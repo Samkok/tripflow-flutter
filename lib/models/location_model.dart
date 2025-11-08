@@ -10,6 +10,7 @@ class LocationModel {
   final double? distanceFromPrevious;
   final DateTime? scheduledDate;
   final Duration stayDuration;
+  final bool isSkipped;
 
   LocationModel({
     required this.id,
@@ -20,6 +21,7 @@ class LocationModel {
     this.travelTimeFromPrevious,
     this.distanceFromPrevious,
     this.stayDuration = const Duration(minutes: 30),
+    this.isSkipped = false,
     this.scheduledDate,
   });
 
@@ -35,6 +37,7 @@ class LocationModel {
       'distanceFromPrevious': distanceFromPrevious,
       'stayDurationSeconds': stayDuration.inSeconds,
       'scheduledDate': scheduledDate?.toIso8601String(),
+      'isSkipped': isSkipped,
     };
   }
 
@@ -49,6 +52,7 @@ class LocationModel {
           ? Duration(seconds: json['travelTimeFromPreviousSeconds'])
           : null,
       distanceFromPrevious: json['distanceFromPrevious']?.toDouble(),
+      isSkipped: json['isSkipped'] ?? false,
       stayDuration: json['stayDurationSeconds'] != null
           ? Duration(seconds: json['stayDurationSeconds'])
           : const Duration(minutes: 30),
@@ -67,6 +71,7 @@ class LocationModel {
     Duration? travelTimeFromPrevious,
     double? distanceFromPrevious,
     Duration? stayDuration,
+    bool? isSkipped,
     DateTime? scheduledDate,
   }) {
     return LocationModel(
@@ -78,6 +83,7 @@ class LocationModel {
       travelTimeFromPrevious: travelTimeFromPrevious ?? this.travelTimeFromPrevious,
       distanceFromPrevious: distanceFromPrevious ?? this.distanceFromPrevious,
       stayDuration: stayDuration ?? this.stayDuration,
+      isSkipped: isSkipped ?? this.isSkipped,
       scheduledDate: scheduledDate ?? this.scheduledDate,
     );
   }

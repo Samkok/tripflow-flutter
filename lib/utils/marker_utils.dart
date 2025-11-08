@@ -83,22 +83,45 @@ class MarkerUtils {
     Color backgroundColor = Colors.red,
     Color textColor = Colors.white,
     required bool isDarkMode,
+    bool isStart = false,
     double size = 100, // Diameter of the circle
+    bool isSkipped = false, // Add this parameter
   }) async {
     final ui.PictureRecorder pictureRecorder = ui.PictureRecorder();
 
     // --- 1. Configure Text Painters ---
-    // Painter for the number inside the circle
-    TextPainter numberPainter = TextPainter(textDirection: TextDirection.ltr);
-    numberPainter.text = TextSpan(
-      text: number.toString(),
-      style: TextStyle(
-        fontSize: size * 0.5,
-        fontWeight: FontWeight.bold,
-        color: textColor,
-      ),
-    );
-    numberPainter.layout();
+    // Painter for the number inside the circle or the skipped icon
+    TextPainter contentPainter = TextPainter(textDirection: TextDirection.ltr);
+
+    if (isStart) {
+      contentPainter.text = TextSpan(
+        text: String.fromCharCode(Icons.flag_rounded.codePoint),
+        style: TextStyle(
+          fontSize: size * 0.6,
+          fontFamily: Icons.flag_rounded.fontFamily,
+          color: textColor,
+        ),
+      );
+    } else if (isSkipped) {
+      contentPainter.text = TextSpan(
+        text: String.fromCharCode(Icons.remove_circle_outline.codePoint),
+        style: TextStyle(
+          fontSize: size * 0.5, // Keep similar size to number
+          fontFamily: Icons.remove_circle_outline.fontFamily,
+          color: textColor, // Use textColor for the icon
+        ),
+      );
+    } else {
+      contentPainter.text = TextSpan(
+        text: number.toString(),
+        style: TextStyle(
+          fontSize: size * 0.5,
+          fontWeight: FontWeight.bold,
+          color: textColor,
+        ),
+      );
+    }
+    contentPainter.layout();
 
     // Painter for the location name below the circle
     TextPainter namePainter = TextPainter(textDirection: TextDirection.ltr, maxLines: 2, ellipsis: '...');
@@ -129,16 +152,29 @@ class MarkerUtils {
     final Canvas canvas = Canvas(pictureRecorder);
 
     // --- 3. Draw the Elements ---
+    // Apply grayscale filter if skipped
+    if (isSkipped) {
+      final ColorFilter greyscaleFilter = ColorFilter.matrix(<double>[
+        0.2126, 0.7152, 0.0722, 0, 0,
+        0.2126, 0.7152, 0.0722, 0, 0,
+        0.2126, 0.7152, 0.0722, 0, 0,
+        0,      0,      0,      1, 0,
+      ]);
+      canvas.saveLayer(null, Paint()..colorFilter = greyscaleFilter);
+    }
+
     // Draw the circle
-    final Paint circlePaint = Paint()..color = backgroundColor;
+    final Paint circlePaint = Paint()
+      ..color = isStart ? Colors.green.shade600 : backgroundColor;
+
     canvas.drawCircle(Offset(canvasCenterX, circleRadius), circleRadius, circlePaint);
 
     // Draw the number inside the circle
-    numberPainter.paint(
+    contentPainter.paint(
       canvas,
       Offset(
-        canvasCenterX - numberPainter.width / 2,
-        circleRadius - numberPainter.height / 2,
+        canvasCenterX - contentPainter.width / 2,
+        circleRadius - contentPainter.height / 2,
       ),
     );
 
@@ -147,6 +183,10 @@ class MarkerUtils {
       canvas,
       Offset(canvasCenterX - namePainter.width / 2, size + paddingBelowCircle),
     );
+
+    if (isSkipped) {
+      canvas.restore(); // Restore canvas after applying filter
+    }
 
     // --- 4. Convert to Bitmap ---
     final ui.Image img = await pictureRecorder.endRecording().toImage(totalWidth.toInt(), totalHeight.toInt());

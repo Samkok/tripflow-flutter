@@ -23,34 +23,23 @@ class CachedMarkersState {
 }
 
 String _generateLocationsCacheKey(List<LocationModel> locations, LatLng? currentLocation, DateTime selectedDate) {
-  final locationIds = locations.map((l) => l.id).join('_');
+  // Use a combination of IDs and count to ensure the key changes when items are added/removed.
+  final locationIds = locations.map((l) => '${l.id}-${l.isSkipped}').join('_');
   final currentLocKey = currentLocation != null ? '${currentLocation.latitude}_${currentLocation.longitude}' : 'none';
   final dateKey = selectedDate.toIso8601String();
-  return 'locations_${locationIds}_current_${currentLocKey}_date_$dateKey';
+  return 'locations_${locations.length}_${locationIds}_current_${currentLocKey}_date_$dateKey';
 }
 
 final cachedMarkersProvider = FutureProvider<CachedMarkersState>((ref) async {
   // OPTIMIZED: Use select() to only rebuild when locations or currentLocation change
-  // This prevents rebuilds when route details (polylines, legDetails, etc.) change
-  final allPinnedLocations = ref.watch(tripProvider.select((state) => state.pinnedLocations));
+  final locationsForDate = ref.watch(locationsForSelectedDateProvider); // This will now be the optimized list if available
   final selectedDate = ref.watch(selectedDateProvider);
-
-  // Filter locations to only show those for the selected date
-  final pinnedLocations = allPinnedLocations.where((loc) {
-    // This logic now mirrors `locationsForSelectedDateProvider` exactly.
-    if (loc.scheduledDate == null) {
-      final addedAtDate = DateTime(loc.addedAt.year, loc.addedAt.month, loc.addedAt.day);
-      return selectedDate.isAtSameMomentAs(addedAtDate);
-    }
-    final locDate = loc.scheduledDate!;
-    final scheduledDateAtMidnight = DateTime(locDate.year, locDate.month, locDate.day);
-    return selectedDate.isAtSameMomentAs(scheduledDateAtMidnight);
-  }).toList();
+  final tripState = ref.watch(tripProvider);
   final currentLocation = ref.watch(tripProvider.select((state) => state.currentLocation));
   final showPlaceNames = ref.watch(showMarkerNamesProvider);
   final isDarkMode = ref.watch(themeProvider) == ThemeMode.dark;
-
-  final cacheKey = _generateLocationsCacheKey(pinnedLocations, currentLocation, selectedDate);
+  
+  final cacheKey = _generateLocationsCacheKey(locationsForDate, currentLocation, selectedDate);
 
   // DEBUG: Uncomment to track marker generation
   // print('🎨 Generating cached markers - locations: ${pinnedLocations.length}, showNames: $showPlaceNames');
@@ -71,15 +60,32 @@ final cachedMarkersProvider = FutureProvider<CachedMarkersState>((ref) async {
   }
 
   // OPTIMIZED: Use batch marker generation for better performance
-  for (int i = 0; i < pinnedLocations.length; i++) {
-    final location = pinnedLocations[i];
+  int nonSkippedIndex = 0; // This index will now correctly reflect the optimized order
+  for (final location in locationsForDate) { // Iterate over the correctly ordered list
+    int markerNumber;
+
+    // Check if this location is the designated start location for the route
+    final isStartLocation = tripState.optimizedRoute.isNotEmpty &&
+                              tripState.startLocationId == location.id;
+
+    if (isStartLocation) {
+      markerNumber = 0; // Use 0 to signify the start location
+    }
+    if (location.isSkipped) {
+      markerNumber = -1; // Use -1 to indicate a skipped location to the marker service
+    } else {
+      nonSkippedIndex++;
+      markerNumber = nonSkippedIndex;
+    }
 
     final customIcon = await markerCache.getNumberedMarker(
-      number: i + 1,
+      isStart: isStartLocation,
+      number: markerNumber,
       name: location.name,
       backgroundColor: AppTheme.accentColor,
       textColor: Colors.white,
       isDarkMode: isDarkMode,
+      isSkipped: location.isSkipped, // Pass the skipped status
     );
 
     markers.add(
@@ -135,8 +141,10 @@ final memoizedAutomaticZonesProvider = Provider<Set<Circle>>((ref) {
   final selectedDate = ref.watch(selectedDateProvider);
   final threshold = ref.watch(proximityThresholdCommittedProvider);
 
-  // Filter locations to only include those for the selected date.
+  // Filter locations to only include those for the selected date and are not skipped.
   final locationsForDate = allLocations.where((loc) {
+    if (loc.isSkipped) return false;
+
     // This logic now mirrors `locationsForSelectedDateProvider` exactly.
     if (loc.scheduledDate == null) {
       final addedAtDate = DateTime(loc.addedAt.year, loc.addedAt.month, loc.addedAt.day);
@@ -170,31 +178,23 @@ final styledPolylinesProvider = Provider<Set<Polyline>>((ref) {
   final tappedPolylineId = ref.watch(tappedPolylineIdProvider);
 
   // DEBUG: Uncomment to track polyline styling
-  // print('🎨 Styling ${tripState.legPolylines.length} polylines, highlighted: $tappedPolylineId');
+  // print('🎨 Styling ${tripState.legPolylines.length} polylines, highlighted: $tappedPolylineId, optimized locations: ${tripState.optimizedLocationsForSelectedDate.length}');
 
   final Set<Polyline> polylines = {};
 
-  // Filter the locations to only include those that are part of the current optimized route for the selected date.
-  final routedLocationsForDate = tripState.pinnedLocations.where((loc) {
-    // A location is part of the route if it has travel details or is the first stop.
-    final isRoutable = loc.travelTimeFromPrevious != null || tripState.pinnedLocations.firstWhere((l) => l.travelTimeFromPrevious != null, orElse: () => loc) == loc;
-    if (!isRoutable) return false;
+  // The legPolylines are generated based on tripState.optimizedLocationsForSelectedDate.
+  // So, we should use that list for checking bounds.
+  final List<LocationModel> currentOptimizedLocations = tripState.optimizedLocationsForSelectedDate;
 
-    // And it must be on the selected date.
-    if (loc.scheduledDate == null) {
-      final now = DateTime.now();
-      final today = DateTime(now.year, now.month, now.day);
-      return selectedDate.isAtSameMomentAs(today);
-    }
-    final locDate = loc.scheduledDate!;
-    return selectedDate.isAtSameMomentAs(DateTime(locDate.year, locDate.month, locDate.day));
-  }).toList();
-
-  // The number of legs should be one less than the number of routed locations.
-  // We iterate through the legs of the route.
+  // We iterate through the legs of the route. The number of legs should be one less
+  // than the number of optimized locations for the selected date.
   for (int i = 0; i < tripState.legPolylines.length; i++) {
     // Ensure we have corresponding locations for this leg.
-    if (i + 1 >= routedLocationsForDate.length) continue;
+    // This check needs to be against the locations that were used to generate the route.
+    // If the optimizedLocationsForSelectedDate is empty, it means no route is generated for the current date.
+    if (currentOptimizedLocations.isEmpty || i + 1 >= currentOptimizedLocations.length) {
+      continue;
+    }
 
     final legPoints = tripState.legPolylines[i];
     if (legPoints.isNotEmpty) {

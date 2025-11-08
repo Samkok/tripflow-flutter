@@ -3,3 +3,4 @@ node_modules/
 docker-clean.bat
 docker-clean.sh"build/" 
 /build
+.vscode/

@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'dart:ui';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:tripflow/providers/places_provider.dart';
 import 'package:tripflow/widgets/location_detail_sheet.dart';
 import 'package:uuid/uuid.dart';
 import '../models/location_model.dart';
@@ -156,7 +157,7 @@ class _MapScreenState extends ConsumerState<MapScreen> with SingleTickerProvider
       // Show loading indicator
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Row(
+          content: const Row(
             children: [
               SizedBox(
                 height: 16,
@@ -164,7 +165,7 @@ class _MapScreenState extends ConsumerState<MapScreen> with SingleTickerProvider
                 child: CircularProgressIndicator(strokeWidth: 2),
               ),
               SizedBox(width: 16),
-              Text('Adding location...'),
+              Text('Adding location...'), // Uses theme colors
             ],
           ),
           duration: Duration(seconds: 2),
@@ -192,7 +193,7 @@ class _MapScreenState extends ConsumerState<MapScreen> with SingleTickerProvider
 
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
+            SnackBar( // Uses theme colors
               content: Text('Added ${location.name} to your trip', style: TextStyle(color: Theme.of(context).colorScheme.onPrimary)),
               backgroundColor: Theme.of(context).colorScheme.primary,
               behavior: SnackBarBehavior.floating,
@@ -219,7 +220,7 @@ class _MapScreenState extends ConsumerState<MapScreen> with SingleTickerProvider
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
+          const SnackBar( // Uses theme colors
             content: Text('Failed to add location. Please try again.'),
             backgroundColor: Colors.red,
           ),
@@ -266,7 +267,7 @@ class _MapScreenState extends ConsumerState<MapScreen> with SingleTickerProvider
         builder: (context, ref, child) {
           final proximityThreshold = ref.watch(proximityThresholdPreviewProvider);
           
-          return Container(
+          return Container( // Uses theme colors
             margin: const EdgeInsets.all(16),
             padding: const EdgeInsets.all(20),
             decoration: BoxDecoration(
@@ -291,7 +292,7 @@ class _MapScreenState extends ConsumerState<MapScreen> with SingleTickerProvider
                 Row(
                   children: [
                     Icon(
-                      Icons.tune, // Uses theme colors
+                      Icons.tune,
                       color: Theme.of(context).colorScheme.primary,
                       size: 24,
                     ),
@@ -311,7 +312,7 @@ class _MapScreenState extends ConsumerState<MapScreen> with SingleTickerProvider
                       },
                       child: Container(
                         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                        decoration: BoxDecoration(
+                        decoration: BoxDecoration( // Uses theme colors
                           color: Theme.of(context).colorScheme.primary.withOpacity(0.2),
                           borderRadius: BorderRadius.circular(12),
                           border: Border.all(
@@ -321,7 +322,7 @@ class _MapScreenState extends ConsumerState<MapScreen> with SingleTickerProvider
                         ),
                         child: Text(
                           _formatDistance(proximityThreshold),
-                          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                          style: Theme.of(context).textTheme.titleMedium?.copyWith( // Uses theme colors
                             color: Theme.of(context).colorScheme.primary,
                             fontWeight: FontWeight.bold,
                           ),
@@ -356,7 +357,7 @@ class _MapScreenState extends ConsumerState<MapScreen> with SingleTickerProvider
                 const SizedBox(height: 12),
                 Text(
                   'Adjust how close locations need to be to form a zone. Smaller values create tighter zones, larger values group more distant locations together.',
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith( // Uses theme colors
                     fontStyle: FontStyle.italic, // Uses theme colors
                   ),
                 ),
@@ -365,7 +366,7 @@ class _MapScreenState extends ConsumerState<MapScreen> with SingleTickerProvider
                   width: double.infinity,
                   child: ElevatedButton(
                     onPressed: () => Navigator.of(context).pop(),
-                    style: ElevatedButton.styleFrom(
+                    style: ElevatedButton.styleFrom( // Uses theme colors
                       padding: const EdgeInsets.symmetric(vertical: 16),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(12),
@@ -391,7 +392,7 @@ class _MapScreenState extends ConsumerState<MapScreen> with SingleTickerProvider
       context: context,
       builder: (context) {
         return AlertDialog(
-          backgroundColor: Theme.of(context).cardColor,
+          backgroundColor: Theme.of(context).cardColor, // Uses theme colors
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
           title: const Text('Set Zone Distance'),
           content: TextField(
@@ -399,7 +400,7 @@ class _MapScreenState extends ConsumerState<MapScreen> with SingleTickerProvider
             autofocus: true,
             keyboardType: const TextInputType.numberWithOptions(decimal: false),
             decoration: InputDecoration(
-              hintText: 'Enter distance in meters',
+              hintText: 'Enter distance in meters', // Uses theme colors
               filled: true,
               fillColor: Theme.of(context).colorScheme.surface,
               border: OutlineInputBorder(
@@ -418,7 +419,7 @@ class _MapScreenState extends ConsumerState<MapScreen> with SingleTickerProvider
           actions: [
             TextButton(
               onPressed: () => Navigator.of(context).pop(),
-              child: Text('Cancel', style: TextStyle(color: Theme.of(context).textTheme.bodyMedium?.color)),
+              child: Text('Cancel', style: TextStyle(color: Theme.of(context).textTheme.bodyMedium?.color)), // Uses theme colors
             ),
             TextButton(
               onPressed: () {
@@ -428,9 +429,9 @@ class _MapScreenState extends ConsumerState<MapScreen> with SingleTickerProvider
                 }
                 Navigator.of(context).pop();
               },
-              style: TextButton.styleFrom(backgroundColor: Theme.of(context).colorScheme.primary),
+              style: TextButton.styleFrom(backgroundColor: Theme.of(context).colorScheme.primary), // Uses theme colors
               child: const Text(
-                'Set',
+                'Set', // Uses theme colors
                 style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold),
               ),
             ),
@@ -602,6 +603,14 @@ class _MapScreenState extends ConsumerState<MapScreen> with SingleTickerProvider
                     );
                   },
                 ),
+                // const SizedBox(height: 12),
+                // FloatingActionButton(
+                //   heroTag: 'addFromUrlFab',
+                //   mini: true,
+                //   onPressed: _showAddLocationFromUrlDialog,
+                //   tooltip: 'Add from Google Maps URL',
+                //   child: const Icon(Icons.add_link),
+                // ),
               ],
             ),
           ),
@@ -644,7 +653,7 @@ class _MapScreenState extends ConsumerState<MapScreen> with SingleTickerProvider
     if (currentLocation != null && _mapController != null && mounted) {
       _mapController?.animateCamera(
         CameraUpdate.newCameraPosition(CameraPosition(target: currentLocation, zoom: 16.0)),
-      );
+      ); // Uses theme colors
 
       // Collapse the bottom sheet to show more of the map
       _sheetController?.animateTo(
@@ -661,7 +670,7 @@ class _MapScreenState extends ConsumerState<MapScreen> with SingleTickerProvider
     } else if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Current location is not available. Please enable location services.'),
+          content: Text('Current location is not available. Please enable location services.'), // Uses theme colors
           backgroundColor: Colors.orange,
           behavior: SnackBarBehavior.floating,
         ),
@@ -778,6 +787,86 @@ class _MapScreenState extends ConsumerState<MapScreen> with SingleTickerProvider
     );
 
     _mapController!.animateCamera(CameraUpdate.newLatLngBounds(bounds, 60.0)); // 60.0 padding
+  }
+
+  void _showAddLocationFromUrlDialog() {
+    final textController = TextEditingController();
+    final formKey = GlobalKey<FormState>();
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: Theme.of(context).cardColor,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Text('Add from Google Maps URL'),
+          content: Form(
+            key: formKey,
+            child: TextFormField(
+              controller: textController,
+              autofocus: true,
+              decoration: const InputDecoration(
+                hintText: 'Paste Google Maps link here',
+                border: OutlineInputBorder(),
+              ),
+              validator: (value) {
+                if (value == null || value.isEmpty) {
+                  return 'Please enter a URL';
+                }
+                // Updated to support new maps.app.goo.gl short links
+                if (!value.contains('goo.gl/maps') && !value.contains('google.com/maps') && !value.contains('maps.app.goo.gl')) {
+                  return 'Please enter a valid Google Maps URL';
+                }
+                return null;
+              },
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: Text('Cancel', style: TextStyle(color: Theme.of(context).textTheme.bodyMedium?.color)),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                if (formKey.currentState?.validate() ?? false) {
+                  Navigator.of(context).pop(); // Close dialog immediately
+                  try {
+                    final placeDetails = await ref.read(placeFromUrlProvider(textController.text).future);
+
+                    if (placeDetails != null) {
+                      final selectedDate = ref.read(selectedDateProvider);
+                      final location = LocationModel(
+                        id: const Uuid().v4(),
+                        name: placeDetails.name,
+                        address: placeDetails.address,
+                        coordinates: placeDetails.coordinates,
+                        addedAt: DateTime.now(),
+                        scheduledDate: selectedDate,
+                      );
+                      await ref.read(tripProvider.notifier).addLocation(location);
+                    } else {
+                      // This case might happen if the provider returns null without an error.
+                      throw Exception('Could not retrieve place details.');
+                    }
+                  } catch (e) {
+                    // Handle the error gracefully by showing a SnackBar.
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Failed to add location. Please check the URL and try again.'),
+                          backgroundColor: Colors.red,
+                        ),
+                      );
+                    }
+                  }
+                }
+              },
+              child: const Text('Add'),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   String _formatDistance(double distanceInMeters) {

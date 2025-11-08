@@ -174,6 +174,18 @@ class LocationDetailSheet extends ConsumerWidget {
                     padding: EdgeInsets.zero,
                     constraints: const BoxConstraints(),
                   ),
+                  const SizedBox(width: 8),
+                  IconButton(
+                    icon: Icon(
+                      Icons.delete_outline,
+                      size: 20,
+                      color: isPastDate ? Colors.grey : Theme.of(context).colorScheme.error,
+                    ),
+                    onPressed: isPastDate ? null : () => _showDeleteConfirmationDialog(context, ref, updatedLocation),
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                    tooltip: 'Delete Stop',
+                  ),
                 ],
               ),
             ],
@@ -197,23 +209,25 @@ class LocationDetailSheet extends ConsumerWidget {
         const SizedBox(height: 12),
         Builder(builder: (context) {
           final trip = ref.read(tripProvider);
-          final locationsForDate = ref.read(locationsForSelectedDateProvider); // This is the ordered list of stops for the day
+          // Get all locations for the date, then filter out skipped ones to get the actual route order.
+          final allLocationsForDate = ref.read(locationsForSelectedDateProvider);
+          final routedLocations = allLocationsForDate.where((l) => !l.isSkipped).toList();
 
           // Find the index of the current location in the day's list.
-          final locationIndexInList = locationsForDate.indexWhere((l) => l.id == updatedLocation.id);
+          final locationIndexInList = routedLocations.indexWhere((l) => l.id == updatedLocation.id);
 
           // The leg index is the index of the route segment that *ends* at the current location.
           // The number of legs can be either N or N-1 depending on the start point.
           // The number of locations for the date is N.
           //
-          // Case 1: Start from "current_location". `legDetails.length == N`.
-          // The leg to location at index `i` is `leg_i`.
-          // Case 2: Start from a pinned location. `legDetails.length == N - 1`.
-          // The leg to location at index `i` (where i>0) is `leg_{i-1}`.
-          final legIndex = locationIndexInList;;
+          // The leg leading to the location at index `i` in the list of stops
+          // is at index `i` if start is current location, or `i-1` if start is another stop.
+          // For location #2 (index 1), we want leg #1 (index 0).
+          // For location #3 (index 2), we want leg #2 (index 1).
+          final legIndex = (trip.startLocationId == 'current_location') ? locationIndexInList : locationIndexInList - 1;
 
-          if (legIndex == 0) return const SizedBox.shrink();
-          final previousLocation = locationsForDate[locationIndexInList - 1];
+          if (legIndex < 0 || locationIndexInList == 0) return const SizedBox.shrink();
+          final previousLocation = routedLocations[locationIndexInList - 1];
 
           return Column(
             children: [
@@ -493,6 +507,50 @@ class LocationDetailSheet extends ConsumerWidget {
             TextButton(
               onPressed: () => Navigator.of(context).pop(),
               child: Text('Close', style: TextStyle(color: Theme.of(context).textTheme.bodyMedium?.color)),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _showDeleteConfirmationDialog(BuildContext context, WidgetRef ref, LocationModel location) {
+    showDialog(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          backgroundColor: Theme.of(context).cardColor,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Text('Delete Location'),
+          content: Text('Are you sure you want to delete "${location.name}"? This action cannot be undone.'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: Text('Cancel', style: TextStyle(color: Theme.of(context).textTheme.bodyMedium?.color)),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                // Pop both the dialog and the detail sheet
+                Navigator.of(dialogContext).pop();
+                Navigator.of(context).pop();
+
+                // Perform the deletion
+                ref.read(tripProvider.notifier).removeLocation(location.id);
+
+                // Show a confirmation snackbar
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('Deleted ${location.name}'),
+                    backgroundColor: Theme.of(context).colorScheme.error,
+                    behavior: SnackBarBehavior.floating,
+                  ),
+                );
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Theme.of(context).colorScheme.error,
+                foregroundColor: Theme.of(context).colorScheme.onError,
+              ),
+              child: const Text('Delete'),
             ),
           ],
         );

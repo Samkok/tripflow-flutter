@@ -6,7 +6,6 @@ import 'package:tripflow/providers/optimized_map_overlay_provider.dart';
 import 'package:tripflow/providers/trip_provider.dart';
 import '../providers/theme_provider.dart';
 import '../providers/map_ui_state_provider.dart';
-import '../providers/settings_provider.dart';
 
 class MapWidget extends ConsumerWidget {
   final Function(GoogleMapController) onMapCreated;
@@ -28,8 +27,7 @@ class MapWidget extends ConsumerWidget {
     // print('🗺️ MapWidget build called');
 
     final mapOverlayAsync = ref.watch(assembledMapOverlaysProvider);
-    final showMarkerNames = ref.watch(showMarkerNamesProvider);
-    final pinnedLocations = ref.watch(tripProvider.select((s) => s.pinnedLocations));
+    final locationsForDate = ref.watch(locationsForSelectedDateProvider);
     final themeMode = ref.watch(themeProvider);
     final currentLocation = ref.watch(cachedMarkersProvider).valueOrNull?.markers.firstWhere((m) => m.markerId.value == 'current_location', orElse: () => Marker(markerId: MarkerId(''))).position;
 
@@ -65,8 +63,9 @@ class MapWidget extends ConsumerWidget {
                     return marker;
                   }
                   // For all other markers, find the location and attach the tap handler.
-                  final location = pinnedLocations.firstWhere(
+                  final location = locationsForDate.firstWhere(
                     (loc) => loc.id == marker.markerId.value,
+                    orElse: () => locationsForDate.first, // Should not happen, but a safe fallback.
                   );
                   return marker.copyWith(onTapParam: () => onMarkerTap?.call(location));
                 }).toSet(),

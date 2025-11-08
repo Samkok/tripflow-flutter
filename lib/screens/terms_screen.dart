@@ -64,11 +64,11 @@ class TermsScreen extends StatelessWidget {
             _buildSection(
               context,
               '10. Contact Us',
-              'If you have any questions about these Terms and Conditions, you can contact us at [Your Contact Email].',
+              'If you have any questions about these Terms and Conditions, you can contact us at hengsamkok76@gmail.com.',
             ),
             const SizedBox(height: 24),
             const Text(
-              'Last updated: [Date]',
+              'Last updated: November 15, 2025',
               style: TextStyle(fontStyle: FontStyle.italic, color: Colors.grey),
             ),
           ],

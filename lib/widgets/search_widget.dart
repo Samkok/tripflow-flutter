@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:tripflow/providers/map_ui_state_provider.dart';
 import 'package:uuid/uuid.dart';
 import '../models/location_model.dart';
 import '../providers/places_provider.dart';
@@ -114,12 +115,14 @@ class _SearchWidgetState extends ConsumerState<SearchWidget> {
     final placeDetails = await PlacesService.getPlaceDetails(prediction.placeId);
     
     if (placeDetails != null) {
+      final selectedDate = ref.read(selectedDateProvider);
       final location = LocationModel(
         id: const Uuid().v4(),
         name: placeDetails.name,
         address: placeDetails.address,
         coordinates: placeDetails.coordinates,
         addedAt: DateTime.now(),
+        scheduledDate: selectedDate, // Ensure the new location is scheduled for the current date
       );
 
       await ref.read(tripProvider.notifier).addLocation(location);

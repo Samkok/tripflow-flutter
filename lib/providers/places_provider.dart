@@ -7,3 +7,10 @@ final placesSearchProvider = FutureProvider.family<List<PlacePrediction>, String
     return await PlacesService.searchPlaces(query);
   },
 );
+
+final placeFromUrlProvider = FutureProvider.family<PlaceDetails?, String>(
+  (ref, url) async {
+    if (url.isEmpty) return null;
+    return await PlacesService.getPlaceFromGoogleMapsUrl(url);
+  },
+);

@@ -135,8 +135,9 @@ class MapOverlayNotifier extends AsyncNotifier<MapOverlayState> {
     // Generate zone polygons around clustered locations
     print('📏 Using proximity threshold: ${proximityThreshold}m for zone generation');
 
+    final nonSkippedLocations = tripState.pinnedLocations.where((loc) => !loc.isSkipped).toList();
     final automaticZones = ZoneUtils.getZoneCircles(
-      tripState.pinnedLocations,
+      nonSkippedLocations,
       proximityThreshold,
     );
     print('🏞️ Generated ${automaticZones.length} automatic zone circles');

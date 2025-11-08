@@ -94,6 +94,20 @@ class ZoneUtils {
     return clusters;
   }
 
+  /// Calculates the geographical center (centroid) of a list of locations.
+  static LatLng getClusterCenter(List<LocationModel> cluster) {
+    if (cluster.isEmpty) {
+      throw ArgumentError("Cannot get the center of an empty cluster.");
+    }
+    double sumLat = 0, sumLng = 0;
+    for (final loc in cluster) {
+      sumLat += loc.coordinates.latitude;
+      sumLng += loc.coordinates.longitude;
+    }
+    return LatLng(sumLat / cluster.length, sumLng / cluster.length);
+  }
+
+
   /// Creates a circle that encloses a cluster of locations.
   static Circle? _createZoneCircle(List<LocationModel> cluster, int index) {
     if (cluster.isEmpty) return null;
@@ -101,13 +115,7 @@ class ZoneUtils {
     final points = cluster.map((loc) => loc.coordinates).toList();
 
     // Calculate the center of the cluster (centroid)
-    double sumLat = 0, sumLng = 0;
-    for (final point in points) {
-      sumLat += point.latitude;
-      sumLng += point.longitude;
-    }
-    final center = LatLng(sumLat / points.length, sumLng / points.length);
-
+    final center = getClusterCenter(cluster);
     // Find the farthest point from the center to determine the radius
     double maxDistance = 0;
     for (final point in points) {

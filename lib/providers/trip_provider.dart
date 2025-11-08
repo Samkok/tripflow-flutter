@@ -12,6 +12,7 @@ import '../services/google_maps_service.dart';
 
 class TripState {
   final List<LocationModel> pinnedLocations;
+  final List<LocationModel> optimizedLocationsForSelectedDate; // New field for the optimized order
   final List<LatLng> optimizedRoute;
   final List<List<LatLng>> legPolylines;
   final List<Map<String, dynamic>> legDetails;
@@ -19,9 +20,11 @@ class TripState {
   final Duration totalTravelTime;
   final double? currentHeading;
   final double totalDistance;
+  String startLocationId;
 
   TripState({
     this.pinnedLocations = const [],
+    this.optimizedLocationsForSelectedDate = const [],
     this.optimizedRoute = const [],
     this.legPolylines = const [],
     this.legDetails = const [],
@@ -29,10 +32,12 @@ class TripState {
     this.totalTravelTime = Duration.zero,
     this.currentHeading,
     this.totalDistance = 0.0,
+    this.startLocationId = ''
   });
 
   TripState copyWith({
     List<LocationModel>? pinnedLocations,
+    List<LocationModel>? optimizedLocationsForSelectedDate,
     List<LatLng>? optimizedRoute,
     List<List<LatLng>>? legPolylines,
     List<Map<String, dynamic>>? legDetails,
@@ -40,9 +45,11 @@ class TripState {
     Duration? totalTravelTime,
     double? currentHeading,
     double? totalDistance,
+    String? startLocationId,
   }) {
     return TripState(
       pinnedLocations: pinnedLocations ?? this.pinnedLocations,
+      optimizedLocationsForSelectedDate: optimizedLocationsForSelectedDate ?? this.optimizedLocationsForSelectedDate,
       optimizedRoute: optimizedRoute ?? this.optimizedRoute,
       legPolylines: legPolylines ?? this.legPolylines,
       legDetails: legDetails ?? this.legDetails,
@@ -50,6 +57,7 @@ class TripState {
       totalTravelTime: totalTravelTime ?? this.totalTravelTime,
       currentHeading: currentHeading ?? this.currentHeading,
       totalDistance: totalDistance ?? this.totalDistance,
+      startLocationId: startLocationId ?? this.startLocationId,
     );
   }
 
@@ -61,6 +69,7 @@ class TripState {
 
     return other is TripState &&
         _listEquals(other.pinnedLocations, pinnedLocations) &&
+        _listEquals(other.optimizedLocationsForSelectedDate, optimizedLocationsForSelectedDate) &&
         _listEquals(other.optimizedRoute, optimizedRoute) &&
         other.currentLocation == currentLocation &&
         other.totalTravelTime == totalTravelTime &&
@@ -73,6 +82,7 @@ class TripState {
   int get hashCode {
     return Object.hash(
       Object.hashAll(pinnedLocations),
+      Object.hashAll(optimizedLocationsForSelectedDate),
       Object.hashAll(optimizedRoute),
       currentLocation,
       totalTravelTime,
@@ -118,7 +128,14 @@ class TripNotifier extends StateNotifier<TripState> {
         : location;
 
     final updatedLocations = [...state.pinnedLocations, locationWithDate];
-    state = state.copyWith(pinnedLocations: updatedLocations);
+    // When adding a new location, the existing optimized route is no longer valid.
+    // Clear it to ensure the UI reflects the new, un-optimized list.
+    state = state.copyWith(
+      pinnedLocations: updatedLocations,
+      optimizedLocationsForSelectedDate: [],
+      optimizedRoute: [],
+      legDetails: [],
+    );
 
     // Save to storage asynchronously without blocking
     _saveLocations(updatedLocations);
@@ -132,6 +149,7 @@ class TripNotifier extends StateNotifier<TripState> {
     // Clear optimized route data when a location is removed
     state = state.copyWith(
       pinnedLocations: updatedLocations,
+      optimizedLocationsForSelectedDate: [],
       optimizedRoute: [],
       legPolylines: [],
       legDetails: [],
@@ -150,6 +168,7 @@ class TripNotifier extends StateNotifier<TripState> {
     // Clear optimized route data when locations are removed
     state = state.copyWith(
       pinnedLocations: updatedLocations,
+      optimizedLocationsForSelectedDate: [], // Clear optimized list
       optimizedRoute: [],
       legPolylines: [],
       legDetails: [],
@@ -157,6 +176,46 @@ class TripNotifier extends StateNotifier<TripState> {
       totalDistance: 0.0,
     );
 
+    await _saveLocations(updatedLocations);
+  }
+
+  Future<void> skipMultipleLocations(Set<String> locationIds) async {
+    final updatedLocations = state.pinnedLocations.map((loc) {
+      if (locationIds.contains(loc.id)) {
+        return loc.copyWith(isSkipped: true);
+      }
+      return loc;
+    }).toList();
+
+    state = state.copyWith(
+      pinnedLocations: updatedLocations,
+      optimizedRoute: [],
+      optimizedLocationsForSelectedDate: [], // Clear optimized list
+      legPolylines: [],
+      legDetails: [],
+      totalTravelTime: Duration.zero,
+      totalDistance: 0.0,
+    );
+    await _saveLocations(updatedLocations);
+  }
+
+  Future<void> unskipMultipleLocations(Set<String> locationIds) async {
+    final updatedLocations = state.pinnedLocations.map((loc) {
+      if (locationIds.contains(loc.id)) {
+        return loc.copyWith(isSkipped: false);
+      }
+      return loc;
+    }).toList();
+
+    state = state.copyWith(
+      pinnedLocations: updatedLocations,
+      optimizedRoute: [],
+      optimizedLocationsForSelectedDate: [], // Clear optimized list
+      legPolylines: [],
+      legDetails: [],
+      totalTravelTime: Duration.zero,
+      totalDistance: 0.0,
+    );
     await _saveLocations(updatedLocations);
   }
 
@@ -176,6 +235,7 @@ class TripNotifier extends StateNotifier<TripState> {
     state = state.copyWith(
       pinnedLocations: updatedLocations,
       optimizedRoute: [],
+      optimizedLocationsForSelectedDate: [], // Clear optimized list
       legPolylines: [],
       legDetails: [],
       totalTravelTime: Duration.zero,
@@ -287,7 +347,10 @@ class TripNotifier extends StateNotifier<TripState> {
     // Filter locations to only include those for the selected date.
     final allLocations = state.pinnedLocations;
     final locationsForDate = allLocations.where((loc) {
-      // This logic now mirrors `locationsForSelectedDateProvider` exactly.
+      // This logic now mirrors `locationsForSelectedDateProvider` exactly, and also filters out skipped locations.
+      if (loc.isSkipped) {
+        return false;
+      }
       if (loc.scheduledDate == null) {
         final addedAtDate = DateTime(loc.addedAt.year, loc.addedAt.month, loc.addedAt.day);
         return selectedDate.isAtSameMomentAs(addedAtDate);
@@ -305,12 +368,13 @@ class TripNotifier extends StateNotifier<TripState> {
       // 1. Determine the starting point and the list of locations to be optimized.
       LatLng startPoint;
       List<LocationModel> locationsToOptimize = List.from(locationsForDate);
-      bool isUsingCurrentLocation = false;
 
       if (startLocationId == 'current_location' && state.currentLocation != null) {
         startPoint = state.currentLocation!;
-        isUsingCurrentLocation = true;
+        state.startLocationId = 'current_location';
+
         // All locations for the date are waypoints
+        // locationsToOptimize remains as is.
       } else if (startLocationId != null) {
         // The start location must be one of the locations for the selected date.
         final startLocation = locationsForDate.firstWhere((loc) => loc.id == startLocationId);
@@ -321,7 +385,6 @@ class TripNotifier extends StateNotifier<TripState> {
         // Default behavior: use current location if available, else first location for the date.
         if (state.currentLocation != null) {
           startPoint = state.currentLocation!;
-          isUsingCurrentLocation = true;
         } else {
           startPoint = locationsForDate.first.coordinates;
           locationsToOptimize.removeAt(0);
@@ -363,9 +426,26 @@ class TripNotifier extends StateNotifier<TripState> {
         if (closestCluster != null) {
           orderedClusters.add(closestCluster);
           clusters.remove(closestCluster);
-          // To find the next closest cluster, we can approximate the next "currentPoint"
-          // by using the last location of the cluster we just added. This is a heuristic.
-          currentPoint = closestCluster.last.coordinates;
+          // To find the next closest cluster, we need a better heuristic for the next "currentPoint".
+          // Instead of just taking the last item, find the point in the cluster that is
+          // "on the edge" or farthest from the cluster's center, which likely represents
+          // a good exit point from that zone.
+          if (closestCluster.length > 1) {
+            final clusterCenter = ZoneUtils.getClusterCenter(closestCluster);
+            double maxDistFromCenter = -1;
+            LocationModel? farthestPoint;
+            for (final loc in closestCluster) {
+              final dist = Geolocator.distanceBetween(clusterCenter.latitude, clusterCenter.longitude, loc.coordinates.latitude, loc.coordinates.longitude);
+              if (dist > maxDistFromCenter) {
+                maxDistFromCenter = dist;
+                farthestPoint = loc;
+              }
+            }
+            currentPoint = farthestPoint?.coordinates ?? closestCluster.last.coordinates;
+          } else {
+            // If only one location in the cluster, that's our next point.
+            currentPoint = closestCluster.first.coordinates;
+          }
         } else {
           break; // Should not happen if clusters is not empty
         }
@@ -375,12 +455,26 @@ class TripNotifier extends StateNotifier<TripState> {
       // This list is now ordered by cluster proximity.
       final finalOrderedWaypoints = orderedClusters.expand((cluster) => cluster).toList();
 
+      // Separate the final destination from the intermediate waypoints.
+      // The last location in our custom-ordered list is the destination.
+      LocationModel? destination;
+      List<LocationModel> intermediateWaypoints = [];
+
+      if (finalOrderedWaypoints.isNotEmpty) {
+        destination = finalOrderedWaypoints.last;
+        intermediateWaypoints = finalOrderedWaypoints.length > 1 ? finalOrderedWaypoints.sublist(0, finalOrderedWaypoints.length - 1) : [];
+      }
       // 5. Get the route from Google Maps, but WITHOUT waypoint optimization,
       // as we have already defined our custom order.
       final routeResult = await GoogleMapsService.getOptimizedRouteDetails(
         origin: startPoint,
-        destinations: finalOrderedWaypoints,
-        // We use our custom order, not Google's TSP solver.
+        // If the start point is a specific location, the last waypoint becomes the destination.
+        // If the start point is 'current_location', all locations are waypoints, and the last one is the destination.
+        destination: startLocationId != 'current_location' && destination != null
+            ? destination
+            : (finalOrderedWaypoints.isNotEmpty ? finalOrderedWaypoints.last : null),
+        waypoints: intermediateWaypoints,
+        // We use our custom order, so Google's TSP solver is not needed.
         optimizeWaypoints: false,
       );
 
@@ -403,59 +497,59 @@ class TripNotifier extends StateNotifier<TripState> {
       }
 
       // Add travel details to each location
-      List<LocationModel> locationsWithDetails = [];
+      final Map<String, LocationModel> locationsById = {for (var loc in allLocations) loc.id: loc};
       Duration totalTravelTime = Duration.zero;
       double totalDistance = 0.0;
-
-      // Create a map of all original locations by ID for easy lookup
-      final originalLocationsMap = {for (var loc in allLocations) loc.id: loc};
       
-      // Iterate through the correctly ordered trip locations and assign travel details.
-      for (int i = 0; i < orderedTripLocations.length; i++) {
-        final location = orderedTripLocations[i];
-        Duration? travelTime;
-        double? distance;
+      // The final ordered list of locations for the day's trip, with travel details.
+      // This list respects our custom cluster-based ordering.
+      List<LocationModel> finalOptimizedLocationsForDate = [];
+      
+      // The number of legs will match the number of destinations we routed to.
+      // `orderedWaypoints` contains all the destinations in the correct order.
+      // We iterate through the legs and assign the details to the corresponding destination location.
+      for (int i = 0; i < legDetails.length; i++) {
+        // Ensure we don't go out of bounds
+        if (i >= orderedWaypoints.length) break;
 
-        // The leg index depends on whether we started from a pinned location or current location.
-        final legIndex = (startLocationId != null && startLocationId != 'current_location') ? i - 1 : i;
+        final leg = legDetails[i];
+        final destinationForThisLeg = orderedWaypoints[i];
 
-        if (legIndex >= 0 && legIndex < legDetails.length) {
-          travelTime = legDetails[legIndex]['duration'] as Duration?;
-          distance = (legDetails[legIndex]['distance'] as num?)?.toDouble();
-        }
-
-        locationsWithDetails.add(location.copyWith(
-          travelTimeFromPrevious: travelTime,
-          distanceFromPrevious: distance,
-        ));
+        // Update the location in our map with the new travel details.
+        locationsById[destinationForThisLeg.id] = destinationForThisLeg.copyWith(
+          travelTimeFromPrevious: leg['duration'] as Duration?,
+          distanceFromPrevious: (leg['distance'] as num?)?.toDouble(),
+        );
+        finalOptimizedLocationsForDate.add(locationsById[destinationForThisLeg.id]!); // This adds all waypoints
       }
 
-      // Create a map of the updated locations with travel details.
-      final updatedDetailsMap = {for (var loc in locationsWithDetails) loc.id: loc};
+      // If the start location was a specific stop (not 'current_location'),
+      // prepend it to the final list so it appears on the map.
+      if (startLocationId != null && startLocationId != 'current_location') {
+        final startLocation = locationsForDate.firstWhere((loc) => loc.id == startLocationId);
+        finalOptimizedLocationsForDate.insert(0, startLocation);
+      }
 
-      // Separate locations for the current date from other dates.
-      final locationsForOtherDates = allLocations.where((loc) {
-        final locDate = loc.scheduledDate != null
-            ? DateTime(loc.scheduledDate!.year, loc.scheduledDate!.month, loc.scheduledDate!.day)
-            : DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
-        return !selectedDate.isAtSameMomentAs(locDate);
+      // Update the main pinnedLocations list with the new travel details
+      final updatedPinnedLocations = state.pinnedLocations.map((loc) {
+        if (locationsById.containsKey(loc.id)) {
+          // Use the updated location from the map (which has travel details)
+          return locationsById[loc.id]!;
+        }
+        return loc;
       }).toList();
-
-      // The new `pinnedLocations` list should be the newly ordered locations for the current date,
-      // plus all the locations from other dates. This preserves the order for the optimized date
-      // while leaving others untouched.
-      final finalLocationsList = [
-        ...locationsWithDetails,
-        ...locationsForOtherDates,
-      ];
-
+      
       // Recalculate total time including stay durations
-      totalTravelTime = _calculateTotalTime(locationsWithDetails, legDetails);
+      totalTravelTime = _calculateTotalTime(finalOptimizedLocationsForDate, legDetails);
       totalDistance = legDetails.fold(0.0, (sum, leg) => sum + ((leg['distance'] as num?)?.toDouble() ?? 0.0));
 
       // OPTIMIZED: Only update state once with all changes
       state = state.copyWith(
-        pinnedLocations: finalLocationsList,
+        // Update pinnedLocations with travel details, but maintain original order for non-optimized.
+        // The optimizedLocationsForSelectedDate will hold the actual optimized order.
+        pinnedLocations: updatedPinnedLocations,
+        // Store the actual optimized list for the selected date
+        optimizedLocationsForSelectedDate: finalOptimizedLocationsForDate,
         optimizedRoute: routePoints,
         legPolylines: legPolylines,
         legDetails: legDetails,
@@ -463,8 +557,8 @@ class TripNotifier extends StateNotifier<TripState> {
         totalDistance: totalDistance,
       );
 
-      // Save to storage asynchronously without blocking UI
-      _saveLocations(finalLocationsList);
+      // Save to storage asynchronously without blocking UI (saves updatedPinnedLocations)
+      _saveLocations(updatedPinnedLocations);
     } catch (e) {
       print('Error generating route: $e');
     } finally {
@@ -508,6 +602,7 @@ class TripNotifier extends StateNotifier<TripState> {
     // This is used when switching dates to prevent showing an old route.
     state = state.copyWith(
       optimizedRoute: [],
+      optimizedLocationsForSelectedDate: [], // Clear optimized list
       legPolylines: [],
       legDetails: [],
       totalTravelTime: Duration.zero,
@@ -519,6 +614,7 @@ class TripNotifier extends StateNotifier<TripState> {
     // Use copyWith to reset trip data while preserving the current location and heading.
     state = state.copyWith(
       pinnedLocations: [],
+      optimizedLocationsForSelectedDate: [], // Clear optimized list
       optimizedRoute: [],
       legPolylines: [],
       legDetails: [],
@@ -538,20 +634,29 @@ final isGeneratingRouteProvider = StateProvider<bool>((ref) => false);
 
 // Provider to filter locations based on the selected date
 final locationsForSelectedDateProvider = Provider<List<LocationModel>>((ref) {
-  final allLocations = ref.watch(tripProvider.select((s) => s.pinnedLocations));
+  final tripState = ref.watch(tripProvider);
   final selectedDate = ref.watch(selectedDateProvider);
 
-  return allLocations.where((loc) {
+  // If an optimized route exists for the selected date, use it.
+  // This check is crucial because optimizedLocationsForSelectedDate might hold data from a previous selectedDate.
+  if (tripState.optimizedLocationsForSelectedDate.isNotEmpty) {
+    final firstOptimizedLocDate = tripState.optimizedLocationsForSelectedDate.first.scheduledDate;
+    if (firstOptimizedLocDate != null &&
+        DateTime(firstOptimizedLocDate.year, firstOptimizedLocDate.month, firstOptimizedLocDate.day)
+            .isAtSameMomentAs(selectedDate)) {
+      return tripState.optimizedLocationsForSelectedDate;
+    }
+  }
+
+  // Fallback: filter from pinnedLocations if no optimized route or for a different date
+  return tripState.pinnedLocations.where((loc) {
     if (loc.scheduledDate == null) {
       // If a location somehow has a null date, associate it with the date it was added.
       // This prevents it from incorrectly showing up on the current day in the future.
       final addedAtDate = DateTime(loc.addedAt.year, loc.addedAt.month, loc.addedAt.day);
       return selectedDate.isAtSameMomentAs(addedAtDate);
     }
-    // Compare just the date part, ignoring time
-    final locDate = loc.scheduledDate!;
-    final scheduledDateAtMidnight = DateTime(locDate.year, locDate.month, locDate.day);
-    return selectedDate.isAtSameMomentAs(scheduledDateAtMidnight);
+    return DateTime(loc.scheduledDate!.year, loc.scheduledDate!.month, loc.scheduledDate!.day).isAtSameMomentAs(selectedDate);
   }).toList();
 });
 

@@ -93,21 +93,25 @@ class MarkerCacheService {
     Color backgroundColor = const Color(0xFFFF6B6B),
     Color textColor = Colors.white,
     required bool isDarkMode,
+    bool isStart = false,
+    bool isSkipped = false, // Add this parameter
   }) async {
     final key =
-        'numbered_${number}_${name}_${backgroundColor.value}_${textColor.value}_$isDarkMode';
-
+        'numbered_${number}_${name}_${backgroundColor.value}_${textColor.value}_${isDarkMode}_${isSkipped}_$isStart';
+    
     if (_cache.containsKey(key)) {
       _moveToEnd(key);
       return _cache[key]!;
     }
 
     final icon = await MarkerUtils.getCustomMarkerBitmap(
+      isStart: isStart,
       number: number,
       name: name,
       backgroundColor: backgroundColor,
       textColor: textColor,
       isDarkMode: isDarkMode,
+      isSkipped: isSkipped, // Pass the skipped status
     );
 
     _addToCache(key, icon);

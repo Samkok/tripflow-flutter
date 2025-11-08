@@ -1,4 +1,5 @@
 import 'package:dio/dio.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 
@@ -93,6 +94,54 @@ class PlacesService {
     } catch (e) {
       print('Error getting place details: $e');
       return null;
+    }
+  }
+
+  static Future<PlaceDetails?> getPlaceFromGoogleMapsUrl(String url) async {
+    try {
+      String finalUrl = url;
+      // Handle shortened URLs (e.g., maps.app.goo.gl) by following redirects
+      if (url.contains('goo.gl/maps') || url.contains('maps.app.goo.gl')) {
+        // Configure Dio to not throw an error on redirect status codes.
+        // This allows us to inspect the response headers for the new URL.
+        final response = await _dio.get(
+          url,
+          options: Options(
+            followRedirects: false, // We need to handle the redirect manually
+            validateStatus: (status) => status != null && status < 400, // Treat 3xx as success
+          ),
+        );
+
+        if (response.statusCode == 301 || response.statusCode == 302) {
+          final locationHeader = response.headers['location'];
+          if (locationHeader != null && locationHeader.isNotEmpty) {
+            finalUrl = locationHeader.first;
+          } else {
+            throw Exception('URL redirect did not provide a new location.');
+          }
+        }
+      }
+
+      // Regex to find coordinates in the format @lat,lng
+      final regex = RegExp(r'@(-?\d+\.\d+),(-?\d+\.\d+)');
+      final match = regex.firstMatch(finalUrl);
+
+      if (match != null && match.groupCount >= 2) {
+        final lat = double.tryParse(match.group(1)!);
+        final lng = double.tryParse(match.group(2)!);
+
+        if (lat != null && lng != null) {
+          // We found coordinates, now use reverse geocoding to get details
+          return await getPlaceFromCoordinates(LatLng(lat, lng));
+        }
+      }
+
+      // If regex fails, throw an exception to be caught by the UI layer.
+      throw Exception('Could not extract location coordinates from URL.');
+    } catch (e) {
+      print('Error parsing Google Maps URL: $e');
+      // Re-throw the exception so the UI can handle it.
+      rethrow;
     }
   }
 
