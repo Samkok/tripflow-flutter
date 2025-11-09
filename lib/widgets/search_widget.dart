@@ -132,6 +132,9 @@ class _SearchWidgetState extends ConsumerState<SearchWidget> {
         _isSearching = false;
       });
 
+      // Dismiss the keyboard
+      widget.focusNode?.unfocus();
+
       // Show snackbar
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

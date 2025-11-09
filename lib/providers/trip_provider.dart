@@ -466,13 +466,11 @@ class TripNotifier extends StateNotifier<TripState> {
       }
       // 5. Get the route from Google Maps, but WITHOUT waypoint optimization,
       // as we have already defined our custom order.
+      // Always pass the destination when it exists, regardless of start location type.
+      // This ensures the route connects to the final location even when starting from current location.
       final routeResult = await GoogleMapsService.getOptimizedRouteDetails(
         origin: startPoint,
-        // If the start point is a specific location, the last waypoint becomes the destination.
-        // If the start point is 'current_location', all locations are waypoints, and the last one is the destination.
-        destination: startLocationId != 'current_location' && destination != null
-            ? destination
-            : (finalOrderedWaypoints.isNotEmpty ? finalOrderedWaypoints.last : null),
+        destination: destination,
         waypoints: intermediateWaypoints,
         // We use our custom order, so Google's TSP solver is not needed.
         optimizeWaypoints: false,
