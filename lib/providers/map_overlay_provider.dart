@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
-import 'package:tripflow/providers/map_ui_state_provider.dart';
-import 'package:tripflow/providers/debounced_settings_provider.dart';
-import 'package:tripflow/providers/theme_provider.dart';import '../models/location_model.dart';
+import 'package:voyza/providers/map_ui_state_provider.dart';
+import 'package:voyza/providers/debounced_settings_provider.dart';
+import 'package:voyza/providers/theme_provider.dart';import '../models/location_model.dart';
 import '../providers/trip_provider.dart';
 import '../providers/settings_provider.dart';
 import '../utils/marker_utils.dart';

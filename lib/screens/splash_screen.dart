@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:tripflow/screens/map_screen.dart';
-import 'package:tripflow/core/theme.dart';
+import 'package:voyza/screens/map_screen.dart';
+import 'package:voyza/services/marker_cache_service.dart';
+import 'package:voyza/core/theme.dart';
+import 'package:voyza/utils/marker_utils.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -14,18 +16,28 @@ class _SplashScreenState extends State<SplashScreen> {
   @override
   void initState() {
     super.initState();
-    _navigateToHome();
+    _initializeApp();
   }
 
-  void _navigateToHome() {
-    // Wait for 3 seconds then navigate to the MapScreen
-    Timer(const Duration(seconds: 3), () {
-      if (mounted) {
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (context) => MapScreen()),
-        );
-      }
-    });
+  Future<void> _initializeApp() async {
+    // Start all initialization tasks in parallel
+    final tasks = [
+      // Pre-warm the entire marker cache for a smoother map experience.
+      MarkerCacheService().prewarmCache(),
+
+      // Wait for a minimum duration to show the splash screen
+      Future.delayed(const Duration(seconds: 3)),
+    ];
+
+    // Wait for all tasks to complete
+    await Future.wait(tasks);
+
+    // Navigate to the home screen
+    if (mounted) {
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(builder: (context) => MapScreen()),
+      );
+    }
   }
 
   @override
@@ -46,18 +58,24 @@ class _SplashScreenState extends State<SplashScreen> {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              // Placeholder for your logo. Replace with your actual logo widget.
-              Icon(
-                Icons.explore_outlined,
-                size: 120.0,
-                color: Colors.white,
-                shadows: [
-                  Shadow(color: Colors.black.withOpacity(0.2), blurRadius: 15, offset: const Offset(0, 5))
-                ],
+              // App logo
+              Container(
+                width: 120,
+                height: 120,
+                decoration: BoxDecoration(
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.2),
+                      blurRadius: 15,
+                      offset: const Offset(0, 5),
+                    ),
+                  ],
+                ),
+                child: Image.asset('assets/images/logo.png'),
               ),
               const SizedBox(height: 24),
               Text(
-                'TripFlow',
+                'VoyZa',
                 style: Theme.of(context).textTheme.headlineLarge?.copyWith(color: Colors.white, fontWeight: FontWeight.bold),
               ),
             ],

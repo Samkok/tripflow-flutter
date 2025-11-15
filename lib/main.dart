@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
-import 'package:tripflow/screens/splash_screen.dart';
+import 'package:voyza/screens/splash_screen.dart';
 
 import 'core/theme.dart';
 import 'providers/theme_provider.dart';
@@ -20,7 +20,7 @@ class MyApp extends ConsumerWidget {
 
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      title: 'TripFlow',
+      title: 'VoyZa',
       theme: AppTheme.lightTheme,
       darkTheme: AppTheme.darkTheme,
       themeMode: themeMode,

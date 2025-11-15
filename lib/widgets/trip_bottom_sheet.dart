@@ -2,11 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
-import 'package:tripflow/models/location_model.dart';
-import 'package:tripflow/providers/settings_provider.dart';
-import 'package:tripflow/providers/map_ui_state_provider.dart';
+import 'package:voyza/models/location_model.dart';
+import 'package:voyza/providers/settings_provider.dart';
+import 'package:voyza/providers/map_ui_state_provider.dart';
 import '../providers/trip_provider.dart';
-import 'package:tripflow/widgets/location_detail_sheet.dart';
+import 'package:voyza/widgets/location_detail_sheet.dart';
 import '../utils/date_picker_utils.dart';
 import '../core/theme.dart';
 
@@ -175,17 +175,17 @@ class TripBottomSheet extends ConsumerWidget {
               tooltip: 'Zone settings',
             ),
             const SizedBox(width: 4),
-            Consumer(
-              builder: (context, ref, child) {
-                final showNames = ref.watch(showMarkerNamesProvider);
-                return IconButton(
-                  icon: Icon(showNames ? Icons.visibility_off_outlined : Icons.visibility_outlined),
-                  onPressed: () => ref.read(showMarkerNamesProvider.notifier).state = !showNames,
-                  color: Theme.of(context).textTheme.bodyMedium?.color,
-                  tooltip: showNames ? 'Hide place names' : 'Show place names',
-                );
-              },
-            ),
+            // Consumer(
+            //   builder: (context, ref, child) {
+            //     final showNames = ref.watch(showMarkerNamesProvider);
+            //     return IconButton(
+            //       icon: Icon(showNames ? Icons.visibility_off_outlined : Icons.visibility_outlined),
+            //       onPressed: () => ref.read(showMarkerNamesProvider.notifier).state = !showNames,
+            //       color: Theme.of(context).textTheme.bodyMedium?.color,
+            //       tooltip: showNames ? 'Hide place names' : 'Show place names',
+            //     );
+            //   },
+            // ),
             if (tripState.pinnedLocations.isNotEmpty) ...[
               Container(
                 height: 24,
@@ -200,7 +200,7 @@ class TripBottomSheet extends ConsumerWidget {
                   onPressed: isGenerating
                       ? null
                       : () {
-                          final locationsForDate = ref.read(locationsForSelectedDateProvider);
+                          ref.read(locationsForSelectedDateProvider);
                           _showChooseStartPointDialog(context, ref, isReoptimizing: tripState.optimizedRoute.isNotEmpty);
                         },
                   color: Theme.of(context).colorScheme.primary,
@@ -988,7 +988,7 @@ class TripBottomSheet extends ConsumerWidget {
 
                     // After deletion, if there are still locations, show the re-optimize dialog.
                     if (ref.read(tripProvider).pinnedLocations.isNotEmpty) {
-                      final locationsForDate = ref.read(locationsForSelectedDateProvider);
+                      ref.read(locationsForSelectedDateProvider);
                       _showChooseStartPointDialog(context, ref, isReoptimizing: true);
                     }
                   },

@@ -1,10 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
-import 'package:tripflow/models/location_model.dart';
-import 'package:tripflow/providers/optimized_map_overlay_provider.dart';
-import 'package:tripflow/providers/trip_provider.dart';
-import '../providers/theme_provider.dart';
+import 'package:voyza/models/location_model.dart';
+import 'package:voyza/providers/optimized_map_overlay_provider.dart';
+import 'package:voyza/providers/trip_provider.dart';
 import '../providers/map_ui_state_provider.dart';
 
 class MapWidget extends ConsumerWidget {
@@ -28,8 +27,7 @@ class MapWidget extends ConsumerWidget {
 
     final mapOverlayAsync = ref.watch(assembledMapOverlaysProvider);
     final locationsForDate = ref.watch(locationsForSelectedDateProvider);
-    final themeMode = ref.watch(themeProvider);
-    final currentLocation = ref.watch(cachedMarkersProvider).valueOrNull?.markers.firstWhere((m) => m.markerId.value == 'current_location', orElse: () => Marker(markerId: MarkerId(''))).position;
+    final currentLocation = ref.watch(tripProvider.select((s) => s.currentLocation));
 
     return mapOverlayAsync.when(
       data: (AssembledMapOverlays overlayState) {

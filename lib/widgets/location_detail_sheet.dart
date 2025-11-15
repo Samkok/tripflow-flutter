@@ -1,12 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
-import 'package:intl/intl.dart';
-import 'package:tripflow/models/location_model.dart';
-import 'package:tripflow/providers/map_ui_state_provider.dart';
-import 'package:tripflow/providers/settings_provider.dart';
-import 'package:tripflow/providers/trip_provider.dart';
-import 'package:tripflow/utils/date_picker_utils.dart';
+import 'package:voyza/models/location_model.dart';
+import 'package:voyza/providers/map_ui_state_provider.dart';
+import 'package:voyza/providers/trip_provider.dart';
+import 'package:voyza/utils/date_picker_utils.dart';
 
 import '../core/theme.dart';
 

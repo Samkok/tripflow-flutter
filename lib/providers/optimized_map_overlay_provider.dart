@@ -1,23 +1,22 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:flutter/material.dart';
-import 'package:tripflow/providers/map_ui_state_provider.dart';
-import 'package:tripflow/providers/theme_provider.dart';
-import '../models/location_model.dart';
-import '../providers/settings_provider.dart';
+import 'package:voyza/models/location_model.dart';
+import 'package:voyza/providers/map_ui_state_provider.dart';
+import 'package:voyza/providers/theme_provider.dart';
 import '../providers/trip_provider.dart';
-import '../providers/map_ui_state_provider.dart';
 import '../providers/debounced_settings_provider.dart';
 import '../services/marker_cache_service.dart';
 import '../utils/zone_utils.dart';
 import '../core/theme.dart';
 
 class CachedMarkersState {
-  final Set<Marker> markers;
+  // This will now hold the generated bitmaps, not the final Marker objects.
+  final Map<String, BitmapDescriptor> markerIcons;
   final String cacheKey;
 
   const CachedMarkersState({
-    required this.markers,
+    required this.markerIcons,
     required this.cacheKey,
   });
 }
@@ -30,13 +29,14 @@ String _generateLocationsCacheKey(List<LocationModel> locations, LatLng? current
   return 'locations_${locations.length}_${locationIds}_current_${currentLocKey}_date_$dateKey';
 }
 
-final cachedMarkersProvider = FutureProvider<CachedMarkersState>((ref) async {
+/// A provider that generates and caches marker bitmaps.
+/// This is the expensive part that should only run when location data changes.
+final cachedMarkerBitmapsProvider = FutureProvider<CachedMarkersState>((ref) async {
   // OPTIMIZED: Use select() to only rebuild when locations or currentLocation change
   final locationsForDate = ref.watch(locationsForSelectedDateProvider); // This will now be the optimized list if available
   final selectedDate = ref.watch(selectedDateProvider);
   final tripState = ref.watch(tripProvider);
   final currentLocation = ref.watch(tripProvider.select((state) => state.currentLocation));
-  final showPlaceNames = ref.watch(showMarkerNamesProvider);
   final isDarkMode = ref.watch(themeProvider) == ThemeMode.dark;
   
   final cacheKey = _generateLocationsCacheKey(locationsForDate, currentLocation, selectedDate);
@@ -44,19 +44,12 @@ final cachedMarkersProvider = FutureProvider<CachedMarkersState>((ref) async {
   // DEBUG: Uncomment to track marker generation
   // print('🎨 Generating cached markers - locations: ${pinnedLocations.length}, showNames: $showPlaceNames');
 
-  final Set<Marker> markers = {};
+  final Map<String, BitmapDescriptor> markerIcons = {};
   final markerCache = MarkerCacheService();
 
   if (currentLocation != null) {
     final currentLocationIcon = await markerCache.getCurrentLocationMarker();
-    markers.add(
-      Marker(
-        markerId: const MarkerId('current_location'),
-        position: currentLocation,
-        icon: currentLocationIcon,
-        infoWindow: const InfoWindow(title: 'Your Location'), // Keep for current location
-      ),
-    );
+    markerIcons['current_location'] = currentLocationIcon;
   }
 
   // OPTIMIZED: Use batch marker generation for better performance
@@ -88,25 +81,57 @@ final cachedMarkersProvider = FutureProvider<CachedMarkersState>((ref) async {
       isSkipped: location.isSkipped, // Pass the skipped status
     );
 
-    markers.add(
-      Marker(
-        markerId: MarkerId(location.id),
-        position: location.coordinates,
-        icon: customIcon,
-        infoWindow: showPlaceNames
-            ? InfoWindow(
-                title: location.name,
-                snippet: location.address,
-              )
-            : InfoWindow.noText,
-      ),
-    );
+    markerIcons[location.id] = customIcon;
   }
 
   // DEBUG: Uncomment to track marker generation completion
   // print('✅ Generated ${markers.length} cached markers');
 
-  return CachedMarkersState(markers: markers, cacheKey: cacheKey);
+  return CachedMarkersState(markerIcons: markerIcons, cacheKey: cacheKey);
+});
+
+/// A lightweight provider that assembles the final Marker set.
+/// It watches the marker bitmaps and the `showPlaceNamesProvider`.
+/// This provider rebuilds instantly when names are toggled, without re-running the expensive bitmap generation.
+final finalMarkersProvider = Provider<Set<Marker>>((ref) {
+  final markerBitmapsAsync = ref.watch(cachedMarkerBitmapsProvider);
+  final showPlaceNames = ref.watch(showPlaceNamesProvider); // This watch is crucial
+  final locationsForDate = ref.watch(locationsForSelectedDateProvider);
+  final currentLocation = ref.watch(tripProvider.select((s) => s.currentLocation));
+
+  return markerBitmapsAsync.when(
+    data: (cachedData) {
+      final Set<Marker> markers = {};
+      final markerIcons = cachedData.markerIcons;
+
+      // Add current location marker
+      if (currentLocation != null && markerIcons.containsKey('current_location')) {
+        markers.add(Marker(
+          markerId: const MarkerId('current_location'),
+          position: currentLocation,
+          icon: markerIcons['current_location']!,
+          infoWindow: const InfoWindow(title: 'Your Location'),
+        ));
+      }
+
+      // Add location markers
+      for (final location in locationsForDate) {
+        if (markerIcons.containsKey(location.id)) {
+          markers.add(Marker(
+            markerId: MarkerId(location.id),
+            position: location.coordinates,
+            icon: markerIcons[location.id]!,
+            infoWindow: showPlaceNames
+                ? InfoWindow(title: location.name, snippet: location.address)
+                : InfoWindow.noText,
+          ));
+        }
+      }
+      return markers;
+    },
+    loading: () => {},
+    error: (e, s) => {},
+  );
 });
 
 class ZoneCacheKey {
@@ -130,11 +155,6 @@ class ZoneCacheKey {
   String toString() => 'ZoneCacheKey($locationIds, $threshold)';
 }
 
-ZoneCacheKey _generateZoneCacheKey(List<LocationModel> locations, double threshold) {
-  final locationIds = locations.map((l) => l.id).join('_');
-  return ZoneCacheKey(locationIds, threshold);
-}
-
 final memoizedAutomaticZonesProvider = Provider<Set<Circle>>((ref) {
   // Watch all locations and the selected date to filter them.
   final allLocations = ref.watch(tripProvider.select((state) => state.pinnedLocations));
@@ -155,8 +175,6 @@ final memoizedAutomaticZonesProvider = Provider<Set<Circle>>((ref) {
     return selectedDate.isAtSameMomentAs(scheduledDateAtMidnight);
   }).toList();
 
-  final cacheKey = _generateZoneCacheKey(locationsForDate, threshold);
-
   // DEBUG: Uncomment to track zone computation
   // print('📏 Computing zones with key: $cacheKey');
 
@@ -174,7 +192,6 @@ final memoizedAutomaticZonesProvider = Provider<Set<Circle>>((ref) {
 
 final styledPolylinesProvider = Provider<Set<Polyline>>((ref) {
   final tripState = ref.watch(tripProvider);
-  final selectedDate = ref.watch(selectedDateProvider);
   final tappedPolylineId = ref.watch(tappedPolylineIdProvider);
 
   // DEBUG: Uncomment to track polyline styling
@@ -186,13 +203,12 @@ final styledPolylinesProvider = Provider<Set<Polyline>>((ref) {
   // So, we should use that list for checking bounds.
   final List<LocationModel> currentOptimizedLocations = tripState.optimizedLocationsForSelectedDate;
 
-  // We iterate through the legs of the route. The number of legs should be one less
-  // than the number of optimized locations for the selected date.
+  // We iterate through the legs of the route. The number of legs should equal
+  // the number of segments between locations (n locations = n-1 legs, or n legs if starting from current location).
   for (int i = 0; i < tripState.legPolylines.length; i++) {
-    // Ensure we have corresponding locations for this leg.
-    // This check needs to be against the locations that were used to generate the route.
-    // If the optimizedLocationsForSelectedDate is empty, it means no route is generated for the current date.
-    if (currentOptimizedLocations.isEmpty || i + 1 >= currentOptimizedLocations.length) {
+    // Ensure we have a valid leg polyline.
+    // The legPolylines array should contain all legs from the route, including the final leg to the destination.
+    if (currentOptimizedLocations.isEmpty) {
       continue;
     }
 
@@ -292,20 +308,22 @@ class AssembledMapOverlays {
 }
 
 final assembledMapOverlaysProvider = Provider<AsyncValue<AssembledMapOverlays>>((ref) {
-  final markersAsync = ref.watch(cachedMarkersProvider);
+  final markers = ref.watch(finalMarkersProvider);
   final polylines = ref.watch(styledPolylinesProvider);
   final automaticZones = ref.watch(memoizedAutomaticZonesProvider);
   final routeInfoMarkersAsync = ref.watch(routeInfoMarkersProvider);
 
-  return markersAsync.when(
-    data: (cachedMarkers) {
+  // Since finalMarkersProvider is synchronous (deriving from an async one),
+  // we can treat it more directly. We'll use the async state of the bitmap provider to manage loading/error states.
+  return ref.watch(cachedMarkerBitmapsProvider).when(
+    data: (_) { // We don't need the data here, just the state.
       final routeInfoMarkers = routeInfoMarkersAsync.valueOrNull ?? {};
 
       // DEBUG: Uncomment to track overlay assembly
-      // print('✅ Assembling map overlays: ${cachedMarkers.markers.length} base markers, ${routeInfoMarkers.length} route info markers, ${polylines.length} polylines, ${automaticZones.length} auto zones');
+      // print('✅ Assembling map overlays: ${markers.length} base markers, ${routeInfoMarkers.length} route info markers, ${polylines.length} polylines, ${automaticZones.length} auto zones');
 
       return AsyncValue.data(AssembledMapOverlays(
-        markers: {...cachedMarkers.markers, ...routeInfoMarkers},
+        markers: {...markers, ...routeInfoMarkers},
         polylines: polylines,
         automaticZones: automaticZones,
       ));

@@ -42,7 +42,7 @@ class ProfileMenuButton extends ConsumerWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text('Anonymous User', style: Theme.of(context).textTheme.titleMedium),
-                  Text('user@tripflow.com', style: Theme.of(context).textTheme.bodySmall),
+                  Text('user@voyza.com', style: Theme.of(context).textTheme.bodySmall),
                 ],
               ),
             ],
@@ -73,16 +73,16 @@ class ProfileMenuButton extends ConsumerWidget {
           ),
         ),
         // More Settings
-        PopupMenuItem<int>(
-          value: 2,
-          child: Row(
-            children: [
-              Icon(Icons.settings_outlined, color: Theme.of(context).textTheme.bodyMedium?.color),
-              SizedBox(width: 12),
-              Text('More Settings'),
-            ],
-          ),
-        ),
+        // PopupMenuItem<int>(
+        //   value: 2,
+        //   child: Row(
+        //     children: [
+        //       Icon(Icons.settings_outlined, color: Theme.of(context).textTheme.bodyMedium?.color),
+        //       SizedBox(width: 12),
+        //       Text('More Settings'),
+        //     ],
+        //   ),
+        // ),
         // Terms and Conditions
         PopupMenuItem<int>(
           value: 3,

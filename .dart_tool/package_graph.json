@@ -1,10 +1,10 @@
 {
   "roots": [
-    "tripflow"
+    "voyza"
   ],
   "packages": [
     {
-      "name": "tripflow",
+      "name": "voyza",
       "version": "1.0.0+1",
       "dependencies": [
         "dio",

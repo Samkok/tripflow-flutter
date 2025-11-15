@@ -1,4 +1,4 @@
-name: tripflow
+name: voyza
 description: A mobile app for optimizing trip routes with Google Maps integration
 publish_to: 'none'
 version: 1.0.0+1

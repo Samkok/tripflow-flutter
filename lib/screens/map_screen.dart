@@ -5,8 +5,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'dart:ui';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
-import 'package:tripflow/providers/places_provider.dart';
-import 'package:tripflow/widgets/location_detail_sheet.dart';
+import 'package:voyza/providers/places_provider.dart';
+import 'package:voyza/widgets/location_detail_sheet.dart';
 import 'package:uuid/uuid.dart';
 import '../models/location_model.dart';
 import '../providers/trip_provider.dart';
@@ -132,11 +132,11 @@ class _MapScreenState extends ConsumerState<MapScreen> with SingleTickerProvider
 
   void _onMapCreated(GoogleMapController controller) {
     _mapController = controller;
-    // Set the initial map style as soon as the controller is available.
-    final showLabels = ref.read(showMarkerNamesProvider);
+    // Set the initial map style.
     final themeMode = ref.read(themeProvider);
-    final initialStyle = MapWidget.getMapStyle(themeMode, showLabels);
-    _mapController!.setMapStyle(initialStyle);
+    final showPlaceNames = ref.read(showPlaceNamesProvider);
+    final style = MapWidget.getMapStyle(themeMode, showPlaceNames);
+    _mapController!.setMapStyle(style);
   }
 
   Future<void> _onMapLongPress(LatLng coordinates) async {
@@ -443,19 +443,6 @@ class _MapScreenState extends ConsumerState<MapScreen> with SingleTickerProvider
 
   @override
   Widget build(BuildContext context) {
-    // Listen for theme changes to update the map style.
-    // This is more performant than rebuilding the entire MapWidget.
-    ref.listen<ThemeMode>(themeProvider, (previous, next) {
-      if (_mapController != null) {
-        final showLabels = ref.read(showMarkerNamesProvider);
-        final style = MapWidget.getMapStyle(next, showLabels);
-        _mapController!.setMapStyle(style);
-        print(
-          '🗺️ Map style updated for theme: ${next.name}, Labels: ${showLabels ? 'Visible' : 'Hidden'}',
-        );
-      }
-    });
-
     // Listen to polyline taps to animate the camera to fit the route segment.
     ref.listen<String?>(tappedPolylineIdProvider, (previous, next) {
       if (next != null) {
@@ -491,6 +478,45 @@ class _MapScreenState extends ConsumerState<MapScreen> with SingleTickerProvider
         }
         // Reset the trigger
         ref.read(TripBottomSheet.viewHistoricalRouteProvider.notifier).state = false;
+      }
+    });
+
+    // Listen for the zoom trigger after route optimization
+    ref.listen<int>(zoomToFitRouteTrigger, (previous, next) {
+      if (next > (previous ?? 0)) {
+        _zoomToFitTrip();
+      }
+    });
+
+    // Listen for theme or label visibility changes to update the map style instantly.
+    ref.listen<bool>(showPlaceNamesProvider, (_, showLabels) {
+      if (_mapController != null) {
+        final themeMode = ref.read(themeProvider);
+        final style = MapWidget.getMapStyle(themeMode, showLabels);
+        _mapController!.setMapStyle(style);
+      }
+    });
+    ref.listen<ThemeMode>(themeProvider, (_, themeMode) {
+      if (_mapController != null) {
+        final showLabels = ref.read(showPlaceNamesProvider);
+        final style = MapWidget.getMapStyle(themeMode, showLabels);
+        _mapController!.setMapStyle(style);
+      }
+    });
+
+    // Listen for theme or label visibility changes to update the map style instantly.
+    ref.listen<bool>(showPlaceNamesProvider, (_, showLabels) {
+      if (_mapController != null) {
+        final themeMode = ref.read(themeProvider);
+        final style = MapWidget.getMapStyle(themeMode, showLabels);
+        _mapController!.setMapStyle(style);
+      }
+    });
+    ref.listen<ThemeMode>(themeProvider, (_, themeMode) {
+      if (_mapController != null) {
+        final showLabels = ref.read(showPlaceNamesProvider);
+        final style = MapWidget.getMapStyle(themeMode, showLabels);
+        _mapController!.setMapStyle(style);
       }
     });
 
@@ -603,6 +629,21 @@ class _MapScreenState extends ConsumerState<MapScreen> with SingleTickerProvider
                     );
                   },
                 ),
+                const SizedBox(height: 12),
+                Consumer(builder: (context, ref, child) {
+                  final showPlaceNames = ref.watch(showPlaceNamesProvider);
+                  return FloatingActionButton(
+                    heroTag: 'togglePlaceNamesFab',
+                    mini: true,
+                    onPressed: () {
+                      ref.read(showPlaceNamesProvider.notifier).state = !showPlaceNames;
+                    },
+                    tooltip: 'Toggle Place Names',
+                    child: Icon(
+                      showPlaceNames ? Icons.visibility_off_outlined : Icons.visibility_outlined,
+                    ),
+                  );
+                }),
                 // const SizedBox(height: 12),
                 // FloatingActionButton(
                 //   heroTag: 'addFromUrlFab',
@@ -878,14 +919,4 @@ class _MapScreenState extends ConsumerState<MapScreen> with SingleTickerProvider
     }
   }
 
-  String _formatDuration(Duration duration) {
-    final hours = duration.inHours;
-    final minutes = duration.inMinutes % 60;
-
-    if (hours > 0) {
-      return '${hours}h ${minutes}m';
-    } else {
-      return '${minutes}m';
-    }
-  }
 }

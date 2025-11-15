@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:tripflow/providers/map_ui_state_provider.dart';
+import 'package:voyza/providers/map_ui_state_provider.dart';
 import 'package:uuid/uuid.dart';
 import '../models/location_model.dart';
 import '../providers/places_provider.dart';

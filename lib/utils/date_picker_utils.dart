@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
 
 /// A utility class for showing a custom date picker with highlighted dates.
 class DatePickerUtils {

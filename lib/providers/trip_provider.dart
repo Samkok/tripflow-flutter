@@ -1,7 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:uuid/uuid.dart';
-import 'package:tripflow/providers/map_ui_state_provider.dart';
+import 'package:voyza/providers/map_ui_state_provider.dart';
 import 'package:geolocator/geolocator.dart';
 import '../models/location_model.dart';
 import '../models/trip_model.dart';
@@ -462,7 +462,7 @@ class TripNotifier extends StateNotifier<TripState> {
 
       if (finalOrderedWaypoints.isNotEmpty) {
         destination = finalOrderedWaypoints.last;
-        intermediateWaypoints = finalOrderedWaypoints.length > 1 ? finalOrderedWaypoints.sublist(0, finalOrderedWaypoints.length - 1) : [];
+        intermediateWaypoints = finalOrderedWaypoints.length > 1 ? finalOrderedWaypoints.sublist(0, state.startLocationId == 'current_location' ? finalOrderedWaypoints.length : finalOrderedWaypoints.length - 1) : [];
       }
       // 5. Get the route from Google Maps, but WITHOUT waypoint optimization,
       // as we have already defined our custom order.
@@ -477,21 +477,28 @@ class TripNotifier extends StateNotifier<TripState> {
       );
 
       final routePoints = routeResult['routePoints'] as List<LatLng>;
-      final waypointOrder = routeResult['waypointOrder'] as List<int>;
       final legDetails = routeResult['legDetails'] as List<Map<String, dynamic>>;
       final legPolylines = routeResult['legPolylines'] as List<List<LatLng>>;
 
-      // The final ordered list of locations for the day's trip.
-      // This list respects our custom cluster-based ordering.
-      List<LocationModel> orderedTripLocations = [];
-      // The `waypointOrder` from Google will just be a sequence [0, 1, 2, ...]
-      // because we set `optimizeWaypoints: false`. We use our `finalOrderedWaypoints`.
-      final orderedWaypoints = finalOrderedWaypoints;
+      // 4. Reconstruct the final, ordered list of locations based on Google's response.
+      final waypointOrder = routeResult['waypointOrder'] as List<int>? ?? [];
+      List<LocationModel> orderedWaypoints = [];
+      if (waypointOrder.isNotEmpty) {
+        orderedWaypoints = waypointOrder.map((index) => intermediateWaypoints[index]).toList();
+      }
+      // Add the destination back to the end of the ordered list.
+      // if (destination != null) {
+      //   orderedWaypoints.add(destination);
+      // }
+
+      // This is the definitive, optimized list of locations for the day's trip.
+      List<LocationModel> finalOptimizedLocationsForDate = List.from(orderedWaypoints);
+
+      // If the start location was a specific stop (not 'current_location'),
+      // prepend it to the final list so it appears first.
       if (startLocationId != null && startLocationId != 'current_location') {
         final startLocation = locationsForDate.firstWhere((loc) => loc.id == startLocationId);
-        orderedTripLocations = [startLocation, ...orderedWaypoints];
-      } else {
-        orderedTripLocations = orderedWaypoints;
+        finalOptimizedLocationsForDate.insert(0, startLocation);
       }
 
       // Add travel details to each location
@@ -499,43 +506,47 @@ class TripNotifier extends StateNotifier<TripState> {
       Duration totalTravelTime = Duration.zero;
       double totalDistance = 0.0;
       
-      // The final ordered list of locations for the day's trip, with travel details.
-      // This list respects our custom cluster-based ordering.
-      List<LocationModel> finalOptimizedLocationsForDate = [];
-      
-      // The number of legs will match the number of destinations we routed to.
-      // `orderedWaypoints` contains all the destinations in the correct order.
-      // We iterate through the legs and assign the details to the corresponding destination location.
+      // 5. Iterate through the route legs and assign travel details to each destination in our final ordered list.
       for (int i = 0; i < legDetails.length; i++) {
-        // Ensure we don't go out of bounds
-        if (i >= orderedWaypoints.length) break;
-
         final leg = legDetails[i];
+        // The destination for the i-th leg is the i-th location in the `orderedWaypoints` list.
+        if (i >= orderedWaypoints.length) continue; // Safety check
         final destinationForThisLeg = orderedWaypoints[i];
-
-        // Update the location in our map with the new travel details.
         locationsById[destinationForThisLeg.id] = destinationForThisLeg.copyWith(
           travelTimeFromPrevious: leg['duration'] as Duration?,
           distanceFromPrevious: (leg['distance'] as num?)?.toDouble(),
         );
-        finalOptimizedLocationsForDate.add(locationsById[destinationForThisLeg.id]!); // This adds all waypoints
       }
 
-      // If the start location was a specific stop (not 'current_location'),
-      // prepend it to the final list so it appears on the map.
-      if (startLocationId != null && startLocationId != 'current_location') {
-        final startLocation = locationsForDate.firstWhere((loc) => loc.id == startLocationId);
-        finalOptimizedLocationsForDate.insert(0, startLocation);
-      }
-
-      // Update the main pinnedLocations list with the new travel details
-      final updatedPinnedLocations = state.pinnedLocations.map((loc) {
-        if (locationsById.containsKey(loc.id)) {
-          // Use the updated location from the map (which has travel details)
-          return locationsById[loc.id]!;
+      // Reconstruct the master list of all pinned locations to persist the new order.
+      // 1. Get all locations that are NOT for the selected date.
+      final otherDateLocations = state.pinnedLocations.where((loc) {
+        if (loc.scheduledDate == null) {
+          final addedAtDate = DateTime(loc.addedAt.year, loc.addedAt.month, loc.addedAt.day);
+          return !selectedDate.isAtSameMomentAs(addedAtDate);
         }
-        return loc;
+        final locDate = loc.scheduledDate!;
+        final scheduledDateAtMidnight = DateTime(locDate.year, locDate.month, locDate.day);
+        return !selectedDate.isAtSameMomentAs(scheduledDateAtMidnight);
       }).toList();
+
+      // 2. Get the newly ordered and updated locations for the current date (non-skipped only).
+      final updatedLocationsForDate = finalOptimizedLocationsForDate.map((loc) => locationsById[loc.id] ?? loc).toList();
+
+      // 3. Get skipped locations for the selected date (these should remain visible but not in the route).
+      final skippedLocationsForDate = allLocations.where((loc) {
+        if (!loc.isSkipped) return false;
+        if (loc.scheduledDate == null) {
+          final addedAtDate = DateTime(loc.addedAt.year, loc.addedAt.month, loc.addedAt.day);
+          return selectedDate.isAtSameMomentAs(addedAtDate);
+        }
+        final locDate = loc.scheduledDate!;
+        final scheduledDateAtMidnight = DateTime(locDate.year, locDate.month, locDate.day);
+        return selectedDate.isAtSameMomentAs(scheduledDateAtMidnight);
+      }).toList();
+
+      // 4. Combine them into the new master list. This preserves the optimized order and includes skipped locations.
+      final updatedPinnedLocations = [...otherDateLocations, ...updatedLocationsForDate, ...skippedLocationsForDate];
       
       // Recalculate total time including stay durations
       totalTravelTime = _calculateTotalTime(finalOptimizedLocationsForDate, legDetails);
@@ -557,6 +568,9 @@ class TripNotifier extends StateNotifier<TripState> {
 
       // Save to storage asynchronously without blocking UI (saves updatedPinnedLocations)
       _saveLocations(updatedPinnedLocations);
+
+      // Trigger the UI to zoom to fit the new route
+      _ref.read(zoomToFitRouteTrigger.notifier).update((state) => state + 1);
     } catch (e) {
       print('Error generating route: $e');
     } finally {
@@ -630,6 +644,9 @@ final tripProvider = StateNotifierProvider<TripNotifier, TripState>((ref) {
 // A simple provider to track the loading state of route generation
 final isGeneratingRouteProvider = StateProvider<bool>((ref) => false);
 
+// A provider to signal the UI to zoom to fit the optimized route
+final zoomToFitRouteTrigger = StateProvider<int>((ref) => 0);
+
 // Provider to filter locations based on the selected date
 final locationsForSelectedDateProvider = Provider<List<LocationModel>>((ref) {
   final tripState = ref.watch(tripProvider);
@@ -637,12 +654,34 @@ final locationsForSelectedDateProvider = Provider<List<LocationModel>>((ref) {
 
   // If an optimized route exists for the selected date, use it.
   // This check is crucial because optimizedLocationsForSelectedDate might hold data from a previous selectedDate.
+  // We will now return the optimized list PLUS any skipped locations for that date.
   if (tripState.optimizedLocationsForSelectedDate.isNotEmpty) {
     final firstOptimizedLocDate = tripState.optimizedLocationsForSelectedDate.first.scheduledDate;
-    if (firstOptimizedLocDate != null &&
-        DateTime(firstOptimizedLocDate.year, firstOptimizedLocDate.month, firstOptimizedLocDate.day)
-            .isAtSameMomentAs(selectedDate)) {
-      return tripState.optimizedLocationsForSelectedDate;
+    bool dateMatches = false;
+    if (firstOptimizedLocDate != null) {
+      final optimizedDateAtMidnight = DateTime(firstOptimizedLocDate.year, firstOptimizedLocDate.month, firstOptimizedLocDate.day);
+      dateMatches = selectedDate.isAtSameMomentAs(optimizedDateAtMidnight);
+    } else {
+      // If first optimized location has null scheduledDate, check using addedAt
+      final firstOptimizedLoc = tripState.optimizedLocationsForSelectedDate.first;
+      final addedAtDate = DateTime(firstOptimizedLoc.addedAt.year, firstOptimizedLoc.addedAt.month, firstOptimizedLoc.addedAt.day);
+      dateMatches = selectedDate.isAtSameMomentAs(addedAtDate);
+    }
+    
+    if (dateMatches) {
+      // Get skipped locations for the selected date, handling null scheduledDate
+      final skippedForDate = tripState.pinnedLocations.where((loc) {
+        if (!loc.isSkipped) return false;
+        if (loc.scheduledDate == null) {
+          final addedAtDate = DateTime(loc.addedAt.year, loc.addedAt.month, loc.addedAt.day);
+          return selectedDate.isAtSameMomentAs(addedAtDate);
+        }
+        final locDate = loc.scheduledDate!;
+        final scheduledDateAtMidnight = DateTime(locDate.year, locDate.month, locDate.day);
+        return selectedDate.isAtSameMomentAs(scheduledDateAtMidnight);
+      }).toList();
+      // Return the optimized locations first, followed by the skipped ones.
+      return [...tripState.optimizedLocationsForSelectedDate, ...skippedForDate];
     }
   }
 

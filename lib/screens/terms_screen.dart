@@ -19,7 +19,7 @@ class TermsScreen extends StatelessWidget {
             _buildSection(
               context,
               '1. Introduction',
-              'Welcome to TripFlow ("the App"). These Terms and Conditions govern your use of our application and services. By downloading, accessing, or using the App, you agree to be bound by these terms. If you do not agree to these terms, please do not use the App.',
+              'Welcome to Voyza ("the App"). These Terms and Conditions govern your use of our application and services. By downloading, accessing, or using the App, you agree to be bound by these terms. If you do not agree to these terms, please do not use the App.',
             ),
             _buildSection(
               context,

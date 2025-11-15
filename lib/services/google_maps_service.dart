@@ -89,7 +89,7 @@ class GoogleMapsService {
         'routePoints': fullRoutePoints,
         'waypointOrder': waypointOrder,
         'legDetails': legDetails,
-        'legPolylines': _extractLegPolylines(legs),
+        'legPolylines': extractedLegPolylines,
       };
     } catch (e) {
       print('Error getting optimized route: $e');
@@ -119,7 +119,7 @@ class GoogleMapsService {
       }
       
       // The decoded polyline doesn't always include the very last point. Add it explicitly.
-      legPoints.add(LatLng(leg['end_location']['lat'], leg['end_location']['lng']));
+      // legPoints.add(LatLng(leg['end_location']['lat'], leg['end_location']['lng']));
 
       legPolylines.add(legPoints);
     }

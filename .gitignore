@@ -4,3 +4,4 @@ docker-clean.bat
 docker-clean.sh"build/" 
 /build
 .vscode/
+/android/app/key.properties
