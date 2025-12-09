@@ -1,8 +1,10 @@
+import 'package:flutter_compass/flutter_compass.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:flutter_compass/flutter_compass.dart';
+
 import '../utils/stream_utils.dart';
+import 'api_service.dart';
 
 class LocationService {
   static Future<bool> requestLocationPermission() async {
@@ -22,6 +24,39 @@ class LocationService {
       return LatLng(position.latitude, position.longitude);
     } catch (e) {
       print('Error getting current location: $e');
+      return null;
+    }
+  }
+
+  static Future<String?> getCurrentCountryCode() async {
+    try {
+      final coordinates = await getCurrentLocation();
+      if (coordinates == null) return null;
+
+      final url = 'https://maps.googleapis.com/maps/api/geocode/json'
+          '?latlng=${coordinates.latitude},${coordinates.longitude}'
+          '&key=${ApiService.googleMapsApiKey}';
+
+      final response = await ApiService.dio.get(url);
+      final data = response.data;
+
+      if (data['status'] != 'OK' || data['results'].isEmpty) {
+        return null;
+      }
+
+      final results = data['results'] as List;
+      for (final result in results) {
+        final addressComponents = result['address_components'] as List;
+        for (final component in addressComponents) {
+          final types = component['types'] as List;
+          if (types.contains('country')) {
+            return component['short_name'];
+          }
+        }
+      }
+      return null;
+    } catch (e) {
+      print('Error getting current country code: $e');
       return null;
     }
   }

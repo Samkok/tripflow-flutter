@@ -1,14 +1,16 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:voyza/models/location_model.dart';
-import 'package:voyza/providers/settings_provider.dart';
 import 'package:voyza/providers/map_ui_state_provider.dart';
 import '../providers/trip_provider.dart';
-import 'package:voyza/widgets/location_detail_sheet.dart';
 import '../utils/date_picker_utils.dart';
 import '../core/theme.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'optimized_location_card.dart';
+import '../services/csv_service.dart';
 
 class TripBottomSheet extends ConsumerWidget {
   final DraggableScrollableController? sheetController;
@@ -25,11 +27,15 @@ class TripBottomSheet extends ConsumerWidget {
   });
 
   // A simple provider to signal when the "View Route" button is tapped for a historical trip.
-  static final viewHistoricalRouteProvider = StateProvider<bool>((ref) => false);
+  static final viewHistoricalRouteProvider =
+      StateProvider<bool>((ref) => false);
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final tripState = ref.watch(tripProvider);
+    // OPTIMIZATION: Watch only specific fields to prevent rebuilds during drag
+    // Don't watch entire tripState here since it rebuilds on every state change
+    final hasPinnedLocations =
+        ref.watch(tripProvider.select((s) => s.pinnedLocations.isNotEmpty));
 
     return DraggableScrollableSheet(
       controller: sheetController,
@@ -37,18 +43,19 @@ class TripBottomSheet extends ConsumerWidget {
       snap: true,
       snapSizes: const [0.12, 0.85],
       initialChildSize: 0.12, // Start in the collapsed state
-      minChildSize: 0.12,      // Collapsed state shows only the header
-      maxChildSize: 0.85,      // Expanded state leaves search bar visible
+      minChildSize: 0.12, // Collapsed state shows only the header
+      maxChildSize: 0.85, // Expanded state leaves search bar visible
       builder: (context, scrollController) {
         return Container(
-          decoration: BoxDecoration( // Uses theme colors
+          decoration: BoxDecoration(
+            // Uses theme colors
             color: Theme.of(context).colorScheme.surface,
             borderRadius: const BorderRadius.vertical(
               top: Radius.circular(24),
             ),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withOpacity(0.3),
+                color: Colors.black.withValues(alpha: 0.3),
                 blurRadius: 20,
                 offset: const Offset(0, -5),
               ),
@@ -95,12 +102,13 @@ class TripBottomSheet extends ConsumerWidget {
                   physics: const AlwaysScrollableScrollPhysics(),
                   padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
                   children: [
-                    // Header
+                    // Header - OPTIMIZATION: Use separate widgets to minimize rebuilds
                     Consumer(builder: (context, ref, _) {
-                      final isSelectionMode = ref.watch(isSelectionModeProvider);
+                      final isSelectionMode =
+                          ref.watch(isSelectionModeProvider);
                       return isSelectionMode
                           ? _buildSelectionModeHeader(context, ref)
-                          : _buildDefaultHeader(context, ref, tripState);
+                          : _buildDefaultHeader(context, ref);
                     }),
 
                     // History Banner
@@ -119,25 +127,32 @@ class TripBottomSheet extends ConsumerWidget {
 
                     const SizedBox(height: 16),
 
-                    // Trip Summary
-                    if (tripState.pinnedLocations.isNotEmpty) ...[
+                    // Trip Summary - OPTIMIZATION: Build only if there are locations
+                    if (hasPinnedLocations) ...[
                       Consumer(builder: (context, ref, _) {
-                        final locationsForDate = ref.watch(locationsForSelectedDateProvider);
-                        return _buildTripSummary(context, tripState, locationsForDate.length);
+                        final locationsForDate =
+                            ref.watch(locationsForSelectedDateProvider);
+                        final totalTravelTime = ref.watch(
+                            tripProvider.select((s) => s.totalTravelTime));
+                        final totalDistance = ref
+                            .watch(tripProvider.select((s) => s.totalDistance));
+                        return _buildTripSummary(context, totalTravelTime,
+                            totalDistance, locationsForDate.length);
                       }),
                       const SizedBox(height: 16),
                     ],
 
                     // Date Selector - Moved here from the header
-                    if (tripState.pinnedLocations.isNotEmpty) ...[
+                    if (hasPinnedLocations) ...[
                       _buildDatePicker(context, ref),
                     ],
 
-
                     // Locations List
                     Consumer(builder: (context, ref, _) {
-                      final locationsForDate = ref.watch(locationsForSelectedDateProvider);
-                      return _buildLocationsList(context, ref, locationsForDate, scrollController);
+                      final locationsForDate =
+                          ref.watch(locationsForSelectedDateProvider);
+                      return _buildLocationsList(
+                          context, ref, locationsForDate, scrollController);
                     }),
                   ],
                 ),
@@ -158,7 +173,13 @@ class TripBottomSheet extends ConsumerWidget {
     });
   });
 
-  Widget _buildDefaultHeader(BuildContext context, WidgetRef ref, TripState tripState) {
+  Widget _buildDefaultHeader(BuildContext context, WidgetRef ref) {
+    // OPTIMIZATION: Read values only when needed, not watched in parent
+    final hasPinnedLocations =
+        ref.watch(tripProvider.select((s) => s.pinnedLocations.isNotEmpty));
+    final hasOptimizedRoute =
+        ref.watch(tripProvider.select((s) => s.optimizedRoute.isNotEmpty));
+
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
@@ -186,7 +207,7 @@ class TripBottomSheet extends ConsumerWidget {
             //     );
             //   },
             // ),
-            if (tripState.pinnedLocations.isNotEmpty) ...[
+            if (hasPinnedLocations) ...[
               Container(
                 height: 24,
                 width: 1,
@@ -201,7 +222,8 @@ class TripBottomSheet extends ConsumerWidget {
                       ? null
                       : () {
                           ref.read(locationsForSelectedDateProvider);
-                          _showChooseStartPointDialog(context, ref, isReoptimizing: tripState.optimizedRoute.isNotEmpty);
+                          _showChooseStartPointDialog(context, ref,
+                              isReoptimizing: hasOptimizedRoute);
                         },
                   color: Theme.of(context).colorScheme.primary,
                   tooltip: 'Optimize route',
@@ -215,12 +237,14 @@ class TripBottomSheet extends ConsumerWidget {
   }
 
   Widget _buildSelectionModeHeader(BuildContext context, WidgetRef ref) {
-    final selectedCount = ref.watch(selectedLocationsProvider.select((s) => s.length));
-    
+    final selectedCount =
+        ref.watch(selectedLocationsProvider.select((s) => s.length));
+
     // FIX: Use only the locations for the selected date to determine the total count and which IDs to select.
     final locationsForDate = ref.watch(locationsForSelectedDateProvider);
     final totalCountForDate = locationsForDate.length;
-    final allSelectedOnDate = selectedCount == totalCountForDate && totalCountForDate > 0;
+    final allSelectedOnDate =
+        selectedCount == totalCountForDate && totalCountForDate > 0;
 
     // Determine if we are on a past date to disable editing actions.
     final selectedDate = ref.watch(selectedDateProvider);
@@ -253,14 +277,17 @@ class TripBottomSheet extends ConsumerWidget {
           children: [
             // Select All / Deselect All Button
             if (totalCountForDate > 0) ...[
-              Text(allSelectedOnDate ? 'Deselect All' : 'Select All', style: Theme.of(context).textTheme.bodyMedium),
+              Text(allSelectedOnDate ? 'Deselect All' : 'Select All',
+                  style: Theme.of(context).textTheme.bodyMedium),
               Checkbox(
                 value: allSelectedOnDate,
                 onChanged: (bool? value) {
-                  final selectedNotifier = ref.read(selectedLocationsProvider.notifier);
+                  final selectedNotifier =
+                      ref.read(selectedLocationsProvider.notifier);
                   if (value == true) {
                     // Select all for the current date
-                    final idsForDate = locationsForDate.map((l) => l.id).toSet();
+                    final idsForDate =
+                        locationsForDate.map((l) => l.id).toSet();
                     selectedNotifier.state = idsForDate;
                   } else {
                     // Deselect all
@@ -278,24 +305,27 @@ class TripBottomSheet extends ConsumerWidget {
                     _showMoveLocationsDialog(context, ref);
                   } else if (value == 'copy') {
                     _showCopyLocationsDialog(context, ref);
-                  } else if (value == 'skip' && !isPastDate) { // Only allow skipping on current/future dates
+                  } else if (value == 'skip' && !isPastDate) {
+                    // Only allow skipping on current/future dates
                     // Add skip action
                     _showSkipConfirmationDialog(context, ref);
                   }
                 },
-                icon: Icon(Icons.more_vert, color: Theme.of(context).textTheme.bodyMedium?.color),
+                icon: Icon(Icons.more_vert,
+                    color: Theme.of(context).textTheme.bodyMedium?.color),
                 itemBuilder: (context) => [
                   PopupMenuItem<String>(
                     value: 'delete',
-                    enabled: !isPastDate,
+                    enabled: true,
                     child: ListTile(
                       leading: Icon(
                         Icons.delete_outline,
-                        color: isPastDate ? Colors.grey : Theme.of(context).colorScheme.error,
+                        color: Theme.of(context).colorScheme.error,
                       ),
                       title: Text(
                         'Delete',
-                        style: TextStyle(color: isPastDate ? Colors.grey : Theme.of(context).colorScheme.error),
+                        style: TextStyle(
+                            color: Theme.of(context).colorScheme.error),
                       ),
                     ),
                   ),
@@ -303,19 +333,27 @@ class TripBottomSheet extends ConsumerWidget {
                     value: 'move',
                     enabled: !isPastDate,
                     child: ListTile(
-                      leading: Icon(Icons.calendar_today_outlined, color: isPastDate ? Colors.grey : null),
-                      title: Text('Move to...', style: TextStyle(color: isPastDate ? Colors.grey : null)),
+                      leading: Icon(Icons.calendar_today_outlined,
+                          color: isPastDate ? Colors.grey : null),
+                      title: Text('Move to...',
+                          style: TextStyle(
+                              color: isPastDate ? Colors.grey : null)),
                     ),
                   ),
-                  PopupMenuItem<String>( // Uses theme colors
+                  PopupMenuItem<String>(
+                    // Uses theme colors
                     value: 'skip',
                     enabled: !isPastDate, // Disable skipping for past dates
                     child: ListTile(
                       leading: Icon(
                         Icons.remove_circle_outline,
-                        color: isPastDate ? Colors.grey : Theme.of(context).textTheme.bodyMedium?.color,
+                        color: isPastDate
+                            ? Colors.grey
+                            : Theme.of(context).textTheme.bodyMedium?.color,
                       ),
-                      title: Text('Skip', style: TextStyle(color: isPastDate ? Colors.grey : null)),
+                      title: Text('Skip',
+                          style: TextStyle(
+                              color: isPastDate ? Colors.grey : null)),
                     ),
                   ),
                   const PopupMenuItem(
@@ -339,8 +377,8 @@ class TripBottomSheet extends ConsumerWidget {
       ref.watch(routeClearerProvider);
 
       final selectedDate = ref.watch(selectedDateProvider);
-      final isToday = selectedDate.isAtSameMomentAs(
-          DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day));
+      final isToday = selectedDate.isAtSameMomentAs(DateTime(
+          DateTime.now().year, DateTime.now().month, DateTime.now().day));
 
       final highlightedDates = ref.read(datesWithLocationsProvider);
       final earliestDate = highlightedDates.isNotEmpty
@@ -372,7 +410,8 @@ class TripBottomSheet extends ConsumerWidget {
                   context: context,
                   initialDate: selectedDate,
                   firstDate: firstDate,
-                  lastDate: DateTime.now().add(const Duration(days: 365 * 5)), // 5 years in the future
+                  lastDate: DateTime.now().add(
+                      const Duration(days: 365 * 5)), // 5 years in the future
                   highlightedDates: highlightedDates,
                 );
 
@@ -382,9 +421,7 @@ class TripBottomSheet extends ConsumerWidget {
               },
               icon: const Icon(Icons.calendar_today_outlined),
               label: Text(
-                isToday
-                    ? 'Today'
-                    : DateFormat.yMMMd().format(selectedDate),
+                isToday ? 'Today' : DateFormat.yMMMd().format(selectedDate),
                 textAlign: TextAlign.center,
               ),
               style: TextButton.styleFrom(
@@ -411,10 +448,10 @@ class TripBottomSheet extends ConsumerWidget {
       margin: const EdgeInsets.only(top: 16),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.secondary.withOpacity(0.15),
+        color: Theme.of(context).colorScheme.secondary.withValues(alpha: 0.15),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
-          color: Theme.of(context).colorScheme.secondary.withOpacity(0.5),
+          color: Theme.of(context).colorScheme.secondary.withValues(alpha: 0.5),
           width: 1,
         ),
       ),
@@ -429,16 +466,18 @@ class TripBottomSheet extends ConsumerWidget {
           const SizedBox(width: 10),
           Text(
             'Viewing Past Trip (Read-Only)',
-            style: Theme.of(context).textTheme.titleSmall
-                ?.copyWith(color: Theme.of(context).colorScheme.secondary, fontWeight: FontWeight.bold),
+            style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                color: Theme.of(context).colorScheme.secondary,
+                fontWeight: FontWeight.bold),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildTripSummary(BuildContext context, TripState tripState, int totalStopsForDate) {
-    final estimatedArrival = DateTime.now().add(tripState.totalTravelTime);
+  Widget _buildTripSummary(BuildContext context, Duration totalTravelTime,
+      double totalDistance, int totalStopsForDate) {
+    final estimatedArrival = DateTime.now().add(totalTravelTime);
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -446,7 +485,7 @@ class TripBottomSheet extends ConsumerWidget {
         color: Theme.of(context).cardColor,
         borderRadius: BorderRadius.circular(16),
         border: Border.all(
-          color: Theme.of(context).colorScheme.primary.withOpacity(0.3),
+          color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.3),
           width: 1,
         ),
       ),
@@ -454,23 +493,46 @@ class TripBottomSheet extends ConsumerWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Icon(
-                Icons.route, // Uses theme colors
-                color: Theme.of(context).colorScheme.primary,
-                size: 20,
+              Row(
+                children: [
+                  Icon(
+                    Icons.route, // Uses theme colors
+                    color: Theme.of(context).colorScheme.primary,
+                    size: 20,
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Route Summary', // Uses theme colors
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                          color: AppTheme.primaryColor,
+                        ),
+                  ),
+                ],
               ),
-              const SizedBox(width: 8),
-              Text(
-                'Route Summary', // Uses theme colors
-                style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  color: AppTheme.primaryColor,
+              // Google Maps navigation button - only show if there are 2+ locations
+              if (totalStopsForDate >= 2)
+                Consumer(
+                  builder: (context, ref, _) {
+                    return IconButton.filledTonal(
+                      onPressed: () => _openGoogleMaps(context, ref),
+                      icon: const Icon(Icons.directions, size: 20),
+                      tooltip: 'Open in Google Maps',
+                      style: IconButton.styleFrom(
+                        backgroundColor: Theme.of(context)
+                            .colorScheme
+                            .primary
+                            .withValues(alpha: 0.15),
+                        foregroundColor: Theme.of(context).colorScheme.primary,
+                        padding: const EdgeInsets.all(8),
+                      ),
+                    );
+                  },
                 ),
-              ),
             ],
           ),
           const SizedBox(height: 12),
-
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
@@ -482,12 +544,12 @@ class TripBottomSheet extends ConsumerWidget {
               _summaryItem(
                 context,
                 'Travel Time',
-                _formatDuration(tripState.totalTravelTime),
+                _formatDuration(totalTravelTime),
               ),
               _summaryItem(
                 context,
                 'Distance',
-                _formatDistance(tripState.totalDistance),
+                _formatDistance(totalDistance),
               ),
             ],
           ),
@@ -502,7 +564,6 @@ class TripBottomSheet extends ConsumerWidget {
               ),
             ],
           ),
-
           Consumer(builder: (context, ref, _) {
             final isGenerating = ref.watch(isGeneratingRouteProvider);
             if (!isGenerating) return const SizedBox.shrink();
@@ -522,8 +583,8 @@ class TripBottomSheet extends ConsumerWidget {
                   Text(
                     'Optimizing route...', // Uses theme colors
                     style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: AppTheme.primaryColor,
-                    ),
+                          color: AppTheme.primaryColor,
+                        ),
                   ),
                 ],
               ),
@@ -534,6 +595,53 @@ class TripBottomSheet extends ConsumerWidget {
     );
   }
 
+  // Opens Google Maps with directions from the first to last location
+  Future<void> _openGoogleMaps(BuildContext context, WidgetRef ref) async {
+    try {
+      final locations = ref.read(locationsForSelectedDateProvider);
+
+      if (locations.length < 2) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Need at least 2 locations to open directions'),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+        return;
+      }
+
+      final firstLocation = locations.first;
+      final lastLocation = locations.last;
+
+      // Construct Google Maps URL with directions
+      final startLat = firstLocation.coordinates.latitude;
+      final startLng = firstLocation.coordinates.longitude;
+      final endLat = lastLocation.coordinates.latitude;
+      final endLng = lastLocation.coordinates.longitude;
+
+      final url = Uri.parse(
+        'https://www.google.com/maps/dir/?api=1&origin=$startLat,$startLng&destination=$endLat,$endLng&travelmode=driving',
+      );
+
+      if (await canLaunchUrl(url)) {
+        await launchUrl(url, mode: LaunchMode.externalApplication);
+      } else {
+        throw Exception('Could not launch Google Maps');
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Failed to open Google Maps'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
   Widget _summaryItem(BuildContext context, String label, String value) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -542,18 +650,19 @@ class TripBottomSheet extends ConsumerWidget {
         Text(
           value,
           style: Theme.of(context).textTheme.titleLarge?.copyWith(
-            color: Theme.of(context).colorScheme.primary,
-          ),
+                color: Theme.of(context).colorScheme.primary,
+              ),
         ),
       ],
     );
   }
 
-  Widget _buildLocationsList(
-      BuildContext context, WidgetRef ref, List<LocationModel> locations, ScrollController scrollController) {
+  Widget _buildLocationsList(BuildContext context, WidgetRef ref,
+      List<LocationModel> locations, ScrollController scrollController) {
     if (locations.isEmpty) {
       return Container(
-        padding: const EdgeInsets.only(left: 32, right: 32, bottom: 32, top: 16),
+        padding:
+            const EdgeInsets.only(left: 32, right: 32, bottom: 32, top: 16),
         child: Column(
           children: [
             Icon(
@@ -583,22 +692,37 @@ class TripBottomSheet extends ConsumerWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Normal (upcoming) locations
+        // Normal (upcoming) locations - OPTIMIZATION: Use ListView.builder with keys
         if (normalLocations.isNotEmpty)
-          ListView.separated(
+          ListView.builder(
+            // OPTIMIZATION: Use ListView.builder instead of ListView.separated for better performance
             shrinkWrap: true,
             physics: const NeverScrollableScrollPhysics(),
             itemCount: normalLocations.length,
-            separatorBuilder: (context, index) => Divider(
-              height: 1,
-              thickness: 1,
-              color: Theme.of(context).dividerColor.withOpacity(0.1),
-              indent: 20,
-              endIndent: 20,
-            ),
             itemBuilder: (context, index) {
               final location = normalLocations[index];
-              return _buildLocationCard(context, ref, location, index + 1, scrollController);
+              // OPTIMIZATION: Add unique keys to prevent unnecessary rebuilds
+              return Column(
+                key: ValueKey(location.id),
+                children: [
+                  OptimizedLocationCard(
+                    location: location,
+                    number: index + 1,
+                    scrollController: scrollController,
+                    sheetController: sheetController,
+                    onLocationTap: onLocationTap,
+                  ),
+                  if (index < normalLocations.length - 1)
+                    Divider(
+                      height: 1,
+                      thickness: 1,
+                      color:
+                          Theme.of(context).dividerColor.withValues(alpha: 0.1),
+                      indent: 20,
+                      endIndent: 20,
+                    ),
+                ],
+              );
             },
           ),
 
@@ -608,11 +732,15 @@ class TripBottomSheet extends ConsumerWidget {
             padding: const EdgeInsets.only(top: 24.0, bottom: 8.0, left: 4.0),
             child: Row(
               children: [
-                Icon(Icons.remove_circle_outline, color: Colors.grey[600], size: 20),
+                Icon(Icons.remove_circle_outline,
+                    color: Colors.grey[600], size: 20),
                 const SizedBox(width: 8),
                 Text(
                   'Skipped Locations',
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(color: Colors.grey[600]),
+                  style: Theme.of(context)
+                      .textTheme
+                      .titleMedium
+                      ?.copyWith(color: Colors.grey[600]),
                 ),
               ],
             ),
@@ -623,8 +751,15 @@ class TripBottomSheet extends ConsumerWidget {
             itemCount: skippedLocations.length,
             itemBuilder: (context, index) {
               final location = skippedLocations[index];
-              // Pass the original index from the full list to maintain correct highlighting and actions
-              return _buildLocationCard(context, ref, location, -1, scrollController);
+              // OPTIMIZATION: Add unique keys to prevent unnecessary rebuilds
+              return OptimizedLocationCard(
+                key: ValueKey('skipped_${location.id}'),
+                location: location,
+                number: -1,
+                scrollController: scrollController,
+                sheetController: sheetController,
+                onLocationTap: onLocationTap,
+              );
             },
           ),
         ],
@@ -633,14 +768,14 @@ class TripBottomSheet extends ConsumerWidget {
         // Optimize button
         Consumer(builder: (context, ref, _) {
           final isGenerating = ref.watch(isGeneratingRouteProvider);
-          final tripState = ref.watch(tripProvider);
+          final hasRoute = ref
+              .watch(tripProvider.select((s) => s.optimizedRoute.isNotEmpty));
           final selectedDate = ref.watch(selectedDateProvider);
 
           final now = DateTime.now();
           final today = DateTime(now.year, now.month, now.day);
           final isPastDate = selectedDate.isBefore(today);
 
-          final hasRoute = tripState.optimizedRoute.isNotEmpty;
           final isViewingHistory = isPastDate && hasRoute;
 
           String buttonText;
@@ -675,12 +810,64 @@ class TripBottomSheet extends ConsumerWidget {
                   ? const SizedBox(
                       height: 16,
                       width: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black),
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2, color: Colors.black),
                     )
-                  : Icon(isViewingHistory ? Icons.visibility_outlined : Icons.route),
+                  : Icon(isViewingHistory
+                      ? Icons.visibility_outlined
+                      : Icons.route),
               label: Text(buttonText),
               style: ElevatedButton.styleFrom(
                 padding: const EdgeInsets.symmetric(vertical: 16),
+              ),
+            ),
+          );
+        }),
+        const SizedBox(height: 12),
+        Consumer(builder: (context, ref, _) {
+          final locations = ref.watch(locationsForSelectedDateProvider);
+          final isGenerating = ref.watch(isGeneratingRouteProvider);
+
+          if (locations.isEmpty) return const SizedBox.shrink();
+
+          return SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: isGenerating
+                  ? null
+                  : () async {
+                      try {
+                        final csvService = CsvService();
+                        await csvService.generateAndShareTripCsv(locations);
+                      } on MissingPluginException {
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text(
+                                  'Please restart the app to enable CSV download.'),
+                              backgroundColor: Colors.orange,
+                            ),
+                          );
+                        }
+                      } catch (e) {
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                  'Failed to download CSV. Please restart the app.'),
+                              backgroundColor: Colors.red,
+                            ),
+                          );
+                        }
+                      }
+                    },
+              icon: const Icon(Icons.download),
+              label: const Text('Download Trip CSV'),
+              style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                side: BorderSide(
+                  color: Theme.of(context).colorScheme.primary,
+                ),
               ),
             ),
           );
@@ -689,213 +876,12 @@ class TripBottomSheet extends ConsumerWidget {
     );
   }
 
-  Widget _buildLocationCard(BuildContext context, WidgetRef ref, LocationModel location,
-      int number,
-      ScrollController scrollController) {
-    final tripState = ref.watch(tripProvider);    
-    final index = tripState.pinnedLocations.indexOf(location);
-    final isHighlighted = ref.watch(highlightedLocationIndexProvider) == index;
-    final isSelectionMode = ref.watch(isSelectionModeProvider);
-    final isSelected = ref.watch(selectedLocationsProvider.select((s) => s.contains(location.id)));
-    final isSkipped = location.isSkipped;
-
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 300),
-      decoration: BoxDecoration(
-        color: isSelected
-            ? Theme.of(context).colorScheme.primary.withOpacity(0.25)
-            : (isHighlighted
-                ? Theme.of(context).colorScheme.primary.withOpacity(0.1)                
-                : Theme.of(context).cardColor),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: isHighlighted
-              ? Theme.of(context).colorScheme.primary
-              : Colors.transparent,
-          width: 2,
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.1),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],        
-        
-      ),
-      margin: const EdgeInsets.symmetric(vertical: 8.0),
-      child: ListTile(
-        onTap: () {
-          if (isSelectionMode) {
-            final selectedNotifier = ref.read(selectedLocationsProvider.notifier);
-            if (isSelected) {
-              selectedNotifier.update((state) => state.difference({location.id}));
-            } else {
-              selectedNotifier.update((state) => state.union({location.id}));
-            }
-          } else {
-            // Show detailed location info modal
-            showModalBottomSheet(
-              context: context,
-              backgroundColor: Colors.transparent,
-              isScrollControlled: true,
-              builder: (modalContext) => LocationDetailSheet(
-                location: location,
-                number: number,
-                parentScrollController: scrollController,
-                parentSheetController: sheetController,
-                onLocationTap: onLocationTap,
-              ),
-            );
-          }
-        },
-        onLongPress: () {
-          if (!isSelectionMode) {
-            ref.read(isSelectionModeProvider.notifier).state = true;
-            ref.read(selectedLocationsProvider.notifier).update((state) => state.union({location.id}));
-          }
-        },
-        leading: CircleAvatar(
-          backgroundColor: isSkipped ? Colors.grey : Theme.of(context).colorScheme.primary,
-          child: Text(
-            isSkipped ? '-' : '$number',
-            style: const TextStyle(
-              color: Colors.black, // This is the color for the number inside the circle
-              fontWeight: FontWeight.bold,
-            ), // Uses theme colors
-          ),
-        ),
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    location.name,
-                    style: Theme.of(context).textTheme.titleMedium,
-                    maxLines: 1, // Uses theme colors
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-              ],
-            ),
-            if (location.travelTimeFromPrevious != null && location.distanceFromPrevious != null) ...[
-              const SizedBox(height: 4),
-              Row(
-                children: [
-                  Icon(
-                    Icons.access_time,
-                    size: 14, // Uses theme colors
-                    color: Theme.of(context).colorScheme.primary,
-                  ),
-                  const SizedBox(width: 4),
-                  Text(
-                    _formatDuration(location.travelTimeFromPrevious!),
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith( // Uses theme colors
-                      color: Theme.of(context).colorScheme.primary,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Icon(
-                    Icons.straighten,
-                    size: 14, // Uses theme colors
-                    color: Theme.of(context).colorScheme.primary,
-                  ),
-                  const SizedBox(width: 4),
-                  Text(
-                    _formatDistance(location.distanceFromPrevious!),
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith( // Uses theme colors
-                      color: Theme.of(context).colorScheme.primary,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ],
-        ),
-        subtitle: Padding(
-          padding: const EdgeInsets.only(top: 4),
-          child: Text(
-            location.address,
-            style: Theme.of(context).textTheme.bodyMedium, // Uses theme colors
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-          ),
-        ),
-        trailing: isSelectionMode
-            ? Checkbox( // Checkbox for multi-selection mode
-              value: isSelected,
-              onChanged: (bool? value) {
-                final selectedNotifier = ref.read(selectedLocationsProvider.notifier);
-                if (value == true) {
-                  selectedNotifier.update((state) => state.union({location.id}));
-                } else {
-                  selectedNotifier.update((state) => state.difference({location.id}));
-                }
-              },
-            )
-            : PopupMenuButton<String>( // "More" menu for normal mode
-                icon: const Icon(Icons.more_vert),
-                onSelected: (value) {
-                  // Temporarily add the single location to the selection provider to reuse dialogs
-                  final selectedIds = {location.id};
-
-                  if (value == 'delete') {
-                    ref.read(selectedLocationsProvider.notifier).state = selectedIds;
-                    _showMultiDeleteConfirmationDialog(context, ref);
-                  } else if (value == 'skip') {
-                    ref.read(tripProvider.notifier).skipMultipleLocations(selectedIds);
-                  } else if (value == 'unskip') {
-                    ref.read(tripProvider.notifier).unskipMultipleLocations(selectedIds);
-                  }
-
-                  // Clear selection after action dialog is shown
-                  // Future.delayed(const Duration(milliseconds: 100), () {
-                  //   ref.read(selectedLocationsProvider.notifier).state = {};
-                  // });
-                },
-                itemBuilder: (context) {
-                  final isPastDate = ref.read(selectedDateProvider).isBefore(DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day));
-                  return [
-                    if (location.isSkipped)
-                      PopupMenuItem<String>(
-                        value: 'unskip',
-                        enabled: !isPastDate,
-                        child: const ListTile(leading: Icon(Icons.add_circle_outline), title: Text('Un-skip')),
-                      )
-                    else
-                      PopupMenuItem<String>(
-                        value: 'skip',
-                        enabled: !isPastDate,
-                        child: const ListTile(leading: Icon(Icons.remove_circle_outline), title: Text('Skip')),
-                      ),
-                    PopupMenuItem<String>(
-                      value: 'move',
-                      enabled: !isPastDate,
-                      child: const ListTile(leading: Icon(Icons.calendar_today_outlined), title: Text('Move to...')),
-                    ),
-                    const PopupMenuItem<String>(
-                      value: 'copy',
-                      child: ListTile(leading: Icon(Icons.copy), title: Text('Copy to...')),
-                    ),
-                    const PopupMenuDivider(),
-                    PopupMenuItem<String>(value: 'delete', enabled: !isPastDate, child: const ListTile(leading: Icon(Icons.delete_outline, color: Colors.red), title: Text('Delete', style: TextStyle(color: Colors.red)))),
-                  ];
-                },
-              ),
-      ),
-    );
-  }
-  
   void _showChooseStartPointDialog(BuildContext context, WidgetRef ref,
       {required bool isReoptimizing}) {
     final tripState = ref.read(tripProvider);
     // Always read the latest, most correct list of locations for the date from the provider.
     final locationsForDate = ref.read(locationsForSelectedDateProvider);
-    
+
     String? selectedStartId = tripState.currentLocation != null
         ? 'current_location'
         : (locationsForDate.isNotEmpty ? locationsForDate.first.id : null);
@@ -905,11 +891,14 @@ class TripBottomSheet extends ConsumerWidget {
       builder: (context) {
         return StatefulBuilder(
           builder: (context, setDialogState) {
-            return AlertDialog( // Uses theme colors
+            return AlertDialog(
+              // Uses theme colors
               backgroundColor: Theme.of(context).cardColor,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),              
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16)),
               title: const Text('Choose Starting Point'),
-              content: SizedBox( // Uses theme colors
+              content: SizedBox(
+                // Uses theme colors
                 width: double.maxFinite,
                 child: ListView(
                   shrinkWrap: true,
@@ -919,16 +908,20 @@ class TripBottomSheet extends ConsumerWidget {
                         title: const Text('My Current Location'),
                         value: 'current_location',
                         groupValue: selectedStartId,
-                        onChanged: (value) => setDialogState(() => selectedStartId = value),
+                        onChanged: (value) =>
+                            setDialogState(() => selectedStartId = value),
                         activeColor: Theme.of(context).colorScheme.primary,
                       ),
                     ...locationsForDate.map((location) {
                       return RadioListTile<String>(
-                        title: Text(location.name, overflow: TextOverflow.ellipsis),
-                        subtitle: Text(location.address, overflow: TextOverflow.ellipsis, maxLines: 1),
+                        title: Text(location.name,
+                            overflow: TextOverflow.ellipsis),
+                        subtitle: Text(location.address,
+                            overflow: TextOverflow.ellipsis, maxLines: 1),
                         value: location.id,
                         groupValue: selectedStartId,
-                        onChanged: (value) => setDialogState(() => selectedStartId = value),
+                        onChanged: (value) =>
+                            setDialogState(() => selectedStartId = value),
                         activeColor: Theme.of(context).colorScheme.primary,
                       );
                     }),
@@ -938,87 +931,35 @@ class TripBottomSheet extends ConsumerWidget {
               actions: [
                 TextButton(
                   onPressed: () => Navigator.of(context).pop(),
-                  child: Text('Cancel', style: TextStyle(color: Theme.of(context).textTheme.bodyMedium?.color)),
+                  child: Text('Cancel',
+                      style: TextStyle(
+                          color:
+                              Theme.of(context).textTheme.bodyMedium?.color)),
                 ),
                 ElevatedButton(
                   onPressed: () {
                     if (selectedStartId != null) {
                       final selectedDate = ref.read(selectedDateProvider);
                       ref.read(tripProvider.notifier).generateOptimizedRoute(
-                          startLocationId: selectedStartId, selectedDate: selectedDate);
+                          startLocationId: selectedStartId,
+                          selectedDate: selectedDate);
                     }
                     Navigator.of(context).pop();
                   },
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Theme.of(context).colorScheme.primary,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12)),
                   ),
                   child: Text(
                     isReoptimizing ? 'Re-optimize' : 'Optimize',
-                    style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold),
+                    style: const TextStyle(
+                        color: Colors.black, fontWeight: FontWeight.bold),
                   ),
                 ),
               ],
             );
           },
-        );
-      },
-    );
-  }
-
-  void _showDeleteConfirmationDialog(BuildContext context, WidgetRef ref, LocationModel location) {
-    showDialog(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          backgroundColor: Theme.of(context).cardColor,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: const Text('Delete Location'),
-          content: Text('Are you sure you want to delete "${location.name}"?'),
-          actionsPadding: const EdgeInsets.fromLTRB(24, 12, 24, 24),
-          actions: [
-            Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                ElevatedButton(
-                  onPressed: () async {
-                    Navigator.of(context).pop();
-                    await ref.read(tripProvider.notifier).removeLocation(location.id);
-
-                    // After deletion, if there are still locations, show the re-optimize dialog.
-                    if (ref.read(tripProvider).pinnedLocations.isNotEmpty) {
-                      ref.read(locationsForSelectedDateProvider);
-                      _showChooseStartPointDialog(context, ref, isReoptimizing: true);
-                    }
-                  },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Theme.of(context).colorScheme.error,
-                    foregroundColor: Theme.of(context).colorScheme.onError,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                  ),
-                  child: const Text(
-                    'Delete & Re-optimize',
-                    style: TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                ),
-                const SizedBox(height: 8),
-                TextButton(
-                  onPressed: () => Navigator.of(context).pop(),
-                  child: Text(
-                    'Cancel',
-                    style: TextStyle(
-                      color: Theme.of(context).textTheme.bodyMedium?.color,
-                    ),
-                  ),
-                  style: TextButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                  ),
-                ),
-              ],
-            ),
-          ],
         );
       },
     );
@@ -1031,18 +972,24 @@ class TripBottomSheet extends ConsumerWidget {
       builder: (dialogContext) {
         return AlertDialog(
           backgroundColor: Theme.of(context).cardColor, // Uses theme colors
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
           title: Text('Delete $selectedCount Locations?'),
-          content: const Text('Are you sure you want to permanently delete the selected locations? This action cannot be undone.'),
+          content: const Text(
+              'Are you sure you want to permanently delete the selected locations? This action cannot be undone.'),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(dialogContext).pop(),
-              child: Text('Cancel', style: TextStyle(color: Theme.of(context).textTheme.bodyMedium?.color)),
+              child: Text('Cancel',
+                  style: TextStyle(
+                      color: Theme.of(context).textTheme.bodyMedium?.color)),
             ),
             ElevatedButton(
               onPressed: () {
                 final selectedIds = ref.read(selectedLocationsProvider);
-                ref.read(tripProvider.notifier).removeMultipleLocations(selectedIds);
+                ref
+                    .read(tripProvider.notifier)
+                    .removeMultipleLocations(selectedIds);
                 // Exit selection mode after action
                 ref.read(isSelectionModeProvider.notifier).state = false;
                 ref.read(selectedLocationsProvider.notifier).state = {};
@@ -1051,79 +998,10 @@ class TripBottomSheet extends ConsumerWidget {
               style: ElevatedButton.styleFrom(
                 backgroundColor: Theme.of(context).colorScheme.error,
                 foregroundColor: Theme.of(context).colorScheme.onError,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12)),
               ),
               child: const Text('Delete'),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  void _showEditLocationNameDialog(BuildContext context, WidgetRef ref, LocationModel location) {
-    final textController = TextEditingController(text: location.name);
-
-    showDialog(
-      context: context,
-      builder: (context) {
-        return AlertDialog( // Uses theme colors
-          backgroundColor: Theme.of(context).cardColor,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: Row(
-            children: [
-              Icon(Icons.edit, color: Theme.of(context).colorScheme.primary, size: 24),
-              const SizedBox(width: 8),
-              const Text('Edit Location Name'),
-            ],
-          ),
-          content: TextField(
-            controller: textController,
-            autofocus: true,
-            decoration: InputDecoration(
-              hintText: 'Enter new name',
-              filled: true,
-              fillColor: Theme.of(context).colorScheme.surface,
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: BorderSide.none,
-              ),
-              focusedBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12), // Uses theme colors
-                borderSide: BorderSide(color: AppTheme.primaryColor, width: 2),
-              ),
-            ),
-            onSubmitted: (newName) {
-              if (newName.isNotEmpty && newName != location.name) {
-                ref.read(tripProvider.notifier).updateLocationName(location.id, newName);
-              }
-              Navigator.of(context).pop();
-            },
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: Text('Cancel', style: TextStyle(color: Theme.of(context).textTheme.bodyMedium?.color)),
-            ),
-            ElevatedButton(
-              onPressed: () {
-                final newName = textController.text;
-                if (newName.isNotEmpty && newName != location.name) {
-                  ref.read(tripProvider.notifier).updateLocationName(location.id, newName);
-                }
-                Navigator.of(context).pop();
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Theme.of(context).colorScheme.primary,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-              ),
-              child: const Text(
-                'Save',
-                style: TextStyle(
-                  color: Colors.black,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
             ),
           ],
         );
@@ -1147,7 +1025,9 @@ class TripBottomSheet extends ConsumerWidget {
 
     if (newDate != null) {
       final selectedIds = ref.read(selectedLocationsProvider);
-      await ref.read(tripProvider.notifier).copyMultipleLocationsToDate(selectedIds, newDate);
+      await ref
+          .read(tripProvider.notifier)
+          .copyMultipleLocationsToDate(selectedIds, newDate);
 
       // Exit selection mode and clear selections
       ref.read(isSelectionModeProvider.notifier).state = false;
@@ -1174,7 +1054,9 @@ class TripBottomSheet extends ConsumerWidget {
 
     if (newDate != null) {
       final selectedIds = ref.read(selectedLocationsProvider);
-      await ref.read(tripProvider.notifier).updateMultipleLocationsScheduledDate(selectedIds, newDate);
+      await ref
+          .read(tripProvider.notifier)
+          .updateMultipleLocationsScheduledDate(selectedIds, newDate);
 
       // Exit selection mode and clear selections
       ref.read(isSelectionModeProvider.notifier).state = false;
@@ -1192,18 +1074,24 @@ class TripBottomSheet extends ConsumerWidget {
       builder: (dialogContext) {
         return AlertDialog(
           backgroundColor: Theme.of(context).cardColor,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
           title: Text('Skip $selectedCount Locations?'),
-          content: const Text('Are you sure you want to skip the selected locations? They will be excluded from the route but remain on the map.'),
+          content: const Text(
+              'Are you sure you want to skip the selected locations? They will be excluded from the route but remain on the map.'),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(dialogContext).pop(),
-              child: Text('Cancel', style: TextStyle(color: Theme.of(context).textTheme.bodyMedium?.color)),
+              child: Text('Cancel',
+                  style: TextStyle(
+                      color: Theme.of(context).textTheme.bodyMedium?.color)),
             ),
             ElevatedButton(
               onPressed: () {
                 final selectedIds = ref.read(selectedLocationsProvider);
-                ref.read(tripProvider.notifier).skipMultipleLocations(selectedIds);
+                ref
+                    .read(tripProvider.notifier)
+                    .skipMultipleLocations(selectedIds);
                 ref.read(isSelectionModeProvider.notifier).state = false;
                 ref.read(selectedLocationsProvider.notifier).state = {};
                 Navigator.of(dialogContext).pop();

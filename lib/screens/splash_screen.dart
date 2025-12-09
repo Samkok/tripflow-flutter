@@ -1,9 +1,8 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:voyza/screens/map_screen.dart';
+import 'package:voyza/screens/main_screen.dart';
 import 'package:voyza/services/marker_cache_service.dart';
 import 'package:voyza/core/theme.dart';
-import 'package:voyza/utils/marker_utils.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -35,7 +34,7 @@ class _SplashScreenState extends State<SplashScreen> {
     // Navigate to the home screen
     if (mounted) {
       Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (context) => MapScreen()),
+        MaterialPageRoute(builder: (context) => const MainScreen()),
       );
     }
   }
@@ -47,8 +46,8 @@ class _SplashScreenState extends State<SplashScreen> {
         decoration: BoxDecoration(
           gradient: LinearGradient(
             colors: [
-              AppTheme.secondaryColor.withOpacity(0.9),
-              AppTheme.primaryColor.withOpacity(0.9),
+              AppTheme.secondaryColor.withValues(alpha: 0.9),
+              AppTheme.primaryColor.withValues(alpha: 0.9),
             ],
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
@@ -65,7 +64,7 @@ class _SplashScreenState extends State<SplashScreen> {
                 decoration: BoxDecoration(
                   boxShadow: [
                     BoxShadow(
-                      color: Colors.black.withOpacity(0.2),
+                      color: Colors.black.withValues(alpha: 0.2),
                       blurRadius: 15,
                       offset: const Offset(0, 5),
                     ),
@@ -76,7 +75,8 @@ class _SplashScreenState extends State<SplashScreen> {
               const SizedBox(height: 24),
               Text(
                 'VoyZa',
-                style: Theme.of(context).textTheme.headlineLarge?.copyWith(color: Colors.white, fontWeight: FontWeight.bold),
+                style: Theme.of(context).textTheme.headlineLarge?.copyWith(
+                    color: Colors.white, fontWeight: FontWeight.bold),
               ),
             ],
           ),

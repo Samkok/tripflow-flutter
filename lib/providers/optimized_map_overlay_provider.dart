@@ -8,11 +8,13 @@ import '../providers/trip_provider.dart';
 import '../providers/debounced_settings_provider.dart';
 import '../services/marker_cache_service.dart';
 import '../utils/zone_utils.dart';
+import '../utils/marker_utils.dart'; // Needed for MarkerBitmapResult type
 import '../core/theme.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 class CachedMarkersState {
-  // This will now hold the generated bitmaps, not the final Marker objects.
-  final Map<String, BitmapDescriptor> markerIcons;
+  // This will now hold the generated bitmaps AND anchors
+  final Map<String, MarkerBitmapResult> markerIcons;
   final String cacheKey;
 
   const CachedMarkersState({
@@ -21,30 +23,37 @@ class CachedMarkersState {
   });
 }
 
-String _generateLocationsCacheKey(List<LocationModel> locations, LatLng? currentLocation, DateTime selectedDate) {
+String _generateLocationsCacheKey(List<LocationModel> locations,
+    LatLng? currentLocation, DateTime selectedDate) {
   // Use a combination of IDs and count to ensure the key changes when items are added/removed.
   final locationIds = locations.map((l) => '${l.id}-${l.isSkipped}').join('_');
-  final currentLocKey = currentLocation != null ? '${currentLocation.latitude}_${currentLocation.longitude}' : 'none';
+  final currentLocKey = currentLocation != null
+      ? '${currentLocation.latitude}_${currentLocation.longitude}'
+      : 'none';
   final dateKey = selectedDate.toIso8601String();
   return 'locations_${locations.length}_${locationIds}_current_${currentLocKey}_date_$dateKey';
 }
 
 /// A provider that generates and caches marker bitmaps.
 /// This is the expensive part that should only run when location data changes.
-final cachedMarkerBitmapsProvider = FutureProvider<CachedMarkersState>((ref) async {
+final cachedMarkerBitmapsProvider =
+    FutureProvider<CachedMarkersState>((ref) async {
   // OPTIMIZED: Use select() to only rebuild when locations or currentLocation change
-  final locationsForDate = ref.watch(locationsForSelectedDateProvider); // This will now be the optimized list if available
+  final locationsForDate = ref.watch(
+      locationsForSelectedDateProvider); // This will now be the optimized list if available
   final selectedDate = ref.watch(selectedDateProvider);
   final tripState = ref.watch(tripProvider);
-  final currentLocation = ref.watch(tripProvider.select((state) => state.currentLocation));
+  final currentLocation =
+      ref.watch(tripProvider.select((state) => state.currentLocation));
   final isDarkMode = ref.watch(themeProvider) == ThemeMode.dark;
-  
-  final cacheKey = _generateLocationsCacheKey(locationsForDate, currentLocation, selectedDate);
+
+  final cacheKey = _generateLocationsCacheKey(
+      locationsForDate, currentLocation, selectedDate);
 
   // DEBUG: Uncomment to track marker generation
   // print('🎨 Generating cached markers - locations: ${pinnedLocations.length}, showNames: $showPlaceNames');
 
-  final Map<String, BitmapDescriptor> markerIcons = {};
+  final Map<String, MarkerBitmapResult> markerIcons = {};
   final markerCache = MarkerCacheService();
 
   if (currentLocation != null) {
@@ -53,25 +62,28 @@ final cachedMarkerBitmapsProvider = FutureProvider<CachedMarkersState>((ref) asy
   }
 
   // OPTIMIZED: Use batch marker generation for better performance
-  int nonSkippedIndex = 0; // This index will now correctly reflect the optimized order
-  for (final location in locationsForDate) { // Iterate over the correctly ordered list
+  int nonSkippedIndex =
+      0; // This index will now correctly reflect the optimized order
+  for (final location in locationsForDate) {
+    // Iterate over the correctly ordered list
     int markerNumber;
 
     // Check if this location is the designated start location for the route
     final isStartLocation = tripState.optimizedRoute.isNotEmpty &&
-                              tripState.startLocationId == location.id;
+        tripState.startLocationId == location.id;
 
     if (isStartLocation) {
       markerNumber = 0; // Use 0 to signify the start location
     }
     if (location.isSkipped) {
-      markerNumber = -1; // Use -1 to indicate a skipped location to the marker service
+      markerNumber =
+          -1; // Use -1 to indicate a skipped location to the marker service
     } else {
       nonSkippedIndex++;
       markerNumber = nonSkippedIndex;
     }
 
-    final customIcon = await markerCache.getNumberedMarker(
+    final customIconResult = await markerCache.getNumberedMarker(
       isStart: isStartLocation,
       number: markerNumber,
       name: location.name,
@@ -81,7 +93,7 @@ final cachedMarkerBitmapsProvider = FutureProvider<CachedMarkersState>((ref) asy
       isSkipped: location.isSkipped, // Pass the skipped status
     );
 
-    markerIcons[location.id] = customIcon;
+    markerIcons[location.id] = customIconResult;
   }
 
   // DEBUG: Uncomment to track marker generation completion
@@ -95,9 +107,11 @@ final cachedMarkerBitmapsProvider = FutureProvider<CachedMarkersState>((ref) asy
 /// This provider rebuilds instantly when names are toggled, without re-running the expensive bitmap generation.
 final finalMarkersProvider = Provider<Set<Marker>>((ref) {
   final markerBitmapsAsync = ref.watch(cachedMarkerBitmapsProvider);
-  final showPlaceNames = ref.watch(showPlaceNamesProvider); // This watch is crucial
+  final showPlaceNames =
+      ref.watch(showPlaceNamesProvider); // This watch is crucial
   final locationsForDate = ref.watch(locationsForSelectedDateProvider);
-  final currentLocation = ref.watch(tripProvider.select((s) => s.currentLocation));
+  final currentLocation =
+      ref.watch(tripProvider.select((s) => s.currentLocation));
 
   return markerBitmapsAsync.when(
     data: (cachedData) {
@@ -105,11 +119,14 @@ final finalMarkersProvider = Provider<Set<Marker>>((ref) {
       final markerIcons = cachedData.markerIcons;
 
       // Add current location marker
-      if (currentLocation != null && markerIcons.containsKey('current_location')) {
+      if (currentLocation != null &&
+          markerIcons.containsKey('current_location')) {
+        final result = markerIcons['current_location']!;
         markers.add(Marker(
           markerId: const MarkerId('current_location'),
           position: currentLocation,
-          icon: markerIcons['current_location']!,
+          icon: result.bitmap,
+          anchor: result.anchor,
           infoWindow: const InfoWindow(title: 'Your Location'),
         ));
       }
@@ -117,10 +134,12 @@ final finalMarkersProvider = Provider<Set<Marker>>((ref) {
       // Add location markers
       for (final location in locationsForDate) {
         if (markerIcons.containsKey(location.id)) {
+          final result = markerIcons[location.id]!;
           markers.add(Marker(
             markerId: MarkerId(location.id),
             position: location.coordinates,
-            icon: markerIcons[location.id]!,
+            icon: result.bitmap,
+            anchor: result.anchor,
             infoWindow: showPlaceNames
                 ? InfoWindow(title: location.name, snippet: location.address)
                 : InfoWindow.noText,
@@ -157,7 +176,8 @@ class ZoneCacheKey {
 
 final memoizedAutomaticZonesProvider = Provider<Set<Circle>>((ref) {
   // Watch all locations and the selected date to filter them.
-  final allLocations = ref.watch(tripProvider.select((state) => state.pinnedLocations));
+  final allLocations =
+      ref.watch(tripProvider.select((state) => state.pinnedLocations));
   final selectedDate = ref.watch(selectedDateProvider);
   final threshold = ref.watch(proximityThresholdCommittedProvider);
 
@@ -167,11 +187,13 @@ final memoizedAutomaticZonesProvider = Provider<Set<Circle>>((ref) {
 
     // This logic now mirrors `locationsForSelectedDateProvider` exactly.
     if (loc.scheduledDate == null) {
-      final addedAtDate = DateTime(loc.addedAt.year, loc.addedAt.month, loc.addedAt.day);
+      final addedAtDate =
+          DateTime(loc.addedAt.year, loc.addedAt.month, loc.addedAt.day);
       return selectedDate.isAtSameMomentAs(addedAtDate);
     }
     final locDate = loc.scheduledDate!;
-    final scheduledDateAtMidnight = DateTime(locDate.year, locDate.month, locDate.day);
+    final scheduledDateAtMidnight =
+        DateTime(locDate.year, locDate.month, locDate.day);
     return selectedDate.isAtSameMomentAs(scheduledDateAtMidnight);
   }).toList();
 
@@ -201,7 +223,8 @@ final styledPolylinesProvider = Provider<Set<Polyline>>((ref) {
 
   // The legPolylines are generated based on tripState.optimizedLocationsForSelectedDate.
   // So, we should use that list for checking bounds.
-  final List<LocationModel> currentOptimizedLocations = tripState.optimizedLocationsForSelectedDate;
+  final List<LocationModel> currentOptimizedLocations =
+      tripState.optimizedLocationsForSelectedDate;
 
   // We iterate through the legs of the route. The number of legs should equal
   // the number of segments between locations (n locations = n-1 legs, or n legs if starting from current location).
@@ -216,16 +239,35 @@ final styledPolylinesProvider = Provider<Set<Polyline>>((ref) {
     if (legPoints.isNotEmpty) {
       final polylineId = 'leg_$i';
       final isHighlighted = tappedPolylineId == polylineId;
+
+      // SMOOTH TRANSITIONS: Use different visual properties for highlighted vs non-highlighted
+      // The Google Maps SDK handles the visual transitions smoothly without reloading the map
       polylines.add(
         Polyline(
           polylineId: PolylineId(polylineId),
           points: legPoints,
-          color: isHighlighted ? AppTheme.primaryColor : Colors.grey.withOpacity(0.6),
-          width: isHighlighted ? 5 : 4,
+          // Smooth color transition: highlighted routes get accent color, others stay subtle
+          color: isHighlighted
+              ? AppTheme.primaryColor
+              : AppTheme.primaryColor.withValues(alpha: 0.5),
+          // Smooth width transition: highlighted routes get wider for emphasis
+          width: isHighlighted ? 7 : 5,
+          // Use patterns for visual distinction without map reload
+          patterns: isHighlighted
+              ? [] // Solid line for highlighted route
+              : [PatternItem.dot], // Dotted pattern for non-highlighted routes
+          // Ensure tap events are captured for interaction
           consumeTapEvents: true,
           onTap: () {
             ref.read(mapUIStateProvider.notifier).setTappedPolyline(polylineId);
           },
+          // Start and end cap for smooth line rendering
+          startCap: Cap.roundCap,
+          endCap: Cap.roundCap,
+          // Joint type for smooth corners
+          jointType: JointType.round,
+          // Geodesic for accurate path representation
+          geodesic: true,
         ),
       );
     }
@@ -244,54 +286,50 @@ final routeInfoMarkersProvider = FutureProvider<Set<Marker>>((ref) async {
   }
 
   final tripState = ref.watch(tripProvider);
-  final legIndex = int.tryParse(tappedPolylineId.replaceFirst('leg_', '')) ?? -1;
+  final legIndex =
+      int.tryParse(tappedPolylineId.replaceFirst('leg_', '')) ?? -1;
 
   // Ensure the leg index is valid.
-  if (legIndex < 0 || legIndex >= tripState.legDetails.length || legIndex >= tripState.legPolylines.length) {
+  if (legIndex < 0 ||
+      legIndex >= tripState.legDetails.length ||
+      legIndex >= tripState.legPolylines.length) {
     return {};
   }
 
   final legPoints = tripState.legPolylines[legIndex];
   if (legPoints.isEmpty) return {};
 
-  final legDetail = tripState.legDetails[legIndex];
-  final duration = legDetail['duration'] as Duration;
-  final distance = legDetail['distance'] as double;
-
   // Calculate midpoint for marker placement.
   final midIndex = legPoints.length ~/ 2;
   final midpoint = legPoints[midIndex];
 
-  // Determine if this specific marker should be highlighted
-  final isHighlighted = tappedPolylineId == 'leg_$legIndex';
-
   final markerCache = MarkerCacheService();
-  final icon = await markerCache.getRouteInfoMarker(
-    duration: _formatDurationForMarker(duration),
-    distance: _formatDistanceForMarker(distance),
-    isHighlighted: isHighlighted,
-  );
+  final result = await markerCache.getGoogleMapsButtonMarker();
 
-  return {Marker(markerId: MarkerId('route_info_$legIndex'), position: midpoint, icon: icon, anchor: const Offset(0.5, 0.5), zIndex: 10)};
+  return {
+    Marker(
+        markerId: MarkerId('route_info_$legIndex'),
+        position: midpoint,
+        icon: result.bitmap,
+        anchor: result.anchor,
+        zIndex: 10,
+        consumeTapEvents: true,
+        onTap: () {
+          final start = legPoints.first;
+          final end = legPoints.last;
+          _launchMapsUrl(start, end);
+        })
+  };
 });
 
-String _formatDurationForMarker(Duration duration) {
-  final hours = duration.inHours;
-  final minutes = duration.inMinutes % 60;
-
-  if (hours > 0) {
-    return '${hours}h ${minutes}m';
+Future<void> _launchMapsUrl(LatLng origin, LatLng destination) async {
+  final url = Uri.parse(
+    'https://www.google.com/maps/dir/?api=1&origin=${origin.latitude},${origin.longitude}&destination=${destination.latitude},${destination.longitude}&travelmode=driving',
+  );
+  if (await canLaunchUrl(url)) {
+    await launchUrl(url, mode: LaunchMode.externalApplication);
   } else {
-    return '${minutes}m';
-  }
-}
-
-String _formatDistanceForMarker(double distanceInMeters) {
-  if (distanceInMeters < 1000) {
-    return '${distanceInMeters.toInt()}m';
-  } else {
-    final kilometers = distanceInMeters / 1000;
-    return '${kilometers.toStringAsFixed(1)}km';
+    print('Could not launch $url'); // Use debugPrint in real app
   }
 }
 
@@ -307,7 +345,8 @@ class AssembledMapOverlays {
   });
 }
 
-final assembledMapOverlaysProvider = Provider<AsyncValue<AssembledMapOverlays>>((ref) {
+final assembledMapOverlaysProvider =
+    Provider<AsyncValue<AssembledMapOverlays>>((ref) {
   final markers = ref.watch(finalMarkersProvider);
   final polylines = ref.watch(styledPolylinesProvider);
   final automaticZones = ref.watch(memoizedAutomaticZonesProvider);
@@ -316,7 +355,8 @@ final assembledMapOverlaysProvider = Provider<AsyncValue<AssembledMapOverlays>>(
   // Since finalMarkersProvider is synchronous (deriving from an async one),
   // we can treat it more directly. We'll use the async state of the bitmap provider to manage loading/error states.
   return ref.watch(cachedMarkerBitmapsProvider).when(
-    data: (_) { // We don't need the data here, just the state.
+    data: (_) {
+      // We don't need the data here, just the state.
       final routeInfoMarkers = routeInfoMarkersAsync.valueOrNull ?? {};
 
       // DEBUG: Uncomment to track overlay assembly

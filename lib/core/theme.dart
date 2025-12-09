@@ -7,9 +7,9 @@ class AppTheme {
   static const Color accentColor = Color(0xFFFF6B6B);
 
   // Dark Theme Specific Colors
-  static const Color darkBackgroundColor = Color(0xFF0A0A0B);
-  static const Color darkSurfaceColor = Color(0xFF1A1A1B);
-  static const Color darkCardColor = Color(0xFF2A2A2B);
+  static const Color darkBackgroundColor = Color(0xFF17263c);
+  static const Color darkSurfaceColor = Color(0xFF242f3e);
+  static const Color darkCardColor = Color(0xFF242f3e);
 
   // Light Theme Specific Colors
   static const Color lightBackgroundColor = Color(0xFFF2F2F7);
@@ -97,7 +97,7 @@ class AppTheme {
     cardTheme: CardThemeData(
       color: lightCardColor,
       elevation: 8,
-      shadowColor: Colors.grey.withOpacity(0.2),
+      shadowColor: Colors.grey.withValues(alpha: 0.2),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
       ),

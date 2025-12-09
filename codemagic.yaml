@@ -1,0 +1,54 @@
+workflows:
+  android-deploy-workflows:
+    name: Android Deploy Workflow
+    instance_type: mac_mini_m1
+    max_build_duration: 120
+    triggering:
+      events:
+        - tag
+      cancel_previous_builds: true
+    environment:
+      groups:
+        - google-credentials
+      flutter: stable
+      xcode: latest
+      cocaopods: default
+    scripts:
+      - name: Setup keystore
+        script: |
+          echo $KEYSTORE_FILE | base64 --decode > /tmp/voyza_keystore.jks
+          cat >> "$CM_BUILD_DIR/android/key.properties" <<EOF
+          storePassword=$KEYSTORE_PASSWORD
+          keyPassword=$KEYSTORE_KEY_PASSWORD
+          keyAlias=voyza
+          storeFile=/tmp/voyza_keystore.jks
+          EOF
+      - name: Build ABB
+        script: |
+          cd $CM_BUILD_DIR
+          flutter pub get
+          flutter build appbundle
+    artifacts:
+      - build/app/outputs/bundle/release/app-release.aab
+    publishing:
+      google_play:
+        service_account_credentials: $GOOGLE_PLAY_CREDENTIALS
+        track: alpha
+  andriod-workflows:
+    name: Android workflows
+    instance_type: mac_mini_m1
+    max_build_duration: 120
+    environment:
+      groups:
+        - google-credentials
+      flutter: stable
+      xcode: latest
+      cocaopods: default
+    scripts:
+      - name: Install dependencies
+        script: |
+          flutter pub get
+      - name: Run tests
+        script: |
+          flutter test
+  

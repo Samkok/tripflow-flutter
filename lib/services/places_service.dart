@@ -1,6 +1,7 @@
-import 'package:dio/dio.dart';
-import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:dio/dio.dart';
+import 'api_service.dart';
+import 'location_service.dart';
 
 class PlacePrediction {
   final String placeId;
@@ -50,19 +51,21 @@ class PlaceDetails {
 }
 
 class PlacesService {
-  static final Dio _dio = Dio();
-  static String get _apiKey => dotenv.env['GOOGLE_PLACES_API_KEY'] ?? '';
-  static String get _geocodingApiKey => dotenv.env['GOOGLE_MAPS_API_KEY'] ?? '';
-
   static Future<List<PlacePrediction>> searchPlaces(String query) async {
     if (query.isEmpty) return [];
 
     try {
-      final url = 'https://maps.googleapis.com/maps/api/place/autocomplete/json'
+      final countryCode = await LocationService.getCurrentCountryCode();
+      String url =
+          'https://maps.googleapis.com/maps/api/place/autocomplete/json'
           '?input=${Uri.encodeComponent(query)}'
-          '&key=$_apiKey';
+          '&key=${ApiService.googlePlacesApiKey}';
 
-      final response = await _dio.get(url);
+      if (countryCode != null) {
+        url += '&components=country:$countryCode';
+      }
+
+      final response = await ApiService.dio.get(url);
       final data = response.data;
 
       if (data['status'] != 'OK') return [];
@@ -82,9 +85,9 @@ class PlacesService {
       final url = 'https://maps.googleapis.com/maps/api/place/details/json'
           '?place_id=$placeId'
           '&fields=name,formatted_address,geometry'
-          '&key=$_apiKey';
+          '&key=${ApiService.googlePlacesApiKey}';
 
-      final response = await _dio.get(url);
+      final response = await ApiService.dio.get(url);
       final data = response.data;
 
       if (data['status'] != 'OK') return null;
@@ -103,11 +106,12 @@ class PlacesService {
       if (url.contains('goo.gl/maps') || url.contains('maps.app.goo.gl')) {
         // Configure Dio to not throw an error on redirect status codes.
         // This allows us to inspect the response headers for the new URL.
-        final response = await _dio.get(
+        final response = await ApiService.dio.get(
           url,
           options: Options(
             followRedirects: false, // We need to handle the redirect manually
-            validateStatus: (status) => status != null && status < 400, // Treat 3xx as success
+            validateStatus: (status) =>
+                status != null && status < 400, // Treat 3xx as success
           ),
         );
 
@@ -144,39 +148,41 @@ class PlacesService {
     }
   }
 
-  static Future<PlaceDetails?> getPlaceFromCoordinates(LatLng coordinates) async {
+  static Future<PlaceDetails?> getPlaceFromCoordinates(
+      LatLng coordinates) async {
     try {
       final url = 'https://maps.googleapis.com/maps/api/geocode/json'
           '?latlng=${coordinates.latitude},${coordinates.longitude}'
-          '&key=$_geocodingApiKey';
+          '&key=${ApiService.googleMapsApiKey}';
 
-      final response = await _dio.get(url);
+      final response = await ApiService.dio.get(url);
       final data = response.data;
 
       if (data['status'] != 'OK' || data['results'].isEmpty) {
         // Return a generic location if geocoding fails
         return PlaceDetails(
           name: 'Pinned Location',
-          address: '${coordinates.latitude.toStringAsFixed(6)}, ${coordinates.longitude.toStringAsFixed(6)}',
+          address:
+              '${coordinates.latitude.toStringAsFixed(6)}, ${coordinates.longitude.toStringAsFixed(6)}',
           coordinates: coordinates,
         );
       }
 
       final result = data['results'][0];
       String name = 'Pinned Location';
-      
+
       // Try to get a meaningful name from the result
       final addressComponents = result['address_components'] as List;
       for (final component in addressComponents) {
         final types = component['types'] as List;
-        if (types.contains('establishment') || 
+        if (types.contains('establishment') ||
             types.contains('point_of_interest') ||
             types.contains('premise')) {
           name = component['long_name'];
           break;
         }
       }
-      
+
       // If no establishment name found, use the first address component
       if (name == 'Pinned Location' && addressComponents.isNotEmpty) {
         name = addressComponents[0]['long_name'] ?? 'Pinned Location';
@@ -192,7 +198,8 @@ class PlacesService {
       // Return a generic location if there's an error
       return PlaceDetails(
         name: 'Pinned Location',
-        address: '${coordinates.latitude.toStringAsFixed(6)}, ${coordinates.longitude.toStringAsFixed(6)}',
+        address:
+            '${coordinates.latitude.toStringAsFixed(6)}, ${coordinates.longitude.toStringAsFixed(6)}',
         coordinates: coordinates,
       );
     }

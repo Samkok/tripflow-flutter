@@ -1,5 +1,4 @@
 import 'dart:collection';
-import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:flutter/material.dart';
 import 'package:voyza/core/theme.dart';
 import '../utils/marker_utils.dart';
@@ -9,9 +8,9 @@ class MarkerCacheService {
   factory MarkerCacheService() => _instance;
   MarkerCacheService._internal();
 
-  final LinkedHashMap<String, BitmapDescriptor> _cache = LinkedHashMap();
+  final LinkedHashMap<String, MarkerBitmapResult> _cache = LinkedHashMap();
   static const int _maxCacheSize = 100;
-  BitmapDescriptor? _currentLocationIcon;
+  MarkerBitmapResult? _currentLocationIcon;
   bool _isPrewarmed = false;
 
   /// PERFORMANCE: Pre-generate common markers to avoid async delays on first use
@@ -61,7 +60,7 @@ class MarkerCacheService {
     return '${type}_${number}_${name}_${backgroundColor?.value}_${textColor?.value}';
   }
 
-  Future<BitmapDescriptor> getCurrentLocationMarker({
+  Future<MarkerBitmapResult> getCurrentLocationMarker({
     Color backgroundColor = const Color(0xFF00D4FF),
   }) async {
     if (_currentLocationIcon != null) {
@@ -74,20 +73,22 @@ class MarkerCacheService {
     );
 
     if (_cache.containsKey(key)) {
-      _currentLocationIcon = _cache[key]!;
-      return _currentLocationIcon!;
+      return _cache[key]!;
     }
 
     final icon = await MarkerUtils.getCurrentLocationMarker(
       backgroundColor: backgroundColor,
     );
 
-    _currentLocationIcon = icon;
-    _addToCache(key, icon);
-    return icon;
+    // Center anchor for location dot
+    final result = MarkerBitmapResult(icon, const Offset(0.5, 0.5));
+
+    _currentLocationIcon = result;
+    _addToCache(key, result);
+    return result;
   }
 
-  Future<BitmapDescriptor> getNumberedMarker({
+  Future<MarkerBitmapResult> getNumberedMarker({
     required int number,
     required String name,
     Color backgroundColor = const Color(0xFFFF6B6B),
@@ -98,13 +99,13 @@ class MarkerCacheService {
   }) async {
     final key =
         'numbered_${number}_${name}_${backgroundColor.value}_${textColor.value}_${isDarkMode}_${isSkipped}_$isStart';
-    
+
     if (_cache.containsKey(key)) {
       _moveToEnd(key);
       return _cache[key]!;
     }
 
-    final icon = await MarkerUtils.getCustomMarkerBitmap(
+    final result = await MarkerUtils.getCustomMarkerBitmap(
       isStart: isStart,
       number: number,
       name: name,
@@ -114,11 +115,11 @@ class MarkerCacheService {
       isSkipped: isSkipped, // Pass the skipped status
     );
 
-    _addToCache(key, icon);
-    return icon;
+    _addToCache(key, result);
+    return result;
   }
 
-  Future<BitmapDescriptor> getLegStartMarker() async {
+  Future<MarkerBitmapResult> getLegStartMarker() async {
     const key = 'leg_start_marker';
     if (_cache.containsKey(key)) {
       return _cache[key]!;
@@ -127,11 +128,12 @@ class MarkerCacheService {
       color: Colors.green.shade400,
       icon: Icons.flag_circle,
     );
-    _addToCache(key, icon);
-    return icon;
+    final result = MarkerBitmapResult(icon, const Offset(0.5, 0.5));
+    _addToCache(key, result);
+    return result;
   }
 
-  Future<BitmapDescriptor> getLegEndMarker() async {
+  Future<MarkerBitmapResult> getLegEndMarker() async {
     const key = 'leg_end_marker';
     if (_cache.containsKey(key)) {
       return _cache[key]!;
@@ -140,11 +142,12 @@ class MarkerCacheService {
       color: AppTheme.accentColor,
       icon: Icons.location_on,
     );
-    _addToCache(key, icon);
-    return icon;
+    final result = MarkerBitmapResult(icon, const Offset(0.5, 0.5));
+    _addToCache(key, result);
+    return result;
   }
 
-  Future<BitmapDescriptor> getDestinationMarker() async {
+  Future<MarkerBitmapResult> getDestinationMarker() async {
     const key = 'destination_marker';
     if (_cache.containsKey(key)) {
       _moveToEnd(key);
@@ -156,11 +159,26 @@ class MarkerCacheService {
       size: 100.0,
     );
 
-    _addToCache(key, icon);
-    return icon;
+    // Flag pole bottom is roughly at (0.1, 0.9) based on drawing commands
+    final result = MarkerBitmapResult(icon, const Offset(0.1, 0.9));
+
+    _addToCache(key, result);
+    return result;
   }
 
-  Future<BitmapDescriptor> getRouteInfoMarker({
+  Future<MarkerBitmapResult> getGoogleMapsButtonMarker() async {
+    const key =
+        'google_maps_button_marker_v2'; // Versioned to force cache refresh
+    if (_cache.containsKey(key)) {
+      return _cache[key]!;
+    }
+
+    final result = await MarkerUtils.getGoogleMapsButtonMarker();
+    _addToCache(key, result);
+    return result;
+  }
+
+  Future<MarkerBitmapResult> getRouteInfoMarker({
     required String duration,
     required String distance,
     bool isHighlighted = false,
@@ -180,16 +198,18 @@ class MarkerCacheService {
       accentColor: AppTheme.accentColor,
     );
 
-    _addToCache(key, icon);
-    return icon;
+    final result = MarkerBitmapResult(icon, const Offset(0.5, 0.5));
+
+    _addToCache(key, result);
+    return result;
   }
 
-  void _addToCache(String key, BitmapDescriptor icon) {
+  void _addToCache(String key, MarkerBitmapResult result) {
     if (_cache.length >= _maxCacheSize) {
       final firstKey = _cache.keys.first;
       _cache.remove(firstKey);
     }
-    _cache[key] = icon;
+    _cache[key] = result;
   }
 
   void _moveToEnd(String key) {

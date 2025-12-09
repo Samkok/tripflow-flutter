@@ -3,7 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:voyza/providers/map_ui_state_provider.dart';
 import 'package:voyza/providers/debounced_settings_provider.dart';
-import 'package:voyza/providers/theme_provider.dart';import '../models/location_model.dart';
+import 'package:voyza/providers/theme_provider.dart';
+import '../models/location_model.dart';
 import '../providers/trip_provider.dart';
 import '../providers/settings_provider.dart';
 import '../utils/marker_utils.dart';
@@ -39,27 +40,32 @@ class MapOverlayState {
 }
 
 class MapOverlayNotifier extends AsyncNotifier<MapOverlayState> {
-  BitmapDescriptor? _currentLocationIcon;  final Map<String, BitmapDescriptor> _numberedMarkerIcons = {}; // Cache for numbered markers
+  BitmapDescriptor? _currentLocationIcon;
+  final Map<String, MarkerBitmapResult> _numberedMarkerIcons =
+      {}; // Cache for numbered markers
 
   @override
   Future<MapOverlayState> build() async {
     print('🏗️ Building MapOverlayNotifier');
-    
+
     // Watch dependencies
     final tripState = ref.watch(tripProvider);
     final proximityThreshold = ref.watch(proximityThresholdCommittedProvider);
     final tappedPolylineId = ref.watch(tappedPolylineIdProvider);
     final showMarkerNames = ref.watch(showMarkerNamesProvider);
     final isDarkMode = ref.watch(themeProvider) == ThemeMode.dark;
-    
-    print('🔄 MapOverlay build triggered - locations: ${tripState.pinnedLocations.length}, threshold: ${proximityThreshold}m');
-    
+
+    print(
+        '🔄 MapOverlay build triggered - locations: ${tripState.pinnedLocations.length}, threshold: ${proximityThreshold}m');
+
     // Load marker icons if not already loaded
     if (_currentLocationIcon == null) {
-      _currentLocationIcon = await MarkerUtils.getCurrentLocationMarker(backgroundColor: Colors.black);
+      _currentLocationIcon = await MarkerUtils.getCurrentLocationMarker(
+          backgroundColor: Colors.black);
     }
-    
-    return await _generateOverlays(tripState, proximityThreshold, tappedPolylineId, showMarkerNames, isDarkMode);
+
+    return await _generateOverlays(tripState, proximityThreshold,
+        tappedPolylineId, showMarkerNames, isDarkMode);
   }
 
   Future<MapOverlayState> _generateOverlays(
@@ -69,8 +75,9 @@ class MapOverlayNotifier extends AsyncNotifier<MapOverlayState> {
     bool showMarkerNames,
     bool isDarkMode,
   ) async {
-    print('🎨 Generating overlays with ${tripState.pinnedLocations.length} locations');
-    
+    print(
+        '🎨 Generating overlays with ${tripState.pinnedLocations.length} locations');
+
     final Set<Marker> markers = {};
     final Set<Polyline> polylines = {};
 
@@ -89,27 +96,28 @@ class MapOverlayNotifier extends AsyncNotifier<MapOverlayState> {
     // Pinned location markers with custom numbered icons
     for (int i = 0; i < tripState.pinnedLocations.length; i++) {
       final location = tripState.pinnedLocations[i];
-      
+
       // Get custom numbered marker from cache or generate if not present
       final int markerNumber = i + 1;
       final String cacheKey = '${markerNumber}_${location.name}_$isDarkMode';
-      BitmapDescriptor? customIcon = _numberedMarkerIcons[cacheKey];
-      if (customIcon == null) {
-        customIcon = await MarkerUtils.getCustomMarkerBitmap(
+      MarkerBitmapResult? customMarkerResult = _numberedMarkerIcons[cacheKey];
+      if (customMarkerResult == null) {
+        customMarkerResult = await MarkerUtils.getCustomMarkerBitmap(
           number: markerNumber,
           name: location.name,
           backgroundColor: AppTheme.accentColor,
           textColor: Colors.white,
           isDarkMode: isDarkMode,
         );
-        _numberedMarkerIcons[cacheKey] = customIcon;
+        _numberedMarkerIcons[cacheKey] = customMarkerResult;
       }
 
       markers.add(
         Marker(
           markerId: MarkerId(location.id),
           position: location.coordinates,
-          icon: customIcon,
+          icon: customMarkerResult.bitmap,
+          anchor: customMarkerResult.anchor,
         ),
       );
     }
@@ -120,12 +128,14 @@ class MapOverlayNotifier extends AsyncNotifier<MapOverlayState> {
       if (legPoints.isNotEmpty) {
         final polylineId = 'leg_$i';
         final isHighlighted = tappedPolylineId == polylineId;
-        
+
         polylines.add(
           Polyline(
             polylineId: PolylineId(polylineId),
             points: legPoints,
-            color: isHighlighted ? AppTheme.primaryColor : Colors.grey.withOpacity(0.7),
+            color: isHighlighted
+                ? AppTheme.primaryColor
+                : Colors.grey.withValues(alpha: 0.7),
             width: isHighlighted ? 12 : 8,
           ),
         );
@@ -133,9 +143,11 @@ class MapOverlayNotifier extends AsyncNotifier<MapOverlayState> {
     }
 
     // Generate zone polygons around clustered locations
-    print('📏 Using proximity threshold: ${proximityThreshold}m for zone generation');
+    print(
+        '📏 Using proximity threshold: ${proximityThreshold}m for zone generation');
 
-    final nonSkippedLocations = tripState.pinnedLocations.where((loc) => !loc.isSkipped).toList();
+    final nonSkippedLocations =
+        tripState.pinnedLocations.where((loc) => !loc.isSkipped).toList();
     final automaticZones = ZoneUtils.getZoneCircles(
       nonSkippedLocations,
       proximityThreshold,
@@ -151,6 +163,7 @@ class MapOverlayNotifier extends AsyncNotifier<MapOverlayState> {
   }
 }
 
-final mapOverlayProvider = AsyncNotifierProvider<MapOverlayNotifier, MapOverlayState>(() {
+final mapOverlayProvider =
+    AsyncNotifierProvider<MapOverlayNotifier, MapOverlayState>(() {
   return MapOverlayNotifier();
 });

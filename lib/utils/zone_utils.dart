@@ -136,8 +136,8 @@ class ZoneUtils {
       circleId: CircleId('zone_$index'),
       center: center,
       radius: radius,
-      fillColor: color.withOpacity(0.25), // Softer fill
-      strokeColor: color.withOpacity(0.8), // Stronger stroke
+      fillColor: color.withValues(alpha: 0.25), // Softer fill
+      strokeColor: color.withValues(alpha: 0.8), // Stronger stroke
       strokeWidth: 4,
     );
   }

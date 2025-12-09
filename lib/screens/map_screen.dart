@@ -5,7 +5,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'dart:ui';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
-import 'package:voyza/providers/places_provider.dart';
 import 'package:voyza/widgets/location_detail_sheet.dart';
 import 'package:uuid/uuid.dart';
 import '../models/location_model.dart';
@@ -13,12 +12,10 @@ import '../providers/trip_provider.dart';
 import '../providers/theme_provider.dart';
 import '../providers/map_ui_state_provider.dart';
 import '../providers/debounced_settings_provider.dart';
-import '../providers/settings_provider.dart';
 import '../services/location_service.dart';
 import '../services/places_service.dart';
 import '../widgets/map_widget.dart';
 import '../widgets/search_widget.dart';
-import '../widgets/profile_menu_button.dart';
 import '../widgets/trip_bottom_sheet.dart';
 
 class MapScreen extends ConsumerStatefulWidget {
@@ -28,14 +25,16 @@ class MapScreen extends ConsumerStatefulWidget {
   ConsumerState<MapScreen> createState() => _MapScreenState();
 }
 
-class _MapScreenState extends ConsumerState<MapScreen> with SingleTickerProviderStateMixin {
+class _MapScreenState extends ConsumerState<MapScreen>
+    with SingleTickerProviderStateMixin {
   GoogleMapController? _mapController;
   DraggableScrollableController? _sheetController;
   bool _isTrackingLocation = false;
   int? _highlightedLocationIndex;
   final FocusNode _searchFocusNode = FocusNode();
   bool _isSearchFocused = false;
-  StreamSubscription<LatLng>? _locationSubscription; // PERFORMANCE: Track subscription for cleanup
+  StreamSubscription<LatLng>?
+      _locationSubscription; // PERFORMANCE: Track subscription for cleanup
 
   @override
   void initState() {
@@ -89,7 +88,8 @@ class _MapScreenState extends ConsumerState<MapScreen> with SingleTickerProvider
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Location permissions denied. Showing default map area.'),
+            content:
+                Text('Location permissions denied. Showing default map area.'),
             backgroundColor: Colors.orange,
           ),
         );
@@ -130,12 +130,12 @@ class _MapScreenState extends ConsumerState<MapScreen> with SingleTickerProvider
     );
   }
 
-  void _onMapCreated(GoogleMapController controller) {
+  void _onMapCreated(GoogleMapController controller) async {
     _mapController = controller;
     // Set the initial map style.
     final themeMode = ref.read(themeProvider);
     final showPlaceNames = ref.read(showPlaceNamesProvider);
-    final style = MapWidget.getMapStyle(themeMode, showPlaceNames);
+    final style = await MapWidget.getMapStyle(themeMode, showPlaceNames);
     _mapController!.setMapStyle(style);
   }
 
@@ -173,7 +173,8 @@ class _MapScreenState extends ConsumerState<MapScreen> with SingleTickerProvider
       );
 
       // Get place details from coordinates
-      final placeDetails = await PlacesService.getPlaceFromCoordinates(coordinates);
+      final placeDetails =
+          await PlacesService.getPlaceFromCoordinates(coordinates);
 
       if (placeDetails != null) {
         final selectedDate = ref.read(selectedDateProvider);
@@ -193,8 +194,11 @@ class _MapScreenState extends ConsumerState<MapScreen> with SingleTickerProvider
 
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar( // Uses theme colors
-              content: Text('Added ${location.name} to your trip', style: TextStyle(color: Theme.of(context).colorScheme.onPrimary)),
+            SnackBar(
+              // Uses theme colors
+              content: Text('Added ${location.name} to your trip',
+                  style: TextStyle(
+                      color: Theme.of(context).colorScheme.onPrimary)),
               backgroundColor: Theme.of(context).colorScheme.primary,
               behavior: SnackBarBehavior.floating,
               action: SnackBarAction(
@@ -220,7 +224,8 @@ class _MapScreenState extends ConsumerState<MapScreen> with SingleTickerProvider
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar( // Uses theme colors
+          const SnackBar(
+            // Uses theme colors
             content: Text('Failed to add location. Please try again.'),
             backgroundColor: Colors.red,
           ),
@@ -228,7 +233,7 @@ class _MapScreenState extends ConsumerState<MapScreen> with SingleTickerProvider
       }
     }
   }
-  
+
   void _onMarkerTapped(LocationModel location) {
     // Find the index of the tapped location in the list for the currently selected date.
     final locationsForDate = ref.read(locationsForSelectedDateProvider);
@@ -265,9 +270,11 @@ class _MapScreenState extends ConsumerState<MapScreen> with SingleTickerProvider
       backgroundColor: Colors.transparent,
       builder: (context) => Consumer(
         builder: (context, ref, child) {
-          final proximityThreshold = ref.watch(proximityThresholdPreviewProvider);
-          
-          return Container( // Uses theme colors
+          final proximityThreshold =
+              ref.watch(proximityThresholdPreviewProvider);
+
+          return Container(
+            // Uses theme colors
             margin: const EdgeInsets.all(16),
             padding: const EdgeInsets.all(20),
             decoration: BoxDecoration(
@@ -299,10 +306,11 @@ class _MapScreenState extends ConsumerState<MapScreen> with SingleTickerProvider
                     const SizedBox(width: 12),
                     Text(
                       'Zone Distance',
-                      style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                        color: Theme.of(context).colorScheme.primary,
-                        fontWeight: FontWeight.bold,
-                      ),
+                      style:
+                          Theme.of(context).textTheme.headlineSmall?.copyWith(
+                                color: Theme.of(context).colorScheme.primary,
+                                fontWeight: FontWeight.bold,
+                              ),
                     ),
                     const Spacer(),
                     GestureDetector(
@@ -311,9 +319,14 @@ class _MapScreenState extends ConsumerState<MapScreen> with SingleTickerProvider
                         _showManualZoneDistanceInputDialog();
                       },
                       child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                        decoration: BoxDecoration( // Uses theme colors
-                          color: Theme.of(context).colorScheme.primary.withOpacity(0.2),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 6),
+                        decoration: BoxDecoration(
+                          // Uses theme colors
+                          color: Theme.of(context)
+                              .colorScheme
+                              .primary
+                              .withOpacity(0.2),
                           borderRadius: BorderRadius.circular(12),
                           border: Border.all(
                             color: Theme.of(context).colorScheme.primary,
@@ -322,10 +335,14 @@ class _MapScreenState extends ConsumerState<MapScreen> with SingleTickerProvider
                         ),
                         child: Text(
                           _formatDistance(proximityThreshold),
-                          style: Theme.of(context).textTheme.titleMedium?.copyWith( // Uses theme colors
-                            color: Theme.of(context).colorScheme.primary,
-                            fontWeight: FontWeight.bold,
-                          ),
+                          style: Theme.of(context)
+                              .textTheme
+                              .titleMedium
+                              ?.copyWith(
+                                // Uses theme colors
+                                color: Theme.of(context).colorScheme.primary,
+                                fontWeight: FontWeight.bold,
+                              ),
                         ),
                       ),
                     ),
@@ -335,11 +352,14 @@ class _MapScreenState extends ConsumerState<MapScreen> with SingleTickerProvider
                 SliderTheme(
                   data: SliderTheme.of(context).copyWith(
                     activeTrackColor: Theme.of(context).colorScheme.primary,
-                    inactiveTrackColor: Theme.of(context).colorScheme.primary.withOpacity(0.3),
+                    inactiveTrackColor:
+                        Theme.of(context).colorScheme.primary.withOpacity(0.3),
                     thumbColor: Theme.of(context).colorScheme.primary,
-                    overlayColor: Theme.of(context).colorScheme.primary.withOpacity(0.2),
+                    overlayColor:
+                        Theme.of(context).colorScheme.primary.withOpacity(0.2),
                     trackHeight: 6,
-                    thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 12),
+                    thumbShape:
+                        const RoundSliderThumbShape(enabledThumbRadius: 12),
                   ),
                   child: Slider(
                     value: proximityThreshold,
@@ -347,26 +367,32 @@ class _MapScreenState extends ConsumerState<MapScreen> with SingleTickerProvider
                     max: 5000.0,
                     divisions: 49,
                     onChanged: (value) {
-                      ref.read(debouncedProximityThresholdProvider.notifier).updatePreviewValue(value);
+                      ref
+                          .read(debouncedProximityThresholdProvider.notifier)
+                          .updatePreviewValue(value);
                     },
                     onChangeEnd: (value) {
-                      ref.read(debouncedProximityThresholdProvider.notifier).setValueImmediately(value);
+                      ref
+                          .read(debouncedProximityThresholdProvider.notifier)
+                          .setValueImmediately(value);
                     },
                   ),
                 ),
                 const SizedBox(height: 12),
                 Text(
                   'Adjust how close locations need to be to form a zone. Smaller values create tighter zones, larger values group more distant locations together.',
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith( // Uses theme colors
-                    fontStyle: FontStyle.italic, // Uses theme colors
-                  ),
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        // Uses theme colors
+                        fontStyle: FontStyle.italic, // Uses theme colors
+                      ),
                 ),
                 const SizedBox(height: 20),
                 SizedBox(
                   width: double.infinity,
                   child: ElevatedButton(
                     onPressed: () => Navigator.of(context).pop(),
-                    style: ElevatedButton.styleFrom( // Uses theme colors
+                    style: ElevatedButton.styleFrom(
+                      // Uses theme colors
                       padding: const EdgeInsets.symmetric(vertical: 16),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(12),
@@ -393,7 +419,8 @@ class _MapScreenState extends ConsumerState<MapScreen> with SingleTickerProvider
       builder: (context) {
         return AlertDialog(
           backgroundColor: Theme.of(context).cardColor, // Uses theme colors
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
           title: const Text('Set Zone Distance'),
           content: TextField(
             controller: textController,
@@ -411,7 +438,9 @@ class _MapScreenState extends ConsumerState<MapScreen> with SingleTickerProvider
             onSubmitted: (newValue) {
               final distance = double.tryParse(newValue);
               if (distance != null && distance >= 100 && distance <= 5000) {
-                ref.read(debouncedProximityThresholdProvider.notifier).setValueImmediately(distance);
+                ref
+                    .read(debouncedProximityThresholdProvider.notifier)
+                    .setValueImmediately(distance);
               }
               Navigator.of(context).pop();
             },
@@ -419,20 +448,31 @@ class _MapScreenState extends ConsumerState<MapScreen> with SingleTickerProvider
           actions: [
             TextButton(
               onPressed: () => Navigator.of(context).pop(),
-              child: Text('Cancel', style: TextStyle(color: Theme.of(context).textTheme.bodyMedium?.color)), // Uses theme colors
+              child: Text('Cancel',
+                  style: TextStyle(
+                      color: Theme.of(context)
+                          .textTheme
+                          .bodyMedium
+                          ?.color)), // Uses theme colors
             ),
             TextButton(
               onPressed: () {
                 final distance = double.tryParse(textController.text);
                 if (distance != null && distance >= 100 && distance <= 5000) {
-                  ref.read(debouncedProximityThresholdProvider.notifier).setValueImmediately(distance);
+                  ref
+                      .read(debouncedProximityThresholdProvider.notifier)
+                      .setValueImmediately(distance);
                 }
                 Navigator.of(context).pop();
               },
-              style: TextButton.styleFrom(backgroundColor: Theme.of(context).colorScheme.primary), // Uses theme colors
+              style: TextButton.styleFrom(
+                  backgroundColor: Theme.of(context)
+                      .colorScheme
+                      .primary), // Uses theme colors
               child: const Text(
                 'Set', // Uses theme colors
-                style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold),
+                style:
+                    TextStyle(color: Colors.black, fontWeight: FontWeight.bold),
               ),
             ),
           ],
@@ -461,7 +501,9 @@ class _MapScreenState extends ConsumerState<MapScreen> with SingleTickerProvider
       final isPastDate = selectedDate.isBefore(today);
 
       // If we are on a past date and a route has just been loaded...
-      if (isPastDate && next.optimizedRoute.isNotEmpty && (previous?.optimizedRoute.isEmpty ?? true)) {
+      if (isPastDate &&
+          next.optimizedRoute.isNotEmpty &&
+          (previous?.optimizedRoute.isEmpty ?? true)) {
         // Use a post-frame callback to ensure the map controller is ready.
         WidgetsBinding.instance.addPostFrameCallback((_) {
           _zoomToFitRoute(next.optimizedRoute);
@@ -470,14 +512,16 @@ class _MapScreenState extends ConsumerState<MapScreen> with SingleTickerProvider
     });
 
     // Listen for when the "View Route" button is pressed on a historical trip.
-    ref.listen<bool>(TripBottomSheet.viewHistoricalRouteProvider, (previous, next) {
+    ref.listen<bool>(TripBottomSheet.viewHistoricalRouteProvider,
+        (previous, next) {
       if (next) {
         final route = ref.read(tripProvider).optimizedRoute;
         if (route.isNotEmpty) {
           _zoomToFitRoute(route);
         }
         // Reset the trigger
-        ref.read(TripBottomSheet.viewHistoricalRouteProvider.notifier).state = false;
+        ref.read(TripBottomSheet.viewHistoricalRouteProvider.notifier).state =
+            false;
       }
     });
 
@@ -489,33 +533,17 @@ class _MapScreenState extends ConsumerState<MapScreen> with SingleTickerProvider
     });
 
     // Listen for theme or label visibility changes to update the map style instantly.
-    ref.listen<bool>(showPlaceNamesProvider, (_, showLabels) {
+    ref.listen<bool>(showPlaceNamesProvider, (_, showLabels) async {
       if (_mapController != null) {
         final themeMode = ref.read(themeProvider);
-        final style = MapWidget.getMapStyle(themeMode, showLabels);
+        final style = await MapWidget.getMapStyle(themeMode, showLabels);
         _mapController!.setMapStyle(style);
       }
     });
-    ref.listen<ThemeMode>(themeProvider, (_, themeMode) {
+    ref.listen<ThemeMode>(themeProvider, (_, themeMode) async {
       if (_mapController != null) {
         final showLabels = ref.read(showPlaceNamesProvider);
-        final style = MapWidget.getMapStyle(themeMode, showLabels);
-        _mapController!.setMapStyle(style);
-      }
-    });
-
-    // Listen for theme or label visibility changes to update the map style instantly.
-    ref.listen<bool>(showPlaceNamesProvider, (_, showLabels) {
-      if (_mapController != null) {
-        final themeMode = ref.read(themeProvider);
-        final style = MapWidget.getMapStyle(themeMode, showLabels);
-        _mapController!.setMapStyle(style);
-      }
-    });
-    ref.listen<ThemeMode>(themeProvider, (_, themeMode) {
-      if (_mapController != null) {
-        final showLabels = ref.read(showPlaceNamesProvider);
-        final style = MapWidget.getMapStyle(themeMode, showLabels);
+        final style = await MapWidget.getMapStyle(themeMode, showLabels);
         _mapController!.setMapStyle(style);
       }
     });
@@ -549,12 +577,17 @@ class _MapScreenState extends ConsumerState<MapScreen> with SingleTickerProvider
                         decoration: BoxDecoration(
                           color: _isSearchFocused
                               ? Theme.of(context).colorScheme.surface
-                              : Theme.of(context).colorScheme.surface.withOpacity(0.8),
+                              : Theme.of(context)
+                                  .colorScheme
+                                  .surface
+                                  .withOpacity(0.8),
                           borderRadius: BorderRadius.circular(30),
                           border: Border.all(
                             color: _isSearchFocused
                                 ? Theme.of(context).colorScheme.primary
-                                : Theme.of(context).dividerColor.withOpacity(0.2),
+                                : Theme.of(context)
+                                    .dividerColor
+                                    .withOpacity(0.2),
                             width: 1.5,
                           ),
                           boxShadow: [
@@ -570,39 +603,14 @@ class _MapScreenState extends ConsumerState<MapScreen> with SingleTickerProvider
                     ),
                   ),
                 ),
-                const SizedBox(width: 12),
-                // Profile button
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(30),
-                  child: BackdropFilter(
-                    filter: ImageFilter.blur(sigmaX: 10.0, sigmaY: 10.0),
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: Theme.of(context).colorScheme.surface.withOpacity(0.8),
-                        shape: BoxShape.circle,
-                        border: Border.all(
-                          color: Theme.of(context).dividerColor.withOpacity(0.2),
-                          width: 1.5,
-                        ),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withOpacity(0.2),
-                            blurRadius: 20,
-                            offset: const Offset(0, 5),
-                          ),
-                        ],
-                      ),
-                      child: const ProfileMenuButton(),
-                    ),
-                  ),
-                ),
               ],
             ),
           ),
 
           // Floating Action Buttons for Map Controls
           Positioned(
-            bottom: MediaQuery.of(context).size.height * 0.12 + 16, // Position above collapsed sheet
+            bottom: MediaQuery.of(context).size.height * 0.12 +
+                16, // Position above collapsed sheet
             right: 16,
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -617,7 +625,8 @@ class _MapScreenState extends ConsumerState<MapScreen> with SingleTickerProvider
                 const SizedBox(height: 12),
                 Consumer(
                   builder: (context, ref, child) {
-                    final locationsForDate = ref.watch(locationsForSelectedDateProvider);
+                    final locationsForDate =
+                        ref.watch(locationsForSelectedDateProvider);
                     if (locationsForDate.length < 2) {
                       return const SizedBox.shrink();
                     }
@@ -636,11 +645,14 @@ class _MapScreenState extends ConsumerState<MapScreen> with SingleTickerProvider
                     heroTag: 'togglePlaceNamesFab',
                     mini: true,
                     onPressed: () {
-                      ref.read(showPlaceNamesProvider.notifier).state = !showPlaceNames;
+                      ref.read(showPlaceNamesProvider.notifier).state =
+                          !showPlaceNames;
                     },
                     tooltip: 'Toggle Place Names',
                     child: Icon(
-                      showPlaceNames ? Icons.visibility_off_outlined : Icons.visibility_outlined,
+                      showPlaceNames
+                          ? Icons.visibility_off_outlined
+                          : Icons.visibility_outlined,
                     ),
                   );
                 }),
@@ -675,7 +687,7 @@ class _MapScreenState extends ConsumerState<MapScreen> with SingleTickerProvider
       ),
     );
   }
-  
+
   Future<void> _goToCurrentLocation() async {
     LatLng? currentLocation = ref.read(tripProvider).currentLocation;
 
@@ -684,7 +696,9 @@ class _MapScreenState extends ConsumerState<MapScreen> with SingleTickerProvider
       try {
         currentLocation = await LocationService.getCurrentLocation();
         if (currentLocation != null) {
-          ref.read(tripProvider.notifier).updateCurrentLocation(currentLocation);
+          ref
+              .read(tripProvider.notifier)
+              .updateCurrentLocation(currentLocation);
         }
       } catch (e) {
         print("Failed to get current location on demand: $e");
@@ -693,7 +707,8 @@ class _MapScreenState extends ConsumerState<MapScreen> with SingleTickerProvider
 
     if (currentLocation != null && _mapController != null && mounted) {
       _mapController?.animateCamera(
-        CameraUpdate.newCameraPosition(CameraPosition(target: currentLocation, zoom: 16.0)),
+        CameraUpdate.newCameraPosition(
+            CameraPosition(target: currentLocation, zoom: 16.0)),
       ); // Uses theme colors
 
       // Collapse the bottom sheet to show more of the map
@@ -711,14 +726,15 @@ class _MapScreenState extends ConsumerState<MapScreen> with SingleTickerProvider
     } else if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Current location is not available. Please enable location services.'), // Uses theme colors
+          content: Text(
+              'Current location is not available. Please enable location services.'), // Uses theme colors
           backgroundColor: Colors.orange,
           behavior: SnackBarBehavior.floating,
         ),
       );
     }
   }
-  
+
   void _zoomToFitTrip() {
     if (_mapController == null) return;
 
@@ -750,7 +766,8 @@ class _MapScreenState extends ConsumerState<MapScreen> with SingleTickerProvider
       northeast: LatLng(maxLat, maxLng),
     );
 
-    _mapController!.animateCamera(CameraUpdate.newLatLngBounds(bounds, 80.0)); // 80.0 padding
+    _mapController!.animateCamera(
+        CameraUpdate.newLatLngBounds(bounds, 80.0)); // 80.0 padding
   }
 
   void _zoomToLocation(LatLng coordinates) {
@@ -799,14 +816,16 @@ class _MapScreenState extends ConsumerState<MapScreen> with SingleTickerProvider
       northeast: LatLng(maxLat, maxLng),
     );
 
-    _mapController!.animateCamera(CameraUpdate.newLatLngBounds(bounds, 80.0)); // 80.0 padding
+    _mapController!.animateCamera(
+        CameraUpdate.newLatLngBounds(bounds, 80.0)); // 80.0 padding
   }
 
   void _zoomToFitRoute(List<LatLng> routePoints) {
     if (_mapController == null || routePoints.isEmpty) return;
 
     if (routePoints.length == 1) {
-      _mapController!.animateCamera(CameraUpdate.newLatLngZoom(routePoints.first, 15.0));
+      _mapController!
+          .animateCamera(CameraUpdate.newLatLngZoom(routePoints.first, 15.0));
       return;
     }
 
@@ -827,87 +846,8 @@ class _MapScreenState extends ConsumerState<MapScreen> with SingleTickerProvider
       northeast: LatLng(maxLat, maxLng),
     );
 
-    _mapController!.animateCamera(CameraUpdate.newLatLngBounds(bounds, 60.0)); // 60.0 padding
-  }
-
-  void _showAddLocationFromUrlDialog() {
-    final textController = TextEditingController();
-    final formKey = GlobalKey<FormState>();
-
-    showDialog(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          backgroundColor: Theme.of(context).cardColor,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: const Text('Add from Google Maps URL'),
-          content: Form(
-            key: formKey,
-            child: TextFormField(
-              controller: textController,
-              autofocus: true,
-              decoration: const InputDecoration(
-                hintText: 'Paste Google Maps link here',
-                border: OutlineInputBorder(),
-              ),
-              validator: (value) {
-                if (value == null || value.isEmpty) {
-                  return 'Please enter a URL';
-                }
-                // Updated to support new maps.app.goo.gl short links
-                if (!value.contains('goo.gl/maps') && !value.contains('google.com/maps') && !value.contains('maps.app.goo.gl')) {
-                  return 'Please enter a valid Google Maps URL';
-                }
-                return null;
-              },
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: Text('Cancel', style: TextStyle(color: Theme.of(context).textTheme.bodyMedium?.color)),
-            ),
-            ElevatedButton(
-              onPressed: () async {
-                if (formKey.currentState?.validate() ?? false) {
-                  Navigator.of(context).pop(); // Close dialog immediately
-                  try {
-                    final placeDetails = await ref.read(placeFromUrlProvider(textController.text).future);
-
-                    if (placeDetails != null) {
-                      final selectedDate = ref.read(selectedDateProvider);
-                      final location = LocationModel(
-                        id: const Uuid().v4(),
-                        name: placeDetails.name,
-                        address: placeDetails.address,
-                        coordinates: placeDetails.coordinates,
-                        addedAt: DateTime.now(),
-                        scheduledDate: selectedDate,
-                      );
-                      await ref.read(tripProvider.notifier).addLocation(location);
-                    } else {
-                      // This case might happen if the provider returns null without an error.
-                      throw Exception('Could not retrieve place details.');
-                    }
-                  } catch (e) {
-                    // Handle the error gracefully by showing a SnackBar.
-                    if (mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('Failed to add location. Please check the URL and try again.'),
-                          backgroundColor: Colors.red,
-                        ),
-                      );
-                    }
-                  }
-                }
-              },
-              child: const Text('Add'),
-            ),
-          ],
-        );
-      },
-    );
+    _mapController!.animateCamera(
+        CameraUpdate.newLatLngBounds(bounds, 60.0)); // 60.0 padding
   }
 
   String _formatDistance(double distanceInMeters) {
@@ -918,5 +858,4 @@ class _MapScreenState extends ConsumerState<MapScreen> with SingleTickerProvider
       return '${kilometers.toStringAsFixed(1)}km';
     }
   }
-
 }

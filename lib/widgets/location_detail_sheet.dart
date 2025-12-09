@@ -27,8 +27,9 @@ class LocationDetailSheet extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     // Watch the provider to get the most up-to-date location data
-    final updatedLocation = ref.watch(tripProvider
-        .select((trip) => trip.pinnedLocations.firstWhere((l) => l.id == location.id, orElse: () => location)));
+    final updatedLocation = ref.watch(tripProvider.select((trip) => trip
+        .pinnedLocations
+        .firstWhere((l) => l.id == location.id, orElse: () => location)));
 
     // Determine if the location is on a past date to disable editing.
     final selectedDate = ref.watch(selectedDateProvider);
@@ -44,13 +45,13 @@ class LocationDetailSheet extends ConsumerWidget {
         borderRadius: BorderRadius.circular(24),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.3),
+            color: Colors.black.withValues(alpha: 0.3),
             blurRadius: 20,
             offset: const Offset(0, -5),
           ),
         ],
         border: Border.all(
-          color: Theme.of(context).colorScheme.primary.withOpacity(0.3),
+          color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.3),
           width: 1,
         ),
       ),
@@ -87,7 +88,8 @@ class LocationDetailSheet extends ConsumerWidget {
           ),
 
           // Travel info (if available)
-          if (updatedLocation.travelTimeFromPrevious != null && updatedLocation.distanceFromPrevious != null) ...[
+          if (updatedLocation.travelTimeFromPrevious != null &&
+              updatedLocation.distanceFromPrevious != null) ...[
             const Divider(height: 32),
             _buildTravelInfo(context, ref, updatedLocation),
           ],
@@ -101,7 +103,8 @@ class LocationDetailSheet extends ConsumerWidget {
     );
   }
 
-  Widget _buildHeader(BuildContext context, WidgetRef ref, LocationModel updatedLocation, bool isPastDate) {
+  Widget _buildHeader(BuildContext context, WidgetRef ref,
+      LocationModel updatedLocation, bool isPastDate) {
     return Row(
       children: [
         CircleAvatar(
@@ -143,14 +146,21 @@ class LocationDetailSheet extends ConsumerWidget {
                     icon: Icon(
                       Icons.calendar_today_outlined,
                       size: 20,
-                      color: isPastDate ? Colors.grey : Theme.of(context).colorScheme.primary.withOpacity(0.8),
+                      color: isPastDate
+                          ? Colors.grey
+                          : Theme.of(context)
+                              .colorScheme
+                              .primary
+                              .withValues(alpha: 0.8),
                     ),
                     onPressed: isPastDate
                         ? null
                         : () async {
-                            final datesWithLocations = ref.read(datesWithLocationsProvider);
+                            final datesWithLocations =
+                                ref.read(datesWithLocationsProvider);
                             final now = DateTime.now();
-                            final newDate = await DatePickerUtils.showCustomDatePicker(
+                            final newDate =
+                                await DatePickerUtils.showCustomDatePicker(
                               context: context,
                               initialDate: updatedLocation.scheduledDate ?? now,
                               firstDate: DateTime(now.year, now.month, now.day),
@@ -158,8 +168,12 @@ class LocationDetailSheet extends ConsumerWidget {
                               highlightedDates: datesWithLocations,
                             );
                             if (newDate != null) {
-                              final normalizedDate = DateTime(newDate.year, newDate.month, newDate.day);
-                              ref.read(tripProvider.notifier).updateLocationScheduledDate(updatedLocation.id, normalizedDate);
+                              final normalizedDate = DateTime(
+                                  newDate.year, newDate.month, newDate.day);
+                              ref
+                                  .read(tripProvider.notifier)
+                                  .updateLocationScheduledDate(
+                                      updatedLocation.id, normalizedDate);
                             }
                           },
                     padding: EdgeInsets.zero,
@@ -167,8 +181,18 @@ class LocationDetailSheet extends ConsumerWidget {
                     tooltip: 'Schedule Date',
                   ),
                   IconButton(
-                    icon: Icon(Icons.edit_outlined, size: 20, color: isPastDate ? Colors.grey : Theme.of(context).colorScheme.primary.withOpacity(0.8)),
-                    onPressed: isPastDate ? null : () => _showEditLocationNameDialog(context, ref, updatedLocation),
+                    icon: Icon(Icons.edit_outlined,
+                        size: 20,
+                        color: isPastDate
+                            ? Colors.grey
+                            : Theme.of(context)
+                                .colorScheme
+                                .primary
+                                .withValues(alpha: 0.8)),
+                    onPressed: isPastDate
+                        ? null
+                        : () => _showEditLocationNameDialog(
+                            context, ref, updatedLocation),
                     padding: EdgeInsets.zero,
                     constraints: const BoxConstraints(),
                   ),
@@ -177,9 +201,10 @@ class LocationDetailSheet extends ConsumerWidget {
                     icon: Icon(
                       Icons.delete_outline,
                       size: 20,
-                      color: isPastDate ? Colors.grey : Theme.of(context).colorScheme.error,
+                      color: Theme.of(context).colorScheme.error,
                     ),
-                    onPressed: isPastDate ? null : () => _showDeleteConfirmationDialog(context, ref, updatedLocation),
+                    onPressed: () => _showDeleteConfirmationDialog(
+                        context, ref, updatedLocation),
                     padding: EdgeInsets.zero,
                     constraints: const BoxConstraints(),
                     tooltip: 'Delete Stop',
@@ -193,7 +218,8 @@ class LocationDetailSheet extends ConsumerWidget {
     );
   }
 
-  Widget _buildTravelInfo(BuildContext context, WidgetRef ref, LocationModel updatedLocation) {
+  Widget _buildTravelInfo(
+      BuildContext context, WidgetRef ref, LocationModel updatedLocation) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -208,11 +234,14 @@ class LocationDetailSheet extends ConsumerWidget {
         Builder(builder: (context) {
           final trip = ref.read(tripProvider);
           // Get all locations for the date, then filter out skipped ones to get the actual route order.
-          final allLocationsForDate = ref.read(locationsForSelectedDateProvider);
-          final routedLocations = allLocationsForDate.where((l) => !l.isSkipped).toList();
+          final allLocationsForDate =
+              ref.read(locationsForSelectedDateProvider);
+          final routedLocations =
+              allLocationsForDate.where((l) => !l.isSkipped).toList();
 
           // Find the index of the current location in the day's list.
-          final locationIndexInList = routedLocations.indexWhere((l) => l.id == updatedLocation.id);
+          final locationIndexInList =
+              routedLocations.indexWhere((l) => l.id == updatedLocation.id);
 
           // The leg index is the index of the route segment that *ends* at the current location.
           // The number of legs can be either N or N-1 depending on the start point.
@@ -222,9 +251,12 @@ class LocationDetailSheet extends ConsumerWidget {
           // is at index `i` if start is current location, or `i-1` if start is another stop.
           // For location #2 (index 1), we want leg #1 (index 0).
           // For location #3 (index 2), we want leg #2 (index 1).
-          final legIndex = (trip.startLocationId == 'current_location') ? locationIndexInList : locationIndexInList - 1;
+          final legIndex = (trip.startLocationId == 'current_location')
+              ? locationIndexInList
+              : locationIndexInList - 1;
 
-          if (legIndex < 0 || locationIndexInList == 0) return const SizedBox.shrink();
+          if (legIndex < 0 || locationIndexInList == 0)
+            return const SizedBox.shrink();
           final previousLocation = routedLocations[locationIndexInList - 1];
 
           return Column(
@@ -242,19 +274,26 @@ class LocationDetailSheet extends ConsumerWidget {
                     Navigator.of(context).pop();
 
                     // 2. Highlight the corresponding route segment on the map.
-                    ref.read(mapUIStateProvider.notifier).setTappedPolyline('leg_$legIndex');
+                    ref
+                        .read(mapUIStateProvider.notifier)
+                        .setTappedPolyline('leg_$legIndex');
 
                     // 3. Collapse the main bottom sheet to its minimum size.
-                    parentSheetController?.animateTo(0.12, duration: const Duration(milliseconds: 300), curve: Curves.easeInOut);
+                    parentSheetController?.animateTo(0.12,
+                        duration: const Duration(milliseconds: 300),
+                        curve: Curves.easeInOut);
 
                     // 4. Scroll the main list back to the top.
                     WidgetsBinding.instance.addPostFrameCallback((_) {
-                      parentScrollController.animateTo(0, duration: const Duration(milliseconds: 300), curve: Curves.easeInOut);
+                      parentScrollController.animateTo(0,
+                          duration: const Duration(milliseconds: 300),
+                          curve: Curves.easeInOut);
                     });
                   },
                   style: OutlinedButton.styleFrom(
                     padding: const EdgeInsets.symmetric(vertical: 12),
-                    foregroundColor: Theme.of(context).textTheme.bodyMedium?.color,
+                    foregroundColor:
+                        Theme.of(context).textTheme.bodyMedium?.color,
                   ),
                 ),
               ),
@@ -287,21 +326,24 @@ class LocationDetailSheet extends ConsumerWidget {
     );
   }
 
-  Widget _buildActionButtons(BuildContext context, WidgetRef ref, LocationModel updatedLocation, bool isPastDate) {
+  Widget _buildActionButtons(BuildContext context, WidgetRef ref,
+      LocationModel updatedLocation, bool isPastDate) {
     return Row(
       children: [
         Expanded(
             child: ElevatedButton.icon(
           onPressed: isPastDate
               ? null
-              : () => _showEditStayDurationDialog(context, ref, updatedLocation),
+              : () =>
+                  _showEditStayDurationDialog(context, ref, updatedLocation),
           icon: const Icon(Icons.timer_outlined),
           label: const Text('Set Stay'),
           style: ElevatedButton.styleFrom(
             backgroundColor: AppTheme.primaryColor,
             foregroundColor: Colors.black,
             padding: const EdgeInsets.symmetric(vertical: 16),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
           ),
         )),
         const SizedBox(width: 12),
@@ -326,10 +368,12 @@ class LocationDetailSheet extends ConsumerWidget {
             icon: const Icon(Icons.map),
             label: const Text('View on Map'),
             style: ElevatedButton.styleFrom(
-              backgroundColor: Theme.of(context).colorScheme.primary.withOpacity(0.2),
+              backgroundColor:
+                  Theme.of(context).colorScheme.primary.withValues(alpha: 0.2),
               foregroundColor: Theme.of(context).colorScheme.primary,
               padding: const EdgeInsets.symmetric(vertical: 16),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12)),
             ),
           ),
         ),
@@ -337,7 +381,8 @@ class LocationDetailSheet extends ConsumerWidget {
     );
   }
 
-  void _showEditLocationNameDialog(BuildContext context, WidgetRef ref, LocationModel location) {
+  void _showEditLocationNameDialog(
+      BuildContext context, WidgetRef ref, LocationModel location) {
     final textController = TextEditingController(text: location.name);
 
     showDialog(
@@ -345,10 +390,12 @@ class LocationDetailSheet extends ConsumerWidget {
       builder: (context) {
         return AlertDialog(
           backgroundColor: Theme.of(context).cardColor,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
           title: Row(
             children: [
-              Icon(Icons.edit, color: Theme.of(context).colorScheme.primary, size: 24),
+              Icon(Icons.edit,
+                  color: Theme.of(context).colorScheme.primary, size: 24),
               const SizedBox(width: 8),
               const Text('Edit Location Name'),
             ],
@@ -371,7 +418,9 @@ class LocationDetailSheet extends ConsumerWidget {
             ),
             onSubmitted: (newName) {
               if (newName.isNotEmpty && newName != location.name) {
-                ref.read(tripProvider.notifier).updateLocationName(location.id, newName);
+                ref
+                    .read(tripProvider.notifier)
+                    .updateLocationName(location.id, newName);
               }
               Navigator.of(context).pop();
             },
@@ -379,19 +428,24 @@ class LocationDetailSheet extends ConsumerWidget {
           actions: [
             TextButton(
               onPressed: () => Navigator.of(context).pop(),
-              child: Text('Cancel', style: TextStyle(color: Theme.of(context).textTheme.bodyMedium?.color)),
+              child: Text('Cancel',
+                  style: TextStyle(
+                      color: Theme.of(context).textTheme.bodyMedium?.color)),
             ),
             ElevatedButton(
               onPressed: () {
                 final newName = textController.text;
                 if (newName.isNotEmpty && newName != location.name) {
-                  ref.read(tripProvider.notifier).updateLocationName(location.id, newName);
+                  ref
+                      .read(tripProvider.notifier)
+                      .updateLocationName(location.id, newName);
                 }
                 Navigator.of(context).pop();
               },
               style: ElevatedButton.styleFrom(
                 backgroundColor: Theme.of(context).colorScheme.primary,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12)),
               ),
               child: const Text(
                 'Save',
@@ -407,7 +461,8 @@ class LocationDetailSheet extends ConsumerWidget {
     );
   }
 
-  void _showEditStayDurationDialog(BuildContext context, WidgetRef ref, LocationModel location) {
+  void _showEditStayDurationDialog(
+      BuildContext context, WidgetRef ref, LocationModel location) {
     final List<Duration> commonDurations = [
       const Duration(minutes: 15),
       const Duration(minutes: 30),
@@ -424,10 +479,12 @@ class LocationDetailSheet extends ConsumerWidget {
       builder: (context) {
         return AlertDialog(
           backgroundColor: Theme.of(context).cardColor,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
           title: Row(
             children: [
-              Icon(Icons.timer_outlined, color: Theme.of(context).colorScheme.primary, size: 24),
+              Icon(Icons.timer_outlined,
+                  color: Theme.of(context).colorScheme.primary, size: 24),
               const SizedBox(width: 8),
               const Text('Set Stay Duration'),
             ],
@@ -452,7 +509,9 @@ class LocationDetailSheet extends ConsumerWidget {
                         fontWeight: FontWeight.bold,
                       ),
                       onPressed: () {
-                        ref.read(tripProvider.notifier).updateLocationStayDuration(location.id, duration);
+                        ref
+                            .read(tripProvider.notifier)
+                            .updateLocationStayDuration(location.id, duration);
                         Navigator.of(context).pop();
                       });
                 }).toList(),
@@ -487,10 +546,12 @@ class LocationDetailSheet extends ConsumerWidget {
                     ElevatedButton(
                       onPressed: () {
                         if (formKey.currentState?.validate() ?? false) {
-                          final minutes = int.parse(customMinutesController.text);
+                          final minutes =
+                              int.parse(customMinutesController.text);
                           ref
                               .read(tripProvider.notifier)
-                              .updateLocationStayDuration(location.id, Duration(minutes: minutes));
+                              .updateLocationStayDuration(
+                                  location.id, Duration(minutes: minutes));
                           Navigator.of(context).pop();
                         }
                       },
@@ -504,7 +565,9 @@ class LocationDetailSheet extends ConsumerWidget {
           actions: [
             TextButton(
               onPressed: () => Navigator.of(context).pop(),
-              child: Text('Close', style: TextStyle(color: Theme.of(context).textTheme.bodyMedium?.color)),
+              child: Text('Close',
+                  style: TextStyle(
+                      color: Theme.of(context).textTheme.bodyMedium?.color)),
             ),
           ],
         );
@@ -512,19 +575,24 @@ class LocationDetailSheet extends ConsumerWidget {
     );
   }
 
-  void _showDeleteConfirmationDialog(BuildContext context, WidgetRef ref, LocationModel location) {
+  void _showDeleteConfirmationDialog(
+      BuildContext context, WidgetRef ref, LocationModel location) {
     showDialog(
       context: context,
       builder: (dialogContext) {
         return AlertDialog(
           backgroundColor: Theme.of(context).cardColor,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
           title: const Text('Delete Location'),
-          content: Text('Are you sure you want to delete "${location.name}"? This action cannot be undone.'),
+          content: Text(
+              'Are you sure you want to delete "${location.name}"? This action cannot be undone.'),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(dialogContext).pop(),
-              child: Text('Cancel', style: TextStyle(color: Theme.of(context).textTheme.bodyMedium?.color)),
+              child: Text('Cancel',
+                  style: TextStyle(
+                      color: Theme.of(context).textTheme.bodyMedium?.color)),
             ),
             ElevatedButton(
               onPressed: () {
@@ -556,7 +624,8 @@ class LocationDetailSheet extends ConsumerWidget {
     );
   }
 
-  Widget _buildDetailRow(BuildContext context, IconData icon, String label, String value) {
+  Widget _buildDetailRow(
+      BuildContext context, IconData icon, String label, String value) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 16),
       child: Row(
@@ -587,14 +656,15 @@ class LocationDetailSheet extends ConsumerWidget {
     );
   }
 
-  Widget _buildInfoCard(BuildContext context, IconData icon, String label, String value) {
+  Widget _buildInfoCard(
+      BuildContext context, IconData icon, String label, String value) {
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.primary.withOpacity(0.1),
+        color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
-          color: Theme.of(context).colorScheme.primary.withOpacity(0.3),
+          color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.3),
           width: 1,
         ),
       ),
