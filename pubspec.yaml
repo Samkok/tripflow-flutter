@@ -43,6 +43,8 @@ dependencies:
   path_provider: ^2.1.5
   share_plus: ^12.0.1
   csv: ^6.0.0
+  connectivity_plus: ^7.0.0
+  internet_connection_checker_plus: ^2.9.1+1
 
 dev_dependencies:
   flutter_test:

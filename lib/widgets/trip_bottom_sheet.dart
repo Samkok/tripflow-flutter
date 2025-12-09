@@ -41,9 +41,9 @@ class TripBottomSheet extends ConsumerWidget {
       controller: sheetController,
       // Define snap points for a magnetic feel
       snap: true,
-      snapSizes: const [0.12, 0.85],
-      initialChildSize: 0.12, // Start in the collapsed state
-      minChildSize: 0.12, // Collapsed state shows only the header
+      snapSizes: const [0.23, 0.85],
+      initialChildSize: 0.23, // Start in the collapsed state
+      minChildSize: 0.23, // Collapsed state shows only the header
       maxChildSize: 0.85, // Expanded state leaves search bar visible
       builder: (context, scrollController) {
         return Container(
@@ -125,8 +125,6 @@ class TripBottomSheet extends ConsumerWidget {
                       }
                     }),
 
-                    const SizedBox(height: 16),
-
                     // Trip Summary - OPTIMIZATION: Build only if there are locations
                     if (hasPinnedLocations) ...[
                       Consumer(builder: (context, ref, _) {
@@ -139,7 +137,6 @@ class TripBottomSheet extends ConsumerWidget {
                         return _buildTripSummary(context, totalTravelTime,
                             totalDistance, locationsForDate.length);
                       }),
-                      const SizedBox(height: 16),
                     ],
 
                     // Date Selector - Moved here from the header
@@ -154,6 +151,8 @@ class TripBottomSheet extends ConsumerWidget {
                       return _buildLocationsList(
                           context, ref, locationsForDate, scrollController);
                     }),
+
+                    const SizedBox(height: 75),
                   ],
                 ),
               ),
@@ -764,7 +763,6 @@ class TripBottomSheet extends ConsumerWidget {
           ),
         ],
 
-        const SizedBox(height: 24),
         // Optimize button
         Consumer(builder: (context, ref, _) {
           final isGenerating = ref.watch(isGeneratingRouteProvider);

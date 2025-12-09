@@ -609,10 +609,10 @@ class _MapScreenState extends ConsumerState<MapScreen>
 
           // Floating Action Buttons for Map Controls
           Positioned(
-            bottom: MediaQuery.of(context).size.height * 0.12 +
+            bottom: MediaQuery.of(context).size.height * 0.23 +
                 16, // Position above collapsed sheet
             right: 16,
-            child: Column(
+            child: Row(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [

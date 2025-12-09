@@ -6,6 +6,8 @@ import 'package:voyza/screens/splash_screen.dart';
 import 'core/theme.dart';
 import 'providers/theme_provider.dart';
 
+import 'widgets/connectivity_wrapper.dart';
+
 Future<void> main() async {
   await dotenv.load(fileName: ".env");
   runApp(const ProviderScope(child: MyApp()));
@@ -24,6 +26,9 @@ class MyApp extends ConsumerWidget {
       theme: AppTheme.lightTheme,
       darkTheme: AppTheme.darkTheme,
       themeMode: themeMode,
+      builder: (context, child) {
+        return ConnectivityWrapper(child: child!);
+      },
       home: const SplashScreen(),
     );
   }
