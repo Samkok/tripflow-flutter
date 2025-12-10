@@ -612,7 +612,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
             bottom: MediaQuery.of(context).size.height * 0.23 +
                 16, // Position above collapsed sheet
             right: 16,
-            child: Row(
+            child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [

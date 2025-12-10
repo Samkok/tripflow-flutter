@@ -1,16 +1,18 @@
-import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:voyza/providers/location_provider.dart';
+import 'dart:ui';
 import 'package:voyza/screens/map_screen.dart';
 import 'package:voyza/screens/settings_screen.dart';
 
-class MainScreen extends StatefulWidget {
+class MainScreen extends ConsumerStatefulWidget {
   const MainScreen({super.key});
 
   @override
-  State<MainScreen> createState() => _MainScreenState();
+  ConsumerState<MainScreen> createState() => _MainScreenState();
 }
 
-class _MainScreenState extends State<MainScreen> {
+class _MainScreenState extends ConsumerState<MainScreen> {
   int _selectedIndex = 0;
 
   static final List<Widget> _widgetOptions = <Widget>[
@@ -26,6 +28,9 @@ class _MainScreenState extends State<MainScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Activate the sync manager
+    ref.read(syncManagerProvider);
+
     return Scaffold(
       extendBody: true, // Allows body to extend behind the bottom nav
       body: IndexedStack(
@@ -45,9 +50,24 @@ class _MainScreenState extends State<MainScreen> {
         borderRadius: BorderRadius.circular(35),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.15),
+            color: Colors.black.withOpacity(0.30),
             blurRadius: 30,
-            offset: const Offset(0, 10),
+            offset: const Offset(0, 30),
+          ),
+          BoxShadow(
+            color: Colors.black.withOpacity(0.30),
+            blurRadius: 30,
+            offset: const Offset(0, -10),
+          ),
+          BoxShadow(
+            color: Colors.black.withOpacity(0.30),
+            blurRadius: 30,
+            offset: const Offset(10, 0),
+          ),
+          BoxShadow(
+            color: Colors.black.withOpacity(0.30),
+            blurRadius: 30,
+            offset: const Offset(-10, 0),
           ),
         ],
         border: Border.all(

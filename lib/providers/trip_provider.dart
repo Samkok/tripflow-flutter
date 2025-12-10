@@ -11,6 +11,8 @@ import '../services/google_maps_service.dart';
 import '../services/storage_service.dart';
 import '../providers/debounced_settings_provider.dart';
 import '../utils/zone_utils.dart';
+import '../models/saved_location.dart';
+import 'location_provider.dart';
 
 class TripState {
   final List<LocationModel> pinnedLocations;
@@ -116,6 +118,16 @@ class TripNotifier extends StateNotifier<TripState> {
 
   TripNotifier(this._ref) : super(TripState()) {
     _loadPinnedLocations();
+    _initSyncListener();
+  }
+
+  void _initSyncListener() {
+    _ref.listen<AsyncValue<List<SavedLocation>>>(savedLocationsProvider,
+        (prev, next) {
+      next.whenData((savedLocations) {
+        _mergeSavedLocations(savedLocations);
+      });
+    });
   }
 
   Future<void> _loadPinnedLocations() async {
@@ -123,6 +135,41 @@ class TripNotifier extends StateNotifier<TripState> {
     final locations = await StorageService.getPinnedLocations();
     state = state.copyWith(pinnedLocations: locations);
     _isLoading = false;
+  }
+
+  void _mergeSavedLocations(List<SavedLocation> savedLocations) {
+    if (_isLoading) return;
+
+    final currentIds = state.pinnedLocations.map((l) => l.id).toSet();
+    final newLocations = <LocationModel>[];
+
+    for (final saved in savedLocations) {
+      if (!currentIds.contains(saved.id)) {
+        // Convert SavedLocation to LocationModel
+        // Note: SavedLocation lacks address/schedule info, so we use defaults.
+        newLocations.add(LocationModel(
+          id: saved.id,
+          name: saved.name,
+          address: '', // Placeholder as address is not synced yet
+          coordinates: LatLng(saved.lat, saved.lng),
+          addedAt: saved.createdAt,
+          scheduledDate:
+              _ref.read(selectedDateProvider), // Default to current selection
+        ));
+      }
+    }
+
+    if (newLocations.isNotEmpty) {
+      final updatedLocations = [...state.pinnedLocations, ...newLocations];
+      state = state.copyWith(
+        pinnedLocations: updatedLocations,
+        // Reset optimization if new locations come in
+        optimizedLocationsForSelectedDate: [],
+        optimizedRoute: [],
+      );
+      // We don't save to legacy storage here to avoid dupes/loops,
+      // or we could updates storage if needed.
+    }
   }
 
   Future<void> _saveLocations(List<LocationModel> locations) async {
@@ -141,7 +188,6 @@ class TripNotifier extends StateNotifier<TripState> {
 
     final updatedLocations = [...state.pinnedLocations, locationWithDate];
     // When adding a new location, the existing optimized route is no longer valid.
-    // Clear it to ensure the UI reflects the new, un-optimized list.
     state = state.copyWith(
       pinnedLocations: updatedLocations,
       optimizedLocationsForSelectedDate: [],
@@ -152,6 +198,28 @@ class TripNotifier extends StateNotifier<TripState> {
 
     // Save to storage asynchronously without blocking
     _saveLocations(updatedLocations);
+
+    print("Code reached here");
+
+    // Sync with new Repository
+    try {
+      final savedLoc = SavedLocation(
+        id: locationWithDate.id,
+        name: locationWithDate.name,
+        lat: locationWithDate.coordinates.latitude,
+        lng: locationWithDate.coordinates.longitude,
+        createdAt: locationWithDate.addedAt,
+        scheduledDate: locationWithDate.scheduledDate,
+        stayDuration: locationWithDate.stayDuration.inSeconds,
+        isSkipped: locationWithDate.isSkipped,
+        // userId and fingerprint will be handled by repository based on auth state
+        userId: '',
+        fingerprint: '',
+      );
+      await _ref.read(locationRepositoryProvider).addLocation(savedLoc);
+    } catch (e) {
+      log('Error saving to repository: $e');
+    }
   }
 
   Future<void> removeLocation(String locationId) async {
@@ -171,6 +239,13 @@ class TripNotifier extends StateNotifier<TripState> {
     selectLeg(null); // Clear selected leg
 
     await _saveLocations(updatedLocations);
+
+    // Sync deletion with Repository
+    try {
+      await _ref.read(locationRepositoryProvider).deleteLocation(locationId);
+    } catch (e) {
+      log('Error deleting from repository: $e');
+    }
   }
 
   Future<void> removeMultipleLocations(Set<String> locationIds) async {
@@ -191,6 +266,16 @@ class TripNotifier extends StateNotifier<TripState> {
     selectLeg(null); // Clear selected leg
 
     await _saveLocations(updatedLocations);
+
+    // Sync multiple deletions with Repository
+    final repository = _ref.read(locationRepositoryProvider);
+    for (final id in locationIds) {
+      try {
+        await repository.deleteLocation(id);
+      } catch (e) {
+        log('Error deleting from repository for id $id: $e');
+      }
+    }
   }
 
   Future<void> skipMultipleLocations(Set<String> locationIds) async {
@@ -212,6 +297,16 @@ class TripNotifier extends StateNotifier<TripState> {
     );
     selectLeg(null); // Clear selected leg
     await _saveLocations(updatedLocations);
+
+    // Sync skip status with Repository
+    final repository = _ref.read(locationRepositoryProvider);
+    for (final id in locationIds) {
+      try {
+        await repository.updateLocation(id, {'is_skipped': true});
+      } catch (e) {
+        log('Error skipping location in repository for id $id: $e');
+      }
+    }
   }
 
   Future<void> unskipMultipleLocations(Set<String> locationIds) async {
@@ -233,6 +328,16 @@ class TripNotifier extends StateNotifier<TripState> {
     );
     selectLeg(null); // Clear selected leg
     await _saveLocations(updatedLocations);
+
+    // Sync unskip status with Repository
+    final repository = _ref.read(locationRepositoryProvider);
+    for (final id in locationIds) {
+      try {
+        await repository.updateLocation(id, {'is_skipped': false});
+      } catch (e) {
+        log('Error unskipping location in repository for id $id: $e');
+      }
+    }
   }
 
   Future<void> reorderLocation(int oldIndex, int newIndex) async {
@@ -273,6 +378,13 @@ class TripNotifier extends StateNotifier<TripState> {
 
     state = state.copyWith(pinnedLocations: updatedLocations);
     await _saveLocations(updatedLocations);
+
+    // Sync with Repository
+    try {
+      await _ref.read(locationRepositoryProvider).updateLocation(locationId, {'name': newName});
+    } catch (e) {
+      log('Error updating name in repository: $e');
+    }
   }
 
   Future<void> updateLocationStayDuration(
@@ -293,6 +405,15 @@ class TripNotifier extends StateNotifier<TripState> {
       totalTravelTime: newTotalTravelTime,
     );
     await _saveLocations(updatedLocations);
+
+    print("Stay For: " + newDuration.inSeconds.toString());
+
+    // Sync with Repository
+    try {
+      await _ref.read(locationRepositoryProvider).updateLocation(locationId, {'stay_duration': newDuration.inSeconds});
+    } catch (e) {
+      log('Error updating stay duration in repository: $e');
+    }
   }
 
   Future<void> updateLocationScheduledDate(
@@ -307,6 +428,13 @@ class TripNotifier extends StateNotifier<TripState> {
 
     state = state.copyWith(pinnedLocations: updatedLocations);
     await _saveLocations(updatedLocations);
+
+    // Sync with Repository
+    try {
+      await _ref.read(locationRepositoryProvider).updateLocation(locationId, {'scheduled_date': newDate.toIso8601String()});
+    } catch (e) {
+      log('Error updating scheduled date in repository: $e');
+    }
   }
 
   Future<void> updateMultipleLocationsScheduledDate(
@@ -321,6 +449,16 @@ class TripNotifier extends StateNotifier<TripState> {
 
     state = state.copyWith(pinnedLocations: updatedLocations);
     await _saveLocations(updatedLocations);
+
+    // Sync multiple updates with Repository
+    final repository = _ref.read(locationRepositoryProvider);
+    for (final id in locationIds) {
+      try {
+        await repository.updateLocation(id, {'scheduled_date': newDate.toIso8601String()});
+      } catch (e) {
+        log('Error updating scheduled date for id $id: $e');
+      }
+    }
   }
 
   Future<void> copyMultipleLocationsToDate(
@@ -344,6 +482,28 @@ class TripNotifier extends StateNotifier<TripState> {
       final updatedLocations = [...state.pinnedLocations, ...newLocations];
       state = state.copyWith(pinnedLocations: updatedLocations);
       await _saveLocations(updatedLocations);
+
+      // Sync new locations with Repository
+      final repository = _ref.read(locationRepositoryProvider);
+      for (final loc in newLocations) {
+         try {
+            final savedLoc = SavedLocation(
+              id: loc.id,
+              userId: '',
+              fingerprint: '',
+              name: loc.name,
+              lat: loc.coordinates.latitude,
+              lng: loc.coordinates.longitude,
+              isSkipped: loc.isSkipped,
+              stayDuration: loc.stayDuration.inSeconds,
+              scheduledDate: loc.scheduledDate,
+              createdAt: loc.addedAt,
+            );
+            await repository.addLocation(savedLoc);
+         } catch (e) {
+            log('Error copying to repository for id ${loc.id}: $e');
+         }
+      }
     }
   }
 

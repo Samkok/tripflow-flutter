@@ -31,13 +31,13 @@ dependencies:
   go_router: ^12.1.3
   
   # Local Storage
-  shared_preferences: ^2.2.2
+  shared_preferences: ^2.5.4
   
   # Environment
   flutter_dotenv: ^5.1.0
   
   # Utils
-  uuid: ^4.2.2
+  uuid: ^4.5.2
   intl: ^0.19.0
   url_launcher: ^6.3.2
   path_provider: ^2.1.5
@@ -45,11 +45,17 @@ dependencies:
   csv: ^6.0.0
   connectivity_plus: ^7.0.0
   internet_connection_checker_plus: ^2.9.1+1
+  supabase_flutter: ^2.10.3
+  hive: ^2.2.3
+  hive_flutter: ^1.1.0
+  crypto: ^3.0.7
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^3.0.0
+  build_runner: ^2.4.13
+  hive_generator: ^2.0.1
 
 flutter:
   uses-material-design: true

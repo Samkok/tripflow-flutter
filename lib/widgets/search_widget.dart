@@ -8,6 +8,8 @@ import '../providers/trip_provider.dart';
 import '../services/places_service.dart';
 import '../core/theme.dart';
 
+final searchQueryProvider = StateProvider.autoDispose<String>((ref) => '');
+
 class SearchWidget extends ConsumerStatefulWidget {
   final FocusNode? focusNode;
 
@@ -19,7 +21,6 @@ class SearchWidget extends ConsumerStatefulWidget {
 
 class _SearchWidgetState extends ConsumerState<SearchWidget> {
   final TextEditingController _searchController = TextEditingController();
-  bool _isSearching = false;
 
   @override
   Widget build(BuildContext context) {
@@ -28,55 +29,61 @@ class _SearchWidgetState extends ConsumerState<SearchWidget> {
       children: [
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16.0),
-          child: TextField(
-            focusNode: widget.focusNode,
-            controller: _searchController,
-            onChanged: (value) {
-              setState(() {
-                _isSearching = value.isNotEmpty;
-              });
+          child: Consumer(
+            builder: (context, ref, child) {
+              final searchQuery = ref.watch(searchQueryProvider);
+              return TextField(
+                focusNode: widget.focusNode,
+                controller: _searchController,
+                onChanged: (value) {
+                  ref.read(searchQueryProvider.notifier).state = value;
+                },
+                decoration: InputDecoration(
+                  filled: false,
+                  hintText: 'Search for places...',
+                  prefixIcon: Icon(
+                    Icons.search,
+                    color: AppTheme.primaryColor,
+                  ),
+                  suffixIcon: searchQuery.isNotEmpty
+                      ? IconButton(
+                          icon: const Icon(Icons.clear),
+                          onPressed: () {
+                            _searchController.clear();
+                            ref.read(searchQueryProvider.notifier).state = '';
+                          },
+                        )
+                      : null,
+                  border: InputBorder.none,
+                ),
+              );
             },
-            decoration: InputDecoration(
-              filled: false, // Prevents the TextField from having its own background color
-              hintText: 'Search for places...',
-              prefixIcon: Icon(
-                Icons.search,
-                color: AppTheme.primaryColor,
-              ),
-              suffixIcon: _searchController.text.isNotEmpty
-                  ? IconButton(
-                      icon: const Icon(Icons.clear),
-                      onPressed: () {
-                        _searchController.clear();
-                        setState(() {
-                          _isSearching = false;
-                        });
-                      },
-                    )
-                  : null,
-              border: InputBorder.none,
-            ),
           ),
         ),
-        if (_isSearching) ...[
-          const Divider(height: 1, thickness: 1),
-          Consumer(
-            builder: (context, ref, child) {
-              final searchResults = ref.watch(
-                placesSearchProvider(_searchController.text),
-              );
+        Consumer(
+          builder: (context, ref, child) {
+            final searchQuery = ref.watch(searchQueryProvider);
+            if (searchQuery.isEmpty) return const SizedBox.shrink();
 
-              return searchResults.when(
-                data: (predictions) => _buildPredictionsList(predictions),
-                loading: () => const Padding(
-                  padding: EdgeInsets.all(16.0),
-                  child: CircularProgressIndicator(),
+            final searchResults = ref.watch(
+              placesSearchProvider(searchQuery),
+            );
+
+            return Column(
+              children: [
+                const Divider(height: 1, thickness: 1),
+                searchResults.when(
+                  data: (predictions) => _buildPredictionsList(predictions),
+                  loading: () => const Padding(
+                    padding: EdgeInsets.all(16.0),
+                    child: CircularProgressIndicator(),
+                  ),
+                  error: (error, stack) => const SizedBox(),
                 ),
-                error: (error, stack) => const SizedBox(),
-              );
-            },
-          ),
-        ],
+              ],
+            );
+          },
+        ),
       ],
     );
   }
@@ -112,9 +119,12 @@ class _SearchWidgetState extends ConsumerState<SearchWidget> {
   }
 
   Future<void> _selectPlace(PlacePrediction prediction) async {
-    final placeDetails = await PlacesService.getPlaceDetails(prediction.placeId);
-    
+    final placeDetails =
+        await PlacesService.getPlaceDetails(prediction.placeId);
+
     if (placeDetails != null) {
+      if (!mounted) return;
+
       final selectedDate = ref.read(selectedDateProvider);
       final location = LocationModel(
         id: const Uuid().v4(),
@@ -126,11 +136,9 @@ class _SearchWidgetState extends ConsumerState<SearchWidget> {
       );
 
       await ref.read(tripProvider.notifier).addLocation(location);
-      
+
       _searchController.clear();
-      setState(() {
-        _isSearching = false;
-      });
+      ref.read(searchQueryProvider.notifier).state = '';
 
       // Dismiss the keyboard
       widget.focusNode?.unfocus();
