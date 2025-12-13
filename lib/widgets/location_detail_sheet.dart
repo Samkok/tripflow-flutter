@@ -5,6 +5,7 @@ import 'package:voyza/models/location_model.dart';
 import 'package:voyza/providers/map_ui_state_provider.dart';
 import 'package:voyza/providers/trip_provider.dart';
 import 'package:voyza/utils/date_picker_utils.dart';
+import 'package:voyza/widgets/add_to_trip_sheet.dart';
 
 import '../core/theme.dart';
 
@@ -208,6 +209,31 @@ class LocationDetailSheet extends ConsumerWidget {
                     padding: EdgeInsets.zero,
                     constraints: const BoxConstraints(),
                     tooltip: 'Delete Stop',
+                  ),
+                  const SizedBox(width: 8),
+                  IconButton(
+                    icon: Icon(
+                      Icons.playlist_add,
+                      size: 20,
+                      color: Theme.of(context).colorScheme.primary,
+                    ),
+                    onPressed: () async {
+                      // Show trip selection bottom sheet for this location
+                      showModalBottomSheet(
+                        context: context,
+                        isScrollControlled: true,
+                        backgroundColor: Colors.transparent,
+                        builder: (context) => AddToTripSheet(
+                          availableLocations: [updatedLocation],
+                          onSuccess: () {
+                            Navigator.of(context).pop();
+                          },
+                        ),
+                      );
+                    },
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                    tooltip: 'Add to Trip',
                   ),
                 ],
               ),

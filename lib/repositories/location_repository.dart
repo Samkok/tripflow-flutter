@@ -7,6 +7,18 @@ import '../services/supabase_service.dart';
 import '../services/anonymous_user_service.dart';
 import '../utils/fingerprint_utils.dart';
 
+class SyncResult {
+  int uploadedCount = 0;
+  int skippedCount = 0;
+  List<String> errors = [];
+
+  bool get isSuccess => errors.isEmpty;
+
+  @override
+  String toString() =>
+      'Uploaded: $uploadedCount, Skipped: $skippedCount, Errors: ${errors.length}';
+}
+
 class LocationRepository {
   static const String _boxName = 'locations';
   Box<SavedLocation>? _box; // Changed from late to nullable
@@ -255,15 +267,73 @@ class LocationRepository {
     }
   }
 
-  Stream<List<SavedLocation>> watchLocations() {
-    if (_box == null || !_box!.isOpen) {
-      if (Hive.isBoxOpen(_boxName)) {
-        _box = Hive.box<SavedLocation>(_boxName);
-      } else {
-        return const Stream.empty();
+  /// Get locations for a specific user ID
+  Future<List<SavedLocation>> getLocationsByUserId(String userId) async {
+    await _ensureInitialized();
+    try {
+      final response = await _supabase
+          .from('locations')
+          .select()
+          .eq('user_id', userId)
+          .order('created_at', ascending: false);
+
+      return (response as List)
+          .map((data) => SavedLocation.fromJson(data))
+          .toList();
+    } catch (e) {
+      debugPrint('Error getting locations by user ID: $e');
+      return [];
+    }
+  }
+
+  /// Sync local locations to remote with conflict resolution by fingerprint
+  Future<SyncResult> syncLocalLocations({
+    required List<SavedLocation> localLocations,
+    required List<SavedLocation> remoteLocations,
+  }) async {
+    await _ensureInitialized();
+    final result = SyncResult();
+
+    // Build fingerprint map of remote locations
+    final remoteByFingerprint = {
+      for (var loc in remoteLocations)
+        if (loc.fingerprint.isNotEmpty) loc.fingerprint: loc
+    };
+
+    for (final localLoc in localLocations) {
+      try {
+        final localFp = localLoc.fingerprint;
+        
+        // Skip if fingerprint already exists in remote
+        if (remoteByFingerprint.containsKey(localFp)) {
+          result.skippedCount++;
+          continue;
+        }
+
+        // Upload unique location
+        await syncLocation(localLoc);
+        result.uploadedCount++;
+      } catch (e) {
+        debugPrint('Error syncing location ${localLoc.name}: $e');
+        result.errors.add('${localLoc.name}: ${e.toString()}');
       }
     }
-    return _box!.watch().map((event) => _box!.values.toList());
+
+    return result;
+  }
+
+  Stream<List<SavedLocation>> watchLocations() {
+    return _createWatchStream();
+  }
+
+  /// Creates a stream that properly initializes the Hive box before watching.
+  /// This returns a stream that first emits current contents, then watches for changes.
+  Stream<List<SavedLocation>> _createWatchStream() async* {
+    await _ensureInitialized();
+    // Emit current contents first
+    yield _box!.values.toList();
+    // Then watch for future changes
+    yield* _box!.watch().map((event) => _box!.values.toList());
   }
 
   Future<void> cleanUpAnonymousData() async {

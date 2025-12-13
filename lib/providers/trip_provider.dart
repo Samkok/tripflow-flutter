@@ -13,6 +13,7 @@ import '../providers/debounced_settings_provider.dart';
 import '../utils/zone_utils.dart';
 import '../models/saved_location.dart';
 import 'location_provider.dart';
+import 'user_trip_provider.dart';
 
 class TripState {
   final List<LocationModel> pinnedLocations;
@@ -117,68 +118,47 @@ class TripNotifier extends StateNotifier<TripState> {
   bool _isLoading = true;
 
   TripNotifier(this._ref) : super(TripState()) {
-    _loadPinnedLocations();
+    // Listen to filtered locations immediately
     _initSyncListener();
   }
 
   void _initSyncListener() {
-    _ref.listen<AsyncValue<List<SavedLocation>>>(savedLocationsProvider,
+    // Listen to filtered locations based on active trip
+    // When trip active: shows only that trip's locations
+    // When no trip active: shows empty list
+    _ref.listen<AsyncValue<List<SavedLocation>>>(filteredLocationsForMapProvider,
         (prev, next) {
-      next.whenData((savedLocations) {
-        _mergeSavedLocations(savedLocations);
+      next.whenData((filteredLocations) {
+        // Convert SavedLocation list to LocationModel list
+        final newPinnedLocations = filteredLocations.map((saved) {
+          return LocationModel(
+            id: saved.id,
+            name: saved.name,
+            address: '', // Address not available from SavedLocation
+            coordinates: LatLng(saved.lat, saved.lng),
+            addedAt: saved.createdAt,
+            scheduledDate: saved.scheduledDate ?? _ref.read(selectedDateProvider),
+            isSkipped: saved.isSkipped,
+            stayDuration: Duration(seconds: saved.stayDuration),
+          );
+        }).toList();
+        
+        // Update state with filtered locations from active trip
+        state = state.copyWith(
+          pinnedLocations: newPinnedLocations,
+          // Clear optimized route when locations change (different trip's locations)
+          optimizedLocationsForSelectedDate: [],
+          optimizedRoute: [],
+          legPolylines: [],
+          legDetails: [],
+          totalTravelTime: Duration.zero,
+          totalDistance: 0.0,
+        );
       });
     });
   }
 
-  Future<void> _loadPinnedLocations() async {
-    _isLoading = true;
-    final locations = await StorageService.getPinnedLocations();
-    state = state.copyWith(pinnedLocations: locations);
-    _isLoading = false;
-  }
-
-  void _mergeSavedLocations(List<SavedLocation> savedLocations) {
-    if (_isLoading) return;
-
-    final currentIds = state.pinnedLocations.map((l) => l.id).toSet();
-    final newLocations = <LocationModel>[];
-
-    for (final saved in savedLocations) {
-      if (!currentIds.contains(saved.id)) {
-        // Convert SavedLocation to LocationModel
-        // Note: SavedLocation lacks address/schedule info, so we use defaults.
-        newLocations.add(LocationModel(
-          id: saved.id,
-          name: saved.name,
-          address: '', // Placeholder as address is not synced yet
-          coordinates: LatLng(saved.lat, saved.lng),
-          addedAt: saved.createdAt,
-          scheduledDate:
-              _ref.read(selectedDateProvider), // Default to current selection
-        ));
-      }
-    }
-
-    if (newLocations.isNotEmpty) {
-      final updatedLocations = [...state.pinnedLocations, ...newLocations];
-      state = state.copyWith(
-        pinnedLocations: updatedLocations,
-        // Reset optimization if new locations come in
-        optimizedLocationsForSelectedDate: [],
-        optimizedRoute: [],
-      );
-      // We don't save to legacy storage here to avoid dupes/loops,
-      // or we could updates storage if needed.
-    }
-  }
-
-  Future<void> _saveLocations(List<LocationModel> locations) async {
-    if (_isLoading) return; // Prevent saving while initial load is in progress
-    await StorageService.savePinnedLocations(locations);
-  }
-
   Future<void> addLocation(LocationModel location) async {
-    // Optimistic update: add location immediately to state for instant UI feedback
     final selectedDate = _ref.read(selectedDateProvider);
 
     // Ensure the new location has the currently selected date if it doesn't have one.
@@ -186,23 +166,14 @@ class TripNotifier extends StateNotifier<TripState> {
         ? location.copyWith(scheduledDate: selectedDate)
         : location;
 
-    final updatedLocations = [...state.pinnedLocations, locationWithDate];
-    // When adding a new location, the existing optimized route is no longer valid.
-    state = state.copyWith(
-      pinnedLocations: updatedLocations,
-      optimizedLocationsForSelectedDate: [],
-      optimizedRoute: [],
-      legDetails: [],
-    );
-    selectLeg(null); // Clear selected leg
+    // Note: pinnedLocations is synced from filteredLocationsForMapProvider
+    // When we add the location, the filter will automatically update
+    // So we don't update state here - it will be updated by _initSyncListener
 
-    // Save to storage asynchronously without blocking
-    _saveLocations(updatedLocations);
-
-    print("Code reached here");
-
-    // Sync with new Repository
     try {
+      // Get the active trip to associate this location with it
+      final activeTrip = await _ref.read(activeTripsProvider.future);
+      
       final savedLoc = SavedLocation(
         id: locationWithDate.id,
         name: locationWithDate.name,
@@ -212,23 +183,61 @@ class TripNotifier extends StateNotifier<TripState> {
         scheduledDate: locationWithDate.scheduledDate,
         stayDuration: locationWithDate.stayDuration.inSeconds,
         isSkipped: locationWithDate.isSkipped,
+        // IMPORTANT: Set tripId if a trip is active
+        tripId: activeTrip?.id,
         // userId and fingerprint will be handled by repository based on auth state
         userId: '',
         fingerprint: '',
       );
       await _ref.read(locationRepositoryProvider).addLocation(savedLoc);
+      
+      // Clear optimized route when location is added
+      state = state.copyWith(
+        optimizedLocationsForSelectedDate: [],
+        optimizedRoute: [],
+        legPolylines: [],
+        legDetails: [],
+        totalTravelTime: Duration.zero,
+        totalDistance: 0.0,
+      );
+      selectLeg(null);
     } catch (e) {
       log('Error saving to repository: $e');
     }
   }
 
-  Future<void> removeLocation(String locationId) async {
-    final updatedLocations =
-        state.pinnedLocations.where((loc) => loc.id != locationId).toList();
+  /// Associates existing locations with a trip
+  Future<void> addLocationsToTrip(List<String> locationIds, String tripId) async {
+    try {
+      final repository = _ref.read(locationRepositoryProvider);
+      
+      // Update each location to associate with the trip
+      for (final locationId in locationIds) {
+        await repository.updateLocation(locationId, {'trip_id': tripId});
+      }
+      
+      // The locations stream will automatically update and filter via filteredLocationsForMapProvider
+    } catch (e) {
+      log('Error adding locations to trip: $e');
+    }
+  }
 
+  /// Removes locations from a trip (sets trip_id to null)
+  Future<void> removeLocationsFromTrip(List<String> locationIds) async {
+    try {
+      final repository = _ref.read(locationRepositoryProvider);
+      
+      for (final locationId in locationIds) {
+        await repository.updateLocation(locationId, {'trip_id': null});
+      }
+    } catch (e) {
+      log('Error removing locations from trip: $e');
+    }
+  }
+
+  Future<void> removeLocation(String locationId) async {
     // Clear optimized route data when a location is removed
     state = state.copyWith(
-      pinnedLocations: updatedLocations,
       optimizedLocationsForSelectedDate: [],
       optimizedRoute: [],
       legPolylines: [],
@@ -238,9 +247,8 @@ class TripNotifier extends StateNotifier<TripState> {
     );
     selectLeg(null); // Clear selected leg
 
-    await _saveLocations(updatedLocations);
-
     // Sync deletion with Repository
+    // This will trigger filteredLocationsForMapProvider to update pinnedLocations
     try {
       await _ref.read(locationRepositoryProvider).deleteLocation(locationId);
     } catch (e) {
@@ -249,13 +257,8 @@ class TripNotifier extends StateNotifier<TripState> {
   }
 
   Future<void> removeMultipleLocations(Set<String> locationIds) async {
-    final updatedLocations = state.pinnedLocations
-        .where((loc) => !locationIds.contains(loc.id))
-        .toList();
-
     // Clear optimized route data when locations are removed
     state = state.copyWith(
-      pinnedLocations: updatedLocations,
       optimizedLocationsForSelectedDate: [], // Clear optimized list
       optimizedRoute: [],
       legPolylines: [],
@@ -265,9 +268,8 @@ class TripNotifier extends StateNotifier<TripState> {
     );
     selectLeg(null); // Clear selected leg
 
-    await _saveLocations(updatedLocations);
-
     // Sync multiple deletions with Repository
+    // This will trigger filteredLocationsForMapProvider to update pinnedLocations
     final repository = _ref.read(locationRepositoryProvider);
     for (final id in locationIds) {
       try {
@@ -279,15 +281,8 @@ class TripNotifier extends StateNotifier<TripState> {
   }
 
   Future<void> skipMultipleLocations(Set<String> locationIds) async {
-    final updatedLocations = state.pinnedLocations.map((loc) {
-      if (locationIds.contains(loc.id)) {
-        return loc.copyWith(isSkipped: true);
-      }
-      return loc;
-    }).toList();
-
+    // Clear optimized route
     state = state.copyWith(
-      pinnedLocations: updatedLocations,
       optimizedRoute: [],
       optimizedLocationsForSelectedDate: [], // Clear optimized list
       legPolylines: [],
@@ -296,7 +291,6 @@ class TripNotifier extends StateNotifier<TripState> {
       totalDistance: 0.0,
     );
     selectLeg(null); // Clear selected leg
-    await _saveLocations(updatedLocations);
 
     // Sync skip status with Repository
     final repository = _ref.read(locationRepositoryProvider);
@@ -310,15 +304,8 @@ class TripNotifier extends StateNotifier<TripState> {
   }
 
   Future<void> unskipMultipleLocations(Set<String> locationIds) async {
-    final updatedLocations = state.pinnedLocations.map((loc) {
-      if (locationIds.contains(loc.id)) {
-        return loc.copyWith(isSkipped: false);
-      }
-      return loc;
-    }).toList();
-
+    // Clear optimized route
     state = state.copyWith(
-      pinnedLocations: updatedLocations,
       optimizedRoute: [],
       optimizedLocationsForSelectedDate: [], // Clear optimized list
       legPolylines: [],
@@ -327,7 +314,6 @@ class TripNotifier extends StateNotifier<TripState> {
       totalDistance: 0.0,
     );
     selectLeg(null); // Clear selected leg
-    await _saveLocations(updatedLocations);
 
     // Sync unskip status with Repository
     final repository = _ref.read(locationRepositoryProvider);
@@ -363,8 +349,6 @@ class TripNotifier extends StateNotifier<TripState> {
       totalDistance: 0.0,
     );
     selectLeg(null); // Clear selected leg
-
-    await _saveLocations(updatedLocations);
   }
 
   Future<void> updateLocationName(String locationId, String newName) async {
@@ -377,7 +361,6 @@ class TripNotifier extends StateNotifier<TripState> {
     }).toList();
 
     state = state.copyWith(pinnedLocations: updatedLocations);
-    await _saveLocations(updatedLocations);
 
     // Sync with Repository
     try {
@@ -404,7 +387,6 @@ class TripNotifier extends StateNotifier<TripState> {
       pinnedLocations: updatedLocations,
       totalTravelTime: newTotalTravelTime,
     );
-    await _saveLocations(updatedLocations);
 
     print("Stay For: " + newDuration.inSeconds.toString());
 
@@ -427,7 +409,6 @@ class TripNotifier extends StateNotifier<TripState> {
     }).toList();
 
     state = state.copyWith(pinnedLocations: updatedLocations);
-    await _saveLocations(updatedLocations);
 
     // Sync with Repository
     try {
@@ -448,7 +429,6 @@ class TripNotifier extends StateNotifier<TripState> {
     }).toList();
 
     state = state.copyWith(pinnedLocations: updatedLocations);
-    await _saveLocations(updatedLocations);
 
     // Sync multiple updates with Repository
     final repository = _ref.read(locationRepositoryProvider);
@@ -467,6 +447,8 @@ class TripNotifier extends StateNotifier<TripState> {
         .where((loc) => locationIds.contains(loc.id))
         .toList();
 
+    final activeTrip = await _ref.read(activeTripsProvider.future);
+
     final newLocations = locationsToCopy.map((loc) {
       // Create a new location with a new ID and the new date.
       // Reset travel details as they are not applicable to the new date yet.
@@ -479,10 +461,6 @@ class TripNotifier extends StateNotifier<TripState> {
     }).toList();
 
     if (newLocations.isNotEmpty) {
-      final updatedLocations = [...state.pinnedLocations, ...newLocations];
-      state = state.copyWith(pinnedLocations: updatedLocations);
-      await _saveLocations(updatedLocations);
-
       // Sync new locations with Repository
       final repository = _ref.read(locationRepositoryProvider);
       for (final loc in newLocations) {
@@ -498,6 +476,8 @@ class TripNotifier extends StateNotifier<TripState> {
               stayDuration: loc.stayDuration.inSeconds,
               scheduledDate: loc.scheduledDate,
               createdAt: loc.addedAt,
+              // IMPORTANT: Associate with active trip if available
+              tripId: activeTrip?.id,
             );
             await repository.addLocation(savedLoc);
          } catch (e) {
@@ -753,7 +733,6 @@ class TripNotifier extends StateNotifier<TripState> {
         totalDistance: totalDistance,
       );
 
-      _saveLocations(updatedPinnedLocations);
       _ref.read(zoomToFitRouteTrigger.notifier).update((state) => state + 1);
     } catch (e) {
       log('Error generating route: $e');
@@ -808,7 +787,7 @@ class TripNotifier extends StateNotifier<TripState> {
   }
 
   void clearTrip() {
-    // Use copyWith to reset trip data while preserving the.
+    // Reset trip data and clear all locations from local storage
     state = state.copyWith(
       pinnedLocations: [],
       optimizedLocationsForSelectedDate: [], // Clear optimized list
@@ -818,7 +797,8 @@ class TripNotifier extends StateNotifier<TripState> {
       totalTravelTime: Duration.zero,
       totalDistance: 0.0,
     );
-    _saveLocations([]);
+    // Remove all locations from local device storage
+    StorageService.savePinnedLocations([]);
   }
 
   void selectLeg(int? legIndex) {

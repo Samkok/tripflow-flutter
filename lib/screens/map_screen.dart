@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'dart:ui';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:voyza/widgets/add_to_trip_sheet.dart';
 import 'package:voyza/widgets/location_detail_sheet.dart';
 import 'package:uuid/uuid.dart';
 import '../models/location_model.dart';
@@ -637,6 +638,30 @@ class _MapScreenState extends ConsumerState<MapScreen>
                       child: const Icon(Icons.zoom_out_map),
                     );
                   },
+                ),
+                const SizedBox(height: 12),
+                // Add to Trip FAB (multi-select)
+                FloatingActionButton(
+                  heroTag: 'addToTripFab',
+                  mini: true,
+                  onPressed: () async {
+                    // Show AddToTripSheet for all visible locations
+                    final locations = ref.read(locationsForSelectedDateProvider);
+                    if (locations.isEmpty) return;
+                    showModalBottomSheet(
+                      context: context,
+                      isScrollControlled: true,
+                      backgroundColor: Colors.transparent,
+                      builder: (context) => AddToTripSheet(
+                        availableLocations: locations,
+                        onSuccess: () {
+                          Navigator.of(context).pop();
+                        },
+                      ),
+                    );
+                  },
+                  tooltip: 'Add Locations to Trip',
+                  child: const Icon(Icons.playlist_add),
                 ),
                 const SizedBox(height: 12),
                 Consumer(builder: (context, ref, child) {

@@ -43,6 +43,9 @@ class SavedLocation extends HiveObject {
   @HiveField(12)
   final DateTime? scheduledDate;
 
+  @HiveField(13)
+  final String? tripId; // UUID of associated trip
+
   SavedLocation({
     required this.id,
     required this.userId,
@@ -57,6 +60,7 @@ class SavedLocation extends HiveObject {
     this.isSkipped = false,
     this.stayDuration = 0,
     this.scheduledDate,
+    this.tripId,
   });
 
   SavedLocation copyWith({
@@ -73,6 +77,7 @@ class SavedLocation extends HiveObject {
     bool? isSkipped,
     int? stayDuration,
     DateTime? scheduledDate,
+    String? tripId,
   }) {
     return SavedLocation(
       id: id ?? this.id,
@@ -88,6 +93,7 @@ class SavedLocation extends HiveObject {
       isSkipped: isSkipped ?? this.isSkipped,
       stayDuration: stayDuration ?? this.stayDuration,
       scheduledDate: scheduledDate ?? this.scheduledDate,
+      tripId: tripId ?? this.tripId,
     );
   }
 
@@ -106,6 +112,7 @@ class SavedLocation extends HiveObject {
       isSkipped: json['is_skipped'] ?? false,
       stayDuration: json['stay_duration'] ?? 0,
       scheduledDate: json['scheduled_date'] != null ? DateTime.parse(json['scheduled_date']) : null,
+      tripId: json['trip_id'],
     );
   }
 
@@ -113,6 +120,7 @@ class SavedLocation extends HiveObject {
     return {
       'id': id,
       'user_id': userId,
+      'trip_id': tripId,
       'name': name,
       'lat': lat,
       'lng': lng,

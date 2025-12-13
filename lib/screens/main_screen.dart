@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:voyza/providers/location_provider.dart';
 import 'dart:ui';
+import 'package:voyza/screens/trip_screen.dart';
 import 'package:voyza/screens/map_screen.dart';
 import 'package:voyza/screens/settings_screen.dart';
 
@@ -16,6 +17,7 @@ class _MainScreenState extends ConsumerState<MainScreen> {
   int _selectedIndex = 0;
 
   static final List<Widget> _widgetOptions = <Widget>[
+    const TripScreen(),
     MapScreen(),
     const SettingsScreen(),
   ];
@@ -82,8 +84,9 @@ class _MainScreenState extends ConsumerState<MainScreen> {
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
-              _buildNavItem(0, Icons.map_outlined, Icons.map_rounded, 'Map'),
-              _buildNavItem(1, Icons.settings_outlined, Icons.settings_rounded,
+              _buildNavItem(0, Icons.trip_origin_outlined, Icons.trip_origin_rounded, 'Trips'),
+              _buildNavItem(1, Icons.map_outlined, Icons.map_rounded, 'Map'),
+              _buildNavItem(2, Icons.settings_outlined, Icons.settings_rounded,
                   'Settings'),
             ],
           ),
