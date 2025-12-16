@@ -20,7 +20,6 @@ class TripDetailsScreen extends ConsumerStatefulWidget {
 class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
   @override
   Widget build(BuildContext context) {
-    final locationRepository = ref.watch(locationRepositoryProvider);
 
     return Scaffold(
       appBar: AppBar(
@@ -49,36 +48,48 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
       initialData: const [],
       builder: (context, snapshot) {
         debugPrint(
-            'Stream state: ${snapshot.connectionState}, hasData: ${snapshot.hasData}, data: ${snapshot.data?.length}');
+            'Trip details - Stream state: ${snapshot.connectionState}, hasData: ${snapshot.hasData}, data length: ${snapshot.data?.length ?? 0}');
 
-        // Show empty state if no locations
-        if ((snapshot.data ?? []).isEmpty) {
-          return _buildEmptyState(true); // Assume it's loading or genuinely empty
+        // Handle connection states
+        if (snapshot.connectionState == ConnectionState.waiting && snapshot.data == null) {
+          return const Center(child: CircularProgressIndicator());
         }
 
-        // Show locations if we have data
-        if (snapshot.hasData && snapshot.data!.isNotEmpty) {
-          final tripLocations = snapshot.data!
-              .where((loc) => loc.tripId == widget.trip.id)
-              .toList();
-          
-          if (tripLocations.isEmpty) {
-            return _buildEmptyState(false);
-          }
-          
-          return _buildLocationsList(tripLocations);
-        }
-
-        // Show error if any
+        // Handle errors
         if (snapshot.hasError) {
           debugPrint('Stream error: ${snapshot.error}');
           return Center(
-            child: Text('Error: ${snapshot.error}'),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Text('Error loading locations: ${snapshot.error}'),
+            ),
           );
         }
 
-        // Default to loading
-        return const Center(child: CircularProgressIndicator());
+        // Get data safely
+        final allLocations = snapshot.data ?? const [];
+        debugPrint('Trip details - Total locations in stream: ${allLocations.length}');
+        
+        if (allLocations.isEmpty) {
+          debugPrint('Trip details - No locations in stream');
+          return _buildEmptyState(true);
+        }
+
+        // Filter by trip ID
+        final tripLocations = allLocations
+            .where((loc) => loc.tripId == widget.trip.id)
+            .toList();
+        
+        debugPrint('Trip details - Trip ID: ${widget.trip.id}');
+        debugPrint('Trip details - Filtered locations: ${tripLocations.length}');
+        debugPrint('Trip details - Location details: ${allLocations.map((l) => '${l.name}(tripId=${l.tripId})').join(", ")}');
+        
+        if (tripLocations.isEmpty) {
+          debugPrint('Trip details - No locations match this trip');
+          return _buildEmptyState(false);
+        }
+        
+        return _buildLocationsList(tripLocations);
       },
     );
   }
@@ -98,6 +109,8 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
       // Use scheduledDate if available, otherwise fall back to createdAt
       final dateToUse = location.scheduledDate ?? location.createdAt;
       final dateKey = DateFormat('MMMM dd, yyyy').format(dateToUse);
+
+      debugPrint('Location ${location.name} belong to trip: ${location.tripId} for date: ${location.scheduledDate}');
 
       if (!groupedByDate.containsKey(dateKey)) {
         groupedByDate[dateKey] = [];
@@ -419,7 +432,7 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
                           ?.withOpacity(0.5),
                     ),
               ),
-              if (location.stayDuration != null && location.stayDuration > 0)
+              if (location.stayDuration > 0)
                 Text(
                   '${(location.stayDuration / 60).toStringAsFixed(0)}m stay',
                   style: Theme.of(context).textTheme.labelSmall?.copyWith(

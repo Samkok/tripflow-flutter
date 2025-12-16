@@ -1,5 +1,6 @@
 import 'dart:developer';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:uuid/uuid.dart';
@@ -7,13 +8,14 @@ import 'package:voyza/providers/map_ui_state_provider.dart';
 import 'package:geolocator/geolocator.dart';
 import '../models/location_model.dart';
 import '../models/trip_model.dart';
+import '../models/trip.dart';
 import '../services/google_maps_service.dart';
 import '../services/storage_service.dart';
 import '../providers/debounced_settings_provider.dart';
 import '../utils/zone_utils.dart';
 import '../models/saved_location.dart';
 import 'location_provider.dart';
-import 'user_trip_provider.dart';
+import 'trip_listener_provider.dart';
 
 class TripState {
   final List<LocationModel> pinnedLocations;
@@ -115,20 +117,58 @@ class TripState {
 
 class TripNotifier extends StateNotifier<TripState> {
   final Ref _ref;
-  bool _isLoading = true;
 
   TripNotifier(this._ref) : super(TripState()) {
-    // Listen to filtered locations immediately
     _initSyncListener();
   }
 
   void _initSyncListener() {
+    // Instead, watch the full AsyncValue and extract the trip manually
+    _ref.listen<AsyncValue<Trip?>>(
+      realtimeActiveTripProvider,
+      (prev, next) {
+        final prevTrip = prev?.asData?.value;
+        final nextTrip = next.asData?.value;
+
+        final prevId = prevTrip?.id;
+        final nextId = nextTrip?.id;
+
+        debugPrint('🔍 Trip ID changed: prev=$prevId → next=$nextId');
+
+        // Only update if the trip ID actually changed
+        if (prevId != nextId) {
+          if (nextTrip != null) {
+            // Trip was activated or switched
+            debugPrint(
+                '🟢 TripNotifier: Trip ACTIVATED - ${nextTrip.name} (${nextTrip.id})');
+          } else {
+            // Trip was deactivated
+            debugPrint(
+                '🔴 TripNotifier: Trip DEACTIVATED - clearing all locations');
+            // Trip was deactivated, clear all pinned locations immediately
+            state = state.copyWith(
+              pinnedLocations: [],
+              optimizedLocationsForSelectedDate: [],
+              optimizedRoute: [],
+              legPolylines: [],
+              legDetails: [],
+              totalTravelTime: Duration.zero,
+              totalDistance: 0.0,
+            );
+          }
+        }
+      },
+    );
+
     // Listen to filtered locations based on active trip
     // When trip active: shows only that trip's locations
     // When no trip active: shows empty list
-    _ref.listen<AsyncValue<List<SavedLocation>>>(filteredLocationsForMapProvider,
-        (prev, next) {
+    _ref.listen<AsyncValue<List<SavedLocation>>>(
+        filteredLocationsForMapProvider, (prev, next) {
       next.whenData((filteredLocations) {
+        debugPrint(
+            '📍 TripNotifier._initSyncListener: Received ${filteredLocations.length} filtered locations');
+
         // Convert SavedLocation list to LocationModel list
         final newPinnedLocations = filteredLocations.map((saved) {
           return LocationModel(
@@ -137,12 +177,16 @@ class TripNotifier extends StateNotifier<TripState> {
             address: '', // Address not available from SavedLocation
             coordinates: LatLng(saved.lat, saved.lng),
             addedAt: saved.createdAt,
-            scheduledDate: saved.scheduledDate ?? _ref.read(selectedDateProvider),
+            scheduledDate:
+                saved.scheduledDate ?? _ref.read(selectedDateProvider),
             isSkipped: saved.isSkipped,
             stayDuration: Duration(seconds: saved.stayDuration),
           );
         }).toList();
-        
+
+        debugPrint(
+            '✅ TripNotifier._initSyncListener: Converted to ${newPinnedLocations.length} LocationModel objects');
+
         // Update state with filtered locations from active trip
         state = state.copyWith(
           pinnedLocations: newPinnedLocations,
@@ -171,9 +215,11 @@ class TripNotifier extends StateNotifier<TripState> {
     // So we don't update state here - it will be updated by _initSyncListener
 
     try {
-      // Get the active trip to associate this location with it
-      final activeTrip = await _ref.read(activeTripsProvider.future);
-      
+      // Get the REALTIME active trip to associate this location with it
+      // This ensures we use the most up-to-date trip state
+      final activeTripAsync = _ref.read(realtimeActiveTripProvider);
+      final activeTrip = activeTripAsync.asData?.value;
+
       final savedLoc = SavedLocation(
         id: locationWithDate.id,
         name: locationWithDate.name,
@@ -183,14 +229,16 @@ class TripNotifier extends StateNotifier<TripState> {
         scheduledDate: locationWithDate.scheduledDate,
         stayDuration: locationWithDate.stayDuration.inSeconds,
         isSkipped: locationWithDate.isSkipped,
-        // IMPORTANT: Set tripId if a trip is active
+        // IMPORTANT: Set tripId if a trip is active, null if no trip is active
         tripId: activeTrip?.id,
         // userId and fingerprint will be handled by repository based on auth state
         userId: '',
         fingerprint: '',
       );
+
+      debugPrint('addLocation: Adding location "${savedLoc.name}" with tripId=${savedLoc.tripId ?? "null (no trip)"}');
       await _ref.read(locationRepositoryProvider).addLocation(savedLoc);
-      
+
       // Clear optimized route when location is added
       state = state.copyWith(
         optimizedLocationsForSelectedDate: [],
@@ -207,15 +255,16 @@ class TripNotifier extends StateNotifier<TripState> {
   }
 
   /// Associates existing locations with a trip
-  Future<void> addLocationsToTrip(List<String> locationIds, String tripId) async {
+  Future<void> addLocationsToTrip(
+      List<String> locationIds, String tripId) async {
     try {
       final repository = _ref.read(locationRepositoryProvider);
-      
+
       // Update each location to associate with the trip
       for (final locationId in locationIds) {
         await repository.updateLocation(locationId, {'trip_id': tripId});
       }
-      
+
       // The locations stream will automatically update and filter via filteredLocationsForMapProvider
     } catch (e) {
       log('Error adding locations to trip: $e');
@@ -226,7 +275,7 @@ class TripNotifier extends StateNotifier<TripState> {
   Future<void> removeLocationsFromTrip(List<String> locationIds) async {
     try {
       final repository = _ref.read(locationRepositoryProvider);
-      
+
       for (final locationId in locationIds) {
         await repository.updateLocation(locationId, {'trip_id': null});
       }
@@ -364,7 +413,9 @@ class TripNotifier extends StateNotifier<TripState> {
 
     // Sync with Repository
     try {
-      await _ref.read(locationRepositoryProvider).updateLocation(locationId, {'name': newName});
+      await _ref
+          .read(locationRepositoryProvider)
+          .updateLocation(locationId, {'name': newName});
     } catch (e) {
       log('Error updating name in repository: $e');
     }
@@ -392,7 +443,9 @@ class TripNotifier extends StateNotifier<TripState> {
 
     // Sync with Repository
     try {
-      await _ref.read(locationRepositoryProvider).updateLocation(locationId, {'stay_duration': newDuration.inSeconds});
+      await _ref
+          .read(locationRepositoryProvider)
+          .updateLocation(locationId, {'stay_duration': newDuration.inSeconds});
     } catch (e) {
       log('Error updating stay duration in repository: $e');
     }
@@ -412,7 +465,8 @@ class TripNotifier extends StateNotifier<TripState> {
 
     // Sync with Repository
     try {
-      await _ref.read(locationRepositoryProvider).updateLocation(locationId, {'scheduled_date': newDate.toIso8601String()});
+      await _ref.read(locationRepositoryProvider).updateLocation(
+          locationId, {'scheduled_date': newDate.toIso8601String()});
     } catch (e) {
       log('Error updating scheduled date in repository: $e');
     }
@@ -434,7 +488,8 @@ class TripNotifier extends StateNotifier<TripState> {
     final repository = _ref.read(locationRepositoryProvider);
     for (final id in locationIds) {
       try {
-        await repository.updateLocation(id, {'scheduled_date': newDate.toIso8601String()});
+        await repository
+            .updateLocation(id, {'scheduled_date': newDate.toIso8601String()});
       } catch (e) {
         log('Error updating scheduled date for id $id: $e');
       }
@@ -447,7 +502,9 @@ class TripNotifier extends StateNotifier<TripState> {
         .where((loc) => locationIds.contains(loc.id))
         .toList();
 
-    final activeTrip = await _ref.read(activeTripsProvider.future);
+    // Get the REALTIME active trip to associate copied locations with it
+    final activeTripAsync = _ref.read(realtimeActiveTripProvider);
+    final activeTrip = activeTripAsync.asData?.value;
 
     final newLocations = locationsToCopy.map((loc) {
       // Create a new location with a new ID and the new date.
@@ -464,25 +521,26 @@ class TripNotifier extends StateNotifier<TripState> {
       // Sync new locations with Repository
       final repository = _ref.read(locationRepositoryProvider);
       for (final loc in newLocations) {
-         try {
-            final savedLoc = SavedLocation(
-              id: loc.id,
-              userId: '',
-              fingerprint: '',
-              name: loc.name,
-              lat: loc.coordinates.latitude,
-              lng: loc.coordinates.longitude,
-              isSkipped: loc.isSkipped,
-              stayDuration: loc.stayDuration.inSeconds,
-              scheduledDate: loc.scheduledDate,
-              createdAt: loc.addedAt,
-              // IMPORTANT: Associate with active trip if available
-              tripId: activeTrip?.id,
-            );
-            await repository.addLocation(savedLoc);
-         } catch (e) {
-            log('Error copying to repository for id ${loc.id}: $e');
-         }
+        try {
+          final savedLoc = SavedLocation(
+            id: loc.id,
+            userId: '',
+            fingerprint: '',
+            name: loc.name,
+            lat: loc.coordinates.latitude,
+            lng: loc.coordinates.longitude,
+            isSkipped: loc.isSkipped,
+            stayDuration: loc.stayDuration.inSeconds,
+            scheduledDate: loc.scheduledDate,
+            createdAt: loc.addedAt,
+            // IMPORTANT: Associate with active trip if available, null if no trip is active
+            tripId: activeTrip?.id,
+          );
+          debugPrint('copyMultipleLocationsToDate: Copying "${savedLoc.name}" with tripId=${savedLoc.tripId ?? "null (no trip)"}');
+          await repository.addLocation(savedLoc);
+        } catch (e) {
+          log('Error copying to repository for id ${loc.id}: $e');
+        }
       }
     }
   }

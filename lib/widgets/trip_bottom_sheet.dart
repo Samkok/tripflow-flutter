@@ -139,10 +139,8 @@ class TripBottomSheet extends ConsumerWidget {
                       }),
                     ],
 
-                    // Date Selector - Moved here from the header
-                    if (hasPinnedLocations) ...[
-                      _buildDatePicker(context, ref),
-                    ],
+                    // Date Selector - Always visible to allow date switching
+                    _buildDatePicker(context, ref),
 
                     // Locations List
                     Consumer(builder: (context, ref, _) {

@@ -1,12 +1,17 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/trip.dart';
 import '../repositories/trip_repository.dart';
-import '../repositories/trip_repository_with_events.dart';
 import '../services/trip_event_service.dart';
+import '../repositories/trip_repository_with_events.dart';
 import 'auth_provider.dart';
 
 final tripRepositoryProvider = Provider<TripRepository>((ref) {
   return TripRepository();
+});
+
+/// Provides a singleton instance of the TripEventService.
+final tripEventServiceProvider = Provider<TripEventService>((ref) {
+  return TripEventService();
 });
 
 /// Trip repository with event emission
@@ -14,7 +19,7 @@ final tripRepositoryProvider = Provider<TripRepository>((ref) {
 final tripRepositoryWithEventsProvider =
     Provider<TripRepositoryWithEvents>((ref) {
   final repository = ref.watch(tripRepositoryProvider);
-  final eventService = TripEventService();
+  final eventService = ref.watch(tripEventServiceProvider);
   return TripRepositoryWithEvents(
     repository: repository,
     eventService: eventService,

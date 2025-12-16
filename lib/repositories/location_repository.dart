@@ -32,10 +32,53 @@ class LocationRepository {
   Future<void> _ensureInitialized() async {
     if (_box != null && _box!.isOpen) return;
 
-    if (!Hive.isBoxOpen(_boxName)) {
-      _box = await Hive.openBox<SavedLocation>(_boxName);
-    } else {
-      _box = Hive.box<SavedLocation>(_boxName);
+    try {
+      if (!Hive.isBoxOpen(_boxName)) {
+        _box = await Hive.openBox<SavedLocation>(_boxName);
+      } else {
+        _box = Hive.box<SavedLocation>(_boxName);
+      }
+    } catch (e) {
+      // If there's a HiveError (corrupted data or unknown typeId), delete and recreate
+      if (e.toString().contains('HiveError') || e.toString().contains('unknown typeId')) {
+        debugPrint('Corrupted Hive cache detected: $e. Clearing and recreating...');
+        
+        // Close the box if it's open
+        if (Hive.isBoxOpen(_boxName)) {
+          await Hive.box(_boxName).clear();
+          await Hive.box(_boxName).close();
+        }
+        
+        // Delete the corrupted box
+        try {
+          await Hive.deleteBoxFromDisk(_boxName);
+        } catch (deleteError) {
+          debugPrint('Could not delete corrupted box from disk: $deleteError');
+        }
+        
+        // Recreate the box
+        _box = await Hive.openBox<SavedLocation>(_boxName);
+        debugPrint('Hive cache cleared and recreated successfully');
+      } else {
+        rethrow;
+      }
+    }
+
+    // Migration: Clear old data that doesn't have tripId/scheduledDate fields
+    // This ensures fresh data is loaded from the database
+    if (_box!.isNotEmpty) {
+      final needsMigration = _box!.values.any((loc) => loc.tripId == null && loc.source == 'synced');
+      
+      if (needsMigration) {
+        debugPrint('Clearing Hive cache due to schema update (added tripId/scheduledDate fields)');
+        await _box!.clear();
+        
+        // If authenticated, immediately fetch fresh remote data
+        final user = _supabase.auth.currentUser;
+        if (user != null) {
+          await fetchRemoteLocations();
+        }
+      }
     }
   }
 
@@ -329,11 +372,31 @@ class LocationRepository {
   /// Creates a stream that properly initializes the Hive box before watching.
   /// This returns a stream that first emits current contents, then watches for changes.
   Stream<List<SavedLocation>> _createWatchStream() async* {
+    try {
+      await _ensureInitialized();
+      debugPrint('watchLocations: Box initialized, has ${_box!.length} items');
+      
+      // Emit current contents first
+      final initialData = _box!.values.toList();
+      debugPrint('watchLocations: Emitting initial data with ${initialData.length} items');
+      yield initialData;
+      
+      // Then watch for future changes
+      yield* _box!.watch().map((event) {
+        final data = _box!.values.toList();
+        debugPrint('watchLocations: Box changed, now has ${data.length} items');
+        return data;
+      });
+    } catch (e) {
+      debugPrint('watchLocations error: $e');
+      yield const <SavedLocation>[];
+    }
+  }
+
+  /// Get the count of local (anonymous) locations
+  Future<int> getLocalLocationCount() async {
     await _ensureInitialized();
-    // Emit current contents first
-    yield _box!.values.toList();
-    // Then watch for future changes
-    yield* _box!.watch().map((event) => _box!.values.toList());
+    return _box!.values.where((loc) => loc.source == 'local').length;
   }
 
   Future<void> cleanUpAnonymousData() async {

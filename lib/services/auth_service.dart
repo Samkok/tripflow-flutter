@@ -3,8 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:voyza/repositories/location_repository.dart';
 import 'package:voyza/repositories/user_profile_repository.dart';
-import 'package:voyza/services/supabase_service.dart';
-import 'package:voyza/widgets/signed_out_dialog.dart';
+import 'package:voyza/services/supabase_service.dart'; // Keep this if other methods use it
 
 class AuthService {
   final SupabaseClient _supabase = SupabaseService.instance.client;
@@ -16,16 +15,27 @@ class AuthService {
 
   User? get currentUser => _supabase.auth.currentUser;
 
-  Future<void> signIn(String email, String password) async {
+  /// Returns the count of local locations that need syncing
+  Future<int> signIn(String email, String password) async {
     try {
       final response = await _supabase.auth
           .signInWithPassword(email: email, password: password);
+
       if (response.user != null) {
-        await _locationRepository.syncOnLogin();
+        // Check if there are local locations before syncing
+        await _locationRepository.init();
+        final localLocationCount = await _locationRepository.getLocalLocationCount();
+        return localLocationCount;
       }
+      return 0;
     } catch (e) {
       rethrow;
     }
+  }
+
+  /// Performs the sync of local locations to the cloud
+  Future<void> syncLocalLocations() async {
+    await _locationRepository.syncOnLogin();
   }
 
   Future<void> signUp(
@@ -62,15 +72,9 @@ class AuthService {
     return _supabase.auth.onAuthStateChange;
   }
 
-  Future<void> signOut(BuildContext context) async {
+  /// Performs the actual sign-out operation.
+  /// UI concerns like showing dialogs should be handled by the caller.
+  Future<void> signOut() async {
     await _supabase.auth.signOut();
-
-    // Show the signed-out dialog
-    if (context.mounted) {
-      showDialog(
-        context: context,
-        builder: (BuildContext dialogContext) => const SignedOutDialog(),
-      );
-    }
   }
 }

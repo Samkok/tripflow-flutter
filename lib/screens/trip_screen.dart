@@ -79,7 +79,7 @@ class _TripScreenState extends ConsumerState<TripScreen> {
       // Clear cached locations on the map before activating a new trip
       ref.read(tripProvider.notifier).clearTrip();
 
-      final tripRepository = ref.read(tripRepositoryProvider);
+      final tripRepository = ref.read(tripRepositoryWithEventsProvider);
       await tripRepository.setActiveTrip(trip.userId, trip.id);
       ref.invalidate(activeTripsProvider);
       ref.invalidate(userTripsProvider);
@@ -717,7 +717,7 @@ class _TripScreenState extends ConsumerState<TripScreen> {
 
   Future<void> _deactivateTrip(Trip trip) async {
     try {
-      final tripRepository = ref.read(tripRepositoryProvider);
+      final tripRepository = ref.read(tripRepositoryWithEventsProvider);
       await tripRepository.deactivateTrip(trip.id);
       ref.invalidate(activeTripsProvider);
       ref.invalidate(userTripsProvider);

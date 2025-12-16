@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:voyza/screens/signup_screen.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../providers/auth_provider.dart';
+import '../widgets/sync_confirmation_dialog.dart';
 
 class LoginScreen extends ConsumerStatefulWidget {
   const LoginScreen({super.key});
@@ -22,10 +23,37 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     if (!_formKey.currentState!.validate()) return;
     setState(() => _isLoading = true);
     try {
-      await ref.read(authServiceProvider).signIn(
+      final localLocationCount = await ref.read(authServiceProvider).signIn(
             _emailController.text,
             _passwordController.text,
           );
+
+      if (!mounted) return;
+
+      // If there are local locations, ask user if they want to sync
+      if (localLocationCount > 0) {
+        final shouldSync = await showDialog<bool>(
+          context: context,
+          barrierDismissible: false,
+          builder: (context) => SyncConfirmationDialog(
+            localLocationCount: localLocationCount,
+          ),
+        );
+
+        // Perform sync if user confirmed
+        if (shouldSync == true) {
+          await ref.read(authServiceProvider).syncLocalLocations();
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Successfully synced $localLocationCount location${localLocationCount != 1 ? 's' : ''}!'),
+                backgroundColor: Colors.green,
+              ),
+            );
+          }
+        }
+      }
+
       if (mounted) {
         Navigator.of(context).pop(); // Go back to settings
       }

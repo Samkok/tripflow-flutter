@@ -113,6 +113,8 @@ final finalMarkersProvider = Provider<Set<Marker>>((ref) {
   final currentLocation =
       ref.watch(tripProvider.select((s) => s.currentLocation));
 
+  debugPrint('finalMarkersProvider: Building ${locationsForDate.length} markers (${locationsForDate.where((l) => !l.isSkipped).length} active)');
+
   return markerBitmapsAsync.when(
     data: (cachedData) {
       final Set<Marker> markers = {};
@@ -146,6 +148,7 @@ final finalMarkersProvider = Provider<Set<Marker>>((ref) {
           ));
         }
       }
+      debugPrint('finalMarkersProvider: Created ${markers.length} total markers');
       return markers;
     },
     loading: () => {},

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:developer' as developer;
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/trip.dart';
 import '../repositories/trip_repository.dart';
@@ -53,11 +54,6 @@ final tripSyncServiceProvider = Provider<TripSyncService>((ref) {
   );
 });
 
-/// Provides access to the trip event service
-final tripEventServiceProvider = Provider<TripEventService>((ref) {
-  return TripEventService();
-});
-
 /// Stream of trip events - emitted when trip activation/deactivation happens
 final tripEventStreamProvider = StreamProvider<TripEvent>((ref) {
   final eventService = ref.watch(tripEventServiceProvider);
@@ -82,6 +78,8 @@ final realtimeActiveTripProvider = StreamProvider<Trip?>((ref) async* {
   // Initial fetch of active trip from database
   try {
     final activeTrip = await tripRepository.getActiveTrip(userId);
+    debugPrint(
+      'realtimeActiveTripProvider: Initial active trip fetch - ${activeTrip?.id}');
     yield activeTrip;
   } catch (e) {
     developer.log(
@@ -100,6 +98,8 @@ final realtimeActiveTripProvider = StreamProvider<Trip?>((ref) async* {
           'realtimeActiveTripProvider: Trip activated - ${event.trip?.id}',
           name: 'realtime_active_trip',
         );
+        debugPrint(
+          'realtimeActiveTripProvider: Trip activated - ${event.trip?.id}');
         yield event.trip;
 
       case TripEventType.tripDeactivated:
@@ -107,6 +107,8 @@ final realtimeActiveTripProvider = StreamProvider<Trip?>((ref) async* {
           'realtimeActiveTripProvider: Trip deactivated',
           name: 'realtime_active_trip',
         );
+        debugPrint(
+          'realtimeActiveTripProvider: Trip deactivated - ${event.trip?.id}');
         yield null;
 
       case TripEventType.tripUpdated:

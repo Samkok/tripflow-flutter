@@ -5,6 +5,7 @@ import 'package:voyza/providers/theme_provider.dart';
 import 'package:voyza/screens/terms_screen.dart';
 
 import '../providers/auth_provider.dart';
+import '../widgets/logout_confirmation_dialog.dart';
 import 'login_screen.dart';
 import 'signup_screen.dart';
 
@@ -175,8 +176,15 @@ class SettingsScreen extends ConsumerWidget {
           SizedBox(
             width: double.infinity,
             child: OutlinedButton.icon(
-              onPressed: () {
-                ref.read(authServiceProvider).signOut(context);
+              onPressed: () async {
+                final shouldLogout = await showDialog<bool>(
+                  context: context,
+                  builder: (context) => const LogoutConfirmationDialog(),
+                );
+
+                if (shouldLogout == true) {
+                  ref.read(authServiceProvider).signOut();
+                }
               },
               icon: const Icon(Icons.logout),
               label: const Text('Sign Out'),
