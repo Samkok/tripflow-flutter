@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:voyza/repositories/location_repository.dart';
 import 'package:voyza/repositories/user_profile_repository.dart';

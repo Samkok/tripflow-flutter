@@ -106,139 +106,177 @@ class LocationDetailSheet extends ConsumerWidget {
 
   Widget _buildHeader(BuildContext context, WidgetRef ref,
       LocationModel updatedLocation, bool isPastDate) {
-    return Row(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        CircleAvatar(
-          backgroundColor: Theme.of(context).colorScheme.primary,
-          radius: 24,
-          child: Text(
-            '$number',
-            style: const TextStyle(
-              color: Colors.black,
-              fontWeight: FontWeight.bold,
-              fontSize: 20,
+        // Stop number and label row
+        Row(
+          children: [
+            CircleAvatar(
+              backgroundColor: Theme.of(context).colorScheme.primary,
+              radius: 24,
+              child: Text(
+                '$number',
+                style: const TextStyle(
+                  color: Colors.black,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 20,
+                ),
+              ),
             ),
-          ),
+            const SizedBox(width: 16),
+            Text(
+              'Stop $number',
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: Theme.of(context).colorScheme.primary,
+                    fontWeight: FontWeight.w600,
+                  ),
+            ),
+          ],
         ),
-        const SizedBox(width: 16),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Stop $number',
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: Theme.of(context).colorScheme.primary,
-                    ),
+        const SizedBox(height: 12),
+
+        // Location name - full width with proper wrapping
+        Text(
+          updatedLocation.name,
+          style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                fontWeight: FontWeight.bold,
               ),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  Expanded(
-                    child: Text(
-                      updatedLocation.name,
-                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                            fontWeight: FontWeight.bold,
-                          ),
-                    ),
+          maxLines: 3,
+          overflow: TextOverflow.ellipsis,
+        ),
+        const SizedBox(height: 16),
+
+        // Action buttons row - separated from name
+        Row(
+          children: [
+            // Schedule Date Button
+            Expanded(
+              child: OutlinedButton.icon(
+                icon: Icon(
+                  Icons.calendar_today_outlined,
+                  size: 18,
+                  color: isPastDate
+                      ? Colors.grey
+                      : Theme.of(context).colorScheme.primary,
+                ),
+                label: const Text('Date'),
+                onPressed: isPastDate
+                    ? null
+                    : () async {
+                        final datesWithLocations =
+                            ref.read(datesWithLocationsProvider);
+                        final now = DateTime.now();
+                        final newDate =
+                            await DatePickerUtils.showCustomDatePicker(
+                          context: context,
+                          initialDate: updatedLocation.scheduledDate ?? now,
+                          firstDate: DateTime(now.year, now.month, now.day),
+                          lastDate: DateTime(now.year + 5),
+                          highlightedDates: datesWithLocations,
+                        );
+                        if (newDate != null) {
+                          final normalizedDate = DateTime(
+                              newDate.year, newDate.month, newDate.day);
+                          ref
+                              .read(tripProvider.notifier)
+                              .updateLocationScheduledDate(
+                                  updatedLocation.id, normalizedDate);
+                        }
+                      },
+                style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
+                  side: BorderSide(
+                    color: isPastDate
+                        ? Colors.grey.withValues(alpha: 0.3)
+                        : Theme.of(context).colorScheme.primary.withValues(alpha: 0.3),
                   ),
-                  const SizedBox(width: 8),
-                  IconButton(
-                    icon: Icon(
-                      Icons.calendar_today_outlined,
-                      size: 20,
-                      color: isPastDate
-                          ? Colors.grey
-                          : Theme.of(context)
-                              .colorScheme
-                              .primary
-                              .withValues(alpha: 0.8),
-                    ),
-                    onPressed: isPastDate
-                        ? null
-                        : () async {
-                            final datesWithLocations =
-                                ref.read(datesWithLocationsProvider);
-                            final now = DateTime.now();
-                            final newDate =
-                                await DatePickerUtils.showCustomDatePicker(
-                              context: context,
-                              initialDate: updatedLocation.scheduledDate ?? now,
-                              firstDate: DateTime(now.year, now.month, now.day),
-                              lastDate: DateTime(now.year + 5),
-                              highlightedDates: datesWithLocations,
-                            );
-                            if (newDate != null) {
-                              final normalizedDate = DateTime(
-                                  newDate.year, newDate.month, newDate.day);
-                              ref
-                                  .read(tripProvider.notifier)
-                                  .updateLocationScheduledDate(
-                                      updatedLocation.id, normalizedDate);
-                            }
-                          },
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(),
-                    tooltip: 'Schedule Date',
-                  ),
-                  IconButton(
-                    icon: Icon(Icons.edit_outlined,
-                        size: 20,
-                        color: isPastDate
-                            ? Colors.grey
-                            : Theme.of(context)
-                                .colorScheme
-                                .primary
-                                .withValues(alpha: 0.8)),
-                    onPressed: isPastDate
-                        ? null
-                        : () => _showEditLocationNameDialog(
-                            context, ref, updatedLocation),
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(),
-                  ),
-                  const SizedBox(width: 8),
-                  IconButton(
-                    icon: Icon(
-                      Icons.delete_outline,
-                      size: 20,
-                      color: Theme.of(context).colorScheme.error,
-                    ),
-                    onPressed: () => _showDeleteConfirmationDialog(
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+
+            // Edit Button
+            Expanded(
+              child: OutlinedButton.icon(
+                icon: Icon(
+                  Icons.edit_outlined,
+                  size: 18,
+                  color: isPastDate
+                      ? Colors.grey
+                      : Theme.of(context).colorScheme.primary,
+                ),
+                label: const Text('Edit'),
+                onPressed: isPastDate
+                    ? null
+                    : () => _showEditLocationNameDialog(
                         context, ref, updatedLocation),
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(),
-                    tooltip: 'Delete Stop',
+                style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
+                  side: BorderSide(
+                    color: isPastDate
+                        ? Colors.grey.withValues(alpha: 0.3)
+                        : Theme.of(context).colorScheme.primary.withValues(alpha: 0.3),
                   ),
-                  const SizedBox(width: 8),
-                  IconButton(
-                    icon: Icon(
-                      Icons.playlist_add,
-                      size: 20,
-                      color: Theme.of(context).colorScheme.primary,
-                    ),
-                    onPressed: () async {
-                      // Show trip selection bottom sheet for this location
-                      showModalBottomSheet(
-                        context: context,
-                        isScrollControlled: true,
-                        backgroundColor: Colors.transparent,
-                        builder: (context) => AddToTripSheet(
-                          availableLocations: [updatedLocation],
-                          onSuccess: () {
-                            Navigator.of(context).pop();
-                          },
-                        ),
-                      );
-                    },
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(),
-                    tooltip: 'Add to Trip',
-                  ),
-                ],
+                ),
               ),
-            ],
-          ),
+            ),
+            const SizedBox(width: 8),
+
+            // Delete Button
+            OutlinedButton.icon(
+              icon: const Icon(
+                Icons.delete_outline,
+                size: 18,
+                color: Colors.red,
+              ),
+              label: const Text(
+                'Delete',
+                style: TextStyle(color: Colors.red),
+              ),
+              onPressed: () => _showDeleteConfirmationDialog(
+                  context, ref, updatedLocation),
+              style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
+                side: BorderSide(
+                  color: Colors.red.withValues(alpha: 0.3),
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+
+            // Add to Trip Icon Button
+            IconButton(
+              icon: Icon(
+                Icons.playlist_add,
+                size: 24,
+                color: Theme.of(context).colorScheme.primary,
+              ),
+              onPressed: () async {
+                // Show trip selection bottom sheet for this location
+                showModalBottomSheet(
+                  context: context,
+                  isScrollControlled: true,
+                  backgroundColor: Colors.transparent,
+                  builder: (context) => AddToTripSheet(
+                    availableLocations: [updatedLocation],
+                    onSuccess: () {
+                      Navigator.of(context).pop();
+                    },
+                  ),
+                );
+              },
+              style: IconButton.styleFrom(
+                side: BorderSide(
+                  color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.3),
+                ),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+              tooltip: 'Add to Trip',
+            ),
+          ],
         ),
       ],
     );
