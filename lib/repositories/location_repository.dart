@@ -142,12 +142,31 @@ class LocationRepository {
     final localLocation = _box!.get(id);
     if (localLocation == null) return;
 
-    // Create a JSON map from the existing location and apply updates
-    final locationJson = localLocation.toJson();
-    locationJson.addAll(updates);
-
-    // Create an updated SavedLocation object
-    final updatedLocation = SavedLocation.fromJson(locationJson).copyWith(isSynced: false);
+    // BUGFIX: Use copyWith to safely update the location instead of JSON round-trip
+    // This avoids potential issues with fromJson() not handling all fields
+    var updatedLocation = localLocation;
+    
+    // Apply updates using copyWith for type-safe updates
+    if (updates.containsKey('trip_id')) {
+      updatedLocation = updatedLocation.copyWith(tripId: updates['trip_id'] as String?);
+    }
+    if (updates.containsKey('is_skipped')) {
+      updatedLocation = updatedLocation.copyWith(isSkipped: updates['is_skipped'] as bool);
+    }
+    if (updates.containsKey('scheduled_date')) {
+      final dateStr = updates['scheduled_date'];
+      final parsedDate = dateStr is String ? DateTime.parse(dateStr) : dateStr as DateTime?;
+      updatedLocation = updatedLocation.copyWith(scheduledDate: parsedDate);
+    }
+    if (updates.containsKey('stay_duration')) {
+      updatedLocation = updatedLocation.copyWith(stayDuration: updates['stay_duration'] as int);
+    }
+    if (updates.containsKey('name')) {
+      updatedLocation = updatedLocation.copyWith(name: updates['name'] as String);
+    }
+    
+    // Mark as not synced since we made local changes
+    updatedLocation = updatedLocation.copyWith(isSynced: false);
 
     // Save updated location locally
     await _box!.put(id, updatedLocation);
@@ -194,15 +213,18 @@ class LocationRepository {
     final user = _supabase.auth.currentUser;
     if (user == null) return;
 
-    // Step 1: Fetch all remote locations
+    // Step 1: Fetch all remote locations (including from collaborative trips)
+    // RLS policies handle access control automatically
     List<SavedLocation> remoteLocations = [];
     try {
-      final response =
-          await _supabase.from('locations').select().eq('user_id', user.id);
+      // Don't filter by user_id - let RLS handle it
+      final response = await _supabase.from('locations').select();
 
       remoteLocations = (response as List)
           .map((data) => SavedLocation.fromJson(data))
           .toList();
+
+      debugPrint('syncOnLogin: Fetched ${remoteLocations.length} locations (including collaborative trips)');
     } catch (e) {
       debugPrint('Error syncing fetch remote: $e');
       return; // Stop if we can't get remote state
@@ -287,19 +309,24 @@ class LocationRepository {
 
   /// Fetches remote locations and updates local cache.
   /// Typically called on app start or refresh.
+  /// Fetches ALL locations the user has access to (owned + collaborative trips).
+  /// RLS policies handle access control automatically.
   Future<void> fetchRemoteLocations() async {
     await _ensureInitialized();
     final user = _supabase.auth.currentUser;
     if (user == null) return; // Anonymous user only sees local
 
     try {
+      // Don't filter by user_id - let RLS policies handle access control
+      // This will return locations the user owns AND locations from trips they collaborate on
       final response = await _supabase
           .from('locations')
           .select()
-          .eq('user_id', user.id)
           .order('created_at', ascending: false);
 
       final List<dynamic> data = response;
+      debugPrint('fetchRemoteLocations: Fetched ${data.length} locations (including collaborative trips)');
+
       for (final item in data) {
         final remoteLoc = SavedLocation.fromJson(item);
         // Upsert to local Hive, overwriting any existing
@@ -413,21 +440,21 @@ class LocationRepository {
   }
 
   // Realtime subscription
+  // Subscribe to ALL location changes that the user has access to
+  // RLS policies on the database handle access control automatically
   void subscribeToRealtimeChanges() {
     final user = _supabase.auth.currentUser;
     if (user == null) return;
 
+    // Don't filter by user_id - let RLS policies handle access control
+    // This allows receiving updates for locations in collaborative trips
     _subscription = _supabase
         .channel('public:locations')
         .onPostgresChanges(
           event: PostgresChangeEvent.all,
           schema: 'public',
           table: 'locations',
-          filter: PostgresChangeFilter(
-            type: PostgresChangeFilterType.eq,
-            column: 'user_id',
-            value: user.id,
-          ),
+          // No filter - RLS policies will automatically filter what this user can see
           callback: (payload) {
             // Ensure box is ready before handling changes
             if (_box == null || !_box!.isOpen) {
@@ -437,6 +464,8 @@ class LocationRepository {
                 return; // Cannot handle update if box is closed
               }
             }
+
+            debugPrint('Realtime location change: ${payload.eventType}');
 
             if (payload.eventType == PostgresChangeEvent.insert ||
                 payload.eventType == PostgresChangeEvent.update) {

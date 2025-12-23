@@ -4,6 +4,7 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:voyza/models/location_model.dart';
 import 'package:voyza/providers/map_ui_state_provider.dart';
 import 'package:voyza/providers/trip_provider.dart';
+import 'package:voyza/providers/trip_collaborator_provider.dart';
 import 'package:voyza/utils/date_picker_utils.dart';
 import 'package:voyza/widgets/add_to_trip_sheet.dart';
 
@@ -106,6 +107,15 @@ class LocationDetailSheet extends ConsumerWidget {
 
   Widget _buildHeader(BuildContext context, WidgetRef ref,
       LocationModel updatedLocation, bool isPastDate) {
+    // Check if user has write access to the active trip
+    // OPTIMIZATION: Watch only when permission data is ready to avoid unnecessary rebuilds
+    // The widget will rebuild ONLY when permission actually changes, not on every event
+    final hasWriteAccessAsync = ref.watch(hasActiveTripWriteAccessProvider);
+    final hasWriteAccess = hasWriteAccessAsync.whenOrNull(data: (value) => value) ?? false;
+
+    // Disable editing if past date OR no write access
+    final canEdit = !isPastDate && hasWriteAccess;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -156,14 +166,13 @@ class LocationDetailSheet extends ConsumerWidget {
                 icon: Icon(
                   Icons.calendar_today_outlined,
                   size: 18,
-                  color: isPastDate
-                      ? Colors.grey
-                      : Theme.of(context).colorScheme.primary,
+                  color: canEdit
+                      ? Theme.of(context).colorScheme.primary
+                      : Colors.grey,
                 ),
                 label: const Text('Date'),
-                onPressed: isPastDate
-                    ? null
-                    : () async {
+                onPressed: canEdit
+                    ? () async {
                         final datesWithLocations =
                             ref.read(datesWithLocationsProvider);
                         final now = DateTime.now();
@@ -183,13 +192,14 @@ class LocationDetailSheet extends ConsumerWidget {
                               .updateLocationScheduledDate(
                                   updatedLocation.id, normalizedDate);
                         }
-                      },
+                      }
+                    : null,
                 style: OutlinedButton.styleFrom(
                   padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
                   side: BorderSide(
-                    color: isPastDate
-                        ? Colors.grey.withValues(alpha: 0.3)
-                        : Theme.of(context).colorScheme.primary.withValues(alpha: 0.3),
+                    color: canEdit
+                        ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.3)
+                        : Colors.grey.withValues(alpha: 0.3),
                   ),
                 ),
               ),
@@ -202,79 +212,90 @@ class LocationDetailSheet extends ConsumerWidget {
                 icon: Icon(
                   Icons.edit_outlined,
                   size: 18,
-                  color: isPastDate
-                      ? Colors.grey
-                      : Theme.of(context).colorScheme.primary,
+                  color: canEdit
+                      ? Theme.of(context).colorScheme.primary
+                      : Colors.grey,
                 ),
                 label: const Text('Edit'),
-                onPressed: isPastDate
-                    ? null
-                    : () => _showEditLocationNameDialog(
-                        context, ref, updatedLocation),
+                onPressed: canEdit
+                    ? () => _showEditLocationNameDialog(
+                        context, ref, updatedLocation)
+                    : null,
                 style: OutlinedButton.styleFrom(
                   padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
                   side: BorderSide(
-                    color: isPastDate
-                        ? Colors.grey.withValues(alpha: 0.3)
-                        : Theme.of(context).colorScheme.primary.withValues(alpha: 0.3),
+                    color: canEdit
+                        ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.3)
+                        : Colors.grey.withValues(alpha: 0.3),
                   ),
                 ),
               ),
             ),
             const SizedBox(width: 8),
 
-            // Delete Button
+            // Delete Button - also requires write access
             OutlinedButton.icon(
-              icon: const Icon(
+              icon: Icon(
                 Icons.delete_outline,
                 size: 18,
-                color: Colors.red,
+                color: hasWriteAccess ? Colors.red : Colors.grey,
               ),
-              label: const Text(
+              label: Text(
                 'Delete',
-                style: TextStyle(color: Colors.red),
+                style: TextStyle(color: hasWriteAccess ? Colors.red : Colors.grey),
               ),
-              onPressed: () => _showDeleteConfirmationDialog(
-                  context, ref, updatedLocation),
+              onPressed: hasWriteAccess
+                  ? () => _showDeleteConfirmationDialog(
+                      context, ref, updatedLocation)
+                  : null,
               style: OutlinedButton.styleFrom(
                 padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
                 side: BorderSide(
-                  color: Colors.red.withValues(alpha: 0.3),
+                  color: hasWriteAccess
+                      ? Colors.red.withValues(alpha: 0.3)
+                      : Colors.grey.withValues(alpha: 0.3),
                 ),
               ),
             ),
             const SizedBox(width: 8),
 
-            // Add to Trip Icon Button
+            // Add to Trip Icon Button - requires write access
             IconButton(
               icon: Icon(
                 Icons.playlist_add,
                 size: 24,
-                color: Theme.of(context).colorScheme.primary,
+                color: hasWriteAccess
+                    ? Theme.of(context).colorScheme.primary
+                    : Colors.grey,
               ),
-              onPressed: () async {
-                // Show trip selection bottom sheet for this location
-                showModalBottomSheet(
-                  context: context,
-                  isScrollControlled: true,
-                  backgroundColor: Colors.transparent,
-                  builder: (context) => AddToTripSheet(
-                    availableLocations: [updatedLocation],
-                    onSuccess: () {
-                      Navigator.of(context).pop();
-                    },
-                  ),
-                );
-              },
+              onPressed: hasWriteAccess
+                  ? () async {
+                      // Show trip selection bottom sheet for this location
+                      showModalBottomSheet(
+                        context: context,
+                        isScrollControlled: true,
+                        backgroundColor: Colors.transparent,
+                        builder: (context) => AddToTripSheet(
+                          availableLocations: [updatedLocation],
+                          onSuccess: () {
+                            // Sheet already pops itself, no need to pop again
+                            // Just refresh or perform any additional actions here if needed
+                          },
+                        ),
+                      );
+                    }
+                  : null,
               style: IconButton.styleFrom(
                 side: BorderSide(
-                  color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.3),
+                  color: hasWriteAccess
+                      ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.3)
+                      : Colors.grey.withValues(alpha: 0.3),
                 ),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(8),
                 ),
               ),
-              tooltip: 'Add to Trip',
+              tooltip: hasWriteAccess ? 'Add to Trip' : 'Read-only access',
             ),
           ],
         ),
@@ -392,18 +413,25 @@ class LocationDetailSheet extends ConsumerWidget {
 
   Widget _buildActionButtons(BuildContext context, WidgetRef ref,
       LocationModel updatedLocation, bool isPastDate) {
+    // Check if user has write access to the active trip
+    final hasWriteAccessAsync = ref.watch(hasActiveTripWriteAccessProvider);
+    final hasWriteAccess = hasWriteAccessAsync.asData?.value ?? false;
+
+    // Disable editing if past date OR no write access
+    final canEdit = !isPastDate && hasWriteAccess;
+
     return Row(
       children: [
         Expanded(
             child: ElevatedButton.icon(
-          onPressed: isPastDate
-              ? null
-              : () =>
-                  _showEditStayDurationDialog(context, ref, updatedLocation),
+          onPressed: canEdit
+              ? () =>
+                  _showEditStayDurationDialog(context, ref, updatedLocation)
+              : null,
           icon: const Icon(Icons.timer_outlined),
           label: const Text('Set Stay'),
           style: ElevatedButton.styleFrom(
-            backgroundColor: AppTheme.primaryColor,
+            backgroundColor: canEdit ? AppTheme.primaryColor : Colors.grey,
             foregroundColor: Colors.black,
             padding: const EdgeInsets.symmetric(vertical: 16),
             shape:

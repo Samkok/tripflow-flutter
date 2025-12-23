@@ -243,36 +243,72 @@ final styledPolylinesProvider = Provider<Set<Polyline>>((ref) {
       final polylineId = 'leg_$i';
       final isHighlighted = tappedPolylineId == polylineId;
 
-      // SMOOTH TRANSITIONS: Use different visual properties for highlighted vs non-highlighted
+      // PROFESSIONAL ROUTE STYLING: Beautiful, crisp polylines with smooth transitions
       // The Google Maps SDK handles the visual transitions smoothly without reloading the map
+
+      // Add shadow/outline polyline for depth effect
+      polylines.add(
+        Polyline(
+          polylineId: PolylineId('${polylineId}_shadow'),
+          points: legPoints,
+          color: Colors.black.withValues(alpha: isHighlighted ? 0.2 : 0.12),
+          width: isHighlighted ? 10 : 8,
+          consumeTapEvents: false,
+          startCap: Cap.roundCap,
+          endCap: Cap.roundCap,
+          jointType: JointType.round,
+          geodesic: true,
+          zIndex: 1,
+        ),
+      );
+
+      // Main polyline with professional styling
       polylines.add(
         Polyline(
           polylineId: PolylineId(polylineId),
           points: legPoints,
-          // Smooth color transition: highlighted routes get accent color, others stay subtle
+          // Grey when not clicked, vibrant primary color when highlighted
           color: isHighlighted
               ? AppTheme.primaryColor
-              : AppTheme.primaryColor.withValues(alpha: 0.5),
-          // Smooth width transition: highlighted routes get wider for emphasis
-          width: isHighlighted ? 7 : 5,
-          // Use patterns for visual distinction without map reload
-          patterns: isHighlighted
-              ? [] // Solid line for highlighted route
-              : [PatternItem.dot], // Dotted pattern for non-highlighted routes
+              : Colors.grey.shade500,
+          // Professional width: thicker when highlighted
+          width: isHighlighted ? 8 : 6,
+          // No patterns for cleaner, more professional look
+          patterns: [],
           // Ensure tap events are captured for interaction
           consumeTapEvents: true,
           onTap: () {
             ref.read(mapUIStateProvider.notifier).setTappedPolyline(polylineId);
           },
-          // Start and end cap for smooth line rendering
+          // Round caps for smooth, professional appearance
           startCap: Cap.roundCap,
           endCap: Cap.roundCap,
-          // Joint type for smooth corners
+          // Round joints for smooth corners
           jointType: JointType.round,
           // Geodesic for accurate path representation
           geodesic: true,
+          // Higher z-index for main polyline
+          zIndex: isHighlighted ? 10 : 5,
         ),
       );
+
+      // Add white inner line for highlighted route (creates a bordered effect)
+      if (isHighlighted) {
+        polylines.add(
+          Polyline(
+            polylineId: PolylineId('${polylineId}_border'),
+            points: legPoints,
+            color: Colors.white.withValues(alpha: 0.4),
+            width: 3,
+            consumeTapEvents: false,
+            startCap: Cap.roundCap,
+            endCap: Cap.roundCap,
+            jointType: JointType.round,
+            geodesic: true,
+            zIndex: 11,
+          ),
+        );
+      }
     }
   }
 
@@ -326,13 +362,37 @@ final routeInfoMarkersProvider = FutureProvider<Set<Marker>>((ref) async {
 });
 
 Future<void> _launchMapsUrl(LatLng origin, LatLng destination) async {
-  final url = Uri.parse(
+  // For mobile devices, use the comgooglemaps:// URL scheme which opens Google Maps app directly
+  // For web/desktop, fall back to https:// URL
+
+  // First, try the Google Maps app URL scheme (works on both Android and iOS)
+  final mapsAppUrl = Uri.parse(
+    'comgooglemaps://?saddr=${origin.latitude},${origin.longitude}&daddr=${destination.latitude},${destination.longitude}&directionsmode=driving',
+  );
+
+  try {
+    // Try to launch Google Maps app first
+    if (await canLaunchUrl(mapsAppUrl)) {
+      await launchUrl(mapsAppUrl, mode: LaunchMode.externalApplication);
+      return;
+    }
+  } catch (e) {
+    debugPrint('Google Maps app not available, trying web URL: $e');
+  }
+
+  // Fallback to web URL (works universally but opens in browser or maps app depending on platform)
+  final webUrl = Uri.parse(
     'https://www.google.com/maps/dir/?api=1&origin=${origin.latitude},${origin.longitude}&destination=${destination.latitude},${destination.longitude}&travelmode=driving',
   );
-  if (await canLaunchUrl(url)) {
-    await launchUrl(url, mode: LaunchMode.externalApplication);
-  } else {
-    print('Could not launch $url'); // Use debugPrint in real app
+
+  try {
+    if (await canLaunchUrl(webUrl)) {
+      await launchUrl(webUrl, mode: LaunchMode.externalApplication);
+    } else {
+      debugPrint('Could not launch maps URL');
+    }
+  } catch (e) {
+    debugPrint('Error launching maps: $e');
   }
 }
 

@@ -7,6 +7,7 @@ import '../repositories/trip_repository.dart';
 import '../services/trip_event_service.dart';
 import 'auth_provider.dart';
 import 'user_trip_provider.dart';
+import 'local_active_trip_provider.dart';
 
 /// Service that syncs database trip changes to the event service
 class TripSyncService {
@@ -61,73 +62,29 @@ final tripEventStreamProvider = StreamProvider<TripEvent>((ref) {
 });
 
 /// Real-time active trip with Riverpod integration
-/// Combines database polling with event streaming for instant updates
-/// when user activates/deactivates a trip
+/// Now uses LOCAL storage instead of database for trip activation
+/// This allows each user to independently activate/deactivate trips
 final realtimeActiveTripProvider = StreamProvider<Trip?>((ref) async* {
   final authState = ref.watch(authStateProvider);
-  final tripRepository = ref.watch(tripRepositoryProvider);
-  final eventService = ref.watch(tripEventServiceProvider);
 
   final userId = authState.asData?.value.session?.user.id;
-  
+
   if (userId == null) {
     yield null;
     return;
   }
 
-  // Initial fetch of active trip from database
-  try {
-    final activeTrip = await tripRepository.getActiveTrip(userId);
-    debugPrint(
-      'realtimeActiveTripProvider: Initial active trip fetch - ${activeTrip?.id}');
-    yield activeTrip;
-  } catch (e) {
-    developer.log(
-      'realtimeActiveTripProvider: Error fetching initial active trip - $e',
-      name: 'realtime_active_trip',
-      error: e,
-    );
-    yield null;
-  }
+  // Watch the local active trip provider
+  // This emits whenever the locally stored active trip ID changes
+  final localActiveTripAsync = ref.watch(localActiveTripProvider);
 
-  // Subscribe to trip events and update in real-time
-  await for (final event in eventService.tripEventStream) {
-    switch (event.type) {
-      case TripEventType.tripActivated:
-        developer.log(
-          'realtimeActiveTripProvider: Trip activated - ${event.trip?.id}',
-          name: 'realtime_active_trip',
-        );
-        debugPrint(
-          'realtimeActiveTripProvider: Trip activated - ${event.trip?.id}');
-        yield event.trip;
+  final activeTrip = localActiveTripAsync.asData?.value;
+  debugPrint(
+    'realtimeActiveTripProvider: Local active trip - ${activeTrip?.id}');
 
-      case TripEventType.tripDeactivated:
-        developer.log(
-          'realtimeActiveTripProvider: Trip deactivated',
-          name: 'realtime_active_trip',
-        );
-        debugPrint(
-          'realtimeActiveTripProvider: Trip deactivated - ${event.trip?.id}');
-        yield null;
+  yield activeTrip;
 
-      case TripEventType.tripUpdated:
-        // Refresh active trip on update (status might have changed)
-        try {
-          final updated = await tripRepository.getActiveTrip(userId);
-          yield updated;
-        } catch (e) {
-          developer.log(
-            'realtimeActiveTripProvider: Error on trip update - $e',
-            name: 'realtime_active_trip',
-            error: e,
-          );
-        }
-
-      case TripEventType.tripDeleted:
-      case TripEventType.tripCreated:
-        // These don't affect the active trip display
-        break;
-    }
-  }
+  // Note: We no longer listen to trip events for activation/deactivation
+  // since those are now purely local operations
+  // The localActiveTripProvider will automatically update when changed
 });

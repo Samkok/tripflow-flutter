@@ -1,8 +1,3 @@
-import 'package:json_annotation/json_annotation.dart';
-
-part 'user_profile.g.dart';
-
-@JsonSerializable()
 class UserProfile {
   final String id;
   final String userId;
@@ -40,10 +35,47 @@ class UserProfile {
     required this.updatedAt,
   });
 
-  factory UserProfile.fromJson(Map<String, dynamic> json) =>
-      _$UserProfileFromJson(json);
+  factory UserProfile.fromJson(Map<String, dynamic> json) {
+    return UserProfile(
+      id: json['id'] as String,
+      userId: json['user_id'] as String,
+      firstName: json['first_name'] as String?,
+      lastName: json['last_name'] as String?,
+      email: json['email'] as String,
+      phoneNumber: json['phone_number'] as String?,
+      profilePictureUrl: json['profile_picture_url'] as String?,
+      bio: json['bio'] as String?,
+      dateOfBirth: json['date_of_birth'] as String?,
+      gender: json['gender'] as String?,
+      address: json['address'] as String?,
+      city: json['city'] as String?,
+      country: json['country'] as String?,
+      preferences: json['preferences'] as Map<String, dynamic>?,
+      createdAt: DateTime.parse(json['created_at'] as String),
+      updatedAt: DateTime.parse(json['updated_at'] as String),
+    );
+  }
 
-  Map<String, dynamic> toJson() => _$UserProfileToJson(this);
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'user_id': userId,
+      'first_name': firstName,
+      'last_name': lastName,
+      'email': email,
+      'phone_number': phoneNumber,
+      'profile_picture_url': profilePictureUrl,
+      'bio': bio,
+      'date_of_birth': dateOfBirth,
+      'gender': gender,
+      'address': address,
+      'city': city,
+      'country': country,
+      'preferences': preferences,
+      'created_at': createdAt.toIso8601String(),
+      'updated_at': updatedAt.toIso8601String(),
+    };
+  }
 
   /// Factory constructor for creating a new user profile during signup
   factory UserProfile.create({

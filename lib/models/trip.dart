@@ -1,8 +1,3 @@
-import 'package:json_annotation/json_annotation.dart';
-
-part 'trip.g.dart';
-
-@JsonSerializable()
 class Trip {
   final String id;
   final String userId;
@@ -32,9 +27,43 @@ class Trip {
     required this.updatedAt,
   });
 
-  factory Trip.fromJson(Map<String, dynamic> json) => _$TripFromJson(json);
+  factory Trip.fromJson(Map<String, dynamic> json) {
+    return Trip(
+      id: json['id'] as String,
+      userId: json['user_id'] as String,
+      name: json['name'] as String,
+      description: json['description'] as String?,
+      status: json['status'] as String? ?? 'planning',
+      isActive: json['is_active'] as bool? ?? false,
+      startDate: json['start_date'] != null
+          ? DateTime.parse(json['start_date'] as String)
+          : null,
+      endDate: json['end_date'] != null
+          ? DateTime.parse(json['end_date'] as String)
+          : null,
+      totalDistance: (json['total_distance'] as num?)?.toDouble() ?? 0,
+      totalDurationMinutes: json['total_duration_minutes'] as int? ?? 0,
+      createdAt: DateTime.parse(json['created_at'] as String),
+      updatedAt: DateTime.parse(json['updated_at'] as String),
+    );
+  }
 
-  Map<String, dynamic> toJson() => _$TripToJson(this);
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'user_id': userId,
+      'name': name,
+      'description': description,
+      'status': status,
+      'is_active': isActive,
+      'start_date': startDate?.toIso8601String(),
+      'end_date': endDate?.toIso8601String(),
+      'total_distance': totalDistance,
+      'total_duration_minutes': totalDurationMinutes,
+      'created_at': createdAt.toIso8601String(),
+      'updated_at': updatedAt.toIso8601String(),
+    };
+  }
 
   /// Factory constructor for creating a new trip
   factory Trip.create({

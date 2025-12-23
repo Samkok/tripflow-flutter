@@ -14,7 +14,7 @@ class MarkerUtils {
   /// Creates a custom bitmap for the user's current location.
   /// It's designed to look like the pulsing blue dot in Google Maps.
   static Future<BitmapDescriptor> getCurrentLocationMarker({
-    double size = 40, // The total size of the bitmap (including glow)
+    double size = 30, // The total size of the bitmap (including glow)
     Color backgroundColor = const Color(0xFF4285F4), // Google Blue
   }) async {
     final ui.PictureRecorder pictureRecorder = ui.PictureRecorder();
@@ -57,7 +57,7 @@ class MarkerUtils {
   /// Creates a custom bitmap for a destination marker (e.g., a flag).
   static Future<BitmapDescriptor> getDestinationMarkerBitmap({
     Color color = Colors.red,
-    double size = 30.0,
+    double size = 20.0,
   }) async {
     final ui.PictureRecorder pictureRecorder = ui.PictureRecorder();
     final Canvas canvas = Canvas(pictureRecorder);
@@ -99,7 +99,7 @@ class MarkerUtils {
     required bool isDarkMode,
     bool isStart = false,
     double size = 20,
-    bool isSkipped = false, // Add this parameter
+    bool isSkipped = false,
   }) async {
     final ui.PictureRecorder pictureRecorder = ui.PictureRecorder();
 
@@ -111,7 +111,7 @@ class MarkerUtils {
       contentPainter.text = TextSpan(
         text: String.fromCharCode(Icons.flag_rounded.codePoint),
         style: TextStyle(
-          fontSize: size * 0.6,
+          fontSize: size * 0.55,
           fontFamily: Icons.flag_rounded.fontFamily,
           color: textColor,
         ),
@@ -120,9 +120,9 @@ class MarkerUtils {
       contentPainter.text = TextSpan(
         text: String.fromCharCode(Icons.remove_circle_outline.codePoint),
         style: TextStyle(
-          fontSize: size * 0.5, // Keep similar size to number
+          fontSize: size * 0.5,
           fontFamily: Icons.remove_circle_outline.fontFamily,
-          color: textColor, // Use textColor for the icon
+          color: textColor,
         ),
       );
     } else {
@@ -130,7 +130,7 @@ class MarkerUtils {
         text: number.toString(),
         style: TextStyle(
           fontSize: size * 0.5,
-          fontWeight: FontWeight.bold,
+          fontWeight: FontWeight.w900, // Extra bold for better readability
           color: textColor,
         ),
       );
@@ -143,68 +143,94 @@ class MarkerUtils {
     namePainter.text = TextSpan(
       text: name,
       style: TextStyle(
-        fontSize: 14, // Reduced to 14
-        fontWeight: FontWeight.w600,
-        color: isDarkMode ? Colors.white : Colors.black,
+        fontSize: 12, // Increased from 14 for better readability
+        fontWeight: FontWeight.w700, // Bolder for better visibility
+        color: isDarkMode ? Colors.white : Colors.black87,
         shadows: [
+          // Multiple shadows for crisp text outline
+          Shadow(
+              color: isDarkMode
+                  ? Colors.black.withValues(alpha: 0.9)
+                  : Colors.white.withValues(alpha: 0.95),
+              blurRadius: 3,
+              offset: const Offset(0, 0)),
           Shadow(
               color: isDarkMode
                   ? Colors.black.withValues(alpha: 0.7)
-                  : Colors.white.withValues(alpha: 0.7),
-              blurRadius: 2,
-              offset: const Offset(0, 0))
+                  : Colors.white.withValues(alpha: 0.8),
+              blurRadius: 6,
+              offset: const Offset(0, 1)),
         ],
       ),
     );
     // Layout the name with a max width to allow wrapping
-    namePainter.layout(maxWidth: size * 2.5);
+    namePainter.layout(maxWidth: size * 3);
 
     // --- 2. Calculate Canvas Dimensions ---
     final double circleRadius = size / 2;
-    final double paddingBelowCircle = 12.0;
+    final double shadowRadius = 4.0; // Shadow offset
+    final double paddingBelowCircle = 16.0; // Increased padding
     final double totalWidth =
         namePainter.width > size ? namePainter.width : size;
-    final double totalHeight = size + paddingBelowCircle + namePainter.height;
+    final double totalHeight = size + paddingBelowCircle + namePainter.height + shadowRadius;
     final double canvasCenterX = totalWidth / 2;
 
     final Canvas canvas = Canvas(pictureRecorder);
 
     // --- 3. Draw the Elements ---
+
     // Apply grayscale filter if skipped
     if (isSkipped) {
       final ColorFilter greyscaleFilter = ColorFilter.matrix(<double>[
-        0.2126,
-        0.7152,
-        0.0722,
-        0,
-        0,
-        0.2126,
-        0.7152,
-        0.0722,
-        0,
-        0,
-        0.2126,
-        0.7152,
-        0.0722,
-        0,
-        0,
-        0,
-        0,
-        0,
-        1,
-        0,
+        0.2126, 0.7152, 0.0722, 0, 0,
+        0.2126, 0.7152, 0.0722, 0, 0,
+        0.2126, 0.7152, 0.0722, 0, 0,
+        0, 0, 0, 1, 0,
       ]);
       canvas.saveLayer(null, Paint()..colorFilter = greyscaleFilter);
     }
 
-    // Draw the circle
-    final Paint circlePaint = Paint()
-      ..color = isStart ? Colors.green.shade600 : backgroundColor;
+    // Draw shadow for depth (multiple layers for softer shadow)
+    final Paint shadowPaint1 = Paint()
+      ..color = Colors.black.withValues(alpha: 0.15)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4);
+    final Paint shadowPaint2 = Paint()
+      ..color = Colors.black.withValues(alpha: 0.1)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8);
 
     canvas.drawCircle(
-        Offset(canvasCenterX, circleRadius), circleRadius, circlePaint);
+        Offset(canvasCenterX, circleRadius + 2), circleRadius + 1, shadowPaint2);
+    canvas.drawCircle(
+        Offset(canvasCenterX, circleRadius + 1), circleRadius, shadowPaint1);
 
-    // Draw the number inside the circle
+    // Draw white border/stroke for better contrast
+    final Paint borderPaint = Paint()
+      ..color = Colors.white
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3.0;
+
+    canvas.drawCircle(
+        Offset(canvasCenterX, circleRadius), circleRadius, borderPaint);
+
+    // Draw the main circle with gradient effect
+    final Paint circlePaint = Paint()
+      ..color = isStart ? Colors.green.shade600 : backgroundColor
+      ..style = PaintingStyle.fill;
+
+    canvas.drawCircle(
+        Offset(canvasCenterX, circleRadius), circleRadius - 1.5, circlePaint);
+
+    // Draw inner highlight for 3D effect
+    final Paint highlightPaint = Paint()
+      ..color = Colors.white.withValues(alpha: 0.3)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2);
+
+    canvas.drawCircle(
+        Offset(canvasCenterX, circleRadius - circleRadius * 0.3),
+        circleRadius * 0.4,
+        highlightPaint);
+
+    // Draw the number/icon inside the circle
     contentPainter.paint(
       canvas,
       Offset(

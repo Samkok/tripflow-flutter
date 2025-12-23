@@ -6,6 +6,8 @@ import 'package:voyza/providers/trip_provider.dart';
 import 'package:voyza/providers/user_trip_provider.dart';
 import 'package:voyza/providers/auth_provider.dart';
 import 'package:voyza/providers/location_provider.dart';
+import 'package:voyza/providers/trip_collaborator_provider.dart';
+import 'package:voyza/providers/local_active_trip_provider.dart';
 import 'package:voyza/screens/trip_details_screen.dart';
 
 class TripScreen extends ConsumerStatefulWidget {
@@ -81,10 +83,8 @@ class _TripScreenState extends ConsumerState<TripScreen> {
       // Clear cached locations on the map before activating a new trip
       ref.read(tripProvider.notifier).clearTrip();
 
-      final tripRepository = ref.read(tripRepositoryWithEventsProvider);
-      await tripRepository.setActiveTrip(trip.userId, trip.id);
-      ref.invalidate(activeTripsProvider);
-      ref.invalidate(userTripsProvider);
+      // Set active trip locally (no database update)
+      await ref.read(localActiveTripIdProvider.notifier).setActiveTrip(trip.id);
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -120,14 +120,33 @@ class _TripScreenState extends ConsumerState<TripScreen> {
     }
   }
 
+  Future<void> _refreshTrips() async {
+    // Invalidate all trip-related providers to trigger refresh
+    ref.invalidate(userTripsProvider);
+    ref.invalidate(activeTripsProvider);
+    ref.invalidate(sharedTripsProvider);
+
+    // Wait a bit for the providers to refresh
+    await Future.delayed(const Duration(milliseconds: 500));
+  }
+
   @override
   Widget build(BuildContext context) {
+    // Note: Collaborator realtime listener is now initialized at app root (main.dart)
+    // No need to initialize it here anymore
+
     final tripsAsync = ref.watch(userTripsProvider);
     final activeTripAsync = ref.watch(activeTripsProvider);
+    final sharedTripsAsync = ref.watch(sharedTripsProvider);
+
+    // Watch the local active trip ID to determine which trip is active
+    ref.watch(localActiveTripIdProvider);
 
     return Scaffold(
-      body: CustomScrollView(
-        slivers: [
+      body: RefreshIndicator(
+        onRefresh: _refreshTrips,
+        child: CustomScrollView(
+          slivers: [
           // Header
           SliverAppBar(
             floating: true,
@@ -205,7 +224,7 @@ class _TripScreenState extends ConsumerState<TripScreen> {
           tripsAsync.when(
             data: (trips) {
               if (trips.isEmpty) {
-                return SliverFillRemaining(
+                return SliverToBoxAdapter(
                   child: Padding(
                     padding: const EdgeInsets.all(32),
                     child: Center(
@@ -217,7 +236,7 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                                   .textTheme
                                   .bodyMedium
                                   ?.color
-                                  ?.withOpacity(0.6),
+                                  ?.withValues(alpha: 0.6),
                             ),
                       ),
                     ),
@@ -230,7 +249,7 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                   left: 16,
                   right: 16,
                   top: 12,
-                  bottom: 32,
+                  bottom: 16,
                 ),
                 sliver: SliverList(
                   delegate: SliverChildBuilderDelegate(
@@ -246,16 +265,75 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                 ),
               );
             },
-            loading: () => const SliverFillRemaining(
-              child: Center(child: CircularProgressIndicator()),
+            loading: () => const SliverToBoxAdapter(
+              child: Center(child: Padding(
+                padding: EdgeInsets.all(32),
+                child: CircularProgressIndicator(),
+              )),
             ),
-            error: (err, _) => SliverFillRemaining(
+            error: (err, _) => SliverToBoxAdapter(
               child: Center(child: Text('Error: $err')),
             ),
           ),
 
-          const SliverPadding(padding: EdgeInsets.symmetric(vertical: 30)),
+          // Shared Trips Section
+          sharedTripsAsync.when(
+            data: (sharedTrips) {
+              if (sharedTrips.isEmpty) {
+                return const SliverToBoxAdapter(child: SizedBox.shrink());
+              }
+
+              return SliverToBoxAdapter(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const SizedBox(height: 16),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.group_outlined,
+                            size: 20,
+                            color: Theme.of(context).colorScheme.primary,
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            'Shared With You',
+                            style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                                  fontWeight: FontWeight.w600,
+                                ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    ...sharedTrips.map((data) {
+                      final tripData = data['trips'] as Map<String, dynamic>?;
+                      final permission = data['permission'] as String;
+                      if (tripData == null) return const SizedBox.shrink();
+
+                      final trip = Trip.fromJson(tripData);
+                      return Padding(
+                        padding: const EdgeInsets.only(
+                          left: 16,
+                          right: 16,
+                          bottom: 12,
+                        ),
+                        child: _buildSharedTripCard(context, trip, permission),
+                      );
+                    }),
+                  ],
+                ),
+              );
+            },
+            loading: () => const SliverToBoxAdapter(child: SizedBox.shrink()),
+            error: (_, __) => const SliverToBoxAdapter(child: SizedBox.shrink()),
+          ),
+
+          const SliverPadding(padding: EdgeInsets.symmetric(vertical: 50)),
         ],
+        ),
       ),
     );
   }
@@ -496,15 +574,15 @@ class _TripScreenState extends ConsumerState<TripScreen> {
     );
   }
 
-  Widget _buildTripCardContent(
-    BuildContext context,
-    Trip trip,
-    int locationCount,
-    DateTime? startDate,
-    DateTime? endDate,
-  ) {
-    final statusColor = trip.isActive ? Colors.green : Colors.orange;
-    final statusText = trip.isActive ? 'Active' : 'Inactive';
+  Widget _buildSharedTripCard(
+      BuildContext context, Trip trip, String permission) {
+    final isWriteAccess = permission == 'write';
+    final permissionColor = isWriteAccess ? Colors.orange : Colors.blue;
+    final permissionText = isWriteAccess ? 'Can Edit' : 'Read Only';
+
+    // Check if this trip is the locally active trip
+    final localActiveTripId = ref.watch(localActiveTripIdProvider);
+    final isActive = localActiveTripId == trip.id;
 
     return GestureDetector(
       onTap: () {
@@ -520,18 +598,340 @@ class _TripScreenState extends ConsumerState<TripScreen> {
           color: Theme.of(context).cardColor,
           borderRadius: BorderRadius.circular(16),
           border: Border.all(
-            color: trip.isActive
+            color: isActive
                 ? Colors.green.withValues(alpha: 0.3)
-                : Theme.of(context).dividerColor.withValues(alpha: 0.2),
-            width: trip.isActive ? 2 : 1,
+                : Theme.of(context).colorScheme.primary.withValues(alpha: 0.2),
+            width: isActive ? 2 : 1,
           ),
           boxShadow: [
             BoxShadow(
-              color: trip.isActive
+              color: isActive
                   ? Colors.green.withValues(alpha: 0.1)
                   : Colors.black.withValues(alpha: 0.05),
-              blurRadius: trip.isActive ? 8 : 4,
-              offset: Offset(0, trip.isActive ? 4 : 2),
+              blurRadius: isActive ? 8 : 4,
+              offset: Offset(0, isActive ? 4 : 2),
+            ),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Header with shared indicator
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              decoration: BoxDecoration(
+                color:
+                    Theme.of(context).colorScheme.primary.withValues(alpha: 0.05),
+                borderRadius: const BorderRadius.vertical(
+                  top: Radius.circular(16),
+                ),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.group_outlined,
+                    size: 16,
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    'Shared with you',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Theme.of(context).colorScheme.primary,
+                          fontWeight: FontWeight.w500,
+                        ),
+                  ),
+                  const Spacer(),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: permissionColor.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          isWriteAccess ? Icons.edit : Icons.visibility,
+                          size: 12,
+                          color: permissionColor,
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          permissionText,
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: permissionColor,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            // Trip content
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 8, 12),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          trip.name,
+                          style:
+                              Theme.of(context).textTheme.titleMedium?.copyWith(
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        if (trip.description != null &&
+                            trip.description!.isNotEmpty) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            trip.description!,
+                            style:
+                                Theme.of(context).textTheme.bodySmall?.copyWith(
+                                      color: Theme.of(context)
+                                          .textTheme
+                                          .bodyMedium
+                                          ?.color
+                                          ?.withValues(alpha: 0.6),
+                                    ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                        const SizedBox(height: 8),
+                        // Activate/Deactivate button for shared trips
+                        SizedBox(
+                          height: 28,
+                          child: ElevatedButton.icon(
+                            onPressed: () {
+                              if (isActive) {
+                                _deactivateTrip(trip);
+                              } else {
+                                _setActiveTrip(trip);
+                              }
+                            },
+                            icon: Icon(
+                              isActive
+                                  ? Icons.stop_circle_outlined
+                                  : Icons.play_circle_outline,
+                              size: 16,
+                            ),
+                            label: Text(
+                              isActive ? 'Deactivate' : 'Activate',
+                              style: const TextStyle(fontSize: 12),
+                            ),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: isActive
+                                  ? Colors.orange
+                                  : Colors.green,
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 10,
+                              ),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  PopupMenuButton<String>(
+                    icon: Icon(
+                      Icons.more_vert_rounded,
+                      color: Theme.of(context)
+                          .textTheme
+                          .bodyMedium
+                          ?.color
+                          ?.withValues(alpha: 0.6),
+                    ),
+                    itemBuilder: (context) => [
+                      const PopupMenuItem<String>(
+                        value: 'leave',
+                        child: Row(
+                          children: [
+                            Icon(
+                              Icons.exit_to_app_rounded,
+                              size: 18,
+                              color: Colors.red,
+                            ),
+                            SizedBox(width: 12),
+                            Text(
+                              'Leave Trip',
+                              style: TextStyle(color: Colors.red),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                    onSelected: (value) {
+                      if (value == 'leave') {
+                        _showLeaveConfirmation(context, trip);
+                      }
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showLeaveConfirmation(BuildContext context, Trip trip) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+        ),
+        title: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Colors.orange.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Icon(
+                Icons.exit_to_app_rounded,
+                color: Colors.orange,
+                size: 24,
+              ),
+            ),
+            const SizedBox(width: 12),
+            const Expanded(
+              child: Text('Leave Trip?'),
+            ),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Are you sure you want to leave "${trip.name}"?',
+              style: const TextStyle(
+                fontWeight: FontWeight.w600,
+                fontSize: 15,
+              ),
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              'You will no longer have access to this trip unless the owner adds you again.',
+              style: TextStyle(fontSize: 13),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(context);
+              _leaveTrip(trip);
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.orange,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('Leave'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _leaveTrip(Trip trip) async {
+    try {
+      final repository = ref.read(tripCollaboratorRepositoryProvider);
+      final success = await repository.leaveTrip(trip.id);
+
+      if (success) {
+        ref.invalidate(sharedTripsProvider);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('You left "${trip.name}"'),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Failed to leave trip'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error leaving trip: $e')),
+        );
+      }
+    }
+  }
+
+  Widget _buildTripCardContent(
+    BuildContext context,
+    Trip trip,
+    int locationCount,
+    DateTime? startDate,
+    DateTime? endDate,
+  ) {
+    // Check if this trip is the locally active trip
+    final localActiveTripId = ref.watch(localActiveTripIdProvider);
+    final isActive = localActiveTripId == trip.id;
+
+    final statusColor = isActive ? Colors.green : Colors.orange;
+    final statusText = isActive ? 'Active' : 'Inactive';
+
+    return GestureDetector(
+      onTap: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => TripDetailsScreen(trip: trip),
+          ),
+        );
+      },
+      child: Container(
+        decoration: BoxDecoration(
+          color: Theme.of(context).cardColor,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: isActive
+                ? Colors.green.withValues(alpha: 0.3)
+                : Theme.of(context).dividerColor.withValues(alpha: 0.2),
+            width: isActive ? 2 : 1,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: isActive
+                  ? Colors.green.withValues(alpha: 0.1)
+                  : Colors.black.withValues(alpha: 0.05),
+              blurRadius: isActive ? 8 : 4,
+              offset: Offset(0, isActive ? 4 : 2),
             ),
           ],
         ),
@@ -734,21 +1134,21 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                         height: 32,
                         child: ElevatedButton.icon(
                           onPressed: () {
-                            if (trip.isActive) {
+                            if (isActive) {
                               _deactivateTrip(trip);
                             } else {
                               _setActiveTrip(trip);
                             }
                           },
                           icon: Icon(
-                            trip.isActive
+                            isActive
                                 ? Icons.stop_circle_outlined
                                 : Icons.play_circle_outline,
                             size: 18,
                           ),
-                          label: Text(trip.isActive ? 'Deactivate' : 'Activate'),
+                          label: Text(isActive ? 'Deactivate' : 'Activate'),
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: trip.isActive
+                            backgroundColor: isActive
                                 ? Colors.orange
                                 : Colors.green,
                             foregroundColor: Colors.white,
@@ -774,10 +1174,8 @@ class _TripScreenState extends ConsumerState<TripScreen> {
 
   Future<void> _deactivateTrip(Trip trip) async {
     try {
-      final tripRepository = ref.read(tripRepositoryWithEventsProvider);
-      await tripRepository.deactivateTrip(trip.id);
-      ref.invalidate(activeTripsProvider);
-      ref.invalidate(userTripsProvider);
+      // Deactivate trip locally (no database update)
+      await ref.read(localActiveTripIdProvider.notifier).deactivateTrip();
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

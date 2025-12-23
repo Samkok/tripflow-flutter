@@ -4,6 +4,7 @@ import '../models/location_model.dart';
 import '../models/trip.dart';
 import '../providers/user_trip_provider.dart';
 import '../providers/trip_provider.dart';
+import '../providers/trip_collaborator_provider.dart';
 
 class AddToTripSheet extends ConsumerStatefulWidget {
   final List<LocationModel> availableLocations;
@@ -191,6 +192,25 @@ class _AddToTripSheetState extends ConsumerState<AddToTripSheet> {
                             selectedLocationIds.isEmpty || selectedTrip == null
                                 ? null
                                 : () async {
+                                    // Check if user has write access to the selected trip
+                                    final hasWriteAccess = await ref.read(
+                                        hasWriteAccessProvider(selectedTrip!.id)
+                                            .future);
+
+                                    if (!hasWriteAccess) {
+                                      if (mounted) {
+                                        ScaffoldMessenger.of(context)
+                                            .showSnackBar(
+                                          const SnackBar(
+                                            content: Text(
+                                                'You don\'t have permission to add locations to this trip.'),
+                                            backgroundColor: Colors.orange,
+                                          ),
+                                        );
+                                      }
+                                      return;
+                                    }
+
                                     // Add locations to trip
                                     await ref
                                         .read(tripProvider.notifier)
@@ -202,7 +222,7 @@ class _AddToTripSheetState extends ConsumerState<AddToTripSheet> {
                                     if (mounted) {
                                       Navigator.pop(context);
                                       widget.onSuccess?.call();
-                                      
+
                                       ScaffoldMessenger.of(context)
                                           .showSnackBar(
                                         SnackBar(

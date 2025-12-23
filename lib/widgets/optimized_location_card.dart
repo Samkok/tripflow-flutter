@@ -4,6 +4,7 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:voyza/models/location_model.dart';
 import 'package:voyza/providers/map_ui_state_provider.dart';
 import 'package:voyza/providers/trip_provider.dart';
+import 'package:voyza/providers/trip_collaborator_provider.dart';
 import 'package:voyza/widgets/location_detail_sheet.dart';
 
 /// Optimized location card widget that minimizes rebuilds
@@ -208,35 +209,61 @@ class OptimizedLocationCard extends ConsumerWidget {
   }
 
   Widget _buildPopupMenu(BuildContext context, WidgetRef ref) {
+    // Check if user has write access to the active trip
+    final hasWriteAccessAsync = ref.watch(hasActiveTripWriteAccessProvider);
+    final hasWriteAccess = hasWriteAccessAsync.asData?.value ?? false;
+
     return PopupMenuButton<String>(
       icon: const Icon(Icons.more_vert),
-      onSelected: (value) => _handleMenuSelection(context, value, ref),
+      onSelected: (value) {
+        // Check write access for all write operations except copy
+        if (!hasWriteAccess && value != 'copy') {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('You don\'t have permission to modify locations in this trip.'),
+              backgroundColor: Colors.orange,
+            ),
+          );
+          return;
+        }
+        _handleMenuSelection(context, value, ref);
+      },
       itemBuilder: (context) {
         final isPastDate = ref.read(selectedDateProvider).isBefore(DateTime(
             DateTime.now().year, DateTime.now().month, DateTime.now().day));
+
+        // Can edit only if not past date AND has write access
+        final canEdit = !isPastDate && hasWriteAccess;
+
         return [
           if (location.isSkipped)
             PopupMenuItem<String>(
               value: 'unskip',
-              enabled: !isPastDate,
-              child: const ListTile(
-                  leading: Icon(Icons.add_circle_outline),
-                  title: Text('Un-skip')),
+              enabled: canEdit,
+              child: ListTile(
+                  leading: Icon(Icons.add_circle_outline,
+                      color: canEdit ? null : Colors.grey),
+                  title: Text('Un-skip',
+                      style: TextStyle(color: canEdit ? null : Colors.grey))),
             )
           else
             PopupMenuItem<String>(
               value: 'skip',
-              enabled: !isPastDate,
-              child: const ListTile(
-                  leading: Icon(Icons.remove_circle_outline),
-                  title: Text('Skip')),
+              enabled: canEdit,
+              child: ListTile(
+                  leading: Icon(Icons.remove_circle_outline,
+                      color: canEdit ? null : Colors.grey),
+                  title: Text('Skip',
+                      style: TextStyle(color: canEdit ? null : Colors.grey))),
             ),
           PopupMenuItem<String>(
             value: 'move',
-            enabled: !isPastDate,
-            child: const ListTile(
-                leading: Icon(Icons.calendar_today_outlined),
-                title: Text('Move to...')),
+            enabled: canEdit,
+            child: ListTile(
+                leading: Icon(Icons.calendar_today_outlined,
+                    color: canEdit ? null : Colors.grey),
+                title: Text('Move to...',
+                    style: TextStyle(color: canEdit ? null : Colors.grey))),
           ),
           const PopupMenuItem<String>(
             value: 'copy',
@@ -246,11 +273,13 @@ class OptimizedLocationCard extends ConsumerWidget {
           const PopupMenuDivider(),
           PopupMenuItem<String>(
               value: 'delete',
-              // Enabled even for past dates to allow cleanup
-              enabled: true,
-              child: const ListTile(
-                  leading: Icon(Icons.delete_outline, color: Colors.red),
-                  title: Text('Delete', style: TextStyle(color: Colors.red)))),
+              enabled: hasWriteAccess,
+              child: ListTile(
+                  leading: Icon(Icons.delete_outline,
+                      color: hasWriteAccess ? Colors.red : Colors.grey),
+                  title: Text('Delete',
+                      style: TextStyle(
+                          color: hasWriteAccess ? Colors.red : Colors.grey)))),
         ];
       },
     );

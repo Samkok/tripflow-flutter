@@ -13,6 +13,8 @@ import '../providers/trip_provider.dart';
 import '../providers/theme_provider.dart';
 import '../providers/map_ui_state_provider.dart';
 import '../providers/debounced_settings_provider.dart';
+import '../providers/trip_collaborator_provider.dart';
+import '../providers/trip_listener_provider.dart';
 import '../services/location_service.dart';
 import '../services/places_service.dart';
 import '../widgets/map_widget.dart';
@@ -20,14 +22,14 @@ import '../widgets/search_widget.dart';
 import '../widgets/trip_bottom_sheet.dart';
 
 class MapScreen extends ConsumerStatefulWidget {
-  MapScreen({super.key});
+  const MapScreen({super.key});
 
   @override
   ConsumerState<MapScreen> createState() => _MapScreenState();
 }
 
 class _MapScreenState extends ConsumerState<MapScreen>
-    with SingleTickerProviderStateMixin {
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   GoogleMapController? _mapController;
   DraggableScrollableController? _sheetController;
   bool _isTrackingLocation = false;
@@ -37,12 +39,30 @@ class _MapScreenState extends ConsumerState<MapScreen>
   StreamSubscription<LatLng>?
       _locationSubscription; // PERFORMANCE: Track subscription for cleanup
 
+  // OPTIMIZATION: Cache for lifecycle management
+  AppLifecycleState? _lastLifecycleState;
+
   @override
   void initState() {
     super.initState();
+    // OPTIMIZATION: Register as lifecycle observer to handle app state changes
+    WidgetsBinding.instance.addObserver(this);
     _sheetController = DraggableScrollableController();
     _initializeLocation();
     _searchFocusNode.addListener(_onSearchFocusChange);
+  }
+
+  // OPTIMIZATION: Handle app lifecycle to pause heavy operations when app is backgrounded
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _lastLifecycleState = state;
+    if (state == AppLifecycleState.paused) {
+      // App is backgrounded - stop location tracking to save battery
+      _locationSubscription?.pause();
+    } else if (state == AppLifecycleState.resumed) {
+      // App is resumed - resume location tracking
+      _locationSubscription?.resume();
+    }
   }
 
   void _onSearchFocusChange() {
@@ -55,12 +75,18 @@ class _MapScreenState extends ConsumerState<MapScreen>
 
   @override
   void dispose() {
+    // OPTIMIZATION: Remove lifecycle observer
+    WidgetsBinding.instance.removeObserver(this);
+    
     _sheetController?.dispose();
     _searchFocusNode.removeListener(_onSearchFocusChange);
     _searchFocusNode.dispose();
 
     // PERFORMANCE: Cancel location stream to prevent memory leaks and battery drain
     _locationSubscription?.cancel();
+    
+    // OPTIMIZATION: Dispose map controller if still active
+    _mapController = null;
 
     super.dispose();
   }
@@ -118,7 +144,8 @@ class _MapScreenState extends ConsumerState<MapScreen>
     // - Result: ~95% fewer location updates
     _locationSubscription = LocationService.getLocationStream().listen(
       (location) {
-        if (mounted) {
+        // OPTIMIZATION: Only update if app is in foreground to prevent background processing
+        if (mounted && _lastLifecycleState == AppLifecycleState.resumed) {
           ref.read(tripProvider.notifier).updateCurrentLocation(location);
         }
         // Location tracking without automatic camera animation
@@ -141,6 +168,20 @@ class _MapScreenState extends ConsumerState<MapScreen>
   }
 
   Future<void> _onMapLongPress(LatLng coordinates) async {
+    // Check if user has write access to the active trip
+    final hasWriteAccessAsync = ref.read(hasActiveTripWriteAccessProvider);
+    final hasWriteAccess = hasWriteAccessAsync.asData?.value ?? false;
+
+    if (!hasWriteAccess) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('You don\'t have permission to add locations to this trip.'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
     // Prevent adding locations to past dates
     final selectedDate = ref.read(selectedDateProvider);
     final now = DateTime.now();
@@ -484,6 +525,15 @@ class _MapScreenState extends ConsumerState<MapScreen>
 
   @override
   Widget build(BuildContext context) {
+    // Note: Collaborator realtime listener is now initialized at app root (main.dart)
+    // No need to initialize it here anymore
+
+    // OPTIMIZATION: Move listeners to separate effect to prevent rebuilding entire widget tree
+    // Use a dedicated build widget for listener side effects
+    return _buildMapScreenContent(context);
+  }
+
+  Widget _buildMapScreenContent(BuildContext context) {
     // Listen to polyline taps to animate the camera to fit the route segment.
     ref.listen<String?>(tappedPolylineIdProvider, (previous, next) {
       if (next != null) {
@@ -559,52 +609,152 @@ class _MapScreenState extends ConsumerState<MapScreen>
             onMarkerTap: _onMarkerTapped,
           ),
 
-          // Search bar
+          // Trip Name Overlay - Beautiful header showing active trip
           Positioned(
             top: 50,
             left: 16,
             right: 16,
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Search bar
-                Expanded(
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(30),
-                    child: BackdropFilter(
-                      filter: ImageFilter.blur(sigmaX: 10.0, sigmaY: 10.0),
-                      child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 300),
-                        decoration: BoxDecoration(
-                          color: _isSearchFocused
-                              ? Theme.of(context).colorScheme.surface
-                              : Theme.of(context)
-                                  .colorScheme
-                                  .surface
-                                  .withOpacity(0.8),
-                          borderRadius: BorderRadius.circular(30),
-                          border: Border.all(
-                            color: _isSearchFocused
-                                ? Theme.of(context).colorScheme.primary
-                                : Theme.of(context)
-                                    .dividerColor
-                                    .withOpacity(0.2),
-                            width: 1.5,
-                          ),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withOpacity(0.2),
-                              blurRadius: 20,
-                              offset: const Offset(0, 5),
+            child: Consumer(
+              builder: (context, ref, child) {
+                final activeTripAsync = ref.watch(realtimeActiveTripProvider);
+
+                return activeTripAsync.when(
+                  data: (activeTrip) {
+                    if (activeTrip == null) return child!;
+
+                    return Column(
+                      children: [
+                        // Active Trip Name Banner
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(16),
+                          child: BackdropFilter(
+                            filter: ImageFilter.blur(sigmaX: 15.0, sigmaY: 15.0),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+                              decoration: BoxDecoration(
+                                gradient: LinearGradient(
+                                  colors: [
+                                    Theme.of(context).colorScheme.primary.withValues(alpha: 0.95),
+                                    Theme.of(context).colorScheme.primary.withValues(alpha: 0.85),
+                                  ],
+                                ),
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(
+                                  color: Colors.white.withValues(alpha: 0.3),
+                                  width: 1.5,
+                                ),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.3),
+                                    blurRadius: 20,
+                                    offset: const Offset(0, 8),
+                                  ),
+                                  BoxShadow(
+                                    color: Colors.black.withValues(alpha: 0.15),
+                                    blurRadius: 10,
+                                    offset: const Offset(0, 4),
+                                  ),
+                                ],
+                              ),
+                              child: Row(
+                                children: [
+                                  Container(
+                                    padding: const EdgeInsets.all(8),
+                                    decoration: BoxDecoration(
+                                      color: Colors.white.withValues(alpha: 0.2),
+                                      borderRadius: BorderRadius.circular(10),
+                                    ),
+                                    child: Icon(
+                                      Icons.navigation_rounded,
+                                      color: Colors.white,
+                                      size: 22,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          'Active Trip',
+                                          style: TextStyle(
+                                            color: Colors.white.withValues(alpha: 0.9),
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.w500,
+                                            letterSpacing: 0.5,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 2),
+                                        Text(
+                                          activeTrip.name,
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 17,
+                                            fontWeight: FontWeight.bold,
+                                            letterSpacing: 0.3,
+                                          ),
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ),
-                          ],
+                          ),
                         ),
-                        child: SearchWidget(focusNode: _searchFocusNode),
+                        const SizedBox(height: 12),
+                        child!,
+                      ],
+                    );
+                  },
+                  loading: () => child!,
+                  error: (_, __) => child!,
+                );
+              },
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Search bar
+                  Expanded(
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(30),
+                      child: BackdropFilter(
+                        filter: ImageFilter.blur(sigmaX: 10.0, sigmaY: 10.0),
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 300),
+                          decoration: BoxDecoration(
+                            color: _isSearchFocused
+                                ? Theme.of(context).colorScheme.surface
+                                : Theme.of(context)
+                                    .colorScheme
+                                    .surface
+                                    .withValues(alpha: 0.92),
+                            borderRadius: BorderRadius.circular(30),
+                            border: Border.all(
+                              color: _isSearchFocused
+                                  ? Theme.of(context).colorScheme.primary
+                                  : Theme.of(context)
+                                      .dividerColor
+                                      .withValues(alpha: 0.2),
+                              width: 1.5,
+                            ),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withValues(alpha: 0.15),
+                                blurRadius: 20,
+                                offset: const Offset(0, 5),
+                              ),
+                            ],
+                          ),
+                          child: SearchWidget(focusNode: _searchFocusNode),
+                        ),
                       ),
                     ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
 
@@ -655,7 +805,8 @@ class _MapScreenState extends ConsumerState<MapScreen>
                       builder: (context) => AddToTripSheet(
                         availableLocations: locations,
                         onSuccess: () {
-                          Navigator.of(context).pop();
+                          // Sheet already pops itself, no need to pop again
+                          // Just refresh or perform any additional actions here if needed
                         },
                       ),
                     );
@@ -791,8 +942,55 @@ class _MapScreenState extends ConsumerState<MapScreen>
       northeast: LatLng(maxLat, maxLng),
     );
 
+    // OPTIMIZATION: Calculate padding to fit between search bar and bottom sheet with 20px padding
+    final screenHeight = MediaQuery.of(context).size.height;
+
+    // Check if active trip banner is shown
+    final activeTripAsync = ref.read(realtimeActiveTripProvider);
+    final hasActiveTrip = activeTripAsync.asData?.value != null;
+
+    // Calculate top safe area padding
+    final topPadding = MediaQuery.of(context).padding.top;
+
+    // UI elements heights (approximate):
+    // - Status bar: included in topPadding
+    // - Active Trip Banner (if shown): ~60px
+    // - Search bar container: ~60px
+    // - Spacing between elements: ~12px
+    final activeTripBannerHeight = hasActiveTrip ? 60.0 : 0.0;
+    final searchBarHeight = 60.0;
+    final spacingBetweenElements = 12.0 + 16.0; // 12px gap + 16px margin
+
+    final topUIHeight = topPadding + activeTripBannerHeight + searchBarHeight + spacingBetweenElements;
+
+    // Bottom sheet in collapsed state takes 23% of screen height
+    final bottomSheetCollapsedHeight = screenHeight * 0.23;
+
+    // OPTIMIZATION: Ensure 20px padding on all sides between search bar and bottom sheet
+    // The Google Maps API only accepts a single padding value, so we need to calculate
+    // a value that ensures minimum 20px clearance on all sides while accounting for UI overlays
+    const paddingAmount = 20.0;
+
+    // Calculate padding needed for top (UI elements + 20px buffer)
+    final topMapPadding = topUIHeight + paddingAmount;
+
+    // Calculate padding needed for bottom (bottom sheet + 20px buffer)
+    final bottomMapPadding = bottomSheetCollapsedHeight + paddingAmount;
+
+    // For left and right, we just need the 20px buffer
+    const sideMapPadding = paddingAmount;
+
+    // Use the maximum of all padding values to ensure nothing is clipped
+    // This ensures at least 20px clearance on the most constrained side
+    final uniformPadding = math.max(
+      math.max(topMapPadding, bottomMapPadding),
+      sideMapPadding,
+    );
+
+    // Apply the calculated uniform padding to all sides
     _mapController!.animateCamera(
-        CameraUpdate.newLatLngBounds(bounds, 80.0)); // 80.0 padding
+      CameraUpdate.newLatLngBounds(bounds, uniformPadding),
+    );
   }
 
   void _zoomToLocation(LatLng coordinates) {

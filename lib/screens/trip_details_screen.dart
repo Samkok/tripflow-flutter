@@ -4,9 +4,11 @@ import 'package:intl/intl.dart';
 import 'package:uuid/uuid.dart';
 import 'package:voyza/models/trip.dart';
 import 'package:voyza/providers/location_provider.dart';
+import 'package:voyza/providers/trip_collaborator_provider.dart';
 import 'package:voyza/models/saved_location.dart';
 import 'package:voyza/services/places_service.dart';
 import 'package:voyza/providers/places_provider.dart';
+import 'package:voyza/widgets/collaborators_sheet.dart';
 
 class TripDetailsScreen extends ConsumerStatefulWidget {
   final Trip trip;
@@ -25,13 +27,44 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
   String _searchQuery = '';
 
   @override
+  void initState() {
+    super.initState();
+    // Invalidate permissions when screen is first created to ensure fresh data
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ref.invalidate(hasWriteAccessProvider(widget.trip.id));
+      ref.invalidate(isTripOwnerProvider(widget.trip.id));
+      ref.invalidate(userTripPermissionProvider(widget.trip.id));
+    });
+  }
+
+  @override
   void dispose() {
     _searchController.dispose();
     super.dispose();
   }
 
+  Future<void> _refreshPermissions() async {
+    // Invalidate permission providers to force re-fetch from database
+    ref.invalidate(hasWriteAccessProvider(widget.trip.id));
+    ref.invalidate(isTripOwnerProvider(widget.trip.id));
+    ref.invalidate(userTripPermissionProvider(widget.trip.id));
+    
+    // Also invalidate location data to refresh the list
+    ref.invalidate(locationRepositoryProvider);
+    
+    // Wait a bit for providers to refresh
+    await Future.delayed(const Duration(milliseconds: 500));
+  }
+
   @override
   Widget build(BuildContext context) {
+    // Initialize collaborator realtime listener (handles permission updates and removal)
+    ref.watch(collaboratorRealtimeInitProvider);
+
+    // Check if current user is the owner
+    final isOwnerAsync = ref.watch(isTripOwnerProvider(widget.trip.id));
+    final hasWriteAccessAsync = ref.watch(hasWriteAccessProvider(widget.trip.id));
+
     return Scaffold(
       appBar: AppBar(
         elevation: 0,
@@ -48,21 +81,56 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
         ),
-      ),
-      body: Column(
-        children: [
-          // Search bar
-          _buildSearchBar(),
-          // Locations list
-          Expanded(child: _buildLocationStreamBody()),
+        actions: [
+          // Team members button - only visible to trip owner
+          isOwnerAsync.when(
+            data: (isOwner) => isOwner
+                ? IconButton(
+                    icon: const Icon(Icons.group_outlined),
+                    tooltip: 'Team Members',
+                    onPressed: () => _showCollaboratorsSheet(),
+                  )
+                : const SizedBox.shrink(),
+            loading: () => const SizedBox.shrink(),
+            error: (_, __) => const SizedBox.shrink(),
+          ),
         ],
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _showAddLocationDialog(),
-        icon: const Icon(Icons.add_location_alt_outlined),
-        label: const Text('Add Location'),
-        backgroundColor: Theme.of(context).colorScheme.primary,
-        foregroundColor: Colors.black,
+      body: RefreshIndicator(
+        onRefresh: _refreshPermissions,
+        child: Column(
+          children: [
+            // Search bar
+            _buildSearchBar(),
+            // Locations list
+            Expanded(child: _buildLocationStreamBody()),
+          ],
+        ),
+      ),
+      floatingActionButton: hasWriteAccessAsync.when(
+        data: (hasWriteAccess) => hasWriteAccess
+            ? FloatingActionButton.extended(
+                onPressed: () => _showAddLocationDialog(),
+                icon: const Icon(Icons.add_location_alt_outlined),
+                label: const Text('Add Location'),
+                backgroundColor: Theme.of(context).colorScheme.primary,
+                foregroundColor: Colors.black,
+              )
+            : null,
+        loading: () => null,
+        error: (_, __) => null,
+      ),
+    );
+  }
+
+  void _showCollaboratorsSheet() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => CollaboratorsSheet(
+        tripId: widget.trip.id,
+        tripName: widget.trip.name,
       ),
     );
   }
@@ -579,6 +647,7 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
 
   @override
   Widget build(BuildContext context) {
+    ref.watch(collaboratorRealtimeInitProvider);
     return DraggableScrollableSheet(
       initialChildSize: 0.9,
       minChildSize: 0.5,
@@ -793,6 +862,20 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
   }
 
   Future<void> _addLocationToTrip(PlacePrediction prediction) async {
+    // Permission check at function level
+    final hasWriteAccess = await ref.read(hasWriteAccessProvider(widget.tripId).future);
+    if (!hasWriteAccess) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('You don\'t have permission to add locations to this trip.'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+      return;
+    }
+
     // Show loading indicator
     if (mounted) {
       showDialog(

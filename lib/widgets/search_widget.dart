@@ -5,6 +5,7 @@ import 'package:uuid/uuid.dart';
 import '../models/location_model.dart';
 import '../providers/places_provider.dart';
 import '../providers/trip_provider.dart';
+import '../providers/trip_collaborator_provider.dart';
 import '../services/places_service.dart';
 import '../core/theme.dart';
 
@@ -119,13 +120,40 @@ class _SearchWidgetState extends ConsumerState<SearchWidget> {
   }
 
   Future<void> _selectPlace(PlacePrediction prediction) async {
+    // Check if user has write access to the active trip
+    final hasWriteAccessAsync = ref.read(hasActiveTripWriteAccessProvider);
+    final hasWriteAccess = hasWriteAccessAsync.asData?.value ?? false;
+
+    if (!hasWriteAccess) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('You don\'t have permission to add locations to this trip.'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    // Check if trying to add to a past date
+    final selectedDate = ref.read(selectedDateProvider);
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    if (selectedDate.isBefore(today)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Cannot add locations to a past date.'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
     final placeDetails =
         await PlacesService.getPlaceDetails(prediction.placeId);
 
     if (placeDetails != null) {
       if (!mounted) return;
 
-      final selectedDate = ref.read(selectedDateProvider);
       final location = LocationModel(
         id: const Uuid().v4(),
         name: placeDetails.name,

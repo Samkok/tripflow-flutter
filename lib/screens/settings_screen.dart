@@ -5,6 +5,9 @@ import 'package:voyza/providers/theme_provider.dart';
 import 'package:voyza/screens/terms_screen.dart';
 
 import '../providers/auth_provider.dart';
+import '../providers/trip_collaborator_provider.dart';
+import '../providers/user_trip_provider.dart';
+import '../providers/trip_provider.dart';
 import '../widgets/logout_confirmation_dialog.dart';
 import 'login_screen.dart';
 import 'signup_screen.dart';
@@ -183,7 +186,14 @@ class SettingsScreen extends ConsumerWidget {
                 );
 
                 if (shouldLogout == true) {
-                  ref.read(authServiceProvider).signOut();
+                  // Clear cached data before signing out
+                  ref.invalidate(sharedTripsProvider);
+                  ref.invalidate(userTripsProvider);
+                  ref.invalidate(activeTripsProvider);
+                  ref.invalidate(tripProvider);
+                  
+                  // Sign out
+                  await ref.read(authServiceProvider).signOut();
                 }
               },
               icon: const Icon(Icons.logout),

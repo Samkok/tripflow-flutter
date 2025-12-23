@@ -1,10 +1,15 @@
 import 'package:dio/dio.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'dart:async';
 import '../models/location_model.dart';
 
 class GoogleMapsService {
-  static final Dio _dio = Dio();
+  static final Dio _dio = Dio(BaseOptions(
+    // OPTIMIZATION: Set timeouts to prevent long waits
+    connectTimeout: const Duration(seconds: 10),
+    receiveTimeout: const Duration(seconds: 15),
+  ));
   static String get _apiKey => dotenv.env['GOOGLE_DIRECTIONS_API_KEY'] ?? '';
 
   static Future<Map<String, dynamic>> getOptimizedRouteDetails({

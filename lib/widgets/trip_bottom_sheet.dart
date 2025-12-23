@@ -6,6 +6,7 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:voyza/models/location_model.dart';
 import 'package:voyza/providers/map_ui_state_provider.dart';
 import '../providers/trip_provider.dart';
+import '../providers/trip_collaborator_provider.dart';
 import '../utils/date_picker_utils.dart';
 import '../core/theme.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -249,6 +250,13 @@ class TripBottomSheet extends ConsumerWidget {
     final today = DateTime(now.year, now.month, now.day);
     final isPastDate = selectedDate.isBefore(today);
 
+    // Check if user has write access to the active trip
+    final hasWriteAccessAsync = ref.watch(hasActiveTripWriteAccessProvider);
+    final hasWriteAccess = hasWriteAccessAsync.asData?.value ?? false;
+
+    // Can edit only if not past date AND has write access
+    final canEdit = !isPastDate && hasWriteAccess;
+
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
@@ -296,15 +304,25 @@ class TripBottomSheet extends ConsumerWidget {
             if (selectedCount > 0) ...[
               PopupMenuButton<String>(
                 onSelected: (value) {
+                  // Check write access for all write operations
+                  if (!hasWriteAccess && value != 'copy') {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('You don\'t have permission to modify locations in this trip.'),
+                        backgroundColor: Colors.orange,
+                      ),
+                    );
+                    return;
+                  }
+
                   if (value == 'delete') {
                     _showMultiDeleteConfirmationDialog(context, ref);
                   } else if (value == 'move') {
                     _showMoveLocationsDialog(context, ref);
                   } else if (value == 'copy') {
                     _showCopyLocationsDialog(context, ref);
-                  } else if (value == 'skip' && !isPastDate) {
-                    // Only allow skipping on current/future dates
-                    // Add skip action
+                  } else if (value == 'skip' && canEdit) {
+                    // Only allow skipping on current/future dates with write access
                     _showSkipConfirmationDialog(context, ref);
                   }
                 },
@@ -313,44 +331,48 @@ class TripBottomSheet extends ConsumerWidget {
                 itemBuilder: (context) => [
                   PopupMenuItem<String>(
                     value: 'delete',
-                    enabled: true,
+                    enabled: hasWriteAccess,
                     child: ListTile(
                       leading: Icon(
                         Icons.delete_outline,
-                        color: Theme.of(context).colorScheme.error,
+                        color: hasWriteAccess
+                            ? Theme.of(context).colorScheme.error
+                            : Colors.grey,
                       ),
                       title: Text(
                         'Delete',
                         style: TextStyle(
-                            color: Theme.of(context).colorScheme.error),
+                            color: hasWriteAccess
+                                ? Theme.of(context).colorScheme.error
+                                : Colors.grey),
                       ),
                     ),
                   ),
                   PopupMenuItem<String>(
                     value: 'move',
-                    enabled: !isPastDate,
+                    enabled: canEdit,
                     child: ListTile(
                       leading: Icon(Icons.calendar_today_outlined,
-                          color: isPastDate ? Colors.grey : null),
+                          color: canEdit ? null : Colors.grey),
                       title: Text('Move to...',
                           style: TextStyle(
-                              color: isPastDate ? Colors.grey : null)),
+                              color: canEdit ? null : Colors.grey)),
                     ),
                   ),
                   PopupMenuItem<String>(
                     // Uses theme colors
                     value: 'skip',
-                    enabled: !isPastDate, // Disable skipping for past dates
+                    enabled: canEdit, // Disable skipping for past dates or read-only
                     child: ListTile(
                       leading: Icon(
                         Icons.remove_circle_outline,
-                        color: isPastDate
-                            ? Colors.grey
-                            : Theme.of(context).textTheme.bodyMedium?.color,
+                        color: canEdit
+                            ? Theme.of(context).textTheme.bodyMedium?.color
+                            : Colors.grey,
                       ),
                       title: Text('Skip',
                           style: TextStyle(
-                              color: isPastDate ? Colors.grey : null)),
+                              color: canEdit ? null : Colors.grey)),
                     ),
                   ),
                   const PopupMenuItem(
@@ -403,9 +425,14 @@ class TripBottomSheet extends ConsumerWidget {
           Expanded(
             child: TextButton.icon(
               onPressed: () async {
+                // BUGFIX: Ensure initialDate is never before firstDate
+                final initialDateForPicker = selectedDate.isBefore(firstDate)
+                    ? firstDate
+                    : selectedDate;
+
                 final newDate = await DatePickerUtils.showCustomDatePicker(
                   context: context,
-                  initialDate: selectedDate,
+                  initialDate: initialDateForPicker,
                   firstDate: firstDate,
                   lastDate: DateTime.now().add(
                       const Duration(days: 365 * 5)), // 5 years in the future
@@ -592,7 +619,7 @@ class TripBottomSheet extends ConsumerWidget {
     );
   }
 
-  // Opens Google Maps with directions from the first to last location
+  // Opens Google Maps with directions from the first to last location with waypoints
   Future<void> _openGoogleMaps(BuildContext context, WidgetRef ref) async {
     try {
       final locations = ref.read(locationsForSelectedDateProvider);
@@ -612,26 +639,82 @@ class TripBottomSheet extends ConsumerWidget {
       final firstLocation = locations.first;
       final lastLocation = locations.last;
 
-      // Construct Google Maps URL with directions
+      // BUGFIX: Build proper Google Maps URL with all waypoints
+      // Using google.navigation:// scheme for better compatibility with Google Maps app
       final startLat = firstLocation.coordinates.latitude;
       final startLng = firstLocation.coordinates.longitude;
       final endLat = lastLocation.coordinates.latitude;
       final endLng = lastLocation.coordinates.longitude;
 
-      final url = Uri.parse(
-        'https://www.google.com/maps/dir/?api=1&origin=$startLat,$startLng&destination=$endLat,$endLng&travelmode=driving',
-      );
+      // Build waypoints string if more than 2 locations
+      String waypointsString = '';
+      if (locations.length > 2) {
+        // Add intermediate locations as waypoints
+        final waypoints = locations.sublist(1, locations.length - 1);
+        waypointsString = waypoints
+            .map((loc) => '${loc.coordinates.latitude},${loc.coordinates.longitude}')
+            .join('|');
+      }
 
+      // BUGFIX: Use proper URL encoding and format for Google Maps
+      // Try multiple URL formats for better compatibility
+      Uri url;
+      
+      if (waypointsString.isNotEmpty) {
+        // Format with waypoints for web
+        url = Uri.https(
+          'www.google.com',
+          '/maps/dir/',
+          {
+            'api': '1',
+            'origin': '$startLat,$startLng',
+            'destination': '$endLat,$endLng',
+            'waypoints': waypointsString,
+            'travelmode': 'driving',
+          },
+        );
+      } else {
+        // Format without waypoints
+        url = Uri.https(
+          'www.google.com',
+          '/maps/dir/',
+          {
+            'api': '1',
+            'origin': '$startLat,$startLng',
+            'destination': '$endLat,$endLng',
+            'travelmode': 'driving',
+          },
+        );
+      }
+
+      // Try to launch the URL
       if (await canLaunchUrl(url)) {
         await launchUrl(url, mode: LaunchMode.externalApplication);
       } else {
-        throw Exception('Could not launch Google Maps');
+        // Fallback: Try alternative format with geo: scheme
+        final fallbackUrl = Uri.parse(
+          'geo:$startLat,$startLng?q=$endLat,$endLng(Route End)',
+        );
+        
+        if (await canLaunchUrl(fallbackUrl)) {
+          await launchUrl(fallbackUrl, mode: LaunchMode.externalApplication);
+        } else {
+          if (context.mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Google Maps app not found. Please install it.'),
+                backgroundColor: Colors.red,
+              ),
+            );
+          }
+        }
       }
     } catch (e) {
+      print('Error opening Google Maps: $e');
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Failed to open Google Maps'),
+          SnackBar(
+            content: Text('Failed to open Google Maps: $e'),
             backgroundColor: Colors.red,
           ),
         );

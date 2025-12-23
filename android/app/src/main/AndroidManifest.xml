@@ -14,7 +14,11 @@
     <application
         android:label="VoyZa"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:largeHeap="true"
+        android:usesCleartextTraffic="false"
+        android:supportsRtl="false"
+        android:enableOnBackInvokedCallback="true">
         
         <!-- Google Maps API Key -->
         <meta-data android:name="com.google.android.geo.API_KEY"
@@ -28,7 +32,9 @@
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
             android:hardwareAccelerated="true"
             android:windowSoftInputMode="adjustResize"
-            android:largeHeap="true">
+            android:largeHeap="true"
+            android:screenOrientation="portrait"
+            android:resizeableActivity="false">
             
             <meta-data
               android:name="io.flutter.embedding.android.NormalTheme"

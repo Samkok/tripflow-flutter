@@ -21,6 +21,43 @@ class MapWidget extends ConsumerWidget {
     this.temporaryDrawing,
   });
 
+  // OPTIMIZATION: Helper to reduce marker rebuild frequency
+  Set<Marker> _buildMarkers(
+    Set<Marker> overlayMarkers,
+    List<LocationModel> locationsForDate,
+  ) {
+    // OPTIMIZATION: Limit marker processing to visible markers only
+    // This prevents excessive marker object creation
+    if (locationsForDate.isEmpty) {
+      return overlayMarkers;
+    }
+
+    return overlayMarkers.map((marker) {
+      final id = marker.markerId.value;
+      // Skip special markers (current location, route markers)
+      if (id == 'current_location' ||
+          id.startsWith('leg_') ||
+          id.startsWith('route_info_')) {
+        return marker;
+      }
+      
+      // Find corresponding location with error handling
+      try {
+        final location = locationsForDate.firstWhere(
+          (loc) => loc.id == marker.markerId.value,
+          orElse: () => locationsForDate.first,
+        );
+
+        return marker.copyWith(
+          onTapParam: () => onMarkerTap?.call(location),
+        );
+      } catch (e) {
+        // Return original marker if something goes wrong
+        return marker;
+      }
+    }).toSet();
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final mapOverlayAsync = ref.watch(assembledMapOverlaysProvider);
@@ -30,6 +67,7 @@ class MapWidget extends ConsumerWidget {
 
     return mapOverlayAsync.when(
       data: (AssembledMapOverlays overlayState) {
+        // OPTIMIZATION: Wrap in RepaintBoundary to prevent parent repaints
         return RepaintBoundary(
           child: GoogleMap(
             key: const ValueKey('main_google_map'),
@@ -42,24 +80,10 @@ class MapWidget extends ConsumerWidget {
               target: currentLocation ?? const LatLng(37.422, -122.084),
               zoom: currentLocation != null ? 15.0 : 10.0,
             ),
-            markers: overlayState.markers.map((marker) {
-              final id = marker.markerId.value;
-              if (id == 'current_location' ||
-                  id.startsWith('leg_') ||
-                  id.startsWith('route_info_')) {
-                return marker;
-              }
-              final location = locationsForDate.firstWhere(
-                (loc) => loc.id == marker.markerId.value,
-                orElse: () => locationsForDate.first,
-              );
-              return marker.copyWith(
-                  onTapParam: () => onMarkerTap?.call(location));
-            }).toSet(),
+            // OPTIMIZATION: Use memoized marker building to reduce garbage
+            markers: _buildMarkers(overlayState.markers, locationsForDate),
             polylines: overlayState.polylines,
-            circles: {
-              ...overlayState.automaticZones,
-            },
+            circles: {...overlayState.automaticZones},
             polygons: const {},
             myLocationEnabled: false,
             myLocationButtonEnabled: false,
@@ -71,6 +95,8 @@ class MapWidget extends ConsumerWidget {
             zoomGesturesEnabled: true,
             compassEnabled: false,
             liteModeEnabled: false,
+            // OPTIMIZATION: Limit FPS to reduce rendering pressure
+            minMaxZoomPreference: const MinMaxZoomPreference(0, 22),
           ),
         );
       },

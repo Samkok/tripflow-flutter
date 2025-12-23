@@ -1,4 +1,5 @@
 import 'dart:developer';
+import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -13,9 +14,11 @@ import '../services/google_maps_service.dart';
 import '../services/storage_service.dart';
 import '../providers/debounced_settings_provider.dart';
 import '../utils/zone_utils.dart';
+import '../utils/isolate_utils.dart';
 import '../models/saved_location.dart';
 import 'location_provider.dart';
 import 'trip_listener_provider.dart';
+import 'trip_collaborator_provider.dart';
 
 class TripState {
   final List<LocationModel> pinnedLocations;
@@ -117,9 +120,55 @@ class TripState {
 
 class TripNotifier extends StateNotifier<TripState> {
   final Ref _ref;
+  
+  // OPTIMIZATION: Debounce timer for route generation to prevent excessive recalculation
+  Timer? _routeOptimizationDebounceTimer;
+  
+  // OPTIMIZATION: Cache for today's date to avoid repeated DateTime calculations
+  late DateTime _cachedToday;
+  DateTime? _cachedTodayDate;
 
   TripNotifier(this._ref) : super(TripState()) {
     _initSyncListener();
+    _updateCachedToday();
+  }
+
+  /// Get today's date, cached and updated only when needed
+  DateTime get today {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    
+    // Invalidate cache if day has changed
+    if (_cachedTodayDate != today) {
+      _cachedToday = today;
+      _cachedTodayDate = today;
+    }
+    return _cachedToday;
+  }
+
+  void _updateCachedToday() {
+    final now = DateTime.now();
+    _cachedToday = DateTime(now.year, now.month, now.day);
+    _cachedTodayDate = _cachedToday;
+  }
+
+  /// Check if user has write access to the active trip
+  /// Returns true if no trip is active (user can edit their own locations)
+  /// or if user is owner/has write permission on the active trip
+  Future<bool> _hasWriteAccess() async {
+    final activeTripAsync = _ref.read(realtimeActiveTripProvider);
+    final activeTrip = activeTripAsync.asData?.value;
+
+    // No active trip - user can edit their own non-trip locations
+    if (activeTrip == null) return true;
+
+    // Check if user is owner
+    final isOwner = await _ref.read(isTripOwnerProvider(activeTrip.id).future);
+    if (isOwner) return true;
+
+    // Check if user has write permission
+    final permission = await _ref.read(userTripPermissionProvider(activeTrip.id).future);
+    return permission == 'write';
   }
 
   void _initSyncListener() {
@@ -203,6 +252,13 @@ class TripNotifier extends StateNotifier<TripState> {
   }
 
   Future<void> addLocation(LocationModel location) async {
+    // Permission check at function level
+    final hasAccess = await _hasWriteAccess();
+    if (!hasAccess) {
+      debugPrint('addLocation: Permission denied - user does not have write access');
+      return;
+    }
+
     final selectedDate = _ref.read(selectedDateProvider);
 
     // Ensure the new location has the currently selected date if it doesn't have one.
@@ -257,6 +313,16 @@ class TripNotifier extends StateNotifier<TripState> {
   /// Associates existing locations with a trip
   Future<void> addLocationsToTrip(
       List<String> locationIds, String tripId) async {
+    // Permission check - must have write access to the target trip
+    final isOwner = await _ref.read(isTripOwnerProvider(tripId).future);
+    if (!isOwner) {
+      final permission = await _ref.read(userTripPermissionProvider(tripId).future);
+      if (permission != 'write') {
+        debugPrint('addLocationsToTrip: Permission denied - user does not have write access to trip $tripId');
+        return;
+      }
+    }
+
     try {
       final repository = _ref.read(locationRepositoryProvider);
 
@@ -273,6 +339,13 @@ class TripNotifier extends StateNotifier<TripState> {
 
   /// Removes locations from a trip (sets trip_id to null)
   Future<void> removeLocationsFromTrip(List<String> locationIds) async {
+    // Permission check at function level
+    final hasAccess = await _hasWriteAccess();
+    if (!hasAccess) {
+      debugPrint('removeLocationsFromTrip: Permission denied - user does not have write access');
+      return;
+    }
+
     try {
       final repository = _ref.read(locationRepositoryProvider);
 
@@ -285,6 +358,13 @@ class TripNotifier extends StateNotifier<TripState> {
   }
 
   Future<void> removeLocation(String locationId) async {
+    // Permission check at function level
+    final hasAccess = await _hasWriteAccess();
+    if (!hasAccess) {
+      debugPrint('removeLocation: Permission denied - user does not have write access');
+      return;
+    }
+
     // Clear optimized route data when a location is removed
     state = state.copyWith(
       optimizedLocationsForSelectedDate: [],
@@ -306,6 +386,13 @@ class TripNotifier extends StateNotifier<TripState> {
   }
 
   Future<void> removeMultipleLocations(Set<String> locationIds) async {
+    // Permission check at function level
+    final hasAccess = await _hasWriteAccess();
+    if (!hasAccess) {
+      debugPrint('removeMultipleLocations: Permission denied - user does not have write access');
+      return;
+    }
+
     // Clear optimized route data when locations are removed
     state = state.copyWith(
       optimizedLocationsForSelectedDate: [], // Clear optimized list
@@ -330,6 +417,13 @@ class TripNotifier extends StateNotifier<TripState> {
   }
 
   Future<void> skipMultipleLocations(Set<String> locationIds) async {
+    // Permission check at function level
+    final hasAccess = await _hasWriteAccess();
+    if (!hasAccess) {
+      debugPrint('skipMultipleLocations: Permission denied - user does not have write access');
+      return;
+    }
+
     // Clear optimized route
     state = state.copyWith(
       optimizedRoute: [],
@@ -353,6 +447,13 @@ class TripNotifier extends StateNotifier<TripState> {
   }
 
   Future<void> unskipMultipleLocations(Set<String> locationIds) async {
+    // Permission check at function level
+    final hasAccess = await _hasWriteAccess();
+    if (!hasAccess) {
+      debugPrint('unskipMultipleLocations: Permission denied - user does not have write access');
+      return;
+    }
+
     // Clear optimized route
     state = state.copyWith(
       optimizedRoute: [],
@@ -376,6 +477,13 @@ class TripNotifier extends StateNotifier<TripState> {
   }
 
   Future<void> reorderLocation(int oldIndex, int newIndex) async {
+    // Permission check at function level
+    final hasAccess = await _hasWriteAccess();
+    if (!hasAccess) {
+      debugPrint('reorderLocation: Permission denied - user does not have write access');
+      return;
+    }
+
     final updatedLocations = List<LocationModel>.from(state.pinnedLocations);
 
     // Adjust newIndex if it's greater than oldIndex (due to removal)
@@ -401,6 +509,13 @@ class TripNotifier extends StateNotifier<TripState> {
   }
 
   Future<void> updateLocationName(String locationId, String newName) async {
+    // Permission check at function level
+    final hasAccess = await _hasWriteAccess();
+    if (!hasAccess) {
+      debugPrint('updateLocationName: Permission denied - user does not have write access');
+      return;
+    }
+
     final updatedLocations = state.pinnedLocations.map((loc) {
       if (loc.id == locationId) {
         // Return a new LocationModel with the updated name
@@ -423,6 +538,13 @@ class TripNotifier extends StateNotifier<TripState> {
 
   Future<void> updateLocationStayDuration(
       String locationId, Duration newDuration) async {
+    // Permission check at function level
+    final hasAccess = await _hasWriteAccess();
+    if (!hasAccess) {
+      debugPrint('updateLocationStayDuration: Permission denied - user does not have write access');
+      return;
+    }
+
     final updatedLocations = state.pinnedLocations.map((loc) {
       if (loc.id == locationId) {
         return loc.copyWith(stayDuration: newDuration);
@@ -453,6 +575,13 @@ class TripNotifier extends StateNotifier<TripState> {
 
   Future<void> updateLocationScheduledDate(
       String locationId, DateTime newDate) async {
+    // Permission check at function level
+    final hasAccess = await _hasWriteAccess();
+    if (!hasAccess) {
+      debugPrint('updateLocationScheduledDate: Permission denied - user does not have write access');
+      return;
+    }
+
     final locations = state.pinnedLocations;
     final updatedLocations = locations.map((loc) {
       if (loc.id == locationId) {
@@ -474,6 +603,13 @@ class TripNotifier extends StateNotifier<TripState> {
 
   Future<void> updateMultipleLocationsScheduledDate(
       Set<String> locationIds, DateTime newDate) async {
+    // Permission check at function level
+    final hasAccess = await _hasWriteAccess();
+    if (!hasAccess) {
+      debugPrint('updateMultipleLocationsScheduledDate: Permission denied - user does not have write access');
+      return;
+    }
+
     final updatedLocations = state.pinnedLocations.map((loc) {
       if (locationIds.contains(loc.id)) {
         // Return a new LocationModel with the updated scheduled date
@@ -498,6 +634,13 @@ class TripNotifier extends StateNotifier<TripState> {
 
   Future<void> copyMultipleLocationsToDate(
       Set<String> locationIds, DateTime newDate) async {
+    // Permission check at function level
+    final hasAccess = await _hasWriteAccess();
+    if (!hasAccess) {
+      debugPrint('copyMultipleLocationsToDate: Permission denied - user does not have write access');
+      return;
+    }
+
     final locationsToCopy = state.pinnedLocations
         .where((loc) => locationIds.contains(loc.id))
         .toList();
@@ -556,8 +699,9 @@ class TripNotifier extends StateNotifier<TripState> {
         location.longitude,
       );
 
-      // Ignore updates smaller than 20 meters (GPS noise)
-      if (distance < 20) {
+      // OPTIMIZATION: Increase minimum distance threshold to 30m to reduce updates further
+      // This reduces unnecessary state changes and provider rebuilds
+      if (distance < 30) {
         return;
       }
     }
@@ -567,21 +711,45 @@ class TripNotifier extends StateNotifier<TripState> {
 
   Future<void> generateOptimizedRoute(
       {String? startLocationId, required DateTime selectedDate}) async {
+    // OPTIMIZATION: Cancel previous route generation debounce if it exists
+    _routeOptimizationDebounceTimer?.cancel();
+
+    // OPTIMIZATION: Debounce the route generation by 500ms to prevent excessive API calls
+    // when user is rapidly changing dates or locations
+    _routeOptimizationDebounceTimer = Timer(const Duration(milliseconds: 500), () {
+      _performRouteOptimization(
+        startLocationId: startLocationId,
+        selectedDate: selectedDate,
+      );
+    });
+  }
+
+  Future<void> _performRouteOptimization({
+    String? startLocationId,
+    required DateTime selectedDate,
+  }) async {
     // Filter locations to only include those for the selected date.
     final allLocations = state.pinnedLocations;
+    
+    // OPTIMIZATION: Cache the date comparison value
+    final selectedYear = selectedDate.year;
+    final selectedMonth = selectedDate.month;
+    final selectedDay = selectedDate.day;
+    
     final locationsForDate = allLocations.where((loc) {
       if (loc.isSkipped) {
         return false;
       }
       if (loc.scheduledDate == null) {
-        final addedAtDate =
-            DateTime(loc.addedAt.year, loc.addedAt.month, loc.addedAt.day);
-        return selectedDate.isAtSameMomentAs(addedAtDate);
+        final addedAt = loc.addedAt;
+        return selectedYear == addedAt.year &&
+            selectedMonth == addedAt.month &&
+            selectedDay == addedAt.day;
       }
       final locDate = loc.scheduledDate!;
-      final scheduledDateAtMidnight =
-          DateTime(locDate.year, locDate.month, locDate.day);
-      return selectedDate.isAtSameMomentAs(scheduledDateAtMidnight);
+      return selectedYear == locDate.year &&
+          selectedMonth == locDate.month &&
+          selectedDay == locDate.day;
     }).toList();
 
     if (locationsForDate.isEmpty) return;
@@ -634,18 +802,36 @@ class TripNotifier extends StateNotifier<TripState> {
         return;
       }
 
+      // OPTIMIZATION: Run clustering on an isolate to prevent UI blocking
       final proximityThreshold = _ref.read(proximityThresholdCommittedProvider);
-      final clusters =
-          ZoneUtils.clusterLocations(locationsToOptimize, proximityThreshold);
+      final clusterResult =
+          await IsolateUtils.clusterLocationsIsolate(locationsToOptimize, proximityThreshold);
+
+      // OPTIMIZATION: Reconstruct clusters from isolate result
+      final List<List<LocationModel>> clusters = [];
+      for (final clusterData in clusterResult['clusters'] as List) {
+        final cluster = <LocationModel>[];
+        for (final locData in clusterData as List) {
+          // Find the matching location object
+          final matching = locationsToOptimize.firstWhere(
+            (loc) => loc.id == locData['id'],
+            orElse: () => locationsToOptimize.first,
+          );
+          cluster.add(matching);
+        }
+        clusters.add(cluster);
+      }
 
       List<List<LocationModel>> orderedClusters = [];
       LatLng currentPoint = startPoint;
 
+      // OPTIMIZATION: Use simplified nearest-cluster finding
       while (clusters.isNotEmpty) {
         List<LocationModel>? closestCluster;
         double minDistance = double.infinity;
 
         for (final cluster in clusters) {
+          // Find the nearest location in this cluster
           for (final location in cluster) {
             final distance = Geolocator.distanceBetween(
                 currentPoint.latitude,
@@ -703,11 +889,23 @@ class TripNotifier extends StateNotifier<TripState> {
         // No waypoints, so no destination. The service call will handle this.
       }
 
+      // OPTIMIZATION: Add timeout to API call to prevent hanging
       final routeResult = await GoogleMapsService.getOptimizedRouteDetails(
         origin: startPoint,
         destination: destination,
         waypoints: intermediateWaypoints,
         optimizeWaypoints: false,
+      ).timeout(
+        const Duration(seconds: 20),
+        onTimeout: () {
+          print('Route optimization API call timed out');
+          return {
+            'routePoints': <LatLng>[],
+            'waypointOrder': <int>[],
+            'legDetails': <Map<String, dynamic>>[],
+            'legPolylines': <List<LatLng>>[],
+          };
+        },
       );
 
       final routePoints = routeResult['routePoints'] as List<LatLng>;
@@ -741,16 +939,18 @@ class TripNotifier extends StateNotifier<TripState> {
         );
       }
 
+      // OPTIMIZATION: Cache date calculation instead of recalculating for each location
       final otherDateLocations = state.pinnedLocations.where((loc) {
         if (loc.scheduledDate == null) {
-          final addedAtDate =
-              DateTime(loc.addedAt.year, loc.addedAt.month, loc.addedAt.day);
-          return !selectedDate.isAtSameMomentAs(addedAtDate);
+          final addedAt = loc.addedAt;
+          return !(selectedYear == addedAt.year &&
+              selectedMonth == addedAt.month &&
+              selectedDay == addedAt.day);
         }
         final locDate = loc.scheduledDate!;
-        final scheduledDateAtMidnight =
-            DateTime(locDate.year, locDate.month, locDate.day);
-        return !selectedDate.isAtSameMomentAs(scheduledDateAtMidnight);
+        return !(selectedYear == locDate.year &&
+            selectedMonth == locDate.month &&
+            selectedDay == locDate.day);
       }).toList();
 
       final updatedLocationsForDate = finalOptimizedLocationsForDate
@@ -760,14 +960,15 @@ class TripNotifier extends StateNotifier<TripState> {
       final skippedLocationsForDate = allLocations.where((loc) {
         if (!loc.isSkipped) return false;
         if (loc.scheduledDate == null) {
-          final addedAtDate =
-              DateTime(loc.addedAt.year, loc.addedAt.month, loc.addedAt.day);
-          return selectedDate.isAtSameMomentAs(addedAtDate);
+          final addedAt = loc.addedAt;
+          return selectedYear == addedAt.year &&
+              selectedMonth == addedAt.month &&
+              selectedDay == addedAt.day;
         }
         final locDate = loc.scheduledDate!;
-        final scheduledDateAtMidnight =
-            DateTime(locDate.year, locDate.month, locDate.day);
-        return selectedDate.isAtSameMomentAs(scheduledDateAtMidnight);
+        return selectedYear == locDate.year &&
+            selectedMonth == locDate.month &&
+            selectedDay == locDate.day;
       }).toList();
 
       final updatedPinnedLocations = [
@@ -912,6 +1113,11 @@ final locationsForSelectedDateProvider = Provider<List<LocationModel>>((ref) {
   // OPTIMIZATION: Early return if no locations at all
   if (pinnedLocations.isEmpty) return const [];
 
+  // OPTIMIZATION: Cache date components to avoid repeated DateTime object creation
+  final selectedYear = selectedDate.year;
+  final selectedMonth = selectedDate.month;
+  final selectedDay = selectedDate.day;
+
   // If an optimized route exists for the selected date, use it.
   // This check is crucial because optimizedLocationsForSelectedDate might hold data from a previous selectedDate.
   // We will now return the optimized list PLUS any skipped locations for that date.
@@ -919,15 +1125,16 @@ final locationsForSelectedDateProvider = Provider<List<LocationModel>>((ref) {
     final firstOptimizedLocDate = optimizedLocations.first.scheduledDate;
     bool dateMatches = false;
     if (firstOptimizedLocDate != null) {
-      final optimizedDateAtMidnight = DateTime(firstOptimizedLocDate.year,
-          firstOptimizedLocDate.month, firstOptimizedLocDate.day);
-      dateMatches = selectedDate.isAtSameMomentAs(optimizedDateAtMidnight);
+      dateMatches = selectedYear == firstOptimizedLocDate.year &&
+          selectedMonth == firstOptimizedLocDate.month &&
+          selectedDay == firstOptimizedLocDate.day;
     } else {
       // If first optimized location has null scheduledDate, check using addedAt
       final firstOptimizedLoc = optimizedLocations.first;
-      final addedAtDate = DateTime(firstOptimizedLoc.addedAt.year,
-          firstOptimizedLoc.addedAt.month, firstOptimizedLoc.addedAt.day);
-      dateMatches = selectedDate.isAtSameMomentAs(addedAtDate);
+      final addedAt = firstOptimizedLoc.addedAt;
+      dateMatches = selectedYear == addedAt.year &&
+          selectedMonth == addedAt.month &&
+          selectedDay == addedAt.day;
     }
 
     if (dateMatches) {
@@ -941,14 +1148,15 @@ final locationsForSelectedDateProvider = Provider<List<LocationModel>>((ref) {
         if (!loc.isSkipped) return false;
 
         if (loc.scheduledDate == null) {
-          final addedAtDate =
-              DateTime(loc.addedAt.year, loc.addedAt.month, loc.addedAt.day);
-          return selectedDate.isAtSameMomentAs(addedAtDate);
+          final addedAt = loc.addedAt;
+          return selectedYear == addedAt.year &&
+              selectedMonth == addedAt.month &&
+              selectedDay == addedAt.day;
         }
         final locDate = loc.scheduledDate!;
-        final scheduledDateAtMidnight =
-            DateTime(locDate.year, locDate.month, locDate.day);
-        return selectedDate.isAtSameMomentAs(scheduledDateAtMidnight);
+        return selectedYear == locDate.year &&
+            selectedMonth == locDate.month &&
+            selectedDay == locDate.day;
       }).toList();
       // Return the optimized locations first, followed by the skipped ones.
       return [...optimizedLocations, ...skippedForDate];
@@ -956,11 +1164,6 @@ final locationsForSelectedDateProvider = Provider<List<LocationModel>>((ref) {
   }
 
   // Fallback: filter from pinnedLocations if no optimized route or for a different date
-  // OPTIMIZATION: Cache the selected date components to avoid recalculating in the loop
-  final selectedYear = selectedDate.year;
-  final selectedMonth = selectedDate.month;
-  final selectedDay = selectedDate.day;
-
   return pinnedLocations.where((loc) {
     if (loc.scheduledDate == null) {
       // If a location somehow has a null date, associate it with the date it was added.

@@ -6,6 +6,7 @@ import 'screens/main_screen.dart';
 
 import 'core/theme.dart';
 import 'providers/theme_provider.dart';
+import 'providers/trip_collaborator_provider.dart';
 
 import 'widgets/connectivity_wrapper.dart';
 
@@ -17,23 +18,80 @@ import 'models/saved_location.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  
+  // OPTIMIZATION: Enable memory-efficient mode
+  // Reduces image cache and other memory overhead
+  imageCache.maximumSize = 50; // Limit to 50 images in cache
+  imageCache.maximumSizeBytes = 100 * 1024 * 1024; // 100MB image cache limit
+  
   await dotenv.load(fileName: ".env");
-  await SupabaseService.initialize();
 
+  // OPTIMIZATION: Initialize Hive first (fast)
   await Hive.initFlutter();
   Hive.registerAdapter(SavedLocationAdapter());
 
-  await LocationRepository().init();
+  // OPTIMIZATION: Defer Supabase initialization to avoid blocking UI
+  // It will initialize on first use via lazy provider
+  // SupabaseService.initialize() will be called in a background task
+
+  // OPTIMIZATION: Defer LocationRepository initialization
+  // It will be initialized on first access via provider
 
   runApp(const ProviderScope(child: MyApp()));
+
+  // OPTIMIZATION: Initialize heavy services in the background after app render
+  _initializeHeavyServices();
 }
 
-class MyApp extends ConsumerWidget {
+/// Initialize heavy services after the app has rendered
+/// This prevents blocking the UI during startup
+void _initializeHeavyServices() {
+  Future.delayed(const Duration(milliseconds: 100), () async {
+    try {
+      await SupabaseService.initialize();
+      await LocationRepository().init();
+    } catch (e) {
+      print('Error initializing heavy services: $e');
+    }
+  });
+}
+
+class MyApp extends ConsumerStatefulWidget {
   const MyApp({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<MyApp> createState() => _MyAppState();
+}
+
+class _MyAppState extends ConsumerState<MyApp> {
+  @override
+  void initState() {
+    super.initState();
+    _initializeCollaboratorListener();
+  }
+
+  /// Initialize collaborator listener after Supabase is ready
+  Future<void> _initializeCollaboratorListener() async {
+    try {
+      // Wait for Supabase to be initialized before starting realtime subscriptions
+      await SupabaseService.waitForInitialization();
+
+      if (mounted) {
+        // CRITICAL: Initialize collaborator realtime listener at app root
+        // This ensures permission changes are detected and enforced immediately
+        // across the entire app without requiring trip reactivation
+        ref.read(collaboratorRealtimeInitProvider);
+      }
+    } catch (e) {
+      // If Supabase initialization fails, log but don't crash the app
+      print('Failed to initialize collaborator listener: $e');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final themeMode = ref.watch(themeProvider);
+
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'VoyZa',
