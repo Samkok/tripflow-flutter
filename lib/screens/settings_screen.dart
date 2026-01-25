@@ -8,9 +8,13 @@ import '../providers/auth_provider.dart';
 import '../providers/trip_collaborator_provider.dart';
 import '../providers/user_trip_provider.dart';
 import '../providers/trip_provider.dart';
+import '../providers/subscription_provider.dart';
 import '../widgets/logout_confirmation_dialog.dart';
+import '../widgets/delete_account_dialog.dart';
+import '../widgets/pro_feature_gate.dart';
 import 'login_screen.dart';
 import 'signup_screen.dart';
+import 'subscription_management_screen.dart';
 
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
@@ -18,6 +22,7 @@ class SettingsScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final themeMode = ref.watch(themeProvider);
+    final subscriptionState = ref.watch(subscriptionProvider);
 
     return Scaffold(
       backgroundColor: Theme.of(context).colorScheme.surface,
@@ -30,9 +35,19 @@ class SettingsScreen extends ConsumerWidget {
       body: ListView(
         padding: const EdgeInsets.all(16.0),
         children: [
+          // Pro upgrade banner for non-Pro users
+          !subscriptionState.isPro
+              ? const ProUpgradeBanner() : const SizedBox.shrink(),
+          const SizedBox(height: 16),
+
           // Profile Section
           _buildSectionHeader(context, 'Profile'),
           _buildProfileCard(context, ref),
+          const SizedBox(height: 24),
+
+          // Subscription Section
+          _buildSectionHeader(context, 'Subscription'),
+          _buildSubscriptionTile(context, ref),
           const SizedBox(height: 24),
 
           // Preferences Section
@@ -43,6 +58,14 @@ class SettingsScreen extends ConsumerWidget {
           // About Section
           _buildSectionHeader(context, 'About'),
           _buildTermsTile(context),
+          const SizedBox(height: 24),
+
+          // Danger Zone - only show for authenticated users
+          if (ref.watch(currentUserProvider) != null) ...[
+            _buildDangerSection(context, ref),
+            const SizedBox(height: 100),
+          ] else
+            const SizedBox(height: 100),
         ],
       ),
     );
@@ -244,6 +267,60 @@ class SettingsScreen extends ConsumerWidget {
     );
   }
 
+  Widget _buildSubscriptionTile(BuildContext context, WidgetRef ref) {
+    final isPro = ref.watch(isProProvider);
+
+    return Container(
+      decoration: BoxDecoration(
+        color: Theme.of(context).cardColor,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: ListTile(
+        onTap: () async {
+          // Navigate to subscription management and wait for return
+          await navigateToSubscriptionManagement(context);
+
+          // Refresh subscription state when user returns
+          if (context.mounted) {
+            debugPrint('SettingsScreen: User returned, refreshing subscription state');
+            await ref.read(subscriptionProvider.notifier).refresh();
+            debugPrint('SettingsScreen: Current isPro state: ${ref.read(isProProvider)}');
+          }
+        },
+        leading: Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: isPro
+                ? Theme.of(context).colorScheme.primary.withOpacity(0.1)
+                : Theme.of(context).colorScheme.secondary.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Icon(
+            isPro ? Icons.star_rounded : Icons.star_outline_rounded,
+            color: isPro
+                ? Theme.of(context).colorScheme.primary
+                : Theme.of(context).colorScheme.secondary,
+          ),
+        ),
+        title: Text(isPro ? 'VoyZa Pro' : 'Upgrade to Pro'),
+        subtitle: Text(
+          isPro ? 'Manage your subscription' : 'Unlock all premium features',
+        ),
+        trailing: const Icon(Icons.arrow_forward_ios, size: 16),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+        ),
+      ),
+    );
+  }
+
   Widget _buildTermsTile(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
@@ -281,5 +358,127 @@ class SettingsScreen extends ConsumerWidget {
         ),
       ),
     );
+  }
+
+  Widget _buildDangerSection(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(bottom: 12.0, left: 4.0),
+          child: Text(
+            'Danger Zone',
+            style: theme.textTheme.titleMedium?.copyWith(
+              fontWeight: FontWeight.bold,
+              color: Colors.red,
+            ),
+          ),
+        ),
+        Container(
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            color: Colors.red.withValues(alpha: 0.05),
+            border: Border.all(color: Colors.red.withValues(alpha: 0.3)),
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(Icons.warning_rounded, color: Colors.red, size: 20),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Delete Account',
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.bold,
+                      color: Colors.red,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Permanently delete your account and all associated data. This action cannot be undone.',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: 16),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: () => _showDeleteAccountDialog(context, ref),
+                  icon: const Icon(Icons.delete_forever),
+                  label: const Text('Delete My Account'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.red,
+                    side: const BorderSide(color: Colors.red),
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _showDeleteAccountDialog(BuildContext context, WidgetRef ref) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const DeleteAccountDialog(),
+    );
+
+    if (confirmed == true && context.mounted) {
+      // Show loading and proceed with deletion
+      _deleteAccount(context, ref);
+    }
+  }
+
+  Future<void> _deleteAccount(BuildContext context, WidgetRef ref) async {
+    // Show loading dialog
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(
+        child: Card(
+          child: Padding(
+            padding: EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                CircularProgressIndicator(),
+                SizedBox(height: 16),
+                Text('Deleting your account...'),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+
+    try {
+      final authService = ref.read(authServiceProvider);
+      await authService.deleteAccount();
+
+      // Account deleted successfully - navigation will be handled by auth state change
+    } catch (e) {
+      if (context.mounted) {
+        Navigator.of(context).pop(); // Close loading dialog
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to delete account: ${e.toString()}'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 5),
+          ),
+        );
+      }
+    }
   }
 }

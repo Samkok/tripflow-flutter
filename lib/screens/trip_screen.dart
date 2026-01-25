@@ -123,8 +123,17 @@ class _TripScreenState extends ConsumerState<TripScreen> {
   Future<void> _refreshTrips() async {
     // Invalidate all trip-related providers to trigger refresh
     ref.invalidate(userTripsProvider);
-    ref.invalidate(activeTripsProvider);
+    ref.invalidate(localActiveTripProvider);
     ref.invalidate(sharedTripsProvider);
+
+    // Fetch remote locations to ensure location counts are accurate
+    try {
+      final locationRepository = ref.read(locationRepositoryProvider);
+      await locationRepository.fetchRemoteLocations();
+      debugPrint('TripScreen: Refreshed remote locations');
+    } catch (e) {
+      debugPrint('TripScreen: Error refreshing locations: $e');
+    }
 
     // Wait a bit for the providers to refresh
     await Future.delayed(const Duration(milliseconds: 500));
@@ -136,11 +145,8 @@ class _TripScreenState extends ConsumerState<TripScreen> {
     // No need to initialize it here anymore
 
     final tripsAsync = ref.watch(userTripsProvider);
-    final activeTripAsync = ref.watch(activeTripsProvider);
+    final activeTripAsync = ref.watch(localActiveTripProvider);
     final sharedTripsAsync = ref.watch(sharedTripsProvider);
-
-    // Watch the local active trip ID to determine which trip is active
-    ref.watch(localActiveTripIdProvider);
 
     return Scaffold(
       body: RefreshIndicator(

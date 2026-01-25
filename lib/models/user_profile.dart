@@ -15,6 +15,7 @@ class UserProfile {
   final Map<String, dynamic>? preferences;
   final DateTime createdAt;
   final DateTime updatedAt;
+  final int locationsAddedCount;
 
   UserProfile({
     required this.id,
@@ -33,6 +34,7 @@ class UserProfile {
     this.preferences,
     required this.createdAt,
     required this.updatedAt,
+    this.locationsAddedCount = 0,
   });
 
   factory UserProfile.fromJson(Map<String, dynamic> json) {
@@ -53,6 +55,7 @@ class UserProfile {
       preferences: json['preferences'] as Map<String, dynamic>?,
       createdAt: DateTime.parse(json['created_at'] as String),
       updatedAt: DateTime.parse(json['updated_at'] as String),
+      locationsAddedCount: json['locations_added_count'] as int? ?? 0,
     );
   }
 
@@ -74,6 +77,7 @@ class UserProfile {
       'preferences': preferences,
       'created_at': createdAt.toIso8601String(),
       'updated_at': updatedAt.toIso8601String(),
+      'locations_added_count': locationsAddedCount,
     };
   }
 
@@ -132,6 +136,7 @@ class UserProfile {
     Map<String, dynamic>? preferences,
     DateTime? createdAt,
     DateTime? updatedAt,
+    int? locationsAddedCount,
   }) {
     return UserProfile(
       id: id ?? this.id,
@@ -150,6 +155,7 @@ class UserProfile {
       preferences: preferences ?? this.preferences,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
+      locationsAddedCount: locationsAddedCount ?? this.locationsAddedCount,
     );
   }
 }

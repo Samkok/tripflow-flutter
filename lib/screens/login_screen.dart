@@ -51,6 +51,9 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
               ),
             );
           }
+        } else {
+          // User declined to sync - record their choice
+          await ref.read(authServiceProvider).declineSync();
         }
       }
 

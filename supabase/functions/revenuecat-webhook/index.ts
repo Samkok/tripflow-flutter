@@ -1,0 +1,481 @@
+// Supabase Edge Function: RevenueCat Webhook Handler
+// Receives webhook events from RevenueCat and updates user_subscriptions table
+// Enables real-time subscription expiration detection via Supabase Realtime
+
+import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
+
+// ============================================================================
+// Types
+// ============================================================================
+
+interface RevenueCatWebhookEvent {
+  event: {
+    type: string;
+    app_user_id: string;
+    product_id?: string;
+    new_product_id?: string;
+    entitlement_ids?: string[];
+    period_type?: string;
+    purchased_at_ms?: number;
+    expiration_at_ms?: number;
+    store?: string;
+    is_trial_period?: boolean;
+    will_renew?: boolean;
+    billing_issues_detected_at_ms?: number;
+    unsubscribe_detected_at_ms?: number;
+    [key: string]: any;
+  };
+  api_version: string;
+}
+
+// ============================================================================
+// Configuration
+// ============================================================================
+
+// Event types we care about
+// Based on: https://www.revenuecat.com/docs/integrations/webhooks/event-types-and-fields
+const RELEVANT_EVENTS = [
+  // Core subscription lifecycle
+  'INITIAL_PURCHASE',
+  'RENEWAL',
+  'CANCELLATION',
+  'UNCANCELLATION',
+  'EXPIRATION',
+
+  // Billing & refunds
+  'BILLING_ISSUE',
+  'REFUND',
+  'REFUND_REVERSED',
+
+  // Product changes
+  'PRODUCT_CHANGE',
+  'NON_RENEWING_PURCHASE',
+
+  // Android-specific
+  'SUBSCRIPTION_PAUSED',
+  'SUBSCRIPTION_EXTENDED',
+
+  // Advanced
+  'TRANSFER',
+  'TEMPORARY_ENTITLEMENT_GRANT',
+
+  // Testing
+  'TEST'
+];
+
+// Initialize Supabase client with service role (has write access to user_subscriptions)
+const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+const supabaseServiceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+const supabase = createClient(supabaseUrl, supabaseServiceRoleKey);
+
+// RevenueCat webhook authorization key (optional but recommended)
+const revenueCatAuthKey = Deno.env.get('REVENUECAT_WEBHOOK_AUTH_KEY');
+
+// ============================================================================
+// Helper Functions
+// ============================================================================
+
+function isValidUUID(str: string): boolean {
+  const uuidRegex =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i; // versioned UUID
+  return uuidRegex.test(str);
+}
+
+function isRevenueCatAnonymousId(str: string): boolean {
+  // $RCAnonymousID:<32 hex>
+  return /^\$RCAnonymousID:[0-9a-f]{32}$/i.test(str);
+}
+
+function isValidAppUserId(str: string): boolean {
+  return isValidUUID(str) || isRevenueCatAnonymousId(str);
+}
+
+/**
+ * Infers will_renew from RevenueCat webhook event type
+ * RevenueCat webhooks do NOT include a will_renew field in the payload
+ *
+ * Reference: https://www.revenuecat.com/docs/integrations/webhooks/event-types-and-fields
+ */
+function inferWillRenew(eventType: string): boolean {
+  // Auto-renewable subscription events
+  const renewableEvents = [
+    'INITIAL_PURCHASE',
+    'RENEWAL',
+    'UNCANCELLATION',
+    'PRODUCT_CHANGE',
+    'SUBSCRIPTION_EXTENDED',
+    'REFUND_REVERSED',
+    'TEST'
+  ];
+
+  // Non-renewable or cancelled events
+  const nonRenewableEvents = [
+    'CANCELLATION',
+    'BILLING_ISSUE',
+    'EXPIRATION',
+    'SUBSCRIPTION_PAUSED',
+    'NON_RENEWING_PURCHASE',
+    'REFUND'
+  ];
+
+  if (renewableEvents.includes(eventType)) {
+    return true;
+  }
+
+  if (nonRenewableEvents.includes(eventType)) {
+    return false;
+  }
+
+  // TRANSFER and unknown events: default to false for safety
+  return false;
+}
+
+/**
+ * Determines subscription status from RevenueCat webhook event
+ * Follows best practices from: https://www.revenuecat.com/docs/integrations/webhooks/event-flows
+ *
+ * Key principles:
+ * - CANCELLATION keeps status 'active' during grace period
+ * - BILLING_ISSUE treated same as CANCELLATION (fires simultaneously)
+ * - SUBSCRIPTION_PAUSED keeps access until period end
+ */
+function determineSubscriptionStatus(
+  eventType: string,
+  expirationDate: Date | null,
+  now: Date
+): string {
+  console.log(`Determining status for event: ${eventType}, expires: ${expirationDate}`);
+
+  // Active subscription events - immediately active
+  const activeEvents = [
+    'INITIAL_PURCHASE',
+    'RENEWAL',
+    'UNCANCELLATION',
+    'PRODUCT_CHANGE',
+    'SUBSCRIPTION_EXTENDED',
+    'REFUND_REVERSED'
+  ];
+
+  if (activeEvents.includes(eventType)) {
+    return 'active';
+  }
+
+  // Expired subscription events - immediately expired
+  if (eventType === 'EXPIRATION' || eventType === 'REFUND') {
+    return 'expired';
+  }
+
+  // Grace period events - user keeps access until expiration
+  // Per RevenueCat docs: BILLING_ISSUE fires with CANCELLATION
+  const gracePeriodEvents = [
+    'CANCELLATION',
+    'BILLING_ISSUE',
+    'SUBSCRIPTION_PAUSED'
+  ];
+
+  if (gracePeriodEvents.includes(eventType)) {
+    if (expirationDate && expirationDate > now) {
+      return 'active';  // Grace period - user still has access
+    }
+    return 'expired';  // Past expiration
+  }
+
+  // Non-renewing purchase - check expiration
+  if (eventType === 'NON_RENEWING_PURCHASE') {
+    if (expirationDate && expirationDate > now) {
+      return 'active';
+    }
+    return 'expired';
+  }
+
+  // TRANSFER - entitlements moved to different user
+  // Should preserve existing status or query REST API
+  // For now, check expiration
+  if (eventType === 'TRANSFER') {
+    if (expirationDate && expirationDate > now) {
+      return 'active';
+    }
+    return 'expired';
+  }
+
+  // TEST event
+  if (eventType === 'TEST') {
+    return 'active';
+  }
+
+  // Unknown event type - future-proof fallback
+  // Check expiration to determine status
+  if (expirationDate && expirationDate > now) {
+    return 'active';
+  }
+  return 'expired';
+}
+
+// ============================================================================
+// Main Handler
+// ============================================================================
+
+serve(async (req) => {
+  try {
+    console.log('Webhook received:', {
+      method: req.method,
+      url: req.url,
+      headers: Object.fromEntries(req.headers),
+    });
+
+    // 1. Verify webhook authenticity (optional but recommended)
+    if (revenueCatAuthKey) {
+      const authHeader = req.headers.get('Authorization');
+      if (authHeader !== `Bearer ${revenueCatAuthKey}`) {
+        console.error('Unauthorized webhook request - invalid auth token');
+        return new Response(
+          JSON.stringify({ error: 'Unauthorized' }),
+          {
+            status: 401,
+            headers: { 'Content-Type': 'application/json' },
+          }
+        );
+      }
+      console.log('Authorization verified');
+    }
+
+    // 2. Parse webhook payload
+    let payload: RevenueCatWebhookEvent;
+    try {
+      payload = await req.json();
+    } catch (e) {
+      console.error('Invalid JSON payload:', e);
+      return new Response(
+        JSON.stringify({ error: 'Invalid JSON' }),
+        {
+          status: 400,
+          headers: { 'Content-Type': 'application/json' },
+        }
+      );
+    }
+
+    const { event } = payload;
+
+    console.log('Parsed webhook event:', {
+      type: event.type,
+      app_user_id: event.app_user_id,
+      product_id: event.product_id || event.new_product_id,
+      entitlement_ids: event.entitlement_ids,
+    });
+
+    // 3. Filter relevant events
+    if (!RELEVANT_EVENTS.includes(event.type)) {
+      console.log('Ignoring non-relevant event:', event.type);
+      console.log('Relevant events are:', RELEVANT_EVENTS);
+      console.log('Full event data:', JSON.stringify(event, null, 2));
+      return new Response(
+        JSON.stringify({
+          message: 'Event ignored (non-relevant)',
+          event_type_received: event.type,
+          relevant_events: RELEVANT_EVENTS
+        }),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }
+      );
+    }
+
+    // 4. Extract subscription data
+    const appUserId = event.app_user_id;
+    const entitlement = event.entitlement_ids?.[0] || 'VoyZa Pro';
+    const productId = event.product_id || event.new_product_id;
+    const store = event.store;
+    const periodType = event.period_type;
+    const willRenew = inferWillRenew(event.type);
+
+    // Convert timestamps from milliseconds to ISO 8601
+    const expiresAt = event.expiration_at_ms
+      ? new Date(event.expiration_at_ms).toISOString()
+      : null;
+    const purchaseDate = event.purchased_at_ms
+      ? new Date(event.purchased_at_ms).toISOString()
+      : null;
+    const billingIssuesDetectedAt = event.billing_issues_detected_at_ms
+      ? new Date(event.billing_issues_detected_at_ms).toISOString()
+      : null;
+    const unsubscribeDetectedAt = event.unsubscribe_detected_at_ms
+      ? new Date(event.unsubscribe_detected_at_ms).toISOString()
+      : null;
+
+    // 5. Determine subscription status
+    const now = new Date();
+    const expirationDate = expiresAt ? new Date(expiresAt) : null;
+    const status = determineSubscriptionStatus(event.type, expirationDate, now);
+
+    console.log('Subscription status determined:', {
+      status,
+      expiresAt,
+      willRenew,
+    });
+
+    // Additional logging for debugging
+    console.log(`Event type: ${event.type}`);
+    console.log(`Inferred will_renew: ${willRenew}`);
+    console.log(`Determined status: ${status}`);
+
+    // Explain the inference
+    if (willRenew === false) {
+      console.log('→ Subscription will NOT renew (cancelled/expired/non-renewable)');
+    } else {
+      console.log('→ Subscription WILL auto-renew');
+    }
+
+    // Log grace period scenarios
+    if (status === 'active' && willRenew === false) {
+      console.log(`→ GRACE PERIOD: User retains access until ${expiresAt}`);
+      if (event.type === 'CANCELLATION') {
+        console.log('  Reason: User cancelled subscription');
+      } else if (event.type === 'BILLING_ISSUE') {
+        console.log('  Reason: Billing failed, retrying during grace period');
+      } else if (event.type === 'SUBSCRIPTION_PAUSED') {
+        console.log('  Reason: User paused subscription (Android)');
+      }
+    }
+
+    // Log special events
+    if (event.type === 'TRANSFER') {
+      console.log(`→ TRANSFER: Entitlements transferred. See transferred_from/to fields.`);
+    }
+    if (event.type === 'PRODUCT_CHANGE') {
+      console.log(`→ PRODUCT_CHANGE: From ${event.product_id} to ${event.new_product_id}`);
+    }
+
+    // 6. Map RevenueCat app_user_id to Supabase user_id
+    // RevenueCat app_user_id should be the Supabase user UUID
+    if (!isValidAppUserId(appUserId)) {
+      console.error('app_user_id is not a valid format:', appUserId);
+      return new Response(
+        JSON.stringify({
+          error: 'Invalid app_user_id format - must be UUID or RevenueCat anonymous ID',
+          received: appUserId,
+        }),
+        {
+          status: 400,
+          headers: { 'Content-Type': 'application/json' },
+        }
+      );
+    }
+
+    // Skip anonymous users - we can't store subscriptions for users without Supabase accounts
+    if (isRevenueCatAnonymousId(appUserId)) {
+      console.log('Skipping webhook for anonymous RevenueCat user:', appUserId);
+      return new Response(
+        JSON.stringify({
+          message: 'Webhook received but skipped for anonymous user',
+          event_type: event.type,
+          app_user_id: appUserId,
+          note: 'Anonymous users must sign in/sign up before subscriptions can be tracked. Once they log in with RevenueCat.login(userId), future webhooks will work.',
+        }),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }
+      );
+    }
+
+    const userId = appUserId;
+
+    // For TEST events, check if user exists first
+    if (event.type === 'TEST') {
+      const { data: userExists } = await supabase
+        .from('auth.users')
+        .select('id')
+        .eq('id', userId)
+        .single();
+
+      if (!userExists) {
+        console.log('TEST event with non-existent user_id:', userId);
+        return new Response(
+          JSON.stringify({
+            message: 'TEST event received but user does not exist in database',
+            event_type: 'TEST',
+            user_id: userId,
+            note: 'For real purchases, this would work because the user exists. Use a real user UUID for testing.',
+          }),
+          {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }
+        );
+      }
+    }
+
+    // 7. Upsert subscription status in Supabase
+    console.log('Calling upsert_subscription_status:', {
+      userId,
+      status,
+      entitlement,
+      productId,
+      expiresAt,
+    });
+
+    const { error } = await supabase.rpc('upsert_subscription_status', {
+      p_user_id: userId,
+      p_revenuecat_app_user_id: appUserId,
+      p_status: status,
+      p_entitlement: entitlement,
+      p_product_identifier: productId,
+      p_store: store,
+      p_expires_at: expiresAt,
+      p_period_type: periodType,
+      p_purchase_date: purchaseDate,
+      p_will_renew: willRenew,
+      p_billing_issues_detected_at: billingIssuesDetectedAt,
+      p_unsubscribe_detected_at: unsubscribeDetectedAt,
+    });
+
+    if (error) {
+      console.error('Error upserting subscription:', error);
+      return new Response(
+        JSON.stringify({
+          error: 'Database error',
+          details: error.message,
+        }),
+        {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' },
+        }
+      );
+    }
+
+    console.log('Successfully updated subscription:', {
+      userId,
+      status,
+      entitlement,
+      expiresAt,
+    });
+
+    // 8. Return success response
+    return new Response(
+      JSON.stringify({
+        message: 'Webhook processed successfully',
+        event_type: event.type,
+        user_id: userId,
+        status,
+      }),
+      {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }
+    );
+  } catch (error) {
+    console.error('Webhook handler error:', error);
+    return new Response(
+      JSON.stringify({
+        error: 'Internal server error',
+        details: error instanceof Error ? error.message : String(error),
+      }),
+      {
+        status: 500,
+        headers: { 'Content-Type': 'application/json' },
+      }
+    );
+  }
+});

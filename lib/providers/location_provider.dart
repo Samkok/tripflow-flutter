@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../repositories/location_repository.dart';
 import '../models/saved_location.dart';
+import '../services/auth_service.dart';
 import 'auth_provider.dart';
 import 'connectivity_provider.dart';
 import 'trip_listener_provider.dart';
@@ -83,8 +84,9 @@ final syncManagerProvider = Provider<void>((ref) {
   final user = authState.asData?.value.session?.user;
 
   if (user != null && connectivity == ConnectivityStatus.isConnected) {
-    // Perform full sync (including anonymous migration)
-    repository.syncOnLogin();
+    // Only perform sync if user explicitly chose to sync
+    // Check sync choice asynchronously
+    _checkAndSync(repository);
 
     // Start listening to realtime changes
     repository.subscribeToRealtimeChanges();
@@ -93,3 +95,15 @@ final syncManagerProvider = Provider<void>((ref) {
     repository.unsubscribe();
   }
 });
+
+/// Helper function to check sync choice and perform sync if approved
+Future<void> _checkAndSync(LocationRepository repository) async {
+  // Import auth_service to access getSyncChoice
+  final syncChoice = await AuthService.getSyncChoice();
+
+  // Only sync if user explicitly chose to sync (true)
+  // If syncChoice is null (never asked) or false (declined), don't sync
+  if (syncChoice == true) {
+    await repository.syncOnLogin();
+  }
+}

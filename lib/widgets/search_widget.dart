@@ -7,6 +7,7 @@ import '../providers/places_provider.dart';
 import '../providers/trip_provider.dart';
 import '../providers/trip_collaborator_provider.dart';
 import '../services/places_service.dart';
+import '../services/subscription_limit_service.dart';
 import '../core/theme.dart';
 
 final searchQueryProvider = StateProvider.autoDispose<String>((ref) => '');
@@ -121,8 +122,7 @@ class _SearchWidgetState extends ConsumerState<SearchWidget> {
 
   Future<void> _selectPlace(PlacePrediction prediction) async {
     // Check if user has write access to the active trip
-    final hasWriteAccessAsync = ref.read(hasActiveTripWriteAccessProvider);
-    final hasWriteAccess = hasWriteAccessAsync.asData?.value ?? false;
+    final hasWriteAccess = await ref.read(hasActiveTripWriteAccessProvider.future);
 
     if (!hasWriteAccess) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -132,6 +132,13 @@ class _SearchWidgetState extends ConsumerState<SearchWidget> {
         ),
       );
       return;
+    }
+
+    // Check subscription limit - show paywall if limit reached
+    final subscriptionLimitService = SubscriptionLimitService(ref);
+    final canAdd = await subscriptionLimitService.canAddLocation(context);
+    if (!canAdd) {
+      return; // User hit limit and didn't upgrade
     }
 
     // Check if trying to add to a past date

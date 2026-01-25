@@ -17,6 +17,7 @@ import '../providers/trip_collaborator_provider.dart';
 import '../providers/trip_listener_provider.dart';
 import '../services/location_service.dart';
 import '../services/places_service.dart';
+import '../services/subscription_limit_service.dart';
 import '../widgets/map_widget.dart';
 import '../widgets/search_widget.dart';
 import '../widgets/trip_bottom_sheet.dart';
@@ -169,8 +170,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
 
   Future<void> _onMapLongPress(LatLng coordinates) async {
     // Check if user has write access to the active trip
-    final hasWriteAccessAsync = ref.read(hasActiveTripWriteAccessProvider);
-    final hasWriteAccess = hasWriteAccessAsync.asData?.value ?? false;
+    final hasWriteAccess = await ref.read(hasActiveTripWriteAccessProvider.future);
 
     if (!hasWriteAccess) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -180,6 +180,13 @@ class _MapScreenState extends ConsumerState<MapScreen>
         ),
       );
       return;
+    }
+
+    // Check subscription limit - show paywall if limit reached
+    final subscriptionLimitService = SubscriptionLimitService(ref);
+    final canAdd = await subscriptionLimitService.canAddLocation(context);
+    if (!canAdd) {
+      return; // User hit limit and didn't upgrade
     }
 
     // Prevent adding locations to past dates
