@@ -128,6 +128,70 @@ final yearlyPackageProvider = FutureProvider<Package?>((ref) async {
   );
 });
 
+/// Conflict information when database and SDK disagree
+class ConflictInfo {
+  final String conflictType; // 'expired_vs_active', 'active_vs_expired', 'plan_mismatch', 'renewal_mismatch'
+  final String? databaseStatus;
+  final String? sdkStatus;
+  final String? databaseProductId;
+  final String? sdkProductId;
+  final bool? databaseWillRenew;
+  final bool? sdkWillRenew;
+  final DateTime detectedAt;
+  final String resolutionStrategy; // 'trust_database', 'trust_sdk', 'trigger_webhook_sync'
+
+  const ConflictInfo({
+    required this.conflictType,
+    required this.databaseStatus,
+    required this.sdkStatus,
+    this.databaseProductId,
+    this.sdkProductId,
+    this.databaseWillRenew,
+    this.sdkWillRenew,
+    required this.detectedAt,
+    required this.resolutionStrategy,
+  });
+
+  String get userMessage {
+    switch (conflictType) {
+      case 'expired_vs_active':
+        return 'Your subscription status is being synchronized. You have active access.';
+      case 'active_vs_expired':
+        return 'Subscription sync in progress. Please refresh in a moment.';
+      case 'plan_mismatch':
+        return 'Plan details are being updated. This may take a moment.';
+      case 'renewal_mismatch':
+        return 'Renewal settings are being synchronized.';
+      default:
+        return 'Subscription details are being synchronized.';
+    }
+  }
+
+  ConflictInfo copyWith({
+    String? conflictType,
+    String? databaseStatus,
+    String? sdkStatus,
+    String? databaseProductId,
+    String? sdkProductId,
+    bool? databaseWillRenew,
+    bool? sdkWillRenew,
+    DateTime? detectedAt,
+    String? resolutionStrategy,
+  }) {
+    return ConflictInfo(
+      conflictType: conflictType ?? this.conflictType,
+      databaseStatus: databaseStatus ?? this.databaseStatus,
+      sdkStatus: sdkStatus ?? this.sdkStatus,
+      databaseProductId: databaseProductId ?? this.databaseProductId,
+      sdkProductId: sdkProductId ?? this.sdkProductId,
+      databaseWillRenew: databaseWillRenew ?? this.databaseWillRenew,
+      sdkWillRenew: sdkWillRenew ?? this.sdkWillRenew,
+      detectedAt: detectedAt ?? this.detectedAt,
+      resolutionStrategy: resolutionStrategy ?? this.resolutionStrategy,
+    );
+  }
+}
+
 /// Subscription state for the notifier
 class SubscriptionState {
   final bool isLoading;
@@ -135,11 +199,27 @@ class SubscriptionState {
   final String? errorMessage;
   final CustomerInfo? customerInfo;
 
+  // Database-first fields
+  final String? databaseStatus; // 'active', 'expired', null if not loaded
+  final DateTime? lastDatabaseUpdate;
+  final ConflictInfo? activeConflict;
+  final bool isDatabasePrimary; // true = use database as source of truth, false = fallback to SDK
+  final bool? databaseWillRenew;
+  final DateTime? databaseExpiresAt;
+  final String? databaseProductId;
+
   const SubscriptionState({
     this.isLoading = false,
     this.isPro = false,
     this.errorMessage,
     this.customerInfo,
+    this.databaseStatus,
+    this.lastDatabaseUpdate,
+    this.activeConflict,
+    this.isDatabasePrimary = true,
+    this.databaseWillRenew,
+    this.databaseExpiresAt,
+    this.databaseProductId,
   });
 
   SubscriptionState copyWith({
@@ -147,12 +227,27 @@ class SubscriptionState {
     bool? isPro,
     String? errorMessage,
     CustomerInfo? customerInfo,
+    String? databaseStatus,
+    DateTime? lastDatabaseUpdate,
+    ConflictInfo? activeConflict,
+    bool? isDatabasePrimary,
+    bool? databaseWillRenew,
+    DateTime? databaseExpiresAt,
+    String? databaseProductId,
+    bool clearConflict = false,
   }) {
     return SubscriptionState(
       isLoading: isLoading ?? this.isLoading,
       isPro: isPro ?? this.isPro,
       errorMessage: errorMessage,
       customerInfo: customerInfo ?? this.customerInfo,
+      databaseStatus: databaseStatus ?? this.databaseStatus,
+      lastDatabaseUpdate: lastDatabaseUpdate ?? this.lastDatabaseUpdate,
+      activeConflict: clearConflict ? null : (activeConflict ?? this.activeConflict),
+      isDatabasePrimary: isDatabasePrimary ?? this.isDatabasePrimary,
+      databaseWillRenew: databaseWillRenew ?? this.databaseWillRenew,
+      databaseExpiresAt: databaseExpiresAt ?? this.databaseExpiresAt,
+      databaseProductId: databaseProductId ?? this.databaseProductId,
     );
   }
 }
@@ -163,6 +258,7 @@ class SubscriptionNotifier extends StateNotifier<SubscriptionState> {
   StreamSubscription<CustomerInfo>? _subscription;
   StreamSubscription<SubscriptionEvent>? _realtimeSubscription;
   Timer? _expirationCheckTimer;
+  Timer? _conflictMonitoringTimer;
 
   SubscriptionNotifier(this._service)
       : super(const SubscriptionState()) {
@@ -178,8 +274,11 @@ class SubscriptionNotifier extends StateNotifier<SubscriptionState> {
     // Load initial state
     await refresh();
 
-    // Initialize realtime subscription for subscription changes
-    _initializeRealtimeSubscription();
+    // Initialize realtime subscription for subscription changes (database-first)
+    await _initializeRealtimeSubscription();
+
+    // Start periodic conflict monitoring
+    _startConflictMonitoring();
   }
 
   /// Initialize Supabase Realtime subscription for subscription status changes
@@ -189,47 +288,69 @@ class SubscriptionNotifier extends StateNotifier<SubscriptionState> {
       // Wait for Supabase to be initialized before starting realtime subscriptions
       await SupabaseService.waitForInitialization();
 
-      debugPrint('SubscriptionProvider: Initializing realtime subscription');
+      debugPrint('SubscriptionProvider: Initializing realtime subscription (database-first)');
 
       final realtimeService = SubscriptionRealtimeService();
       await realtimeService.subscribe();
 
-      _realtimeSubscription = realtimeService.eventStream.listen((event) {
-        _handleRealtimeEvent(event);
-      });
+      _realtimeSubscription = realtimeService.eventStream.listen(
+        (event) {
+          _handleRealtimeEvent(event);
+        },
+        onError: (error) {
+          debugPrint('SubscriptionProvider: ⚠️ Realtime stream error: $error');
+          _handleRealtimeFailure();
+        },
+      );
 
       debugPrint('SubscriptionProvider: ✅ Realtime subscription initialized');
     } catch (e) {
       debugPrint('SubscriptionProvider: ⚠️ Failed to initialize realtime subscription: $e');
-      // Don't crash the app if realtime subscription fails
-      // The app resume check and RevenueCat listener are fallbacks
+      _handleRealtimeFailure();
     }
   }
 
-  /// Handle realtime subscription events from Supabase
+  /// Handle realtime subscription failure - gracefully degrade to SDK-first mode
+  void _handleRealtimeFailure() {
+    debugPrint('SubscriptionProvider: 🔻 Degrading to SDK-first mode due to realtime failure');
+
+    state = state.copyWith(
+      isDatabasePrimary: false,
+      errorMessage: 'Using local subscription data',
+    );
+
+    // In degraded mode, rely on SDK as primary source
+    // Conflict monitoring will continue to attempt database validation
+    debugPrint('SubscriptionProvider: ⚠️ App will use RevenueCat SDK as primary source');
+  }
+
+  /// Handle realtime subscription events from Supabase (database-first approach)
   void _handleRealtimeEvent(SubscriptionEvent event) {
     debugPrint('SubscriptionProvider: 📨 Realtime event received - $event');
 
-    // Determine if user has Pro based on the event
-    final isPro = event.status == 'active' &&
-                  event.entitlement == RevenueCatConfig.entitlementVoyZaPro;
-
-    // Update state immediately
-    state = state.copyWith(
-      isPro: isPro,
-      isLoading: false,
-    );
-
-    debugPrint('SubscriptionProvider: ✨ State updated from realtime event - isPro: $isPro');
-
-    // Sync with RevenueCat for major changes to ensure consistency
-    // This is a background sync that keeps RevenueCat SDK in sync with Supabase
-    if (event.type == SubscriptionEventType.expired ||
-        event.type == SubscriptionEventType.activated ||
-        event.type == SubscriptionEventType.renewed) {
-      debugPrint('SubscriptionProvider: 🔄 Syncing with RevenueCat after major event');
-      refresh();
+    if (!state.isDatabasePrimary) {
+      debugPrint('SubscriptionProvider: ⚠️ Database not primary, ignoring realtime event');
+      return;
     }
+
+    // Update from database status - this is now our primary source of truth
+    if (event.data != null) {
+      _updateFromDatabaseStatus(event.data!);
+    } else {
+      // Fallback if data is null - construct from event fields
+      final record = {
+        'status': event.status,
+        'will_renew': event.willRenew,
+        'expires_at': event.expiresAt?.toIso8601String(),
+        'product_id': event.productIdentifier,
+      };
+      _updateFromDatabaseStatus(record);
+    }
+
+    debugPrint('SubscriptionProvider: ✨ State updated from database via realtime - isPro: ${state.isPro}');
+
+    // Validate against SDK for conflict detection (async, non-blocking)
+    _validateAgainstSDK();
   }
 
   void _updateFromCustomerInfo(CustomerInfo info) {
@@ -251,6 +372,224 @@ class SubscriptionNotifier extends StateNotifier<SubscriptionState> {
 
     // Schedule a check near expiration time if Pro
     // _scheduleExpirationCheck(info);
+  }
+
+  /// Update state from database subscription status (database-first approach)
+  void _updateFromDatabaseStatus(Map<String, dynamic> record) {
+    debugPrint('SubscriptionProvider: 🗄️ Updating from database status');
+
+    final databaseStatus = record['status'] as String?;
+    final willRenew = record['will_renew'] as bool?;
+    final expiresAtStr = record['expires_at'] as String?;
+    final productId = record['product_id'] as String?;
+
+    final expiresAt = expiresAtStr != null ? DateTime.tryParse(expiresAtStr) : null;
+    final isPro = databaseStatus == 'active';
+
+    debugPrint('SubscriptionProvider: Database status = $databaseStatus, isPro = $isPro');
+    debugPrint('SubscriptionProvider: Will renew = $willRenew, Expires at = $expiresAt');
+    debugPrint('SubscriptionProvider: Product ID = $productId');
+
+    state = state.copyWith(
+      isPro: isPro,
+      databaseStatus: databaseStatus,
+      lastDatabaseUpdate: DateTime.now(),
+      databaseWillRenew: willRenew,
+      databaseExpiresAt: expiresAt,
+      databaseProductId: productId,
+    );
+
+    // Validate against SDK to detect conflicts
+    _validateAgainstSDK();
+  }
+
+  /// Validate database status against RevenueCat SDK to detect conflicts
+  Future<void> _validateAgainstSDK() async {
+    if (!state.isDatabasePrimary) {
+      // If database is not primary (degraded mode), skip validation
+      return;
+    }
+
+    try {
+      debugPrint('SubscriptionProvider: 🔍 Validating database against SDK');
+
+      final customerInfo = await _service.getCustomerInfo();
+      if (customerInfo == null) {
+        debugPrint('SubscriptionProvider: ⚠️ SDK returned null customer info');
+        return;
+      }
+
+      final sdkIsPro = customerInfo.entitlements.active.containsKey(RevenueCatConfig.entitlementVoyZaPro);
+      final sdkStatus = sdkIsPro ? 'active' : 'expired';
+
+      // Get SDK product ID
+      String? sdkProductId;
+      if (sdkIsPro) {
+        final entitlement = customerInfo.entitlements.active[RevenueCatConfig.entitlementVoyZaPro];
+        sdkProductId = entitlement?.productIdentifier;
+      }
+
+      // Get SDK will renew
+      bool? sdkWillRenew;
+      if (sdkIsPro) {
+        final entitlement = customerInfo.entitlements.active[RevenueCatConfig.entitlementVoyZaPro];
+        sdkWillRenew = entitlement?.willRenew;
+      }
+
+      final dbStatus = state.databaseStatus;
+      final dbProductId = state.databaseProductId;
+      final dbWillRenew = state.databaseWillRenew;
+
+      // Check for conflicts
+      ConflictInfo? conflict;
+
+      if (dbStatus == 'expired' && sdkStatus == 'active') {
+        // Database says expired but SDK says active - trust SDK (user likely just purchased)
+        debugPrint('SubscriptionProvider: ⚠️ CONFLICT: Database expired but SDK active');
+        conflict = ConflictInfo(
+          conflictType: 'expired_vs_active',
+          databaseStatus: dbStatus,
+          sdkStatus: sdkStatus,
+          databaseProductId: dbProductId,
+          sdkProductId: sdkProductId,
+          databaseWillRenew: dbWillRenew,
+          sdkWillRenew: sdkWillRenew,
+          detectedAt: DateTime.now(),
+          resolutionStrategy: 'trust_sdk',
+        );
+      } else if (dbStatus == 'active' && sdkStatus == 'expired') {
+        // Database says active but SDK says expired - trust database during grace period
+        debugPrint('SubscriptionProvider: ⚠️ CONFLICT: Database active but SDK expired');
+        conflict = ConflictInfo(
+          conflictType: 'active_vs_expired',
+          databaseStatus: dbStatus,
+          sdkStatus: sdkStatus,
+          databaseProductId: dbProductId,
+          sdkProductId: sdkProductId,
+          databaseWillRenew: dbWillRenew,
+          sdkWillRenew: sdkWillRenew,
+          detectedAt: DateTime.now(),
+          resolutionStrategy: 'trust_database',
+        );
+      } else if (dbStatus == 'active' && sdkStatus == 'active' && dbProductId != sdkProductId && dbProductId != null && sdkProductId != null) {
+        // Both active but different products - trigger webhook sync
+        debugPrint('SubscriptionProvider: ⚠️ CONFLICT: Product mismatch - DB: $dbProductId, SDK: $sdkProductId');
+        conflict = ConflictInfo(
+          conflictType: 'plan_mismatch',
+          databaseStatus: dbStatus,
+          sdkStatus: sdkStatus,
+          databaseProductId: dbProductId,
+          sdkProductId: sdkProductId,
+          databaseWillRenew: dbWillRenew,
+          sdkWillRenew: sdkWillRenew,
+          detectedAt: DateTime.now(),
+          resolutionStrategy: 'trigger_webhook_sync',
+        );
+      } else if (dbStatus == 'active' && sdkStatus == 'active' && dbWillRenew != sdkWillRenew && dbWillRenew != null && sdkWillRenew != null) {
+        // Both active but different renewal status
+        debugPrint('SubscriptionProvider: ⚠️ CONFLICT: Renewal mismatch - DB: $dbWillRenew, SDK: $sdkWillRenew');
+        conflict = ConflictInfo(
+          conflictType: 'renewal_mismatch',
+          databaseStatus: dbStatus,
+          sdkStatus: sdkStatus,
+          databaseProductId: dbProductId,
+          sdkProductId: sdkProductId,
+          databaseWillRenew: dbWillRenew,
+          sdkWillRenew: sdkWillRenew,
+          detectedAt: DateTime.now(),
+          resolutionStrategy: 'trigger_webhook_sync',
+        );
+      } else {
+        debugPrint('SubscriptionProvider: ✅ No conflicts detected');
+      }
+
+      if (conflict != null) {
+        state = state.copyWith(activeConflict: conflict);
+        _resolveConflict(conflict);
+      } else {
+        // Clear any existing conflict
+        if (state.activeConflict != null) {
+          debugPrint('SubscriptionProvider: ✅ Conflict resolved');
+          state = state.copyWith(clearConflict: true);
+        }
+      }
+    } catch (e) {
+      debugPrint('SubscriptionProvider: ⚠️ Error validating against SDK: $e');
+      // Don't crash, just log the error
+    }
+  }
+
+  /// Resolve detected conflict between database and SDK
+  Future<void> _resolveConflict(ConflictInfo conflict) async {
+    debugPrint('SubscriptionProvider: 🔧 Resolving conflict: ${conflict.conflictType}');
+    debugPrint('SubscriptionProvider: Strategy: ${conflict.resolutionStrategy}');
+
+    switch (conflict.resolutionStrategy) {
+      case 'trust_sdk':
+        // Database is stale, SDK just processed a purchase - trust SDK and trigger webhook
+        debugPrint('SubscriptionProvider: → Trusting SDK (likely fresh purchase)');
+        await _triggerWebhookSync();
+        // Temporarily use SDK data while webhook processes
+        final customerInfo = state.customerInfo;
+        if (customerInfo != null) {
+          _updateFromCustomerInfo(customerInfo);
+        }
+        break;
+
+      case 'trust_database':
+        // Trust database during grace period after cancellation
+        debugPrint('SubscriptionProvider: → Trusting database (grace period)');
+        // Database is already the source of truth, no action needed
+        // SDK will eventually catch up when user restarts app or when webhook fires
+        break;
+
+      case 'trigger_webhook_sync':
+        // Product or renewal mismatch - trigger webhook to resync
+        debugPrint('SubscriptionProvider: → Triggering webhook sync');
+        await _triggerWebhookSync();
+        break;
+
+      default:
+        debugPrint('SubscriptionProvider: ⚠️ Unknown resolution strategy');
+    }
+  }
+
+  /// Trigger a webhook sync by refreshing RevenueCat customer info
+  /// This forces RevenueCat to send a webhook with the latest subscription state
+  Future<void> _triggerWebhookSync() async {
+    try {
+      debugPrint('SubscriptionProvider: 🔄 Triggering webhook sync via SDK refresh');
+      await _service.getCustomerInfo();
+      debugPrint('SubscriptionProvider: ✅ Webhook sync triggered');
+    } catch (e) {
+      debugPrint('SubscriptionProvider: ⚠️ Failed to trigger webhook sync: $e');
+    }
+  }
+
+  /// Start periodic conflict monitoring (every 30 seconds)
+  void _startConflictMonitoring() {
+    debugPrint('SubscriptionProvider: 🕐 Starting conflict monitoring');
+    _conflictMonitoringTimer?.cancel();
+    _conflictMonitoringTimer = Timer.periodic(
+      const Duration(seconds: 30),
+      (_) => _performConflictCheck(),
+    );
+  }
+
+  /// Perform a conflict check between database and SDK
+  Future<void> _performConflictCheck() async {
+    if (!state.isDatabasePrimary) {
+      // Skip if in degraded mode
+      return;
+    }
+
+    if (state.databaseStatus == null) {
+      // No database data yet
+      return;
+    }
+
+    debugPrint('SubscriptionProvider: 🔍 Performing periodic conflict check');
+    await _validateAgainstSDK();
   }
 
   /// Schedule a check just before the subscription expires
@@ -463,6 +802,7 @@ class SubscriptionNotifier extends StateNotifier<SubscriptionState> {
     _subscription?.cancel();
     _realtimeSubscription?.cancel();
     _expirationCheckTimer?.cancel();
+    _conflictMonitoringTimer?.cancel();
     super.dispose();
   }
 }

@@ -11,6 +11,7 @@ import 'providers/subscription_provider.dart';
 import 'providers/auth_provider.dart';
 
 import 'widgets/connectivity_wrapper.dart';
+import 'widgets/subscription_conflict_banner.dart';
 
 import 'services/supabase_service.dart';
 import 'services/revenuecat_service.dart';
@@ -173,7 +174,14 @@ class _MyAppState extends ConsumerState<MyApp> with WidgetsBindingObserver {
       darkTheme: AppTheme.darkTheme,
       themeMode: themeMode,
       builder: (context, child) {
-        return ConnectivityWrapper(child: child!);
+        return Column(
+          children: [
+            const SubscriptionConflictBanner(),
+            Expanded(
+              child: ConnectivityWrapper(child: child!),
+            ),
+          ],
+        );
       },
       home: const SplashScreen(),
       routes: {
