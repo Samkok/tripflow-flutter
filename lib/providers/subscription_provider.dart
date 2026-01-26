@@ -499,6 +499,15 @@ class SubscriptionNotifier extends StateNotifier<SubscriptionState> {
           detectedAt: DateTime.now(),
           resolutionStrategy: 'trigger_webhook_sync',
         );
+      } else if (dbStatus == 'expired' && sdkStatus == 'expired') {
+        // CRITICAL FIX: Both database and SDK agree subscription is expired
+        // Explicitly clear any lingering conflicts from previous states
+        debugPrint('SubscriptionProvider: ✅ Both expired - clearing any conflicts');
+        if (state.activeConflict != null) {
+          debugPrint('SubscriptionProvider: → Clearing lingering conflict');
+          state = state.copyWith(clearConflict: true);
+        }
+        return; // Early return, no need to check further
       } else {
         debugPrint('SubscriptionProvider: ✅ No conflicts detected');
       }
@@ -534,6 +543,10 @@ class SubscriptionNotifier extends StateNotifier<SubscriptionState> {
         if (customerInfo != null) {
           _updateFromCustomerInfo(customerInfo);
         }
+
+        // CRITICAL FIX: Explicitly clear the conflict after resolution
+        debugPrint('SubscriptionProvider: → Clearing conflict after SDK trust');
+        state = state.copyWith(clearConflict: true);
         break;
 
       case 'trust_database':
@@ -541,16 +554,26 @@ class SubscriptionNotifier extends StateNotifier<SubscriptionState> {
         debugPrint('SubscriptionProvider: → Trusting database (grace period)');
         // Database is already the source of truth, no action needed
         // SDK will eventually catch up when user restarts app or when webhook fires
+
+        // CRITICAL FIX: Explicitly clear the conflict after resolution
+        debugPrint('SubscriptionProvider: → Clearing conflict after database trust');
+        state = state.copyWith(clearConflict: true);
         break;
 
       case 'trigger_webhook_sync':
         // Product or renewal mismatch - trigger webhook to resync
         debugPrint('SubscriptionProvider: → Triggering webhook sync');
         await _triggerWebhookSync();
+
+        // CRITICAL FIX: Explicitly clear the conflict after sync
+        debugPrint('SubscriptionProvider: → Clearing conflict after webhook sync');
+        state = state.copyWith(clearConflict: true);
         break;
 
       default:
         debugPrint('SubscriptionProvider: ⚠️ Unknown resolution strategy');
+        // Clear conflict anyway to prevent stuck state
+        state = state.copyWith(clearConflict: true);
     }
   }
 
