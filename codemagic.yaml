@@ -19,17 +19,36 @@ workflows:
         script: |
           flutter pub get
 
-      - name: Update app.gradle with version info
+      - name: Update app.gradle with incremented version
         script: |
-          APP_BUILD_NUMBER=$BUILD_NUMBER
-          APP_VERSION="1.0.$BUILD_NUMBER"
+          set -e
 
-          echo "Updating app.gradle with APP_VERSION: $APP_VERSION and APP_BUILD_NUMBER: $APP_BUILD_NUMBER"
+          GRADLE_FILE="android/app/build.gradle"
 
-          sed -i "s/versionCode [0-9]\+/versionCode $APP_BUILD_NUMBER/" android/app/build.gradle
-          sed -i "s/versionName \".*\"/versionName \"$APP_VERSION\"/" android/app/build.gradle
+          # Read current versionCode
+          CURRENT_VERSION_CODE=$(grep versionCode $GRADLE_FILE | awk '{print $2}')
+          NEW_VERSION_CODE=$((CURRENT_VERSION_CODE + 1))
 
-          echo "[{\"language\": \"en-US\", \"text\": \"Build type: staging, Version: $APP_VERSION, Build number: $APP_BUILD_NUMBER\"}]" > release_notes.json
+          # Read current versionName
+          CURRENT_VERSION_NAME=$(grep versionName $GRADLE_FILE | sed 's/.*"\(.*\)".*/\1/')
+
+          # Increment patch version (x.y.Z)
+          BASE_VERSION=$(echo "$CURRENT_VERSION_NAME" | cut -d. -f1,2)
+          PATCH_VERSION=$(echo "$CURRENT_VERSION_NAME" | cut -d. -f3)
+          NEW_PATCH_VERSION=$((PATCH_VERSION + 1))
+          NEW_VERSION_NAME="$BASE_VERSION.$NEW_PATCH_VERSION"
+
+          echo "Old versionCode: $CURRENT_VERSION_CODE"
+          echo "New versionCode: $NEW_VERSION_CODE"
+          echo "Old versionName: $CURRENT_VERSION_NAME"
+          echo "New versionName: $NEW_VERSION_NAME"
+
+          # Update build.gradle
+          sed -i "s/versionCode [0-9]\+/versionCode $NEW_VERSION_CODE/" $GRADLE_FILE
+          sed -i "s/versionName \".*\"/versionName \"$NEW_VERSION_NAME\"/" $GRADLE_FILE
+
+          # Release notes
+          echo "[{\"language\": \"en-US\", \"text\": \"Release version $NEW_VERSION_NAME (build $NEW_VERSION_CODE)\"}]" > release_notes.json
           cat release_notes.json
 
       - name: Build Android AAB
