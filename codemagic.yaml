@@ -3,8 +3,28 @@ workflows:
     name: Android Release
     environment:
       flutter: stable
+      android_signing:
+        - voyza_key
     scripts:
-      - flutter pub get
-      - flutter build appbundle
+      - name: Install dependencies
+        script: |
+          flutter pub get
+
+      - name: Update app.gradle with version info
+        script: |
+          APP_BUILD_NUMBER=$BUILD_NUMBER
+          APP_VERSION="1.0.$BUILD_NUMBER"
+
+          echo "Updating app.gradle with APP_VERSION: $APP_VERSION and APP_BUILD_NUMBER: $APP_BUILD_NUMBER"
+
+          sed -i "s/versionCode [0-9]\+/versionCode $APP_BUILD_NUMBER/" android/app/build.gradle
+          sed -i "s/versionName \".*\"/versionName \"$APP_VERSION\"/" android/app/build.gradle
+
+          echo "[{\"language\": \"en-US\", \"text\": \"Build type: staging, Version: $APP_VERSION, Build number: $APP_BUILD_NUMBER\"}]" > release_notes.json
+          cat release_notes.json
+
+      - name: Build Android AAB
+        script: |
+          flutter build appbundle
     artifacts:
       - build/**/outputs/**/*.aab
