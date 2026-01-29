@@ -25,42 +25,6 @@ workflows:
           echo "flutter.versionName=1.0.$BUILD_NUMBER" >> android/local.properties
           cat android/local.properties
 
-
-      - name: Increment Flutter version (Android)
-        script: |
-          set -e
-
-          LOCAL_PROPERTIES="android/local.properties"
-
-          # Ensure file exists
-          if [ ! -f "$LOCAL_PROPERTIES" ]; then
-            echo "flutter.versionCode=1" >> $LOCAL_PROPERTIES
-            echo "flutter.versionName=1.0.0" >> $LOCAL_PROPERTIES
-          fi
-
-          # Read current values
-          CURRENT_CODE=$(grep flutter.versionCode $LOCAL_PROPERTIES | cut -d'=' -f2)
-          CURRENT_NAME=$(grep flutter.versionName $LOCAL_PROPERTIES | cut -d'=' -f2)
-
-          # Increment versionCode
-          NEW_CODE=$((CURRENT_CODE + 1))
-
-          # Increment patch version (x.y.Z)
-          BASE_VERSION=$(echo "$CURRENT_NAME" | cut -d. -f1,2)
-          PATCH_VERSION=$(echo "$CURRENT_NAME" | cut -d. -f3)
-          NEW_PATCH=$((PATCH_VERSION + 1))
-          NEW_NAME="$BASE_VERSION.$NEW_PATCH"
-
-          echo "flutter.versionCode=$NEW_CODE" > $LOCAL_PROPERTIES
-          echo "flutter.versionName=$NEW_NAME" >> $LOCAL_PROPERTIES
-
-          echo "Updated Flutter version:"
-          cat $LOCAL_PROPERTIES
-
-          # Release notes
-          echo "[{\"language\":\"en-US\",\"text\":\"Release $NEW_NAME (build $NEW_CODE)\"}]" > release_notes.json
-
-
       - name: Build Android AAB
         script: |
           flutter build appbundle
