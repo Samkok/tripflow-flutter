@@ -38,8 +38,6 @@ workflows:
       cocoapods: default
       ios_signing:
         distribution_type: app_store
-        certificate: codemagic-managed
-        provisioning_profile: codemagic-managed
         bundle_identifier: com.superiordev.voyza
 
     scripts:
@@ -66,6 +64,5 @@ workflows:
 
     publishing:
       app_store_connect:
-        ipa_path: build/ios/ipa/*.ipa
         auth: integration
         submit_to_testflight: true
