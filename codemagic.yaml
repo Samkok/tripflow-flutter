@@ -29,8 +29,9 @@ workflows:
 
   ios-release:
     name: Build iOS App
+    instance_type: mac_mini_m1
     integrations:
-      app_store_connect: VoyZa
+      app_store_connect: CodeMagic
     environment:
       ios_signing:
         distribution_type: app_store
@@ -38,28 +39,39 @@ workflows:
       vars:
         APP_STORE_APPLE_ID: 6758559163
       flutter: stable
+      xcode: latest
+      cocoapods: default
     scripts:
-      - name: Set up code signing settings on Xcode project
+      - name: Create .env file
         script: |
-          xcode-project use-profiles
-      - name: Install dependencies
+          echo "" > .env
+          echo "REVENUECAT_API_KEY_ANDROID=$REVENUECAT_API_KEY_ANDROID" >> .env
+          echo "REVENUECAT_API_KEY_IOS=$REVENUECAT_API_KEY_IOS" >> .env
+          echo "REVENUECAT_WEBHOOK_AUTH_KEY=$REVENUECAT_WEBHOOK_AUTH_KEY" >> .env
+          echo "SUPABASE_ANON_KEY=$SUPABASE_ANON_KEY" >> .env
+          echo "SUPABASE_URL=$SUPABASE_URL" >> .env
+          echo "GOOGLE_DIRECTIONS_API_KEY=$GOOGLE_DIRECTIONS_API_KEY" >> .env
+          echo "GOOGLE_PLACES_API_KEY=$GOOGLE_PLACES_API_KEY" >> .env
+          echo "GOOGLE_MAPS_API_KEY=$GOOGLE_MAPS_API_KEY" >> .env
+
+      - name: Install Flutter dependencies
+        script: flutter pub get
+
+      - name: Install CocoaPods dependencies
         script: |
-          flutter pub get
-      - name: Install pods
-        script: |
-          find . -name "Podfile" -execdir pod install \;
-      - name: Update app.gradle with version info
+          cd ios
+          pod install
+
+      - name: Update version info
         script: |
           APP_BUILD_NUMBER=$(($BUILD_NUMBER))
           APP_VERSION="1.0.$(($BUILD_NUMBER))"
-          echo "Updating app.gradle with APP_VERSION: $APP_VERSION and APP_BUILD_NUMBER: $APP_BUILD_NUMBER"
+          echo "Updating Info.plist with APP_VERSION: $APP_VERSION and APP_BUILD_NUMBER: $APP_BUILD_NUMBER"
           /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $APP_VERSION" "ios/Runner/Info.plist"
           /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $APP_BUILD_NUMBER" "ios/Runner/Info.plist"
-          echo "[{\"language\": \"en-US\", \"text\": \"Build type: production, Version: $APP_VERSION, Build number: $APP_BUILD_NUMBER\"}]" > release_notes.json
-          cat release_notes.json
+
       - name: Build iOS App
-        script: |
-          flutter build ipa --release --export-options-plist=/Users/builder/export_options.plist
+        script: flutter build ipa --release --build-number=$BUILD_NUMBER
     artifacts:
       - build/ios/ipa/*.ipa
     triggering:
