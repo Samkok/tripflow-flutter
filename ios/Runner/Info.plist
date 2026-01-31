@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>TripFlow</string>
+	<string>VoyZa</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -48,10 +48,19 @@
 	
 	<!-- Location permissions -->
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>This app needs location access to show your current position and optimize routes.</string>
+	<string>VoyZa uses your location to display your current position on the map, provide accurate directions, and help you plan your trips.</string>
+	<key>NSLocationAlwaysUsageDescription</key>
+	<string>VoyZa uses your location in the background to provide real-time trip updates and navigation even when the app is not actively in use.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-	<string>This app needs location access to show your current position and optimize routes.</string>
-	
+	<string>VoyZa uses your location in the background to provide real-time trip updates and navigation even when the app is not actively in use.</string>
+
+	<!-- iOS 14+ Temporary Precise Location -->
+	<key>NSLocationTemporaryUsageDescriptionDictionary</key>
+	<dict>
+		<key>PreciseLocationNavigation</key>
+		<string>VoyZa needs precise location to provide accurate turn-by-turn navigation and optimal route planning for your trips.</string>
+	</dict>
+
 	<!-- Google Maps API Key -->
 	<key>GOOGLE_MAPS_API_KEY</key>
 	<string>AIzaSyDuBPtEpO7gM7409RVrkTkXWimCKmNkgw8</string>
