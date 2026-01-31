@@ -22,11 +22,12 @@ workflows:
       - name: Set Android version from CI build number
         script: |
           echo "flutter.versionCode=$BUILD_NUMBER" > android/local.properties
-          echo "flutter.versionName=1.0.$BUILD_NUMBER" > android/local.properties
+          echo "flutter.versionName=1.0.$BUILD_NUMBER" >> android/local.properties
           cat android/local.properties
 
       - name: Build Android AAB
         script: |
-          flutter build appbundle
+          flutter build appbundle --release --build-number=$BUILD_NUMBER
+
     artifacts:
       - build/**/outputs/**/*.aab

@@ -48,7 +48,7 @@ class _MainScreenState extends ConsumerState<MainScreen> {
       margin: const EdgeInsets.only(left: 20, right: 20, bottom: 20),
       height: 70,
       decoration: BoxDecoration(
-        color: Theme.of(context).cardColor.withOpacity(0.9),
+        color: Theme.of(context).cardColor.withOpacity(0.3),
         borderRadius: BorderRadius.circular(35),
         boxShadow: [
           BoxShadow(
