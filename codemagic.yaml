@@ -26,20 +26,26 @@ workflows:
 
     artifacts:
       - build/**/outputs/**/*.aab
+
   ios-release:
     name: iOS Release (TestFlight)
     instance_type: mac_mini_m1
+    integrations:
+      app_store_connect: app_store
     environment:
       flutter: stable
       xcode: latest
       cocoapods: default
       ios_signing:
         distribution_type: app_store
+        certificate: codemagic-managed
+        provisioning_profile: codemagic-managed
         bundle_identifier: com.superiordev.voyza
 
     scripts:
       - name: Create .env file
         script: |
+          echo "" > .env
           echo "REVENUECAT_API_KEY_ANDROID=$REVENUECAT_API_KEY_ANDROID" >> .env
           echo "REVENUECAT_API_KEY_IOS=$REVENUECAT_API_KEY_IOS" >> .env
           echo "REVENUECAT_WEBHOOK_AUTH_KEY=$REVENUECAT_WEBHOOK_AUTH_KEY" >> .env
@@ -50,18 +56,16 @@ workflows:
           echo "GOOGLE_MAPS_API_KEY=$GOOGLE_MAPS_API_KEY" >> .env
 
       - name: Install dependencies
-        script: |
-          flutter pub get
+        script: flutter pub get
 
       - name: Build iOS IPA
-        script: |
-          flutter build ipa --release --build-number=$BUILD_NUMBER
+        script: flutter build ipa --release --build-number=$BUILD_NUMBER
 
     artifacts:
       - build/ios/ipa/*.ipa
 
     publishing:
       app_store_connect:
+        ipa_path: build/ios/ipa/*.ipa
         auth: integration
         submit_to_testflight: true
-
