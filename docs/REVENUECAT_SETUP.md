@@ -31,11 +31,14 @@ lib/
 
 ### 1. Environment Variables
 
-The RevenueCat API key is stored in `.env`:
+The RevenueCat API keys are stored in `.env` (platform-specific):
 
 ```env
-REVENUECAT_API_KEY=your_api_key_here
+REVENUECAT_API_KEY_IOS=your_ios_api_key_here
+REVENUECAT_API_KEY_ANDROID=your_android_api_key_here
 ```
+
+The app automatically selects the correct key based on the platform at runtime.
 
 ### 2. RevenueCat Dashboard Configuration
 

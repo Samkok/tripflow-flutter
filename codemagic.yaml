@@ -8,7 +8,8 @@ workflows:
     scripts:
       - name: Create .env file
         script: |
-          echo "REVENUECAT_API_KEY=$REVENUECAT_API_KEY" >> .env
+          echo "REVENUECAT_API_KEY_ANDROID=$REVENUECAT_API_KEY_ANDROID" >> .env
+          echo "REVENUECAT_API_KEY_IOS=$REVENUECAT_API_KEY_IOS" >> .env
           echo "REVENUECAT_WEBHOOK_AUTH_KEY=$REVENUECAT_WEBHOOK_AUTH_KEY" >> .env
           echo "SUPABASE_ANON_KEY=$SUPABASE_ANON_KEY" >> .env
           echo "SUPABASE_URL=$SUPABASE_URL" >> .env
@@ -25,3 +26,42 @@ workflows:
 
     artifacts:
       - build/**/outputs/**/*.aab
+  ios-release:
+    name: iOS Release (TestFlight)
+    instance_type: mac_mini_m1
+    environment:
+      flutter: stable
+      xcode: latest
+      cocoapods: default
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: com.superiordev.voyza
+
+    scripts:
+      - name: Create .env file
+        script: |
+          echo "REVENUECAT_API_KEY_ANDROID=$REVENUECAT_API_KEY_ANDROID" >> .env
+          echo "REVENUECAT_API_KEY_IOS=$REVENUECAT_API_KEY_IOS" >> .env
+          echo "REVENUECAT_WEBHOOK_AUTH_KEY=$REVENUECAT_WEBHOOK_AUTH_KEY" >> .env
+          echo "SUPABASE_ANON_KEY=$SUPABASE_ANON_KEY" >> .env
+          echo "SUPABASE_URL=$SUPABASE_URL" >> .env
+          echo "GOOGLE_DIRECTIONS_API_KEY=$GOOGLE_DIRECTIONS_API_KEY" >> .env
+          echo "GOOGLE_PLACES_API_KEY=$GOOGLE_PLACES_API_KEY" >> .env
+          echo "GOOGLE_MAPS_API_KEY=$GOOGLE_MAPS_API_KEY" >> .env
+
+      - name: Install dependencies
+        script: |
+          flutter pub get
+
+      - name: Build iOS IPA
+        script: |
+          flutter build ipa --release --build-number=$BUILD_NUMBER
+
+    artifacts:
+      - build/ios/ipa/*.ipa
+
+    publishing:
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: true
+

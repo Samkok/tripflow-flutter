@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
@@ -80,12 +81,17 @@ class RevenueCatService {
     }
 
     try {
-      final apiKey = dotenv.env['REVENUECAT_API_KEY'];
+      // Get platform-specific API key
+      final apiKey = Platform.isIOS
+          ? dotenv.env['REVENUECAT_API_KEY_IOS']
+          : dotenv.env['REVENUECAT_API_KEY_ANDROID'];
+
       if (apiKey == null || apiKey.isEmpty) {
-        throw Exception('REVENUECAT_API_KEY not found in .env file');
+        final platform = Platform.isIOS ? 'iOS' : 'Android';
+        throw Exception('REVENUECAT_API_KEY_$platform not found in .env file');
       }
 
-      debugPrint('RevenueCatService: Initializing with API key...');
+      debugPrint('RevenueCatService: Initializing with API key for ${Platform.isIOS ? 'iOS' : 'Android'}...');
 
       // Configure RevenueCat
       final configuration = PurchasesConfiguration(apiKey);
