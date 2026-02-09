@@ -91,33 +91,95 @@ class _SearchWidgetState extends ConsumerState<SearchWidget> {
   }
 
   Widget _buildPredictionsList(List<PlacePrediction> predictions) {
-    return ListView.separated(
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      itemCount: predictions.length,
-      separatorBuilder: (context, index) => const Divider(),
-      itemBuilder: (context, index) {
-        final prediction = predictions[index];
-        return ListTile(
-          title: Text(
-            prediction.mainText,
-            style: Theme.of(context).textTheme.titleMedium,
-          ),
-          subtitle: Text(
-            prediction.secondaryText,
-            style: Theme.of(context).textTheme.bodyMedium,
-          ),
-          leading: CircleAvatar(
-            backgroundColor: AppTheme.primaryColor,
-            child: const Icon(
-              Icons.location_on,
-              color: Colors.black,
+    // Calculate max height for the search results to fit between search bar and bottom sheet
+    final screenHeight = MediaQuery.of(context).size.height;
+    final topPadding = MediaQuery.of(context).padding.top;
+
+    // UI elements heights
+    final searchBarHeight = 60.0; // Search bar height
+    final topSpacing = 50.0; // Top safe area + margins (50px from map_screen.dart line 621)
+    final spacing = 12.0; // Spacing between elements
+
+    // Bottom sheet collapsed height is 23% of screen height (from map_screen.dart line 770-771)
+    final bottomSheetCollapsedHeight = screenHeight * 0.23;
+    final bottomPadding = 20.0; // Buffer space above bottom sheet
+
+    // Calculate available space for search results
+    // Total space = screen height - (top padding + top spacing + search bar + spacing + bottom sheet + bottom padding)
+    final maxHeight = screenHeight -
+                     topPadding -
+                     topSpacing -
+                     searchBarHeight -
+                     spacing -
+                     bottomSheetCollapsedHeight -
+                     bottomPadding;
+
+    return Container(
+      constraints: BoxConstraints(
+        maxHeight: maxHeight > 100 ? maxHeight : 100, // Ensure minimum height of 100
+      ),
+      child: ListView.separated(
+        shrinkWrap: true,
+        physics: const AlwaysScrollableScrollPhysics(),
+        itemCount: predictions.length,
+        separatorBuilder: (context, index) => const Divider(),
+        itemBuilder: (context, index) {
+          final prediction = predictions[index];
+          return ListTile(
+            title: Text(
+              prediction.mainText,
+              style: Theme.of(context).textTheme.titleMedium,
             ),
-          ),
-          onTap: () => _selectPlace(prediction),
-        );
-      },
+            subtitle: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  prediction.secondaryText,
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
+                if (prediction.distanceMeters != null) ...[
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      Icon(
+                        Icons.near_me,
+                        size: 12,
+                        color: AppTheme.primaryColor,
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        _formatDistance(prediction.distanceMeters!),
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: AppTheme.primaryColor,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ],
+            ),
+            leading: CircleAvatar(
+              backgroundColor: AppTheme.primaryColor,
+              child: const Icon(
+                Icons.location_on,
+                color: Colors.black,
+              ),
+            ),
+            onTap: () => _selectPlace(prediction),
+          );
+        },
+      ),
     );
+  }
+
+  String _formatDistance(int distanceMeters) {
+    if (distanceMeters < 1000) {
+      return '${distanceMeters}m away';
+    } else {
+      final kilometers = distanceMeters / 1000;
+      return '${kilometers.toStringAsFixed(1)}km away';
+    }
   }
 
   Future<void> _selectPlace(PlacePrediction prediction) async {
@@ -168,6 +230,8 @@ class _SearchWidgetState extends ConsumerState<SearchWidget> {
         coordinates: placeDetails.coordinates,
         addedAt: DateTime.now(),
         scheduledDate: selectedDate, // Ensure the new location is scheduled for the current date
+        photoReference: placeDetails.photoReference,
+        photoAttributions: placeDetails.photoAttributions,
       );
 
       await ref.read(tripProvider.notifier).addLocation(location);

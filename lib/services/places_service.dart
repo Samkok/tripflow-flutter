@@ -1,5 +1,6 @@
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:dio/dio.dart';
+import 'package:geolocator/geolocator.dart';
 import 'api_service.dart';
 import 'location_service.dart';
 
@@ -8,12 +9,14 @@ class PlacePrediction {
   final String description;
   final String mainText;
   final String secondaryText;
+  final int? distanceMeters;
 
   PlacePrediction({
     required this.placeId,
     required this.description,
     required this.mainText,
     required this.secondaryText,
+    this.distanceMeters,
   });
 
   factory PlacePrediction.fromJson(Map<String, dynamic> json) {
@@ -22,6 +25,7 @@ class PlacePrediction {
       description: json['description'],
       mainText: json['structured_formatting']['main_text'] ?? '',
       secondaryText: json['structured_formatting']['secondary_text'] ?? '',
+      distanceMeters: json['distance_meters'],
     );
   }
 }
@@ -30,15 +34,40 @@ class PlaceDetails {
   final String name;
   final String address;
   final LatLng coordinates;
+  final String? photoReference;
+  final int? photoWidth;
+  final int? photoHeight;
+  final List<String>? photoAttributions;
 
   PlaceDetails({
     required this.name,
     required this.address,
     required this.coordinates,
+    this.photoReference,
+    this.photoWidth,
+    this.photoHeight,
+    this.photoAttributions,
   });
 
   factory PlaceDetails.fromJson(Map<String, dynamic> json) {
     final geometry = json['geometry']['location'];
+    final photos = json['photos'] as List?;
+
+    String? photoRef;
+    int? photoWidth;
+    int? photoHeight;
+    List<String>? attributions;
+
+    if (photos != null && photos.isNotEmpty) {
+      final firstPhoto = photos[0];
+      photoRef = firstPhoto['photo_reference'];
+      photoWidth = firstPhoto['width'];
+      photoHeight = firstPhoto['height'];
+      attributions = (firstPhoto['html_attributions'] as List?)
+          ?.map((e) => e.toString())
+          .toList();
+    }
+
     return PlaceDetails(
       name: json['name'] ?? '',
       address: json['formatted_address'] ?? '',
@@ -46,6 +75,10 @@ class PlaceDetails {
         geometry['lat'].toDouble(),
         geometry['lng'].toDouble(),
       ),
+      photoReference: photoRef,
+      photoWidth: photoWidth,
+      photoHeight: photoHeight,
+      photoAttributions: attributions,
     );
   }
 }
@@ -55,11 +88,20 @@ class PlacesService {
     if (query.isEmpty) return [];
 
     try {
+      // Get current location to bias results and calculate distances
+      final currentLocation = await LocationService.getCurrentLocation();
       final countryCode = await LocationService.getCurrentCountryCode();
+
       String url =
           'https://maps.googleapis.com/maps/api/place/autocomplete/json'
           '?input=${Uri.encodeComponent(query)}'
           '&key=${ApiService.googlePlacesApiKey}';
+
+      // Add location bias to prioritize nearby results
+      if (currentLocation != null) {
+        url += '&location=${currentLocation.latitude},${currentLocation.longitude}';
+        url += '&radius=50000'; // 50km radius
+      }
 
       if (countryCode != null) {
         url += '&components=country:$countryCode';
@@ -71,9 +113,53 @@ class PlacesService {
       if (data['status'] != 'OK') return [];
 
       final predictions = data['predictions'] as List;
-      return predictions
+      final predictionsList = predictions
           .map((prediction) => PlacePrediction.fromJson(prediction))
           .toList();
+
+      // If we have current location, fetch details for each prediction to calculate distance
+      if (currentLocation != null && predictionsList.isNotEmpty) {
+        final predictionsWithDistance = await Future.wait(
+          predictionsList.map((prediction) async {
+            try {
+              final details = await getPlaceDetails(prediction.placeId);
+              if (details != null) {
+                // Calculate distance using Geolocator
+                final distanceMeters = Geolocator.distanceBetween(
+                  currentLocation.latitude,
+                  currentLocation.longitude,
+                  details.coordinates.latitude,
+                  details.coordinates.longitude,
+                ).round();
+
+                return PlacePrediction(
+                  placeId: prediction.placeId,
+                  description: prediction.description,
+                  mainText: prediction.mainText,
+                  secondaryText: prediction.secondaryText,
+                  distanceMeters: distanceMeters,
+                );
+              }
+              return prediction;
+            } catch (e) {
+              print('Error calculating distance for ${prediction.placeId}: $e');
+              return prediction;
+            }
+          }),
+        );
+
+        // Sort by distance (nearest first)
+        predictionsWithDistance.sort((a, b) {
+          if (a.distanceMeters == null && b.distanceMeters == null) return 0;
+          if (a.distanceMeters == null) return 1;
+          if (b.distanceMeters == null) return -1;
+          return a.distanceMeters!.compareTo(b.distanceMeters!);
+        });
+
+        return predictionsWithDistance;
+      }
+
+      return predictionsList;
     } catch (e) {
       print('Error searching places: $e');
       return [];
@@ -84,7 +170,7 @@ class PlacesService {
     try {
       final url = 'https://maps.googleapis.com/maps/api/place/details/json'
           '?place_id=$placeId'
-          '&fields=name,formatted_address,geometry'
+          '&fields=name,formatted_address,geometry,photos'
           '&key=${ApiService.googlePlacesApiKey}';
 
       final response = await ApiService.dio.get(url);

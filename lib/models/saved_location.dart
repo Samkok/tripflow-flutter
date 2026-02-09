@@ -46,6 +46,12 @@ class SavedLocation extends HiveObject {
   @HiveField(13)
   final String? tripId; // UUID of associated trip
 
+  @HiveField(14)
+  final String? photoReference;
+
+  @HiveField(15)
+  final List<String>? photoAttributions;
+
   SavedLocation({
     required this.id,
     required this.userId,
@@ -61,6 +67,8 @@ class SavedLocation extends HiveObject {
     this.stayDuration = 0,
     this.scheduledDate,
     this.tripId,
+    this.photoReference,
+    this.photoAttributions,
   });
 
   SavedLocation copyWith({
@@ -78,6 +86,8 @@ class SavedLocation extends HiveObject {
     int? stayDuration,
     DateTime? scheduledDate,
     String? tripId,
+    String? photoReference,
+    List<String>? photoAttributions,
   }) {
     return SavedLocation(
       id: id ?? this.id,
@@ -94,6 +104,8 @@ class SavedLocation extends HiveObject {
       stayDuration: stayDuration ?? this.stayDuration,
       scheduledDate: scheduledDate ?? this.scheduledDate,
       tripId: tripId ?? this.tripId,
+      photoReference: photoReference ?? this.photoReference,
+      photoAttributions: photoAttributions ?? this.photoAttributions,
     );
   }
 
@@ -113,6 +125,10 @@ class SavedLocation extends HiveObject {
       stayDuration: json['stay_duration'] ?? 0,
       scheduledDate: json['scheduled_date'] != null ? DateTime.parse(json['scheduled_date']) : null,
       tripId: json['trip_id'],
+      photoReference: json['photo_reference'],
+      photoAttributions: json['photo_attributions'] != null
+          ? List<String>.from(json['photo_attributions'])
+          : null,
     );
   }
 
@@ -132,6 +148,8 @@ class SavedLocation extends HiveObject {
       'is_skipped': isSkipped,
       'stay_duration': stayDuration,
       'scheduled_date': scheduledDate?.toIso8601String(),
+      'photo_reference': photoReference,
+      'photo_attributions': photoAttributions,
     };
   }
 }

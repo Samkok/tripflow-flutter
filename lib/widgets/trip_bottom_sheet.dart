@@ -206,25 +206,63 @@ class TripBottomSheet extends ConsumerWidget {
             //   },
             // ),
             if (hasPinnedLocations) ...[
-              Container(
-                height: 24,
-                width: 1,
-                color: Theme.of(context).dividerColor,
-                margin: const EdgeInsets.symmetric(horizontal: 4),
-              ),
+              const SizedBox(width: 8),
               Consumer(builder: (context, ref, _) {
                 final isGenerating = ref.watch(isGeneratingRouteProvider);
-                return IconButton(
-                  icon: const Icon(Icons.route),
-                  onPressed: isGenerating
-                      ? null
-                      : () {
-                          ref.read(locationsForSelectedDateProvider);
-                          _showChooseStartPointDialog(context, ref,
-                              isReoptimizing: hasOptimizedRoute);
-                        },
-                  color: Theme.of(context).colorScheme.primary,
-                  tooltip: 'Optimize route',
+                return Container(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [
+                        Theme.of(context).colorScheme.primary,
+                        Theme.of(context).colorScheme.primary.withValues(alpha: 0.8),
+                      ],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                    borderRadius: BorderRadius.circular(12),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.4),
+                        blurRadius: 8,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  child: Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      onTap: isGenerating
+                          ? null
+                          : () {
+                              ref.read(locationsForSelectedDateProvider);
+                              _showChooseStartPointDialog(context, ref,
+                                  isReoptimizing: hasOptimizedRoute);
+                            },
+                      borderRadius: BorderRadius.circular(12),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              isGenerating ? Icons.hourglass_empty : Icons.route_rounded,
+                              color: Colors.white,
+                              size: 20,
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              hasOptimizedRoute ? 'Re-optimize' : 'Optimize Route',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 14,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
                 );
               }),
             ],
@@ -535,22 +573,57 @@ class TripBottomSheet extends ConsumerWidget {
                   ),
                 ],
               ),
-              // Google Maps navigation button - only show if there are 2+ locations
+              // Google Maps navigation button with distance - only show if there are 2+ locations
               if (totalStopsForDate >= 2)
                 Consumer(
                   builder: (context, ref, _) {
-                    return IconButton.filledTonal(
-                      onPressed: () => _openGoogleMaps(context, ref),
-                      icon: const Icon(Icons.directions, size: 20),
-                      tooltip: 'Open in Google Maps',
-                      style: IconButton.styleFrom(
-                        backgroundColor: Theme.of(context)
-                            .colorScheme
-                            .primary
-                            .withValues(alpha: 0.15),
-                        foregroundColor: Theme.of(context).colorScheme.primary,
-                        padding: const EdgeInsets.all(8),
-                      ),
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton.filledTonal(
+                          onPressed: () => _openGoogleMaps(context, ref),
+                          icon: const Icon(Icons.directions, size: 20),
+                          tooltip: 'Open in Google Maps',
+                          style: IconButton.styleFrom(
+                            backgroundColor: Theme.of(context)
+                                .colorScheme
+                                .primary
+                                .withValues(alpha: 0.15),
+                            foregroundColor: Theme.of(context).colorScheme.primary,
+                            padding: const EdgeInsets.all(8),
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: Theme.of(context)
+                                .colorScheme
+                                .primary
+                                .withValues(alpha: 0.1),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                Icons.straighten,
+                                size: 14,
+                                color: Theme.of(context).colorScheme.primary,
+                              ),
+                              const SizedBox(width: 4),
+                              Text(
+                                _formatDistance(totalDistance),
+                                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                  color: Theme.of(context).colorScheme.primary,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
                     );
                   },
                 ),

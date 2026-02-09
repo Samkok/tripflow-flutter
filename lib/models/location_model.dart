@@ -11,6 +11,8 @@ class LocationModel {
   final DateTime? scheduledDate;
   final Duration stayDuration;
   final bool isSkipped;
+  final String? photoReference;
+  final List<String>? photoAttributions;
 
   LocationModel({
     required this.id,
@@ -23,6 +25,8 @@ class LocationModel {
     this.stayDuration = const Duration(minutes: 30),
     this.isSkipped = false,
     this.scheduledDate,
+    this.photoReference,
+    this.photoAttributions,
   });
 
   Map<String, dynamic> toJson() {
@@ -38,6 +42,8 @@ class LocationModel {
       'stayDurationSeconds': stayDuration.inSeconds,
       'scheduledDate': scheduledDate?.toIso8601String(),
       'isSkipped': isSkipped,
+      'photoReference': photoReference,
+      'photoAttributions': photoAttributions,
     };
   }
 
@@ -59,6 +65,10 @@ class LocationModel {
       scheduledDate: json['scheduledDate'] != null
           ? DateTime.parse(json['scheduledDate'])
           : null,
+      photoReference: json['photoReference'],
+      photoAttributions: json['photoAttributions'] != null
+          ? List<String>.from(json['photoAttributions'])
+          : null,
     );
   }
 
@@ -73,6 +83,8 @@ class LocationModel {
     Duration? stayDuration,
     bool? isSkipped,
     DateTime? scheduledDate,
+    String? photoReference,
+    List<String>? photoAttributions,
   }) {
     return LocationModel(
       id: id ?? this.id,
@@ -85,6 +97,8 @@ class LocationModel {
       stayDuration: stayDuration ?? this.stayDuration,
       isSkipped: isSkipped ?? this.isSkipped,
       scheduledDate: scheduledDate ?? this.scheduledDate,
+      photoReference: photoReference ?? this.photoReference,
+      photoAttributions: photoAttributions ?? this.photoAttributions,
     );
   }
 }

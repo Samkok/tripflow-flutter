@@ -234,6 +234,8 @@ class _MapScreenState extends ConsumerState<MapScreen>
           coordinates: placeDetails.coordinates,
           addedAt: DateTime.now(),
           scheduledDate: selectedDate,
+          photoReference: placeDetails.photoReference,
+          photoAttributions: placeDetails.photoAttributions,
         );
 
         await ref.read(tripProvider.notifier).addLocation(location);
@@ -944,12 +946,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
       maxLng = math.max(maxLng, point.longitude);
     }
 
-    final bounds = LatLngBounds(
-      southwest: LatLng(minLat, minLng),
-      northeast: LatLng(maxLat, maxLng),
-    );
-
-    // OPTIMIZATION: Calculate padding to fit between search bar and bottom sheet with 20px padding
+    // OPTIMIZATION: Calculate padding for each edge to fit all UI elements
     final screenHeight = MediaQuery.of(context).size.height;
 
     // Check if active trip banner is shown
@@ -957,46 +954,85 @@ class _MapScreenState extends ConsumerState<MapScreen>
     final hasActiveTrip = activeTripAsync.asData?.value != null;
 
     // Calculate top safe area padding
-    final topPadding = MediaQuery.of(context).padding.top;
+    final topSafePadding = MediaQuery.of(context).padding.top;
 
-    // UI elements heights (approximate):
-    // - Status bar: included in topPadding
-    // - Active Trip Banner (if shown): ~60px
+    // UI elements heights and widths:
+    // Top UI elements:
+    // - Status bar: included in topSafePadding
+    // - Top margin: 50px (from map_screen.dart line 621)
+    // - Active Trip Banner (if shown): ~72px
+    // - Spacing after banner: ~12px
     // - Search bar container: ~60px
-    // - Spacing between elements: ~12px
-    final activeTripBannerHeight = hasActiveTrip ? 60.0 : 0.0;
+    final topMargin = 50.0;
+    final activeTripBannerHeight = hasActiveTrip ? 72.0 : 0.0;
+    final spacingAfterBanner = hasActiveTrip ? 12.0 : 0.0;
     final searchBarHeight = 60.0;
-    final spacingBetweenElements = 12.0 + 16.0; // 12px gap + 16px margin
 
-    final topUIHeight = topPadding + activeTripBannerHeight + searchBarHeight + spacingBetweenElements;
+    final topUIHeight = topSafePadding +
+                       topMargin +
+                       activeTripBannerHeight +
+                       spacingAfterBanner +
+                       searchBarHeight;
 
-    // Bottom sheet in collapsed state takes 23% of screen height
+    // Bottom UI: Bottom sheet in collapsed state takes 23% of screen height
     final bottomSheetCollapsedHeight = screenHeight * 0.23;
 
-    // OPTIMIZATION: Ensure 20px padding on all sides between search bar and bottom sheet
-    // The Google Maps API only accepts a single padding value, so we need to calculate
-    // a value that ensures minimum 20px clearance on all sides while accounting for UI overlays
-    const paddingAmount = 20.0;
+    // Right UI: FAB buttons column
+    // - 4 mini FABs (40px each) = 160px
+    // - 3 spacings between them (12px each) = 36px
+    // - Right margin: 16px
+    // Total width from right edge: 40px (FAB) + 16px (margin) = 56px
+    // Add extra buffer for marker visibility
+    final fabWidth = 40.0;
+    final fabRightMargin = 16.0;
+    final rightUIWidth = fabWidth + fabRightMargin;
 
-    // Calculate padding needed for top (UI elements + 20px buffer)
-    final topMapPadding = topUIHeight + paddingAmount;
+    // Left UI: minimal margin
+    const leftMargin = 16.0;
 
-    // Calculate padding needed for bottom (bottom sheet + 20px buffer)
-    final bottomMapPadding = bottomSheetCollapsedHeight + paddingAmount;
+    // Add buffer padding for visual comfort
+    const bufferPadding = 20.0;
+    const rightBufferPadding = 40.0; // Extra buffer for right side due to FABs
 
-    // For left and right, we just need the 20px buffer
-    const sideMapPadding = paddingAmount;
+    // Calculate edge-specific padding
+    final topPadding = topUIHeight + bufferPadding;
+    final bottomPadding = bottomSheetCollapsedHeight + bufferPadding;
+    final rightPadding = rightUIWidth + rightBufferPadding; // Use larger buffer for right
+    final leftPadding = leftMargin + bufferPadding;
 
-    // Use the maximum of all padding values to ensure nothing is clipped
-    // This ensures at least 20px clearance on the most constrained side
-    final uniformPadding = math.max(
-      math.max(topMapPadding, bottomMapPadding),
-      sideMapPadding,
+    // Create expanded bounds that account for asymmetric padding
+    // We need to expand the bounds to ensure all markers fit within the visible area
+    // after accounting for UI elements
+
+    final latSpan = maxLat - minLat;
+    final lngSpan = maxLng - minLng;
+
+    // Calculate the visible area dimensions
+    final visibleHeight = screenHeight - topPadding - bottomPadding;
+
+    // Calculate how much to expand the bounds on each side
+    // This ensures the actual locations fit within the visible area
+    final verticalExpansionTop = (topPadding / visibleHeight) * latSpan;
+    final verticalExpansionBottom = (bottomPadding / visibleHeight) * latSpan;
+    final horizontalExpansionLeft = (leftPadding / screenHeight) * lngSpan; // Use screenHeight as approximation for aspect ratio
+    final horizontalExpansionRight = (rightPadding / screenHeight) * lngSpan;
+
+    // Create expanded bounds
+    final expandedBounds = LatLngBounds(
+      southwest: LatLng(
+        minLat - verticalExpansionBottom,
+        minLng - horizontalExpansionLeft,
+      ),
+      northeast: LatLng(
+        maxLat + verticalExpansionTop,
+        maxLng + horizontalExpansionRight,
+      ),
     );
 
-    // Apply the calculated uniform padding to all sides
+    // Animate to the expanded bounds with minimal padding
+    // This ensures all original markers are visible within the UI-free area
     _mapController!.animateCamera(
-      CameraUpdate.newLatLngBounds(bounds, uniformPadding),
+      CameraUpdate.newLatLngBounds(expandedBounds, 20.0), // Small uniform padding for safety
     );
   }
 

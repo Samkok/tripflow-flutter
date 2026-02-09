@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:dio/dio.dart';
 import 'package:voyza/models/location_model.dart';
 import 'package:voyza/providers/map_ui_state_provider.dart';
 import 'package:voyza/providers/trip_provider.dart';
 import 'package:voyza/providers/trip_collaborator_provider.dart';
 import 'package:voyza/widgets/location_detail_sheet.dart';
+import 'package:voyza/services/photo_service.dart';
+import 'package:voyza/services/photo_cache_service.dart';
 
 /// Optimized location card widget that minimizes rebuilds
 /// Uses selective provider watching and RepaintBoundary for better performance
@@ -37,7 +40,6 @@ class OptimizedLocationCard extends ConsumerWidget {
     final isSelectionMode = ref.watch(isSelectionModeProvider);
     final isSelected = ref.watch(
         selectedLocationsProvider.select((s) => s.contains(location.id)));
-    final isSkipped = location.isSkipped;
 
     // OPTIMIZATION: Wrap in RepaintBoundary to isolate repaints
     return RepaintBoundary(
@@ -68,17 +70,7 @@ class OptimizedLocationCard extends ConsumerWidget {
         child: ListTile(
           onTap: () => _handleTap(context, ref, isSelectionMode, isSelected),
           onLongPress: () => _handleLongPress(ref, isSelectionMode),
-          leading: CircleAvatar(
-            backgroundColor:
-                isSkipped ? Colors.grey : Theme.of(context).colorScheme.primary,
-            child: Text(
-              isSkipped ? '-' : '$number',
-              style: const TextStyle(
-                color: Colors.black,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          ),
+          leading: _buildLeading(context),
           title: _buildTitle(context),
           subtitle: _buildSubtitle(context),
           trailing: isSelectionMode
@@ -87,6 +79,89 @@ class OptimizedLocationCard extends ConsumerWidget {
         ),
       ),
     );
+  }
+
+  Widget _buildLeading(BuildContext context) {
+    if (location.photoReference != null && location.photoReference!.isNotEmpty) {
+      return FutureBuilder<String?>(
+        future: _loadPhotoUrl(location.photoReference!),
+        builder: (context, snapshot) {
+          if (snapshot.hasData && snapshot.data != null) {
+            return ClipRRect(
+              borderRadius: BorderRadius.circular(25),
+              child: Image.network(
+                snapshot.data!,
+                width: 50,
+                height: 50,
+                fit: BoxFit.cover,
+                errorBuilder: (context, error, stackTrace) {
+                  return _buildFallbackAvatar(context);
+                },
+                loadingBuilder: (context, child, loadingProgress) {
+                  if (loadingProgress == null) return child;
+                  return _buildFallbackAvatar(context, showLoading: true);
+                },
+              ),
+            );
+          } else {
+            return _buildFallbackAvatar(context);
+          }
+        },
+      );
+    } else {
+      return _buildFallbackAvatar(context);
+    }
+  }
+
+  Widget _buildFallbackAvatar(BuildContext context, {bool showLoading = false}) {
+    final isSkipped = location.isSkipped;
+    return CircleAvatar(
+      backgroundColor: isSkipped ? Colors.grey : Theme.of(context).colorScheme.primary,
+      child: showLoading
+          ? const SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+              ),
+            )
+          : Text(
+              isSkipped ? '-' : '$number',
+              style: const TextStyle(
+                color: Colors.black,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+    );
+  }
+
+  Future<String?> _loadPhotoUrl(String photoReference) async {
+    final cache = PhotoCacheService();
+
+    // Check cache first
+    String? url = await cache.getPhotoUrl(photoReference);
+    if (url != null) return url;
+
+    // Fetch from Google
+    try {
+      url = PhotoService.getPhotoUrl(photoReference: photoReference);
+
+      // Follow redirect to get actual URL
+      final response = await Dio().head(
+        url,
+        options: Options(followRedirects: true, maxRedirects: 5),
+      );
+      final actualUrl = response.realUri.toString();
+
+      // Cache it
+      await cache.cachePhotoUrl(photoReference, actualUrl);
+
+      return actualUrl;
+    } catch (e) {
+      print('Error loading photo: $e');
+      return null;
+    }
   }
 
   void _handleTap(BuildContext context, WidgetRef ref, bool isSelectionMode,

@@ -230,6 +230,8 @@ class TripNotifier extends StateNotifier<TripState> {
                 saved.scheduledDate ?? _ref.read(selectedDateProvider),
             isSkipped: saved.isSkipped,
             stayDuration: Duration(seconds: saved.stayDuration),
+            photoReference: saved.photoReference,
+            photoAttributions: saved.photoAttributions,
           );
         }).toList();
 
@@ -290,6 +292,8 @@ class TripNotifier extends StateNotifier<TripState> {
         // userId and fingerprint will be handled by repository based on auth state
         userId: '',
         fingerprint: '',
+        photoReference: locationWithDate.photoReference,
+        photoAttributions: locationWithDate.photoAttributions,
       );
 
       debugPrint('addLocation: Adding location "${savedLoc.name}" with tripId=${savedLoc.tripId ?? "null (no trip)"}');
@@ -678,6 +682,8 @@ class TripNotifier extends StateNotifier<TripState> {
             createdAt: loc.addedAt,
             // IMPORTANT: Associate with active trip if available, null if no trip is active
             tripId: activeTrip?.id,
+            photoReference: loc.photoReference,
+            photoAttributions: loc.photoAttributions,
           );
           debugPrint('copyMultipleLocationsToDate: Copying "${savedLoc.name}" with tripId=${savedLoc.tripId ?? "null (no trip)"}');
           await repository.addLocation(savedLoc);
