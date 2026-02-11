@@ -1,15 +1,70 @@
 import 'package:flutter_compass/flutter_compass.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
-import 'package:permission_handler/permission_handler.dart';
 
 import '../utils/stream_utils.dart';
 import 'api_service.dart';
 
 class LocationService {
+  /// Check if location services are enabled on the device
+  static Future<bool> isLocationServiceEnabled() async {
+    return await Geolocator.isLocationServiceEnabled();
+  }
+
+  /// Check current location permission status
+  static Future<LocationPermission> checkLocationPermission() async {
+    return await Geolocator.checkPermission();
+  }
+
+  /// Open device location settings
+  static Future<bool> openLocationSettings() async {
+    return await Geolocator.openLocationSettings();
+  }
+
+  /// Request location permission using both Geolocator and permission_handler
   static Future<bool> requestLocationPermission() async {
-    final permission = await Permission.location.request();
-    return permission == PermissionStatus.granted;
+    // First check if location services are enabled
+    final serviceEnabled = await isLocationServiceEnabled();
+    if (!serviceEnabled) {
+      print('Location services are disabled on device');
+      return false;
+    }
+
+    // Check current permission status
+    LocationPermission permission = await checkLocationPermission();
+
+    // If already granted (whileInUse or always), return true immediately
+    if (permission == LocationPermission.whileInUse ||
+        permission == LocationPermission.always) {
+      print('Location permission already granted: $permission');
+      return true;
+    }
+
+    // If denied, request permission
+    if (permission == LocationPermission.denied) {
+      print('Requesting location permission...');
+      permission = await Geolocator.requestPermission();
+
+      // Check if permission was granted after request
+      if (permission == LocationPermission.whileInUse ||
+          permission == LocationPermission.always) {
+        print('Location permission granted: $permission');
+        return true;
+      }
+
+      if (permission == LocationPermission.denied) {
+        print('Location permission denied');
+        return false;
+      }
+    }
+
+    // If permanently denied
+    if (permission == LocationPermission.deniedForever) {
+      print('Location permission permanently denied');
+      return false;
+    }
+
+    return true;
   }
 
   static Future<LatLng?> getCurrentLocation() async {
@@ -19,6 +74,7 @@ class LocationService {
 
       final position = await Geolocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.high,
+        timeLimit: const Duration(seconds: 10),
       );
 
       return LatLng(position.latitude, position.longitude);

@@ -569,8 +569,8 @@ Future<bool?> showCustomPaywall(BuildContext context) async {
 }
 
 /// Helper function to show the appropriate paywall
-/// Tries RevenueCat native paywall first, falls back to custom paywall
-Future<bool> showPaywall(BuildContext context, {bool preferNative = true}) async {
+/// Defaults to custom paywall (preferNative = false to avoid v2 paywall warning)
+Future<bool> showPaywall(BuildContext context, {bool preferNative = false}) async {
   if (preferNative) {
     // Try RevenueCat native paywall first
     final result = await showRevenueCatPaywall(context);

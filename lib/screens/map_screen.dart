@@ -874,23 +874,73 @@ class _MapScreenState extends ConsumerState<MapScreen>
   }
 
   Future<void> _goToCurrentLocation() async {
+    // Try to get current location from state first
     LatLng? currentLocation = ref.read(tripProvider).currentLocation;
 
     // If location isn't available in the state, try to fetch it again.
     if (currentLocation == null) {
       try {
+        // Check if location services are enabled first
+        final serviceEnabled = await LocationService.isLocationServiceEnabled();
+        if (!serviceEnabled) {
+          if (!mounted) return;
+          final shouldOpenSettings = await showDialog<bool>(
+            context: context,
+            builder: (context) => AlertDialog(
+              title: const Text('Location Services Disabled'),
+              content: const Text(
+                'Location services are turned off on your device. Please enable them in Settings to use this feature.',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(false),
+                  child: const Text('Cancel'),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(true),
+                  child: const Text('Open Settings'),
+                ),
+              ],
+            ),
+          );
+
+          if (shouldOpenSettings == true) {
+            // On iOS, this opens Location Services settings
+            await LocationService.openLocationSettings();
+          }
+          return;
+        }
+
         currentLocation = await LocationService.getCurrentLocation();
         if (currentLocation != null) {
           ref
               .read(tripProvider.notifier)
               .updateCurrentLocation(currentLocation);
+        } else {
+          // Location service returned null (likely permission denied)
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Location permission denied. Please enable it to use this feature.'),
+              backgroundColor: Colors.orange,
+            ),
+          );
+          return;
         }
       } catch (e) {
         print("Failed to get current location on demand: $e");
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Failed to get your location. Please try again.'),
+            backgroundColor: Colors.red,
+          ),
+        );
+        return;
       }
     }
 
-    if (currentLocation != null && _mapController != null && mounted) {
+    if (_mapController != null && mounted) {
       _mapController?.animateCamera(
         CameraUpdate.newCameraPosition(
             CameraPosition(target: currentLocation, zoom: 16.0)),
