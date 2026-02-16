@@ -18,7 +18,18 @@ import 'services/revenuecat_service.dart';
 import 'repositories/location_repository.dart';
 
 import 'package:hive_flutter/hive_flutter.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'models/saved_location.dart';
+
+/// PERFORMANCE: Global SharedPreferences cache to avoid repeated getInstance() calls
+/// Pre-initialized in main() before any provider accesses it
+class SharedPrefsCache {
+  static SharedPreferences? _instance;
+  static SharedPreferences get instance {
+    assert(_instance != null, 'SharedPrefsCache not initialized. Call main() first.');
+    return _instance!;
+  }
+}
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -30,16 +41,14 @@ Future<void> main() async {
 
   await dotenv.load(fileName: ".env");
 
+  // PERFORMANCE: Pre-initialize SharedPreferences once for all providers
+  // This prevents multiple blocking getInstance() calls during startup
+  final prefs = await SharedPreferences.getInstance();
+  SharedPrefsCache._instance = prefs;
+
   // OPTIMIZATION: Initialize Hive first (fast)
   await Hive.initFlutter();
   Hive.registerAdapter(SavedLocationAdapter());
-
-  // OPTIMIZATION: Defer Supabase initialization to avoid blocking UI
-  // It will initialize on first use via lazy provider
-  // SupabaseService.initialize() will be called in a background task
-
-  // OPTIMIZATION: Defer LocationRepository initialization
-  // It will be initialized on first access via provider
 
   runApp(const ProviderScope(child: MyApp()));
 
@@ -139,23 +148,49 @@ class _MyAppState extends ConsumerState<MyApp> with WidgetsBindingObserver {
         return;
       }
 
-      // CRITICAL: Initialize collaborator realtime listener at app root
-      // This ensures permission changes are detected and enforced immediately
-      // across the entire app without requiring trip reactivation
-      debugPrint('Main: Initializing collaborator realtime listener');
-      ref.read(collaboratorRealtimeInitProvider);
+      // PERFORMANCE: Defer collaborator realtime to let UI render first
+      // Initialize after a short delay so it doesn't compete with initial frame
+      debugPrint('Main: Deferring collaborator realtime listener...');
+      Future.delayed(const Duration(seconds: 2), () {
+        if (mounted) {
+          ref.read(collaboratorRealtimeInitProvider.notifier).ensureInitialized();
+          debugPrint('Main: Collaborator realtime listener initialized');
+        }
+      });
 
-      // CRITICAL: Wait for RevenueCat auth sync to complete
+      // PERFORMANCE: Trigger RevenueCat auth sync in background without blocking
       // This ensures RevenueCat user ID is linked with Supabase auth
-      // Prevents anonymous user issues when app starts with existing session
-      debugPrint('Main: Waiting for RevenueCat auth sync...');
-      try {
-        await ref.read(revenueCatAuthSyncProvider.future);
+      // but doesn't block app startup
+      debugPrint('Main: Triggering RevenueCat auth sync in background...');
+      ref.read(revenueCatAuthSyncProvider.future).then((_) {
         debugPrint('Main: RevenueCat auth sync completed successfully');
-      } catch (e) {
+
+        // Now that auth is synced, initialize subscription realtime listener
+        // This must happen AFTER RevenueCat user ID is linked to Supabase auth
+        // so the realtime filter matches the correct user_id
+        if (mounted) {
+          ref.read(subscriptionProvider.notifier).ensureInitialized();
+          debugPrint('Main: Subscription realtime listener initialized');
+        }
+      }).catchError((e) {
         debugPrint('Main: RevenueCat auth sync error: $e');
-        // Don't fail the whole initialization if RevenueCat sync fails
-      }
+        // CRITICAL FIX: Still initialize subscription even if RevenueCat sync fails
+        // On iOS, auth sync can fail/timeout but Supabase auth may still be valid
+        // Without this, the realtime listener never starts
+        if (mounted) {
+          ref.read(subscriptionProvider.notifier).ensureInitialized();
+          debugPrint('Main: Subscription realtime listener initialized (fallback after auth sync error)');
+        }
+      });
+
+      // SAFETY NET: If RevenueCat auth sync hangs (common on iOS),
+      // force-initialize subscription after 10 seconds regardless
+      Future.delayed(const Duration(seconds: 10), () {
+        if (mounted) {
+          ref.read(subscriptionProvider.notifier).ensureInitialized();
+          debugPrint('Main: Subscription realtime listener initialized (timeout fallback)');
+        }
+      });
     } catch (e, stack) {
       // If Supabase initialization fails, log but don't crash the app
       debugPrint('Main: Failed to initialize collaborator listener: $e');

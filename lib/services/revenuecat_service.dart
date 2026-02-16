@@ -8,7 +8,7 @@ import 'package:purchases_flutter/purchases_flutter.dart';
 /// RevenueCat configuration constants
 class RevenueCatConfig {
   /// Entitlement identifier for VoyZa Pro
-  static const String entitlementVoyZaPro = 'VoyZa Pro';
+  static const String entitlementVoyZaPro = 'premium';
 
   /// Product identifiers
   static const String productMonthly = 'monthly';

@@ -31,7 +31,7 @@ final customerInfoProvider = FutureProvider<CustomerInfo?>((ref) async {
   }
 });
 
-/// Provider to check if user has VoyZa Pro entitlement
+/// Provider to check if user has premium entitlement
 final hasVoyZaProProvider = FutureProvider<bool>((ref) async {
   // Watch customer info to react to changes
   final customerInfoAsync = ref.watch(customerInfoProvider);
@@ -260,9 +260,19 @@ class SubscriptionNotifier extends StateNotifier<SubscriptionState> {
   Timer? _expirationCheckTimer;
   Timer? _conflictMonitoringTimer;
 
+  bool _isInitialized = false;
+
   SubscriptionNotifier(this._service)
       : super(const SubscriptionState()) {
-    _initialize();
+    // PERFORMANCE: Do NOT call _initialize() here
+    // Lazy initialization happens on first access via ensureInitialized()
+  }
+
+  /// PERFORMANCE: Lazy initialization - only runs when subscription features are accessed
+  Future<void> ensureInitialized() async {
+    if (_isInitialized) return;
+    _isInitialized = true;
+    await _initialize();
   }
 
   Future<void> _initialize() async {
@@ -271,8 +281,8 @@ class SubscriptionNotifier extends StateNotifier<SubscriptionState> {
       _updateFromCustomerInfo(info);
     });
 
-    // Load initial state
-    await refresh();
+    // Load initial state (skipInit to avoid recursion)
+    await refresh(skipInit: true);
 
     // Initialize realtime subscription for subscription changes (database-first)
     await _initializeRealtimeSubscription();
@@ -661,7 +671,8 @@ class SubscriptionNotifier extends StateNotifier<SubscriptionState> {
   // }
 
   /// Refresh subscription status
-  Future<void> refresh() async {
+  Future<void> refresh({bool skipInit = false}) async {
+    if (!skipInit) await ensureInitialized();
     state = state.copyWith(isLoading: true, errorMessage: null);
     try {
       final customerInfo = await _service.getCustomerInfo();
@@ -676,6 +687,7 @@ class SubscriptionNotifier extends StateNotifier<SubscriptionState> {
 
   /// Purchase monthly subscription
   Future<bool> purchaseMonthly() async {
+    await ensureInitialized();
     state = state.copyWith(isLoading: true, errorMessage: null);
     try {
       final result = await _service.purchaseMonthly();
@@ -703,6 +715,7 @@ class SubscriptionNotifier extends StateNotifier<SubscriptionState> {
 
   /// Purchase yearly subscription
   Future<bool> purchaseYearly() async {
+    await ensureInitialized();
     state = state.copyWith(isLoading: true, errorMessage: null);
     try {
       final result = await _service.purchaseYearly();

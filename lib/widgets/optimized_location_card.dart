@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:dio/dio.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:voyza/models/location_model.dart';
 import 'package:voyza/providers/map_ui_state_provider.dart';
 import 'package:voyza/providers/trip_provider.dart';
@@ -18,6 +19,9 @@ class OptimizedLocationCard extends ConsumerWidget {
   final ScrollController scrollController;
   final DraggableScrollableController? sheetController;
   final Function(LatLng)? onLocationTap;
+
+  // PERFORMANCE: Static cache for photo URL futures to prevent re-fetching on rebuild
+  static final Map<String, Future<String?>> _photoUrlCache = {};
 
   const OptimizedLocationCard({
     super.key,
@@ -83,24 +87,26 @@ class OptimizedLocationCard extends ConsumerWidget {
 
   Widget _buildLeading(BuildContext context) {
     if (location.photoReference != null && location.photoReference!.isNotEmpty) {
+      // PERFORMANCE: Memoize photo URL future to prevent re-fetching on rebuild
+      final photoFuture = _photoUrlCache.putIfAbsent(
+        location.photoReference!,
+        () => _loadPhotoUrl(location.photoReference!),
+      );
       return FutureBuilder<String?>(
-        future: _loadPhotoUrl(location.photoReference!),
+        future: photoFuture,
         builder: (context, snapshot) {
           if (snapshot.hasData && snapshot.data != null) {
             return ClipRRect(
               borderRadius: BorderRadius.circular(25),
-              child: Image.network(
-                snapshot.data!,
+              child: CachedNetworkImage(
+                imageUrl: snapshot.data!,
                 width: 50,
                 height: 50,
                 fit: BoxFit.cover,
-                errorBuilder: (context, error, stackTrace) {
-                  return _buildFallbackAvatar(context);
-                },
-                loadingBuilder: (context, child, loadingProgress) {
-                  if (loadingProgress == null) return child;
-                  return _buildFallbackAvatar(context, showLoading: true);
-                },
+                memCacheWidth: 100, // Resize for performance (2x for retina)
+                memCacheHeight: 100,
+                placeholder: (context, url) => _buildFallbackAvatar(context, showLoading: true),
+                errorWidget: (context, url, error) => _buildFallbackAvatar(context),
               ),
             );
           } else {

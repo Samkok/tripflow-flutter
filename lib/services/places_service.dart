@@ -166,6 +166,107 @@ class PlacesService {
     }
   }
 
+  /// Search places with pagination support
+  /// Uses Text Search API for better pagination control
+  static Future<List<PlacePrediction>> searchPlacesPaginated(
+    String query, {
+    int offset = 0,
+    int limit = 5,
+  }) async {
+    if (query.isEmpty) return [];
+
+    try {
+      // Get current location and country for filtering
+      final currentLocation = await LocationService.getCurrentLocation();
+      final countryCode = await LocationService.getCurrentCountryCode();
+
+      // Use Text Search API which supports better pagination
+      String url =
+          'https://maps.googleapis.com/maps/api/place/textsearch/json'
+          '?query=${Uri.encodeComponent(query)}'
+          '&key=${ApiService.googlePlacesApiKey}';
+
+      // Add location bias
+      if (currentLocation != null) {
+        url += '&location=${currentLocation.latitude},${currentLocation.longitude}';
+        url += '&radius=50000'; // 50km radius
+      }
+
+      // Add country restriction
+      if (countryCode != null) {
+        url += '&region=$countryCode';
+      }
+
+      final response = await ApiService.dio.get(url);
+      final data = response.data;
+
+      if (data['status'] != 'OK' && data['status'] != 'ZERO_RESULTS') {
+        return [];
+      }
+
+      final results = (data['results'] as List?) ?? [];
+
+      // Apply pagination manually (skip offset, take limit)
+      final paginatedResults = results
+          .skip(offset)
+          .take(limit)
+          .toList();
+
+      // Convert to PlacePrediction format
+      final predictions = <PlacePrediction>[];
+
+      for (final result in paginatedResults) {
+        try {
+          final placeId = result['place_id'] as String;
+          final name = result['name'] as String? ?? '';
+          final address = result['formatted_address'] as String? ?? '';
+          final geometry = result['geometry'];
+          final location = geometry?['location'];
+
+          int? distanceMeters;
+          if (currentLocation != null && location != null) {
+            final lat = (location['lat'] as num?)?.toDouble();
+            final lng = (location['lng'] as num?)?.toDouble();
+            if (lat != null && lng != null) {
+              distanceMeters = Geolocator.distanceBetween(
+                currentLocation.latitude,
+                currentLocation.longitude,
+                lat,
+                lng,
+              ).round();
+            }
+          }
+
+          predictions.add(PlacePrediction(
+            placeId: placeId,
+            description: '$name, $address',
+            mainText: name,
+            secondaryText: address,
+            distanceMeters: distanceMeters,
+          ));
+        } catch (e) {
+          print('Error parsing search result: $e');
+          continue;
+        }
+      }
+
+      // Sort by distance if available
+      if (predictions.any((p) => p.distanceMeters != null)) {
+        predictions.sort((a, b) {
+          if (a.distanceMeters == null && b.distanceMeters == null) return 0;
+          if (a.distanceMeters == null) return 1;
+          if (b.distanceMeters == null) return -1;
+          return a.distanceMeters!.compareTo(b.distanceMeters!);
+        });
+      }
+
+      return predictions;
+    } catch (e) {
+      print('Error searching places (paginated): $e');
+      return [];
+    }
+  }
+
   static Future<PlaceDetails?> getPlaceDetails(String placeId) async {
     try {
       final url = 'https://maps.googleapis.com/maps/api/place/details/json'

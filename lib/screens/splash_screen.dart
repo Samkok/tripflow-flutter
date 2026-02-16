@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:voyza/screens/main_screen.dart';
-import 'package:voyza/services/marker_cache_service.dart';
 import 'package:voyza/core/theme.dart';
 
 class SplashScreen extends StatefulWidget {
@@ -19,17 +18,9 @@ class _SplashScreenState extends State<SplashScreen> {
   }
 
   Future<void> _initializeApp() async {
-    // Start all initialization tasks in parallel
-    final tasks = [
-      // Pre-warm the entire marker cache for a smoother map experience.
-      MarkerCacheService().prewarmCache(),
-
-      // Wait for a minimum duration to show the splash screen
-      Future.delayed(const Duration(seconds: 3)),
-    ];
-
-    // Wait for all tasks to complete
-    await Future.wait(tasks);
+    // Show splash briefly for branding, then navigate
+    // Marker cache will be warmed lazily in background when needed
+    await Future.delayed(const Duration(milliseconds: 500));
 
     // Navigate to the home screen
     if (mounted) {

@@ -18,7 +18,7 @@ class _MainScreenState extends ConsumerState<MainScreen> {
 
   static final List<Widget> _widgetOptions = <Widget>[
     const TripScreen(),
-    MapScreen(),
+    const MapScreen(),
     const SettingsScreen(),
   ];
 

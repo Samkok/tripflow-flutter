@@ -27,7 +27,17 @@ class CollaboratorRealtimeNotifier extends StateNotifier<int> {
   final Ref _ref;
   StreamSubscription<CollaboratorEvent>? _subscription;
 
+  bool _isInitialized = false;
+
   CollaboratorRealtimeNotifier(this._ref) : super(0) {
+    // PERFORMANCE: Do NOT call _initialize() here
+    // Deferred to ensureInitialized() for lazy loading
+  }
+
+  /// PERFORMANCE: Lazy initialization - defer Supabase subscription until needed
+  void ensureInitialized() {
+    if (_isInitialized) return;
+    _isInitialized = true;
     _initialize();
   }
 

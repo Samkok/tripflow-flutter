@@ -553,23 +553,25 @@ class _MapScreenState extends ConsumerState<MapScreen>
       }
     });
 
-    // Listen for trip state changes to auto-zoom on historical routes.
-    ref.listen<TripState>(tripProvider, (previous, next) {
-      final selectedDate = ref.read(selectedDateProvider);
-      final now = DateTime.now();
-      final today = DateTime(now.year, now.month, now.day);
-      final isPastDate = selectedDate.isBefore(today);
+    // PERFORMANCE: Only listen to optimizedRoute changes, not entire TripState
+    ref.listen<List<LatLng>>(
+      tripProvider.select((s) => s.optimizedRoute),
+      (previous, next) {
+        final selectedDate = ref.read(selectedDateProvider);
+        final now = DateTime.now();
+        final today = DateTime(now.year, now.month, now.day);
+        final isPastDate = selectedDate.isBefore(today);
 
-      // If we are on a past date and a route has just been loaded...
-      if (isPastDate &&
-          next.optimizedRoute.isNotEmpty &&
-          (previous?.optimizedRoute.isEmpty ?? true)) {
-        // Use a post-frame callback to ensure the map controller is ready.
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          _zoomToFitRoute(next.optimizedRoute);
-        });
-      }
-    });
+        // If we are on a past date and a route has just been loaded...
+        if (isPastDate &&
+            next.isNotEmpty &&
+            (previous?.isEmpty ?? true)) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            _zoomToFitRoute(next);
+          });
+        }
+      },
+    );
 
     // Listen for when the "View Route" button is pressed on a historical trip.
     ref.listen<bool>(TripBottomSheet.viewHistoricalRouteProvider,

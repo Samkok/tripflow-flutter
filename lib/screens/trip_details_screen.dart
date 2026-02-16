@@ -1,13 +1,14 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:uuid/uuid.dart';
 import 'package:voyza/models/trip.dart';
 import 'package:voyza/providers/location_provider.dart';
+import 'package:voyza/providers/paginated_search_provider.dart';
 import 'package:voyza/providers/trip_collaborator_provider.dart';
 import 'package:voyza/models/saved_location.dart';
 import 'package:voyza/services/places_service.dart';
-import 'package:voyza/providers/places_provider.dart';
 import 'package:voyza/widgets/collaborators_sheet.dart';
 
 class TripDetailsScreen extends ConsumerStatefulWidget {
@@ -637,12 +638,36 @@ class _LocationSearchSheet extends ConsumerStatefulWidget {
 
 class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
   final TextEditingController _searchController = TextEditingController();
-  String _searchQuery = '';
+  Timer? _debounceTimer;
 
   @override
   void dispose() {
     _searchController.dispose();
+    _debounceTimer?.cancel();
+    // Clear search state when sheet is closed
+    Future.microtask(() {
+      ref.read(tripDetailSearchProvider.notifier).clear();
+    });
     super.dispose();
+  }
+
+  void _onSearchChanged(String value) {
+    _debounceTimer?.cancel();
+    _debounceTimer = Timer(const Duration(milliseconds: 300), () {
+      if (value.isEmpty) {
+        ref.read(tripDetailSearchProvider.notifier).clear();
+      } else {
+        ref.read(tripDetailSearchProvider.notifier).search(value);
+      }
+    });
+    setState(() {}); // Update clear button visibility
+  }
+
+  void _onScroll(ScrollController scrollController) {
+    if (scrollController.position.pixels >=
+        scrollController.position.maxScrollExtent * 0.8) {
+      ref.read(tripDetailSearchProvider.notifier).loadMore();
+    }
   }
 
   @override
@@ -653,6 +678,7 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
       minChildSize: 0.5,
       maxChildSize: 0.95,
       builder: (context, scrollController) {
+        scrollController.addListener(() => _onScroll(scrollController));
         return Container(
           decoration: BoxDecoration(
             color: Theme.of(context).scaffoldBackgroundColor,
@@ -701,12 +727,13 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
                   decoration: InputDecoration(
                     hintText: 'Search for a place...',
                     prefixIcon: const Icon(Icons.search),
-                    suffixIcon: _searchQuery.isNotEmpty
+                    suffixIcon: _searchController.text.isNotEmpty
                         ? IconButton(
                             icon: const Icon(Icons.clear),
                             onPressed: () {
                               _searchController.clear();
-                              setState(() => _searchQuery = '');
+                              ref.read(tripDetailSearchProvider.notifier).clear();
+                              setState(() {});
                             },
                           )
                         : null,
@@ -716,9 +743,7 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
                     filled: true,
                     fillColor: Theme.of(context).cardColor,
                   ),
-                  onChanged: (value) {
-                    setState(() => _searchQuery = value);
-                  },
+                  onChanged: _onSearchChanged,
                 ),
               ),
 
@@ -736,7 +761,7 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
   }
 
   Widget _buildSearchResults(ScrollController scrollController) {
-    if (_searchQuery.isEmpty) {
+    if (_searchController.text.isEmpty) {
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -773,91 +798,112 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
       );
     }
 
-    // Use the places search provider
-    final placesAsync = ref.watch(placesSearchProvider(_searchQuery));
+    final searchState = ref.watch(tripDetailSearchProvider);
 
-    return placesAsync.when(
-      data: (predictions) {
-        if (predictions.isEmpty) {
-          return Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(
-                  Icons.location_off,
-                  size: 64,
-                  color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.3),
-                ),
-                const SizedBox(height: 16),
-                Text(
-                  'No places found',
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  'Try a different search term',
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: Theme.of(context)
-                            .textTheme
-                            .bodyMedium
-                            ?.color
-                            ?.withValues(alpha: 0.6),
-                      ),
-                ),
-              ],
-            ),
-          );
-        }
+    // Initial loading
+    if (searchState.isLoading && searchState.results.isEmpty) {
+      return const Center(child: CircularProgressIndicator());
+    }
 
-        return ListView.separated(
-          controller: scrollController,
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          itemCount: predictions.length,
-          separatorBuilder: (context, index) => const Divider(height: 1),
-          itemBuilder: (context, index) {
-            final prediction = predictions[index];
-            return ListTile(
-              leading: Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Icon(
-                  Icons.location_on,
-                  color: Theme.of(context).colorScheme.primary,
-                ),
-              ),
-              title: Text(
-                prediction.mainText,
-                style: const TextStyle(fontWeight: FontWeight.w600),
-              ),
-              subtitle: Text(
-                prediction.secondaryText,
-                style: TextStyle(
-                  color: Theme.of(context)
-                      .textTheme
-                      .bodyMedium
-                      ?.color
-                      ?.withValues(alpha: 0.6),
-                ),
-              ),
-              onTap: () => _addLocationToTrip(prediction),
-            );
-          },
-        );
-      },
-      loading: () => const Center(child: CircularProgressIndicator()),
-      error: (error, stack) => Center(
+    // Error state
+    if (searchState.error != null && searchState.results.isEmpty) {
+      return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             const Icon(Icons.error_outline, size: 64, color: Colors.red),
             const SizedBox(height: 16),
-            Text('Error: $error'),
+            Text('Error: ${searchState.error}'),
           ],
         ),
-      ),
+      );
+    }
+
+    // No results
+    if (searchState.results.isEmpty && !searchState.isLoading) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.location_off,
+              size: 64,
+              color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.3),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              'No places found',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Try a different search term',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(context)
+                        .textTheme
+                        .bodyMedium
+                        ?.color
+                        ?.withValues(alpha: 0.6),
+                  ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    // Results with infinite scroll
+    return ListView.separated(
+      controller: scrollController,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      itemCount: searchState.results.length + (searchState.hasMore ? 1 : 0),
+      separatorBuilder: (context, index) => const Divider(height: 1),
+      itemBuilder: (context, index) {
+        // Loading indicator at the end
+        if (index == searchState.results.length) {
+          return Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: Center(
+              child: searchState.isLoading
+                  ? const SizedBox(
+                      height: 24,
+                      width: 24,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const SizedBox.shrink(),
+            ),
+          );
+        }
+
+        final prediction = searchState.results[index];
+        return ListTile(
+          leading: Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.15),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Icon(
+              Icons.location_on,
+              color: Theme.of(context).colorScheme.primary,
+            ),
+          ),
+          title: Text(
+            prediction.mainText,
+            style: const TextStyle(fontWeight: FontWeight.w600),
+          ),
+          subtitle: Text(
+            prediction.secondaryText,
+            style: TextStyle(
+              color: Theme.of(context)
+                  .textTheme
+                  .bodyMedium
+                  ?.color
+                  ?.withValues(alpha: 0.6),
+            ),
+          ),
+          onTap: () => _addLocationToTrip(prediction),
+        );
+      },
     );
   }
 

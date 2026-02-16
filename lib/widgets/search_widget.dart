@@ -1,9 +1,10 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:voyza/providers/map_ui_state_provider.dart';
 import 'package:uuid/uuid.dart';
 import '../models/location_model.dart';
-import '../providers/places_provider.dart';
+import '../providers/paginated_search_provider.dart';
 import '../providers/trip_provider.dart';
 import '../providers/trip_collaborator_provider.dart';
 import '../services/places_service.dart';
@@ -23,6 +24,47 @@ class SearchWidget extends ConsumerStatefulWidget {
 
 class _SearchWidgetState extends ConsumerState<SearchWidget> {
   final TextEditingController _searchController = TextEditingController();
+  final ScrollController _scrollController = ScrollController();
+  Timer? _debounceTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    // Add scroll listener for infinite scroll
+    _scrollController.addListener(_onScroll);
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    _scrollController.dispose();
+    _debounceTimer?.cancel();
+    super.dispose();
+  }
+
+  void _onScroll() {
+    // Load more when user scrolls to 80% of the list
+    if (_scrollController.position.pixels >=
+        _scrollController.position.maxScrollExtent * 0.8) {
+      ref.read(paginatedSearchProvider.notifier).loadMore();
+    }
+  }
+
+  void _onSearchChanged(String value) {
+    ref.read(searchQueryProvider.notifier).state = value;
+
+    // Cancel previous timer
+    _debounceTimer?.cancel();
+
+    // Debounce search to avoid too many API calls
+    _debounceTimer = Timer(const Duration(milliseconds: 300), () {
+      if (value.isEmpty) {
+        ref.read(paginatedSearchProvider.notifier).clear();
+      } else {
+        ref.read(paginatedSearchProvider.notifier).search(value);
+      }
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -37,9 +79,7 @@ class _SearchWidgetState extends ConsumerState<SearchWidget> {
               return TextField(
                 focusNode: widget.focusNode,
                 controller: _searchController,
-                onChanged: (value) {
-                  ref.read(searchQueryProvider.notifier).state = value;
-                },
+                onChanged: _onSearchChanged,
                 decoration: InputDecoration(
                   filled: false,
                   hintText: 'Search for places...',
@@ -53,6 +93,7 @@ class _SearchWidgetState extends ConsumerState<SearchWidget> {
                           onPressed: () {
                             _searchController.clear();
                             ref.read(searchQueryProvider.notifier).state = '';
+                            ref.read(paginatedSearchProvider.notifier).clear();
                           },
                         )
                       : null,
@@ -67,21 +108,12 @@ class _SearchWidgetState extends ConsumerState<SearchWidget> {
             final searchQuery = ref.watch(searchQueryProvider);
             if (searchQuery.isEmpty) return const SizedBox.shrink();
 
-            final searchResults = ref.watch(
-              placesSearchProvider(searchQuery),
-            );
+            final searchState = ref.watch(paginatedSearchProvider);
 
             return Column(
               children: [
                 const Divider(height: 1, thickness: 1),
-                searchResults.when(
-                  data: (predictions) => _buildPredictionsList(predictions),
-                  loading: () => const Padding(
-                    padding: EdgeInsets.all(16.0),
-                    child: CircularProgressIndicator(),
-                  ),
-                  error: (error, stack) => const SizedBox(),
-                ),
+                _buildSearchResults(searchState),
               ],
             );
           },
@@ -90,86 +122,145 @@ class _SearchWidgetState extends ConsumerState<SearchWidget> {
     );
   }
 
-  Widget _buildPredictionsList(List<PlacePrediction> predictions) {
-    // Calculate max height for the search results to fit between search bar and bottom sheet
+  Widget _buildSearchResults(PaginatedSearchState searchState) {
+    // Calculate max height for the search results
     final screenHeight = MediaQuery.of(context).size.height;
     final topPadding = MediaQuery.of(context).padding.top;
 
-    // UI elements heights
-    final searchBarHeight = 60.0; // Search bar height
-    final topSpacing = 50.0; // Top safe area + margins (50px from map_screen.dart line 621)
-    final spacing = 12.0; // Spacing between elements
-
-    // Bottom sheet collapsed height is 23% of screen height (from map_screen.dart line 770-771)
+    final searchBarHeight = 60.0;
+    final topSpacing = 50.0;
+    final spacing = 12.0;
     final bottomSheetCollapsedHeight = screenHeight * 0.23;
-    final bottomPadding = 20.0; // Buffer space above bottom sheet
+    final bottomPadding = 20.0;
 
-    // Calculate available space for search results
-    // Total space = screen height - (top padding + top spacing + search bar + spacing + bottom sheet + bottom padding)
     final maxHeight = screenHeight -
-                     topPadding -
-                     topSpacing -
-                     searchBarHeight -
-                     spacing -
-                     bottomSheetCollapsedHeight -
-                     bottomPadding;
+        topPadding -
+        topSpacing -
+        searchBarHeight -
+        spacing -
+        bottomSheetCollapsedHeight -
+        bottomPadding;
 
+    // Show initial loading
+    if (searchState.isLoading && searchState.results.isEmpty) {
+      return Container(
+        constraints: BoxConstraints(maxHeight: maxHeight > 100 ? maxHeight : 100),
+        child: const Center(
+          child: Padding(
+            padding: EdgeInsets.all(16.0),
+            child: CircularProgressIndicator(),
+          ),
+        ),
+      );
+    }
+
+    // Show error
+    if (searchState.error != null && searchState.results.isEmpty) {
+      return Container(
+        constraints: BoxConstraints(maxHeight: maxHeight > 100 ? maxHeight : 100),
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: Text(
+              'Error: ${searchState.error}',
+              style: const TextStyle(color: Colors.red),
+            ),
+          ),
+        ),
+      );
+    }
+
+    // Show no results
+    if (searchState.results.isEmpty) {
+      return Container(
+        constraints: BoxConstraints(maxHeight: maxHeight > 100 ? maxHeight : 100),
+        child: const Center(
+          child: Padding(
+            padding: EdgeInsets.all(16.0),
+            child: Text('No places found'),
+          ),
+        ),
+      );
+    }
+
+    // Show results with infinite scroll
     return Container(
       constraints: BoxConstraints(
-        maxHeight: maxHeight > 100 ? maxHeight : 100, // Ensure minimum height of 100
+        maxHeight: maxHeight > 100 ? maxHeight : 100,
       ),
       child: ListView.separated(
+        controller: _scrollController,
         shrinkWrap: true,
         physics: const AlwaysScrollableScrollPhysics(),
-        itemCount: predictions.length,
+        itemCount: searchState.results.length + (searchState.hasMore ? 1 : 0),
         separatorBuilder: (context, index) => const Divider(),
         itemBuilder: (context, index) {
-          final prediction = predictions[index];
-          return ListTile(
-            title: Text(
-              prediction.mainText,
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
-            subtitle: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  prediction.secondaryText,
-                  style: Theme.of(context).textTheme.bodyMedium,
-                ),
-                if (prediction.distanceMeters != null) ...[
-                  const SizedBox(height: 4),
-                  Row(
-                    children: [
-                      Icon(
-                        Icons.near_me,
-                        size: 12,
-                        color: AppTheme.primaryColor,
-                      ),
-                      const SizedBox(width: 4),
-                      Text(
-                        _formatDistance(prediction.distanceMeters!),
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: AppTheme.primaryColor,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ],
-            ),
-            leading: CircleAvatar(
-              backgroundColor: AppTheme.primaryColor,
-              child: const Icon(
-                Icons.location_on,
-                color: Colors.black,
+          // Show loading indicator at the end
+          if (index == searchState.results.length) {
+            return Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Center(
+                child: searchState.isLoading
+                    ? const SizedBox(
+                        height: 24,
+                        width: 24,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const SizedBox.shrink(),
               ),
-            ),
-            onTap: () => _selectPlace(prediction),
-          );
+            );
+          }
+
+          final prediction = searchState.results[index];
+          return _buildPredictionTile(prediction);
         },
       ),
+    );
+  }
+
+  Widget _buildPredictionTile(PlacePrediction prediction) {
+    return ListTile(
+      title: Text(
+        prediction.mainText,
+        style: Theme.of(context).textTheme.titleMedium,
+      ),
+      subtitle: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            prediction.secondaryText,
+            style: Theme.of(context).textTheme.bodyMedium,
+          ),
+          if (prediction.distanceMeters != null) ...[
+            const SizedBox(height: 4),
+            Row(
+              children: [
+                Icon(
+                  Icons.near_me,
+                  size: 12,
+                  color: AppTheme.primaryColor,
+                ),
+                const SizedBox(width: 4),
+                Text(
+                  _formatDistance(prediction.distanceMeters!),
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: AppTheme.primaryColor,
+                        fontWeight: FontWeight.w600,
+                      ),
+                ),
+              ],
+            ),
+          ],
+        ],
+      ),
+      leading: CircleAvatar(
+        backgroundColor: AppTheme.primaryColor,
+        child: const Icon(
+          Icons.location_on,
+          color: Colors.black,
+        ),
+      ),
+      onTap: () => _selectPlace(prediction),
     );
   }
 
@@ -229,7 +320,7 @@ class _SearchWidgetState extends ConsumerState<SearchWidget> {
         address: placeDetails.address,
         coordinates: placeDetails.coordinates,
         addedAt: DateTime.now(),
-        scheduledDate: selectedDate, // Ensure the new location is scheduled for the current date
+        scheduledDate: selectedDate,
         photoReference: placeDetails.photoReference,
         photoAttributions: placeDetails.photoAttributions,
       );
@@ -238,6 +329,7 @@ class _SearchWidgetState extends ConsumerState<SearchWidget> {
 
       _searchController.clear();
       ref.read(searchQueryProvider.notifier).state = '';
+      ref.read(paginatedSearchProvider.notifier).clear();
 
       // Dismiss the keyboard
       widget.focusNode?.unfocus();
@@ -253,11 +345,5 @@ class _SearchWidgetState extends ConsumerState<SearchWidget> {
         );
       }
     }
-  }
-
-  @override
-  void dispose() {
-    _searchController.dispose();
-    super.dispose();
   }
 }

@@ -143,13 +143,24 @@ class TripBottomSheet extends ConsumerWidget {
                     // Date Selector - Always visible to allow date switching
                     _buildDatePicker(context, ref),
 
-                    // Locations List
+                    // Locations List - PERFORMANCE: Spread widgets to avoid nested ListView
                     Consumer(builder: (context, ref, _) {
                       final locationsForDate =
                           ref.watch(locationsForSelectedDateProvider);
-                      return _buildLocationsList(
-                          context, ref, locationsForDate, scrollController);
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: _buildLocationsListWidgets(
+                            context, ref, locationsForDate, scrollController),
+                      );
                     }),
+
+                    // Optimize button
+                    _buildOptimizeButton(context, ref),
+
+                    const SizedBox(height: 12),
+
+                    // CSV download button
+                    _buildCsvDownloadButton(context, ref),
 
                     const SizedBox(height: 75),
                   ],
@@ -810,222 +821,220 @@ class TripBottomSheet extends ConsumerWidget {
     );
   }
 
-  Widget _buildLocationsList(BuildContext context, WidgetRef ref,
+  /// PERFORMANCE: Build location widgets as a flat list to enable lazy loading
+  /// Returns List<Widget> instead of nested ListViews for better performance
+  List<Widget> _buildLocationsListWidgets(BuildContext context, WidgetRef ref,
       List<LocationModel> locations, ScrollController scrollController) {
     if (locations.isEmpty) {
-      return Container(
-        padding:
-            const EdgeInsets.only(left: 32, right: 32, bottom: 32, top: 16),
-        child: Column(
-          children: [
-            Icon(
-              Icons.map_outlined,
-              size: 64, // Uses theme colors
-              color: Theme.of(context).textTheme.bodyMedium?.color,
-            ),
-            const SizedBox(height: 16),
-            Text(
-              'No locations for this date', // Uses theme colors
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Select another date or add new locations.', // Uses theme colors
-              style: Theme.of(context).textTheme.bodyMedium,
-              textAlign: TextAlign.center,
-            ),
-          ],
+      return [
+        Container(
+          padding:
+              const EdgeInsets.only(left: 32, right: 32, bottom: 32, top: 16),
+          child: Column(
+            children: [
+              Icon(
+                Icons.map_outlined,
+                size: 64,
+                color: Theme.of(context).textTheme.bodyMedium?.color,
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'No locations for this date',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Select another date or add new locations.',
+                style: Theme.of(context).textTheme.bodyMedium,
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
         ),
-      );
+      ];
     }
 
     final normalLocations = locations.where((l) => !l.isSkipped).toList();
     final skippedLocations = locations.where((l) => l.isSkipped).toList();
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        // Normal (upcoming) locations - OPTIMIZATION: Use ListView.builder with keys
-        if (normalLocations.isNotEmpty)
-          ListView.builder(
-            // OPTIMIZATION: Use ListView.builder instead of ListView.separated for better performance
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            itemCount: normalLocations.length,
-            itemBuilder: (context, index) {
-              final location = normalLocations[index];
-              // OPTIMIZATION: Add unique keys to prevent unnecessary rebuilds
-              return Column(
-                key: ValueKey(location.id),
-                children: [
-                  OptimizedLocationCard(
-                    location: location,
-                    number: index + 1,
-                    scrollController: scrollController,
-                    sheetController: sheetController,
-                    onLocationTap: onLocationTap,
-                  ),
-                  if (index < normalLocations.length - 1)
-                    Divider(
-                      height: 1,
-                      thickness: 1,
-                      color:
-                          Theme.of(context).dividerColor.withValues(alpha: 0.1),
-                      indent: 20,
-                      endIndent: 20,
-                    ),
-                ],
-              );
-            },
+    final widgets = <Widget>[];
+
+    // Normal (upcoming) locations - directly add to list
+    for (int i = 0; i < normalLocations.length; i++) {
+      final location = normalLocations[i];
+      widgets.add(
+        OptimizedLocationCard(
+          key: ValueKey(location.id),
+          location: location,
+          number: i + 1,
+          scrollController: scrollController,
+          sheetController: sheetController,
+          onLocationTap: onLocationTap,
+        ),
+      );
+
+      // Add divider between items (but not after the last one)
+      if (i < normalLocations.length - 1) {
+        widgets.add(
+          Divider(
+            height: 1,
+            thickness: 1,
+            color: Theme.of(context).dividerColor.withValues(alpha: 0.1),
+            indent: 20,
+            endIndent: 20,
           ),
+        );
+      }
+    }
 
-        // Skipped locations section
-        if (skippedLocations.isNotEmpty) ...[
-          Padding(
-            padding: const EdgeInsets.only(top: 24.0, bottom: 8.0, left: 4.0),
-            child: Row(
-              children: [
-                Icon(Icons.remove_circle_outline,
-                    color: Colors.grey[600], size: 20),
-                const SizedBox(width: 8),
-                Text(
-                  'Skipped Locations',
-                  style: Theme.of(context)
-                      .textTheme
-                      .titleMedium
-                      ?.copyWith(color: Colors.grey[600]),
-                ),
-              ],
-            ),
-          ),
-          ListView.builder(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            itemCount: skippedLocations.length,
-            itemBuilder: (context, index) {
-              final location = skippedLocations[index];
-              // OPTIMIZATION: Add unique keys to prevent unnecessary rebuilds
-              return OptimizedLocationCard(
-                key: ValueKey('skipped_${location.id}'),
-                location: location,
-                number: -1,
-                scrollController: scrollController,
-                sheetController: sheetController,
-                onLocationTap: onLocationTap,
-              );
-            },
-          ),
-        ],
-
-        // Optimize button
-        Consumer(builder: (context, ref, _) {
-          final isGenerating = ref.watch(isGeneratingRouteProvider);
-          final hasRoute = ref
-              .watch(tripProvider.select((s) => s.optimizedRoute.isNotEmpty));
-          final selectedDate = ref.watch(selectedDateProvider);
-
-          final now = DateTime.now();
-          final today = DateTime(now.year, now.month, now.day);
-          final isPastDate = selectedDate.isBefore(today);
-
-          final isViewingHistory = isPastDate && hasRoute;
-
-          String buttonText;
-          VoidCallback? onPressedAction;
-
-          if (isGenerating) {
-            buttonText = 'Optimizing...';
-            onPressedAction = null;
-          } else if (isViewingHistory) {
-            buttonText = 'View Route';
-            onPressedAction = () {
-              // Simply collapse the sheet to view the route on the map
-              sheetController?.animateTo(
-                0.12, // minChildSize
-                duration: const Duration(milliseconds: 300),
-                curve: Curves.easeInOut,
-              );
-              // Signal that we want to zoom to the historical route.
-              ref.read(viewHistoricalRouteProvider.notifier).state = true;
-            };
-          } else {
-            buttonText = hasRoute ? 'Re-optimize Route' : 'Optimize Route';
-            onPressedAction = () => _showChooseStartPointDialog(context, ref,
-                isReoptimizing: hasRoute);
-          }
-
-          return SizedBox(
-            width: double.infinity,
-            child: ElevatedButton.icon(
-              onPressed: onPressedAction,
-              icon: isGenerating
-                  ? const SizedBox(
-                      height: 16,
-                      width: 16,
-                      child: CircularProgressIndicator(
-                          strokeWidth: 2, color: Colors.black),
-                    )
-                  : Icon(isViewingHistory
-                      ? Icons.visibility_outlined
-                      : Icons.route),
-              label: Text(buttonText),
-              style: ElevatedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 16),
+    // Skipped locations section
+    if (skippedLocations.isNotEmpty) {
+      widgets.add(
+        Padding(
+          padding: const EdgeInsets.only(top: 24.0, bottom: 8.0, left: 4.0),
+          child: Row(
+            children: [
+              Icon(Icons.remove_circle_outline,
+                  color: Colors.grey[600], size: 20),
+              const SizedBox(width: 8),
+              Text(
+                'Skipped Locations',
+                style: Theme.of(context)
+                    .textTheme
+                    .titleMedium
+                    ?.copyWith(color: Colors.grey[600]),
               ),
-            ),
-          );
-        }),
-        const SizedBox(height: 12),
-        Consumer(builder: (context, ref, _) {
-          final locations = ref.watch(locationsForSelectedDateProvider);
-          final isGenerating = ref.watch(isGeneratingRouteProvider);
+            ],
+          ),
+        ),
+      );
 
-          if (locations.isEmpty) return const SizedBox.shrink();
+      // Add skipped location cards
+      for (final location in skippedLocations) {
+        widgets.add(
+          OptimizedLocationCard(
+            key: ValueKey('skipped_${location.id}'),
+            location: location,
+            number: -1,
+            scrollController: scrollController,
+            sheetController: sheetController,
+            onLocationTap: onLocationTap,
+          ),
+        );
+      }
+    }
 
-          return SizedBox(
-            width: double.infinity,
-            child: OutlinedButton.icon(
-              onPressed: isGenerating
-                  ? null
-                  : () async {
-                      try {
-                        final csvService = CsvService();
-                        await csvService.generateAndShareTripCsv(locations);
-                      } on MissingPluginException {
-                        if (context.mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text(
-                                  'Please restart the app to enable CSV download.'),
-                              backgroundColor: Colors.orange,
-                            ),
-                          );
-                        }
-                      } catch (e) {
-                        if (context.mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content: Text(
-                                  'Failed to download CSV. Please restart the app.'),
-                              backgroundColor: Colors.red,
-                            ),
-                          );
-                        }
-                      }
-                    },
-              icon: const Icon(Icons.download),
-              label: const Text('Download Trip CSV'),
-              style: OutlinedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 16),
-                side: BorderSide(
-                  color: Theme.of(context).colorScheme.primary,
-                ),
-              ),
-            ),
+    return widgets;
+  }
+
+  /// Build optimize and CSV buttons as separate widgets
+  Widget _buildOptimizeButton(BuildContext context, WidgetRef ref) {
+    return Consumer(builder: (context, ref, _) {
+      final isGenerating = ref.watch(isGeneratingRouteProvider);
+      final hasRoute = ref
+          .watch(tripProvider.select((s) => s.optimizedRoute.isNotEmpty));
+      final selectedDate = ref.watch(selectedDateProvider);
+
+      final now = DateTime.now();
+      final today = DateTime(now.year, now.month, now.day);
+      final isPastDate = selectedDate.isBefore(today);
+
+      final isViewingHistory = isPastDate && hasRoute;
+
+      String buttonText;
+      VoidCallback? onPressedAction;
+
+      if (isGenerating) {
+        buttonText = 'Optimizing...';
+        onPressedAction = null;
+      } else if (isViewingHistory) {
+        buttonText = 'View Route';
+        onPressedAction = () {
+          sheetController?.animateTo(
+            0.12,
+            duration: const Duration(milliseconds: 300),
+            curve: Curves.easeInOut,
           );
-        }),
-      ],
-    );
+          ref.read(viewHistoricalRouteProvider.notifier).state = true;
+        };
+      } else {
+        buttonText = hasRoute ? 'Re-optimize Route' : 'Optimize Route';
+        onPressedAction = () => _showChooseStartPointDialog(context, ref,
+            isReoptimizing: hasRoute);
+      }
+
+      return SizedBox(
+        width: double.infinity,
+        child: ElevatedButton.icon(
+          onPressed: onPressedAction,
+          icon: isGenerating
+              ? const SizedBox(
+                  height: 16,
+                  width: 16,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: Colors.black),
+                )
+              : Icon(isViewingHistory
+                  ? Icons.visibility_outlined
+                  : Icons.route),
+          label: Text(buttonText),
+          style: ElevatedButton.styleFrom(
+            padding: const EdgeInsets.symmetric(vertical: 16),
+          ),
+        ),
+      );
+    });
+  }
+
+  Widget _buildCsvDownloadButton(BuildContext context, WidgetRef ref) {
+    return Consumer(builder: (context, ref, _) {
+      final locations = ref.watch(locationsForSelectedDateProvider);
+      final isGenerating = ref.watch(isGeneratingRouteProvider);
+
+      if (locations.isEmpty) return const SizedBox.shrink();
+
+      return SizedBox(
+        width: double.infinity,
+        child: OutlinedButton.icon(
+          onPressed: isGenerating
+              ? null
+              : () async {
+                  try {
+                    final csvService = CsvService();
+                    await csvService.generateAndShareTripCsv(locations);
+                  } on MissingPluginException {
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text(
+                              'Please restart the app to enable CSV download.'),
+                          backgroundColor: Colors.orange,
+                        ),
+                      );
+                    }
+                  } catch (e) {
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                              'Failed to download CSV. Please restart the app.'),
+                          backgroundColor: Colors.red,
+                        ),
+                      );
+                    }
+                  }
+                },
+          icon: const Icon(Icons.download),
+          label: const Text('Download Trip CSV'),
+          style: OutlinedButton.styleFrom(
+            padding: const EdgeInsets.symmetric(vertical: 16),
+            side: BorderSide(
+              color: Theme.of(context).colorScheme.primary,
+            ),
+          ),
+        ),
+      );
+    });
   }
 
   void _showChooseStartPointDialog(BuildContext context, WidgetRef ref,

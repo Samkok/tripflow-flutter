@@ -60,6 +60,10 @@ class SubscriptionRealtimeService {
   RealtimeChannel? _channel;
   bool _isSubscribed = false;
 
+  int _authRetryCount = 0;
+  static const int _maxAuthRetries = 5;
+  static const Duration _authRetryDelay = Duration(seconds: 3);
+
   /// Subscribe to subscription changes for the current user
   Future<void> subscribe() async {
     if (_isSubscribed) {
@@ -69,9 +73,19 @@ class SubscriptionRealtimeService {
 
     final userId = _supabase.auth.currentUser?.id;
     if (userId == null) {
-      debugPrint('SubscriptionRealtimeService: ⚠️ No user logged in, skipping subscription');
+      debugPrint('SubscriptionRealtimeService: ⚠️ No user logged in');
+      // CRITICAL FIX: On iOS, auth may not be ready yet when this is called.
+      // Retry with backoff instead of silently giving up.
+      if (_authRetryCount < _maxAuthRetries) {
+        _authRetryCount++;
+        debugPrint('SubscriptionRealtimeService: 🔄 Will retry auth check in ${_authRetryDelay.inSeconds}s (attempt $_authRetryCount/$_maxAuthRetries)');
+        Future.delayed(_authRetryDelay, () => subscribe());
+      } else {
+        debugPrint('SubscriptionRealtimeService: ❌ Max auth retries reached, giving up');
+      }
       return;
     }
+    _authRetryCount = 0; // Reset on success
 
     debugPrint('SubscriptionRealtimeService: 🔔 Starting subscription for user $userId');
 
@@ -229,6 +243,15 @@ class SubscriptionRealtimeService {
       store: newRecord['store'] as String?,
       data: newRecord,
     );
+  }
+
+  /// Force resubscribe - unsubscribes and resubscribes with fresh auth
+  /// Useful when auth state changes after initial subscription attempt
+  Future<void> resubscribe() async {
+    debugPrint('SubscriptionRealtimeService: 🔄 Resubscribing with fresh auth...');
+    _authRetryCount = 0;
+    unsubscribe();
+    await subscribe();
   }
 
   /// Unsubscribe from subscription changes

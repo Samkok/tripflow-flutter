@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:hive_flutter/hive_flutter.dart';
+import 'package:voyza/main.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/saved_location.dart';
 import '../services/supabase_service.dart';
@@ -21,6 +22,8 @@ class SyncResult {
 
 class LocationRepository {
   static const String _boxName = 'locations';
+  static const String _migrationKey = 'location_schema_v2_migrated';
+  static const String _needsDataSyncKey = 'location_needs_data_sync';
   Box<SavedLocation>? _box; // Changed from late to nullable
   final SupabaseClient _supabase = SupabaseService.instance.client;
   RealtimeChannel? _subscription;
@@ -64,21 +67,28 @@ class LocationRepository {
       }
     }
 
-    // Migration: Clear old data that doesn't have tripId/scheduledDate fields
-    // This ensures fresh data is loaded from the database
-    if (_box!.isNotEmpty) {
+    // PERFORMANCE: Non-blocking migration with lazy data sync
+    // Check if migration has already been done to avoid repeated checks
+    final prefs = SharedPrefsCache.instance;
+    final migrationDone = prefs.getBool(_migrationKey) ?? false;
+
+    if (!migrationDone && _box!.isNotEmpty) {
       final needsMigration = _box!.values.any((loc) => loc.tripId == null && loc.source == 'synced');
-      
+
       if (needsMigration) {
         debugPrint('Clearing Hive cache due to schema update (added tripId/scheduledDate fields)');
         await _box!.clear();
-        
-        // If authenticated, immediately fetch fresh remote data
+
+        // Set flag to sync data later instead of blocking startup
         final user = _supabase.auth.currentUser;
         if (user != null) {
-          await fetchRemoteLocations();
+          await prefs.setBool(_needsDataSyncKey, true);
+          debugPrint('Migration complete. Data will sync in background.');
         }
       }
+
+      // Mark migration as done
+      await prefs.setBool(_migrationKey, true);
     }
   }
 
@@ -402,12 +412,15 @@ class LocationRepository {
     try {
       await _ensureInitialized();
       debugPrint('watchLocations: Box initialized, has ${_box!.length} items');
-      
+
+      // PERFORMANCE: Trigger lazy background sync if migration set the flag
+      _syncDataInBackgroundIfNeeded();
+
       // Emit current contents first
       final initialData = _box!.values.toList();
       debugPrint('watchLocations: Emitting initial data with ${initialData.length} items');
       yield initialData;
-      
+
       // Then watch for future changes
       yield* _box!.watch().map((event) {
         final data = _box!.values.toList();
@@ -418,6 +431,25 @@ class LocationRepository {
       debugPrint('watchLocations error: $e');
       yield const <SavedLocation>[];
     }
+  }
+
+  /// PERFORMANCE: Non-blocking background data sync triggered after migration
+  void _syncDataInBackgroundIfNeeded() {
+    Future(() async {
+      try {
+        final prefs = SharedPrefsCache.instance;
+        final needsSync = prefs.getBool(_needsDataSyncKey) ?? false;
+
+        if (needsSync) {
+          debugPrint('Starting background data sync after migration...');
+          await fetchRemoteLocations();
+          await prefs.setBool(_needsDataSyncKey, false);
+          debugPrint('Background data sync completed.');
+        }
+      } catch (e) {
+        debugPrint('Error in background data sync: $e');
+      }
+    });
   }
 
   /// Get the count of local (anonymous) locations

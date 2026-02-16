@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:voyza/main.dart';
 
 
 class DebouncedProximityThreshold {
@@ -35,8 +35,9 @@ class DebouncedProximityThresholdNotifier extends StateNotifier<DebouncedProximi
 
   static const _proximityThresholdKey = 'proximity_threshold';
 
-  Future<void> _loadProximityThreshold() async {
-    final prefs = await SharedPreferences.getInstance();
+  void _loadProximityThreshold() {
+    // PERFORMANCE: Use cached SharedPreferences - no async needed
+    final prefs = SharedPrefsCache.instance;
     final savedValue = prefs.getDouble(_proximityThresholdKey) ?? 1000.0;
     state = DebouncedProximityThreshold(
       previewValue: savedValue,
@@ -45,7 +46,7 @@ class DebouncedProximityThresholdNotifier extends StateNotifier<DebouncedProximi
   }
 
   Future<void> _saveProximityThreshold(double value) async {
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = SharedPrefsCache.instance;
     await prefs.setDouble(_proximityThresholdKey, value);
   }
 

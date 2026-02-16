@@ -46,17 +46,15 @@ class MapOverlayNotifier extends AsyncNotifier<MapOverlayState> {
 
   @override
   Future<MapOverlayState> build() async {
-    print('🏗️ Building MapOverlayNotifier');
-
-    // Watch dependencies
-    final tripState = ref.watch(tripProvider);
+    // PERFORMANCE: Use .select() to only rebuild when specific fields change
+    // instead of watching entire TripState which rebuilds on ANY change
+    final pinnedLocations = ref.watch(tripProvider.select((s) => s.pinnedLocations));
+    final currentLocation = ref.watch(tripProvider.select((s) => s.currentLocation));
+    final legPolylines = ref.watch(tripProvider.select((s) => s.legPolylines));
     final proximityThreshold = ref.watch(proximityThresholdCommittedProvider);
     final tappedPolylineId = ref.watch(tappedPolylineIdProvider);
     final showMarkerNames = ref.watch(showMarkerNamesProvider);
-    final isDarkMode = ref.watch(themeProvider) == ThemeMode.dark;
-
-    print(
-        '🔄 MapOverlay build triggered - locations: ${tripState.pinnedLocations.length}, threshold: ${proximityThreshold}m');
+    final isDarkMode = ref.watch(themeProvider.select((mode) => mode == ThemeMode.dark));
 
     // Load marker icons if not already loaded
     if (_currentLocationIcon == null) {
@@ -64,40 +62,38 @@ class MapOverlayNotifier extends AsyncNotifier<MapOverlayState> {
           backgroundColor: Colors.black);
     }
 
-    return await _generateOverlays(tripState, proximityThreshold,
-        tappedPolylineId, showMarkerNames, isDarkMode);
+    return await _generateOverlays(pinnedLocations, currentLocation,
+        legPolylines, proximityThreshold, tappedPolylineId, showMarkerNames, isDarkMode);
   }
 
   Future<MapOverlayState> _generateOverlays(
-    TripState tripState,
+    List<LocationModel> pinnedLocations,
+    LatLng? currentLocation,
+    List<List<LatLng>> legPolylines,
     double proximityThreshold,
     String? tappedPolylineId,
     bool showMarkerNames,
     bool isDarkMode,
   ) async {
-    print(
-        '🎨 Generating overlays with ${tripState.pinnedLocations.length} locations');
-
     final Set<Marker> markers = {};
     final Set<Polyline> polylines = {};
 
     // Current location marker
-    if (tripState.currentLocation != null && _currentLocationIcon != null) {
+    if (currentLocation != null && _currentLocationIcon != null) {
       markers.add(
         Marker(
           markerId: const MarkerId('current_location'),
-          position: tripState.currentLocation!,
-          anchor: const Offset(0.5, 0.5), // Center the icon on the coordinate
+          position: currentLocation,
+          anchor: const Offset(0.5, 0.5),
           icon: _currentLocationIcon!,
         ),
       );
     }
 
     // Pinned location markers with custom numbered icons
-    for (int i = 0; i < tripState.pinnedLocations.length; i++) {
-      final location = tripState.pinnedLocations[i];
+    for (int i = 0; i < pinnedLocations.length; i++) {
+      final location = pinnedLocations[i];
 
-      // Get custom numbered marker from cache or generate if not present
       final int markerNumber = i + 1;
       final String cacheKey = '${markerNumber}_${location.name}_$isDarkMode';
       MarkerBitmapResult? customMarkerResult = _numberedMarkerIcons[cacheKey];
@@ -123,8 +119,8 @@ class MapOverlayNotifier extends AsyncNotifier<MapOverlayState> {
     }
 
     // Individual leg polylines (clickable)
-    for (int i = 0; i < tripState.legPolylines.length; i++) {
-      final legPoints = tripState.legPolylines[i];
+    for (int i = 0; i < legPolylines.length; i++) {
+      final legPoints = legPolylines[i];
       if (legPoints.isNotEmpty) {
         final polylineId = 'leg_$i';
         final isHighlighted = tappedPolylineId == polylineId;
@@ -143,19 +139,15 @@ class MapOverlayNotifier extends AsyncNotifier<MapOverlayState> {
     }
 
     // Generate zone polygons around clustered locations
-    print(
-        '📏 Using proximity threshold: ${proximityThreshold}m for zone generation');
-
     final nonSkippedLocations =
-        tripState.pinnedLocations.where((loc) => !loc.isSkipped).toList();
+        pinnedLocations.where((loc) => !loc.isSkipped).toList();
     final automaticZones = ZoneUtils.getZoneCircles(
       nonSkippedLocations,
       proximityThreshold,
     );
-    print('🏞️ Generated ${automaticZones.length} automatic zone circles');
 
     return MapOverlayState(
-      originalLocations: tripState.pinnedLocations,
+      originalLocations: pinnedLocations,
       markers: markers,
       polylines: polylines,
       automaticZones: automaticZones,

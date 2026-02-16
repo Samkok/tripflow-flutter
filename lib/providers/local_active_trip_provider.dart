@@ -1,6 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:voyza/main.dart';
 import '../models/trip.dart';
 import 'user_trip_provider.dart';
 import 'trip_collaborator_provider.dart';
@@ -16,8 +16,9 @@ class LocalActiveTripNotifier extends StateNotifier<String?> {
 
   static const _activeTripKey = 'local_active_trip_id';
 
-  Future<void> _loadActiveTripId() async {
-    final prefs = await SharedPreferences.getInstance();
+  void _loadActiveTripId() {
+    // PERFORMANCE: Use cached SharedPreferences - no async needed
+    final prefs = SharedPrefsCache.instance;
     final tripId = prefs.getString(_activeTripKey);
     if (tripId != null) {
       debugPrint('LocalActiveTripNotifier: 📂 Loaded active trip from storage: $tripId');
@@ -29,7 +30,7 @@ class LocalActiveTripNotifier extends StateNotifier<String?> {
 
   Future<void> setActiveTrip(String tripId) async {
     debugPrint('LocalActiveTripNotifier: 💾 Saving active trip to storage: $tripId');
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = SharedPrefsCache.instance;
     await prefs.setString(_activeTripKey, tripId);
     state = tripId;
     debugPrint('LocalActiveTripNotifier: ✅ Active trip saved successfully');
@@ -37,14 +38,14 @@ class LocalActiveTripNotifier extends StateNotifier<String?> {
 
   Future<void> deactivateTrip() async {
     debugPrint('LocalActiveTripNotifier: 🔄 Deactivating trip...');
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = SharedPrefsCache.instance;
     await prefs.remove(_activeTripKey);
     state = null;
     debugPrint('LocalActiveTripNotifier: ✅ Trip deactivated successfully');
   }
 
   Future<void> clear() async {
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = SharedPrefsCache.instance;
     await prefs.remove(_activeTripKey);
     state = null;
   }

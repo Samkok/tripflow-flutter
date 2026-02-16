@@ -11,40 +11,37 @@ class MarkerCacheService {
   final LinkedHashMap<String, MarkerBitmapResult> _cache = LinkedHashMap();
   static const int _maxCacheSize = 100;
   MarkerBitmapResult? _currentLocationIcon;
+  bool _isPrewarming = false;
   bool _isPrewarmed = false;
 
-  /// PERFORMANCE: Pre-generate common markers to avoid async delays on first use
-  /// Call this during app initialization for better UX
-  Future<void> prewarmCache() async {
-    if (_isPrewarmed) return;
+  /// PERFORMANCE: Lazily pre-generate common markers in background
+  /// This runs without blocking and improves UX for subsequent marker loads
+  /// Called automatically on first marker request
+  void prewarmCacheInBackground() {
+    if (_isPrewarmed || _isPrewarming) return;
+    _isPrewarming = true;
 
-    print('🔥 Prewarming marker cache...');
+    // Run prewarming in background without blocking
+    Future(() async {
+      try {
+        print('🔥 Prewarming marker cache in background...');
 
-    // Pre-generate current location marker
-    await getCurrentLocationMarker();
+        // Pre-generate only the most commonly used markers (2-3 markers)
+        // to minimize initial load while still providing benefit
+        await Future.wait([
+          getCurrentLocationMarker(),
+          getLegStartMarker(),
+          getLegEndMarker(),
+        ]);
 
-    // Pre-generate numbered markers 1-10 (covers most common use cases)
-    // This prevents the first location additions from being slow
-    final prewarmFutures = <Future>[];
-    for (int i = 1; i <= 10; i++) {
-      prewarmFutures.add(
-        getNumberedMarker(
-          number: i,
-          name: 'Location $i',
-          backgroundColor: AppTheme.accentColor,
-          textColor: Colors.white,
-          isDarkMode: false, // or true, for prewarming
-        ),
-      );
-    }
-
-    // Pre-generate leg markers
-    prewarmFutures.add(getLegStartMarker());
-    prewarmFutures.add(getLegEndMarker());
-
-    await Future.wait(prewarmFutures);
-    _isPrewarmed = true;
-    print('✅ Marker cache prewarmed with ${_cache.length} markers');
+        _isPrewarmed = true;
+        print('✅ Marker cache prewarmed with ${_cache.length} markers');
+      } catch (e) {
+        print('⚠️ Error prewarming marker cache: $e');
+      } finally {
+        _isPrewarming = false;
+      }
+    });
   }
 
   String _generateKey({
@@ -63,6 +60,9 @@ class MarkerCacheService {
   Future<MarkerBitmapResult> getCurrentLocationMarker({
     Color backgroundColor = const Color(0xFF00D4FF),
   }) async {
+    // Trigger background prewarming on first marker access
+    prewarmCacheInBackground();
+
     if (_currentLocationIcon != null) {
       return _currentLocationIcon!;
     }
@@ -97,6 +97,9 @@ class MarkerCacheService {
     bool isStart = false,
     bool isSkipped = false, // Add this parameter
   }) async {
+    // Trigger background prewarming on first marker access
+    prewarmCacheInBackground();
+
     final key =
         'numbered_${number}_${name}_${backgroundColor.value}_${textColor.value}_${isDarkMode}_${isSkipped}_$isStart';
 

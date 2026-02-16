@@ -56,7 +56,7 @@ post_install do |installer|
         # Only set if not already set (preserves existing team)
         if config.build_settings['DEVELOPMENT_TEAM'].nil? || config.build_settings['DEVELOPMENT_TEAM'].empty?
           # Try to get team from environment or use automatic signing
-          config.build_settings['DEVELOPMENT_TEAM'] = ENV['DEVELOPMENT_TEAM'] || ''
+          config.build_settings['DEVELOPMENT_TEAM'] = ENV['DEVELOPMENT_TEAM'] || 'J57YQ6F7J9'
         end
         # Enable automatic code signing
         config.build_settings['CODE_SIGN_STYLE'] = 'Automatic'
