@@ -19,6 +19,7 @@
         "geolocator",
         "go_router",
         "google_maps_flutter",
+        "google_maps_url_extractor",
         "google_places_flutter",
         "hive",
         "hive_flutter",
@@ -130,6 +131,14 @@
         "stream_channel",
         "test_api",
         "vector_math"
+      ]
+    },
+    {
+      "name": "google_maps_url_extractor",
+      "version": "2.0.1",
+      "dependencies": [
+        "flutter",
+        "http"
       ]
     },
     {

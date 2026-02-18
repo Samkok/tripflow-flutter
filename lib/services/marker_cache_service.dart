@@ -170,13 +170,23 @@ class MarkerCacheService {
   }
 
   Future<MarkerBitmapResult> getGoogleMapsButtonMarker() async {
-    const key =
-        'google_maps_button_marker_v2'; // Versioned to force cache refresh
+    const key = 'google_maps_button_v3';
     if (_cache.containsKey(key)) {
       return _cache[key]!;
     }
 
     final result = await MarkerUtils.getGoogleMapsButtonMarker();
+    _addToCache(key, result);
+    return result;
+  }
+
+  Future<MarkerBitmapResult> getGrabButtonMarker() async {
+    const key = 'grab_button_v2';
+    if (_cache.containsKey(key)) {
+      return _cache[key]!;
+    }
+
+    final result = await MarkerUtils.getGrabButtonMarker();
     _addToCache(key, result);
     return result;
   }

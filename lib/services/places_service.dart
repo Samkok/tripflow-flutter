@@ -286,6 +286,46 @@ class PlacesService {
     }
   }
 
+  /// Geocode an address string to get PlaceDetails
+  static Future<PlaceDetails?> getPlaceFromAddress(String address) async {
+    try {
+      final url = 'https://maps.googleapis.com/maps/api/geocode/json'
+          '?address=${Uri.encodeComponent(address)}'
+          '&key=${ApiService.googleMapsApiKey}';
+
+      final response = await ApiService.dio.get(url);
+      final data = response.data;
+
+      if (data['status'] != 'OK' || data['results'].isEmpty) return null;
+
+      final result = data['results'][0];
+      final location = result['geometry']['location'];
+      final lat = location['lat'] as double;
+      final lng = location['lng'] as double;
+
+      String name = address;
+      final addressComponents = result['address_components'] as List;
+      for (final component in addressComponents) {
+        final types = component['types'] as List;
+        if (types.contains('establishment') ||
+            types.contains('point_of_interest') ||
+            types.contains('premise')) {
+          name = component['long_name'];
+          break;
+        }
+      }
+
+      return PlaceDetails(
+        name: name,
+        address: result['formatted_address'] ?? address,
+        coordinates: LatLng(lat, lng),
+      );
+    } catch (e) {
+      print('Error geocoding address: $e');
+      return null;
+    }
+  }
+
   static Future<PlaceDetails?> getPlaceFromGoogleMapsUrl(String url) async {
     try {
       String finalUrl = url;

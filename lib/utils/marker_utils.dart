@@ -265,91 +265,85 @@ class MarkerUtils {
     );
   }
 
-  /// Creates a 'Open Google Maps' button marker
-  static Future<MarkerBitmapResult> getGoogleMapsButtonMarker() async {
+  /// Creates a single pill button marker bitmap
+  static Future<MarkerBitmapResult> _createPillButtonMarker({
+    required String label,
+    required IconData iconData,
+    required Color color,
+  }) async {
     final ui.PictureRecorder pictureRecorder = ui.PictureRecorder();
     final Canvas canvas = Canvas(pictureRecorder);
 
     const double padding = 8.0;
     const double height = 28.0;
 
-    // Paints
-    final Paint buttonPaint = Paint()
-      ..color = const Color(0xFF4285F4) // Google Blue
-      ..style = PaintingStyle.fill;
-
-    // Text "Open Maps"
-    final TextPainter textPainter = TextPainter(
-      text: const TextSpan(
-        text: 'OPEN MAPS',
-        style: TextStyle(
-          color: Colors.white,
-          fontSize: 11,
-          fontWeight: FontWeight.bold,
-        ),
+    final textPainter = TextPainter(
+      text: TextSpan(
+        text: label,
+        style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
       ),
       textDirection: TextDirection.ltr,
-    );
-    textPainter.layout();
+    )..layout();
 
-    // Icon
-    const IconData iconData = Icons.directions;
-    final TextPainter iconPainter = TextPainter(
+    final iconPainter = TextPainter(
       text: TextSpan(
         text: String.fromCharCode(iconData.codePoint),
-        style: TextStyle(
-          fontSize: 14,
-          fontFamily: iconData.fontFamily,
-          color: Colors.white,
-        ),
+        style: TextStyle(fontSize: 14, fontFamily: iconData.fontFamily, color: Colors.white),
       ),
       textDirection: TextDirection.ltr,
-    );
-    iconPainter.layout();
+    )..layout();
 
     final double contentWidth = iconPainter.width + 4 + textPainter.width;
     final double totalWidth = padding * 2 + contentWidth;
-    final double totalHeight = height;
 
-    // Draw Shadow
-    final RRect shadowRRect = RRect.fromRectAndRadius(
-      Rect.fromLTWH(0, 2, totalWidth, totalHeight),
-      const Radius.circular(14),
+    // Shadow
+    canvas.drawShadow(
+      Path()..addRRect(RRect.fromRectAndRadius(
+          Rect.fromLTWH(0, 2, totalWidth, height), const Radius.circular(14))),
+      Colors.black.withValues(alpha: 0.3), 4.0, true,
     );
-    canvas.drawShadow(Path()..addRRect(shadowRRect),
-        Colors.black.withOpacity(0.3), 4.0, true);
 
-    // Draw Button
-    final RRect buttonRRect = RRect.fromRectAndRadius(
-      Rect.fromLTWH(0, 0, totalWidth, totalHeight),
-      const Radius.circular(14),
+    // Button
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+          Rect.fromLTWH(0, 0, totalWidth, height), const Radius.circular(14)),
+      Paint()..color = color,
     );
-    canvas.drawRRect(buttonRRect, buttonPaint);
 
-    // Draw Content
-    final double contentStartX = padding;
-    final double contentStartY = (totalHeight - iconPainter.height) / 2;
+    // Content centered
+    final double startX = (totalWidth - contentWidth) / 2;
+    iconPainter.paint(canvas, Offset(startX, (height - iconPainter.height) / 2));
+    textPainter.paint(canvas, Offset(startX + iconPainter.width + 4, (height - textPainter.height) / 2));
 
-    iconPainter.paint(canvas, Offset(contentStartX, contentStartY));
-
-    final double textStartY = (totalHeight - textPainter.height) / 2;
-    textPainter.paint(
-        canvas, Offset(contentStartX + iconPainter.width + 4, textStartY));
-
-    // Convert
     final ui.Image img = await pictureRecorder
         .endRecording()
-        .toImage(totalWidth.toInt(), (totalHeight + 4).toInt());
-
+        .toImage(totalWidth.toInt(), (height + 4).toInt());
     final ByteData? data = await img.toByteData(format: ui.ImageByteFormat.png);
 
     if (data == null) {
-      return MarkerBitmapResult(
-          BitmapDescriptor.defaultMarker, const Offset(0.5, 0.5));
+      return MarkerBitmapResult(BitmapDescriptor.defaultMarker, const Offset(0.5, 0.5));
     }
 
-    return MarkerBitmapResult(BitmapDescriptor.bytes(data.buffer.asUint8List()),
-        const Offset(0.5, 0.5));
+    return MarkerBitmapResult(
+        BitmapDescriptor.bytes(data.buffer.asUint8List()), const Offset(0.5, 0.5));
+  }
+
+  /// Creates the 'OPEN MAPS' button marker
+  static Future<MarkerBitmapResult> getGoogleMapsButtonMarker() async {
+    return _createPillButtonMarker(
+      label: 'OPEN MAPS',
+      iconData: Icons.directions,
+      color: const Color(0xFF4285F4),
+    );
+  }
+
+  /// Creates the 'OPEN GRAB' button marker
+  static Future<MarkerBitmapResult> getGrabButtonMarker() async {
+    return _createPillButtonMarker(
+      label: 'OPEN GRAB',
+      iconData: Icons.local_taxi,
+      color: const Color(0xFF00B14F),
+    );
   }
 
   /// Creates a custom bitmap for leg start/end markers.

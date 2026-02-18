@@ -37,7 +37,7 @@ class MapWidget extends ConsumerWidget {
       // Skip special markers (current location, route markers)
       if (id == 'current_location' ||
           id.startsWith('leg_') ||
-          id.startsWith('route_info_')) {
+          id.startsWith('route_')) {
         return marker;
       }
       

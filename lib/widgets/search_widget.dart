@@ -1,6 +1,9 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:google_maps_url_extractor/google_maps_url_extractor.dart';
 import 'package:voyza/providers/map_ui_state_provider.dart';
 import 'package:uuid/uuid.dart';
 import '../models/location_model.dart';
@@ -10,6 +13,7 @@ import '../providers/trip_collaborator_provider.dart';
 import '../services/places_service.dart';
 import '../services/subscription_limit_service.dart';
 import '../core/theme.dart';
+import 'google_maps_url_dialog.dart';
 
 final searchQueryProvider = StateProvider.autoDispose<String>((ref) => '');
 
@@ -87,16 +91,25 @@ class _SearchWidgetState extends ConsumerState<SearchWidget> {
                     Icons.search,
                     color: AppTheme.primaryColor,
                   ),
-                  suffixIcon: searchQuery.isNotEmpty
-                      ? IconButton(
+                  suffixIcon: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.link),
+                        tooltip: 'Paste Google Maps link',
+                        onPressed: _showUrlInputDialog,
+                      ),
+                      if (searchQuery.isNotEmpty)
+                        IconButton(
                           icon: const Icon(Icons.clear),
                           onPressed: () {
                             _searchController.clear();
                             ref.read(searchQueryProvider.notifier).state = '';
                             ref.read(paginatedSearchProvider.notifier).clear();
                           },
-                        )
-                      : null,
+                        ),
+                    ],
+                  ),
                   border: InputBorder.none,
                 ),
               );
@@ -253,9 +266,9 @@ class _SearchWidgetState extends ConsumerState<SearchWidget> {
           ],
         ],
       ),
-      leading: CircleAvatar(
+      leading: const CircleAvatar(
         backgroundColor: AppTheme.primaryColor,
-        child: const Icon(
+        child: Icon(
           Icons.location_on,
           color: Colors.black,
         ),
@@ -270,6 +283,151 @@ class _SearchWidgetState extends ConsumerState<SearchWidget> {
     } else {
       final kilometers = distanceMeters / 1000;
       return '${kilometers.toStringAsFixed(1)}km away';
+    }
+  }
+
+  bool _isPastingUrl = false;
+
+  Future<void> _showUrlInputDialog() async {
+    final url = await showDialog<String>(
+      context: context,
+      builder: (context) => const GoogleMapsUrlDialog(),
+    );
+    if (url != null && url.isNotEmpty) {
+      _processGoogleMapsUrl(url);
+    }
+  }
+
+  Future<void> _processGoogleMapsUrl(String text) async {
+    if (_isPastingUrl) return;
+
+    if (!GoogleMapsUrlExtractor.isValidGoogleMapsUrl(text)) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Not a valid Google Maps link'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+      return;
+    }
+
+    setState(() => _isPastingUrl = true);
+
+    try {
+      PlaceDetails? placeDetails;
+
+      // Try extracting coordinates from the URL
+      try {
+        final coordinates =
+            await GoogleMapsUrlExtractor.processGoogleMapsUrl(text);
+        if (coordinates != null &&
+            coordinates['latitude'] != null &&
+            coordinates['longitude'] != null) {
+          final lat = coordinates['latitude'] as double;
+          final lng = coordinates['longitude'] as double;
+          placeDetails =
+              await PlacesService.getPlaceFromCoordinates(LatLng(lat, lng));
+        }
+      } catch (_) {}
+
+      // Fallback: expand short URL and geocode the q parameter
+      if (placeDetails == null) {
+        String? expandedUrl;
+        try {
+          expandedUrl = await GoogleMapsUrlExtractor.expandShortUrl(text);
+        } catch (_) {}
+        final urlToParse = expandedUrl ?? text;
+        final uri = Uri.tryParse(urlToParse);
+        final query = uri?.queryParameters['q'];
+        if (query != null && query.isNotEmpty) {
+          placeDetails = await PlacesService.getPlaceFromAddress(query);
+        }
+      }
+
+      if (placeDetails == null || !mounted) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Could not decode location from URL'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+        return;
+      }
+
+      // Reuse the same validation checks as _selectPlace
+      final hasWriteAccess =
+          await ref.read(hasActiveTripWriteAccessProvider.future);
+      if (!hasWriteAccess) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                  'You don\'t have permission to add locations to this trip.'),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+        return;
+      }
+
+      final subscriptionLimitService = SubscriptionLimitService(ref);
+      final canAdd = await subscriptionLimitService.canAddLocation(context);
+      if (!canAdd) return;
+
+      final selectedDate = ref.read(selectedDateProvider);
+      final now = DateTime.now();
+      final today = DateTime(now.year, now.month, now.day);
+      if (selectedDate.isBefore(today)) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Cannot add locations to a past date.'),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+        return;
+      }
+
+      final location = LocationModel(
+        id: const Uuid().v4(),
+        name: placeDetails.name,
+        address: placeDetails.address,
+        coordinates: placeDetails.coordinates,
+        addedAt: DateTime.now(),
+        scheduledDate: selectedDate,
+        photoReference: placeDetails.photoReference,
+        photoAttributions: placeDetails.photoAttributions,
+      );
+
+      await ref.read(tripProvider.notifier).addLocation(location);
+
+      widget.focusNode?.unfocus();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Added ${location.name} to your trip'),
+            backgroundColor: AppTheme.primaryColor,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to decode URL: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isPastingUrl = false);
     }
   }
 
@@ -347,3 +505,4 @@ class _SearchWidgetState extends ConsumerState<SearchWidget> {
     }
   }
 }
+

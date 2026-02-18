@@ -62,6 +62,11 @@
 	<array>
 		<string>location</string>
 	</array>
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>grab</string>
+		<string>comgooglemaps</string>
+	</array>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSExceptionDomains</key>

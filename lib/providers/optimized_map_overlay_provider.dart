@@ -343,21 +343,36 @@ final routeInfoMarkersProvider = FutureProvider<Set<Marker>>((ref) async {
   final midpoint = legPoints[midIndex];
 
   final markerCache = MarkerCacheService();
-  final result = await markerCache.getGoogleMapsButtonMarker();
+  final mapsResult = await markerCache.getGoogleMapsButtonMarker();
+  final grabResult = await markerCache.getGrabButtonMarker();
 
+  final start = legPoints.first;
+  final end = legPoints.last;
+
+  // Both markers at the same position but with different anchors:
+  // - Maps button: anchor at bottom (1.0) so it renders above the midpoint
+  // - Grab button: anchor at top (-0.1) so it renders below the midpoint
   return {
     Marker(
-        markerId: MarkerId('route_info_$legIndex'),
+        markerId: MarkerId('route_maps_$legIndex'),
         position: midpoint,
-        icon: result.bitmap,
-        anchor: result.anchor,
-        zIndex: 10,
+        icon: mapsResult.bitmap,
+        anchor: const Offset(0.5, 1.1),
+        zIndex: 100,
         consumeTapEvents: true,
         onTap: () {
-          final start = legPoints.first;
-          final end = legPoints.last;
           _launchMapsUrl(start, end);
-        })
+        }),
+    Marker(
+        markerId: MarkerId('route_grab_$legIndex'),
+        position: midpoint,
+        icon: grabResult.bitmap,
+        anchor: const Offset(0.5, -0.1),
+        zIndex: 100,
+        consumeTapEvents: true,
+        onTap: () {
+          launchGrab(start.latitude, start.longitude, end.latitude, end.longitude);
+        }),
   };
 });
 
@@ -393,6 +408,37 @@ Future<void> _launchMapsUrl(LatLng origin, LatLng destination) async {
     }
   } catch (e) {
     debugPrint('Error launching maps: $e');
+  }
+}
+
+Future<void> launchGrab(double pLat, double pLng, double dLat, double dLng) async {
+  final grabDeepLink = Uri.parse(
+    'grab://open?screenType=BOOKING&pickUpLatitude=$pLat&pickUpLongitude=$pLng&dropOffLatitude=$dLat&dropOffLongitude=$dLng',
+  );
+
+  try {
+    if (await canLaunchUrl(grabDeepLink)) {
+      await launchUrl(grabDeepLink, mode: LaunchMode.externalApplication);
+      return;
+    }
+  } catch (e) {
+    debugPrint('Grab deep link failed: $e');
+  }
+
+  // Fallback: try launching without canLaunchUrl check
+  try {
+    await launchUrl(grabDeepLink, mode: LaunchMode.externalApplication);
+    return;
+  } catch (e) {
+    debugPrint('Grab direct launch failed: $e');
+  }
+
+  // Final fallback: open Grab website
+  final webUrl = Uri.parse('https://grab.onelink.me/2695613898');
+  try {
+    await launchUrl(webUrl, mode: LaunchMode.externalApplication);
+  } catch (e) {
+    debugPrint('Could not launch Grab: $e');
   }
 }
 

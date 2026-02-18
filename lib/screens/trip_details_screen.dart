@@ -1,6 +1,9 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:google_maps_url_extractor/google_maps_url_extractor.dart';
 import 'package:intl/intl.dart';
 import 'package:uuid/uuid.dart';
 import 'package:voyza/models/trip.dart';
@@ -10,6 +13,7 @@ import 'package:voyza/providers/trip_collaborator_provider.dart';
 import 'package:voyza/models/saved_location.dart';
 import 'package:voyza/services/places_service.dart';
 import 'package:voyza/widgets/collaborators_sheet.dart';
+import 'package:voyza/widgets/google_maps_url_dialog.dart';
 
 class TripDetailsScreen extends ConsumerStatefulWidget {
   final Trip trip;
@@ -727,16 +731,25 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
                   decoration: InputDecoration(
                     hintText: 'Search for a place...',
                     prefixIcon: const Icon(Icons.search),
-                    suffixIcon: _searchController.text.isNotEmpty
-                        ? IconButton(
+                    suffixIcon: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(
+                          icon: const Icon(Icons.link),
+                          tooltip: 'Paste Google Maps link',
+                          onPressed: _showUrlInputDialog,
+                        ),
+                        if (_searchController.text.isNotEmpty)
+                          IconButton(
                             icon: const Icon(Icons.clear),
                             onPressed: () {
                               _searchController.clear();
                               ref.read(tripDetailSearchProvider.notifier).clear();
                               setState(() {});
                             },
-                          )
-                        : null,
+                          ),
+                      ],
+                    ),
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(12),
                     ),
@@ -905,6 +918,146 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
         );
       },
     );
+  }
+
+  bool _isPastingUrl = false;
+
+  Future<void> _showUrlInputDialog() async {
+    final url = await showDialog<String>(
+      context: context,
+      builder: (context) => const GoogleMapsUrlDialog(),
+    );
+    if (url != null && url.isNotEmpty) {
+      _processGoogleMapsUrl(url);
+    }
+  }
+
+  Future<void> _processGoogleMapsUrl(String text) async {
+    if (_isPastingUrl) return;
+
+    if (!GoogleMapsUrlExtractor.isValidGoogleMapsUrl(text)) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Not a valid Google Maps link'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+      return;
+    }
+
+    setState(() => _isPastingUrl = true);
+
+    // Show loading dialog
+    if (mounted) {
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => const Center(child: CircularProgressIndicator()),
+      );
+    }
+
+    try {
+      PlaceDetails? placeDetails;
+
+      // Try extracting coordinates from the URL
+      try {
+        final coordinates =
+            await GoogleMapsUrlExtractor.processGoogleMapsUrl(text);
+        if (coordinates != null &&
+            coordinates['latitude'] != null &&
+            coordinates['longitude'] != null) {
+          final lat = coordinates['latitude'] as double;
+          final lng = coordinates['longitude'] as double;
+          placeDetails =
+              await PlacesService.getPlaceFromCoordinates(LatLng(lat, lng));
+        }
+      } catch (_) {}
+
+      // Fallback: expand short URL and geocode the q parameter
+      if (placeDetails == null) {
+        String? expandedUrl;
+        try {
+          expandedUrl = await GoogleMapsUrlExtractor.expandShortUrl(text);
+        } catch (_) {}
+        final urlToParse = expandedUrl ?? text;
+        final uri = Uri.tryParse(urlToParse);
+        final query = uri?.queryParameters['q'];
+        if (query != null && query.isNotEmpty) {
+          placeDetails = await PlacesService.getPlaceFromAddress(query);
+        }
+      }
+
+      if (placeDetails == null) {
+        if (mounted) {
+          Navigator.pop(context); // Close loading dialog
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Could not decode location from URL'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+        return;
+      }
+
+      // Permission check
+      final hasWriteAccess =
+          await ref.read(hasWriteAccessProvider(widget.tripId).future);
+      if (!hasWriteAccess) {
+        if (mounted) {
+          Navigator.pop(context); // Close loading dialog
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                  'You don\'t have permission to add locations to this trip.'),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+        return;
+      }
+
+      final newLocation = SavedLocation(
+        id: const Uuid().v4(),
+        userId: '',
+        fingerprint: '',
+        name: placeDetails.name,
+        lat: placeDetails.coordinates.latitude,
+        lng: placeDetails.coordinates.longitude,
+        isSkipped: false,
+        stayDuration: 1800,
+        scheduledDate: DateTime.now(),
+        createdAt: DateTime.now(),
+        tripId: widget.tripId,
+      );
+
+      await ref.read(locationRepositoryProvider).addLocation(newLocation);
+
+      if (mounted) {
+        Navigator.pop(context); // Close loading dialog
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Added ${placeDetails.name} to trip'),
+            backgroundColor: Colors.green,
+          ),
+        );
+        Navigator.pop(context); // Close search sheet
+      }
+    } catch (e) {
+      if (mounted) {
+        Navigator.pop(context); // Close loading dialog
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to decode URL: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isPastingUrl = false);
+    }
   }
 
   Future<void> _addLocationToTrip(PlacePrediction prediction) async {
