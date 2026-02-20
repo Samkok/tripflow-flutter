@@ -28,6 +28,7 @@ class SavedLocationAdapter extends TypeAdapter<SavedLocation> {
       source: fields[8] as String,
       fingerprint: fields[9] as String,
       isSkipped: fields[10] as bool,
+      isDone: fields[16] == null ? false : fields[16] as bool,
       stayDuration: fields[11] as int,
       scheduledDate: fields[12] as DateTime?,
       tripId: fields[13] as String?,
@@ -39,7 +40,7 @@ class SavedLocationAdapter extends TypeAdapter<SavedLocation> {
   @override
   void write(BinaryWriter writer, SavedLocation obj) {
     writer
-      ..writeByte(16)
+      ..writeByte(17)
       ..writeByte(0)
       ..write(obj.id)
       ..writeByte(1)
@@ -71,7 +72,9 @@ class SavedLocationAdapter extends TypeAdapter<SavedLocation> {
       ..writeByte(14)
       ..write(obj.photoReference)
       ..writeByte(15)
-      ..write(obj.photoAttributions);
+      ..write(obj.photoAttributions)
+      ..writeByte(16)
+      ..write(obj.isDone);
   }
 
   @override

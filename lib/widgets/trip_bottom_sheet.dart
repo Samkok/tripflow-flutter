@@ -371,8 +371,9 @@ class TripBottomSheet extends ConsumerWidget {
                   } else if (value == 'copy') {
                     _showCopyLocationsDialog(context, ref);
                   } else if (value == 'skip' && canEdit) {
-                    // Only allow skipping on current/future dates with write access
                     _showSkipConfirmationDialog(context, ref);
+                  } else if (value == 'done' && hasWriteAccess) {
+                    _markSelectedAsDone(context, ref);
                   }
                 },
                 icon: Icon(Icons.more_vert,
@@ -422,6 +423,17 @@ class TripBottomSheet extends ConsumerWidget {
                       title: Text('Skip',
                           style: TextStyle(
                               color: canEdit ? null : Colors.grey)),
+                    ),
+                  ),
+                  PopupMenuItem<String>(
+                    value: 'done',
+                    enabled: hasWriteAccess,
+                    child: ListTile(
+                      leading: Icon(Icons.check_circle_outline,
+                          color: hasWriteAccess ? Colors.green : Colors.grey),
+                      title: Text('Mark as Done',
+                          style: TextStyle(
+                              color: hasWriteAccess ? Colors.green : Colors.grey)),
                     ),
                   ),
                   const PopupMenuItem(
@@ -854,8 +866,9 @@ class TripBottomSheet extends ConsumerWidget {
       ];
     }
 
-    final normalLocations = locations.where((l) => !l.isSkipped).toList();
+    final normalLocations = locations.where((l) => !l.isSkipped && !l.isDone).toList();
     final skippedLocations = locations.where((l) => l.isSkipped).toList();
+    final doneLocations = locations.where((l) => l.isDone).toList();
 
     final widgets = <Widget>[];
 
@@ -882,6 +895,42 @@ class TripBottomSheet extends ConsumerWidget {
             color: Theme.of(context).dividerColor.withValues(alpha: 0.1),
             indent: 20,
             endIndent: 20,
+          ),
+        );
+      }
+    }
+
+    // Done locations section
+    if (doneLocations.isNotEmpty) {
+      widgets.add(
+        Padding(
+          padding: const EdgeInsets.only(top: 24.0, bottom: 8.0, left: 4.0),
+          child: Row(
+            children: [
+              const Icon(Icons.check_circle_outline,
+                  color: Colors.green, size: 20),
+              const SizedBox(width: 8),
+              Text(
+                'Done',
+                style: Theme.of(context)
+                    .textTheme
+                    .titleMedium
+                    ?.copyWith(color: Colors.green),
+              ),
+            ],
+          ),
+        ),
+      );
+
+      for (final location in doneLocations) {
+        widgets.add(
+          OptimizedLocationCard(
+            key: ValueKey('done_${location.id}'),
+            location: location,
+            number: -2,
+            scrollController: scrollController,
+            sheetController: sheetController,
+            onLocationTap: onLocationTap,
           ),
         );
       }
@@ -1226,6 +1275,13 @@ class TripBottomSheet extends ConsumerWidget {
       // Optionally, switch the view to the new date
       ref.read(selectedDateProvider.notifier).state = newDate;
     }
+  }
+
+  void _markSelectedAsDone(BuildContext context, WidgetRef ref) {
+    final selectedIds = ref.read(selectedLocationsProvider);
+    ref.read(tripProvider.notifier).markLocationsAsDone(selectedIds);
+    ref.read(isSelectionModeProvider.notifier).state = false;
+    ref.read(selectedLocationsProvider.notifier).state = {};
   }
 
   void _showSkipConfirmationDialog(BuildContext context, WidgetRef ref) {

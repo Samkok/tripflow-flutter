@@ -26,7 +26,7 @@ class CachedMarkersState {
 String _generateLocationsCacheKey(List<LocationModel> locations,
     LatLng? currentLocation, DateTime selectedDate) {
   // Use a combination of IDs and count to ensure the key changes when items are added/removed.
-  final locationIds = locations.map((l) => '${l.id}-${l.isSkipped}').join('_');
+  final locationIds = locations.map((l) => '${l.id}-${l.isSkipped}-${l.isDone}').join('_');
   final currentLocKey = currentLocation != null
       ? '${currentLocation.latitude}_${currentLocation.longitude}'
       : 'none';
@@ -73,11 +73,11 @@ final cachedMarkerBitmapsProvider =
         tripState.startLocationId == location.id;
 
     if (isStartLocation) {
-      markerNumber = 0; // Use 0 to signify the start location
-    }
-    if (location.isSkipped) {
-      markerNumber =
-          -1; // Use -1 to indicate a skipped location to the marker service
+      markerNumber = 0;
+    } else if (location.isDone) {
+      markerNumber = -2;
+    } else if (location.isSkipped) {
+      markerNumber = -1;
     } else {
       nonSkippedIndex++;
       markerNumber = nonSkippedIndex;
@@ -90,7 +90,8 @@ final cachedMarkerBitmapsProvider =
       backgroundColor: AppTheme.accentColor,
       textColor: Colors.white,
       isDarkMode: isDarkMode,
-      isSkipped: location.isSkipped, // Pass the skipped status
+      isSkipped: location.isSkipped,
+      isDone: location.isDone,
     );
 
     markerIcons[location.id] = customIconResult;
@@ -342,22 +343,29 @@ final routeInfoMarkersProvider = FutureProvider<Set<Marker>>((ref) async {
   final midIndex = legPoints.length ~/ 2;
   final midpoint = legPoints[midIndex];
 
+  // Format distance label from legDetails
+  final legData = tripState.legDetails[legIndex];
+  final distanceMeters = (legData['distance'] as num?)?.toDouble() ?? 0.0;
+  final String distanceLabel = distanceMeters >= 1000
+      ? '${(distanceMeters / 1000).toStringAsFixed(1)} km'
+      : '${distanceMeters.round()} m';
+
   final markerCache = MarkerCacheService();
-  final mapsResult = await markerCache.getGoogleMapsButtonMarker();
+  // Combined bitmap: distance chip + Open Maps button drawn as one image (no overlap risk)
+  final mapsResult = await markerCache.getDistanceAndMapsMarker(distanceLabel);
   final grabResult = await markerCache.getGrabButtonMarker();
 
   final start = legPoints.first;
   final end = legPoints.last;
 
-  // Both markers at the same position but with different anchors:
-  // - Maps button: anchor at bottom (1.0) so it renders above the midpoint
-  // - Grab button: anchor at top (-0.1) so it renders below the midpoint
+  // mapsResult anchor=(0.5, 1.0) → entire combined stack renders above midpoint
+  // grabResult anchor=(0.5, 0.0) → renders below midpoint
   return {
     Marker(
         markerId: MarkerId('route_maps_$legIndex'),
         position: midpoint,
         icon: mapsResult.bitmap,
-        anchor: const Offset(0.5, 1.1),
+        anchor: mapsResult.anchor,
         zIndex: 100,
         consumeTapEvents: true,
         onTap: () {
@@ -367,7 +375,7 @@ final routeInfoMarkersProvider = FutureProvider<Set<Marker>>((ref) async {
         markerId: MarkerId('route_grab_$legIndex'),
         position: midpoint,
         icon: grabResult.bitmap,
-        anchor: const Offset(0.5, -0.1),
+        anchor: grabResult.anchor,
         zIndex: 100,
         consumeTapEvents: true,
         onTap: () {

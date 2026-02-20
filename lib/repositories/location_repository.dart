@@ -163,6 +163,9 @@ class LocationRepository {
     if (updates.containsKey('is_skipped')) {
       updatedLocation = updatedLocation.copyWith(isSkipped: updates['is_skipped'] as bool);
     }
+    if (updates.containsKey('is_done')) {
+      updatedLocation = updatedLocation.copyWith(isDone: updates['is_done'] as bool);
+    }
     if (updates.containsKey('scheduled_date')) {
       final dateStr = updates['scheduled_date'];
       final parsedDate = dateStr is String ? DateTime.parse(dateStr) : dateStr as DateTime?;

@@ -15,6 +15,8 @@ class AuthService {
   final UserProfileRepository _userProfileRepository;
 
   static const String _syncChoiceKey = 'sync_anonymous_locations_choice';
+  static const String _rememberMeKey = 'remember_me';
+  static const String _savedEmailKey = 'saved_email';
 
   AuthService(this._locationRepository, [UserProfileRepository? userProfileRepository])
       : _userProfileRepository = userProfileRepository ?? UserProfileRepository();
@@ -81,6 +83,38 @@ class AuthService {
     await prefs.remove(_syncChoiceKey);
   }
 
+  /// Saves the "Remember Me" preference and email after a successful sign-in.
+  /// Only the email is stored (never the password).
+  static Future<void> saveRememberMe(bool remember, String email) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_rememberMeKey, remember);
+    if (remember) {
+      await prefs.setString(_savedEmailKey, email);
+    } else {
+      await prefs.remove(_savedEmailKey);
+    }
+  }
+
+  /// Returns the saved "Remember Me" preference.
+  /// Defaults to true so existing users are not unexpectedly signed out.
+  static Future<bool> getRememberMe() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_rememberMeKey) ?? true;
+  }
+
+  /// Returns the saved email address, or null if none was stored.
+  static Future<String?> getSavedEmail() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_savedEmailKey);
+  }
+
+  /// Clears Remember Me data (called on sign-out so the next user starts fresh).
+  static Future<void> clearRememberMe() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_rememberMeKey);
+    await prefs.remove(_savedEmailKey);
+  }
+
   Future<void> signUp(
     String email,
     String password, {
@@ -143,8 +177,9 @@ class AuthService {
       // Don't fail the whole logout if RevenueCat fails
     }
 
-    // Clear sync choice on logout
+    // Clear sync choice and remember-me data on logout
     await clearSyncChoice();
+    await clearRememberMe();
 
     await _supabase.auth.signOut();
   }

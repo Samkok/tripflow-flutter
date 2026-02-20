@@ -95,13 +95,14 @@ class MarkerCacheService {
     Color textColor = Colors.white,
     required bool isDarkMode,
     bool isStart = false,
-    bool isSkipped = false, // Add this parameter
+    bool isSkipped = false,
+    bool isDone = false,
   }) async {
     // Trigger background prewarming on first marker access
     prewarmCacheInBackground();
 
     final key =
-        'numbered_${number}_${name}_${backgroundColor.value}_${textColor.value}_${isDarkMode}_${isSkipped}_$isStart';
+        'numbered_${number}_${name}_${backgroundColor.value}_${textColor.value}_${isDarkMode}_${isSkipped}_${isDone}_$isStart';
 
     if (_cache.containsKey(key)) {
       _moveToEnd(key);
@@ -115,7 +116,8 @@ class MarkerCacheService {
       backgroundColor: backgroundColor,
       textColor: textColor,
       isDarkMode: isDarkMode,
-      isSkipped: isSkipped, // Pass the skipped status
+      isSkipped: isSkipped,
+      isDone: isDone,
     );
 
     _addToCache(key, result);
@@ -169,13 +171,13 @@ class MarkerCacheService {
     return result;
   }
 
-  Future<MarkerBitmapResult> getGoogleMapsButtonMarker() async {
-    const key = 'google_maps_button_v3';
+  Future<MarkerBitmapResult> getDistanceAndMapsMarker(String distanceLabel) async {
+    final key = 'distance_maps_$distanceLabel';
     if (_cache.containsKey(key)) {
       return _cache[key]!;
     }
 
-    final result = await MarkerUtils.getGoogleMapsButtonMarker();
+    final result = await MarkerUtils.getDistanceAndMapsMarker(distanceLabel);
     _addToCache(key, result);
     return result;
   }

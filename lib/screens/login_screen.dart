@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:voyza/screens/signup_screen.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../providers/auth_provider.dart';
+import '../services/auth_service.dart';
 import '../widgets/sync_confirmation_dialog.dart';
 
 class LoginScreen extends ConsumerStatefulWidget {
@@ -18,6 +19,26 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   final _formKey = GlobalKey<FormState>();
   bool _isLoading = false;
   bool _isPasswordVisible = false;
+  bool _rememberMe = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadRememberMe();
+  }
+
+  Future<void> _loadRememberMe() async {
+    final remember = await AuthService.getRememberMe();
+    final savedEmail = await AuthService.getSavedEmail();
+    if (mounted) {
+      setState(() {
+        _rememberMe = remember;
+        if (remember && savedEmail != null) {
+          _emailController.text = savedEmail;
+        }
+      });
+    }
+  }
 
   Future<void> _signIn() async {
     if (!_formKey.currentState!.validate()) return;
@@ -57,6 +78,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
         }
       }
 
+      // Save preference before async gap (fire-and-forget is safe for prefs)
+      AuthService.saveRememberMe(_rememberMe, _emailController.text.trim());
       if (mounted) {
         Navigator.of(context).pop(); // Go back to settings
       }
@@ -156,7 +179,19 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                             ? 'Please enter your password'
                             : null,
                       ),
-                      const SizedBox(height: 32),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Checkbox(
+                            value: _rememberMe,
+                            onChanged: (val) =>
+                                setState(() => _rememberMe = val ?? true),
+                            activeColor: theme.colorScheme.primary,
+                          ),
+                          const Text('Remember Me'),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
                       ElevatedButton(
                         onPressed: _isLoading ? null : _signIn,
                         child: _isLoading

@@ -15,6 +15,7 @@ import 'widgets/subscription_conflict_banner.dart';
 
 import 'services/supabase_service.dart';
 import 'services/revenuecat_service.dart';
+import 'services/auth_service.dart';
 import 'repositories/location_repository.dart';
 
 import 'package:hive_flutter/hive_flutter.dart';
@@ -64,6 +65,17 @@ void _initializeHeavyServices() {
       debugPrint('Main: Initializing Supabase...');
       await SupabaseService.initialize();
       debugPrint('Main: Supabase initialized');
+
+      // If the user opted out of "Remember Me", sign them out even if Supabase
+      // restored a session from native storage.
+      final rememberMe = await AuthService.getRememberMe();
+      if (!rememberMe) {
+        final client = SupabaseService.instance.client;
+        if (client.auth.currentUser != null) {
+          await client.auth.signOut();
+          debugPrint('Main: Remember Me is OFF — signed out restored session');
+        }
+      }
 
       debugPrint('Main: Initializing LocationRepository...');
       await LocationRepository().init();

@@ -100,6 +100,7 @@ class MarkerUtils {
     bool isStart = false,
     double size = 20,
     bool isSkipped = false,
+    bool isDone = false,
   }) async {
     final ui.PictureRecorder pictureRecorder = ui.PictureRecorder();
 
@@ -113,6 +114,15 @@ class MarkerUtils {
         style: TextStyle(
           fontSize: size * 0.55,
           fontFamily: Icons.flag_rounded.fontFamily,
+          color: textColor,
+        ),
+      );
+    } else if (isDone) {
+      contentPainter.text = TextSpan(
+        text: String.fromCharCode(Icons.check.codePoint),
+        style: TextStyle(
+          fontSize: size * 0.6,
+          fontFamily: Icons.check.fontFamily,
           color: textColor,
         ),
       );
@@ -214,7 +224,9 @@ class MarkerUtils {
 
     // Draw the main circle with gradient effect
     final Paint circlePaint = Paint()
-      ..color = isStart ? Colors.green.shade600 : backgroundColor
+      ..color = isStart
+          ? Colors.green.shade600
+          : (isDone ? Colors.green.shade500 : backgroundColor)
       ..style = PaintingStyle.fill;
 
     canvas.drawCircle(
@@ -265,30 +277,132 @@ class MarkerUtils {
     );
   }
 
-  /// Creates a single pill button marker bitmap
-  static Future<MarkerBitmapResult> _createPillButtonMarker({
-    required String label,
-    required IconData iconData,
-    required Color color,
-  }) async {
+  /// Creates a combined distance label + Open Maps button as one bitmap.
+  /// Draws: [ distance chip ] on top, [ OPEN MAPS button ] below, with a gap.
+  /// Anchor is set to bottom-center so the whole stack sits above the midpoint.
+  static Future<MarkerBitmapResult> getDistanceAndMapsMarker(String distanceLabel) async {
+    final ui.PictureRecorder pictureRecorder = ui.PictureRecorder();
+    final Canvas canvas = Canvas(pictureRecorder);
+
+    const double hPad = 10.0;
+    const double vPad = 5.0;
+    const double btnHeight = 28.0;
+    const double btnHPad = 8.0;
+    const double gap = 6.0;
+    const double shadowExtra = 4.0;
+
+    // --- Distance label painters ---
+    final distText = TextPainter(
+      text: TextSpan(
+        text: distanceLabel,
+        style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+
+    final double chipHeight = vPad * 2 + distText.height;
+
+    // --- Open Maps button painters ---
+    const IconData mapsIcon = Icons.directions;
+    final mapsIconPainter = TextPainter(
+      text: TextSpan(
+        text: String.fromCharCode(mapsIcon.codePoint),
+        style: TextStyle(fontSize: 14, fontFamily: mapsIcon.fontFamily, color: Colors.white),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+
+    final mapsTextPainter = TextPainter(
+      text: const TextSpan(
+        text: 'OPEN MAPS',
+        style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+
+    final double btnContentWidth = mapsIconPainter.width + 4 + mapsTextPainter.width;
+    final double btnWidth = btnHPad * 2 + btnContentWidth;
+
+    // Canvas width = widest of the two elements
+    final double chipWidth = hPad * 2 + distText.width;
+    final double totalWidth = chipWidth > btnWidth ? chipWidth : btnWidth;
+    final double totalHeight = chipHeight + gap + btnHeight + shadowExtra;
+
+    // --- Draw distance chip ---
+    canvas.drawShadow(
+      Path()..addRRect(RRect.fromRectAndRadius(
+          Rect.fromLTWH((totalWidth - chipWidth) / 2, 2, chipWidth, chipHeight),
+          const Radius.circular(12))),
+      Colors.black.withValues(alpha: 0.35), 3.0, true,
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+          Rect.fromLTWH((totalWidth - chipWidth) / 2, 0, chipWidth, chipHeight),
+          const Radius.circular(12)),
+      Paint()..color = const Color(0xDD1A1A2E),
+    );
+    distText.paint(
+      canvas,
+      Offset((totalWidth - distText.width) / 2, vPad),
+    );
+
+    // --- Draw Open Maps button ---
+    final double btnTop = chipHeight + gap;
+    final double btnLeft = (totalWidth - btnWidth) / 2;
+    canvas.drawShadow(
+      Path()..addRRect(RRect.fromRectAndRadius(
+          Rect.fromLTWH(btnLeft, btnTop + 2, btnWidth, btnHeight),
+          const Radius.circular(14))),
+      Colors.black.withValues(alpha: 0.3), 4.0, true,
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+          Rect.fromLTWH(btnLeft, btnTop, btnWidth, btnHeight),
+          const Radius.circular(14)),
+      Paint()..color = const Color(0xFF4285F4),
+    );
+    final double contentStartX = btnLeft + (btnWidth - btnContentWidth) / 2;
+    mapsIconPainter.paint(canvas, Offset(contentStartX, btnTop + (btnHeight - mapsIconPainter.height) / 2));
+    mapsTextPainter.paint(canvas, Offset(contentStartX + mapsIconPainter.width + 4, btnTop + (btnHeight - mapsTextPainter.height) / 2));
+
+    // --- Convert ---
+    final ui.Image img = await pictureRecorder
+        .endRecording()
+        .toImage(totalWidth.toInt(), totalHeight.toInt());
+    final ByteData? data = await img.toByteData(format: ui.ImageByteFormat.png);
+
+    if (data == null) {
+      return MarkerBitmapResult(BitmapDescriptor.defaultMarker, const Offset(0.5, 1.0));
+    }
+
+    // Anchor at bottom-center so the entire stack renders above the map position
+    return MarkerBitmapResult(
+      BitmapDescriptor.bytes(data.buffer.asUint8List()),
+      const Offset(0.5, 1.0),
+    );
+  }
+
+  /// Creates the 'OPEN GRAB' button marker
+  static Future<MarkerBitmapResult> getGrabButtonMarker() async {
     final ui.PictureRecorder pictureRecorder = ui.PictureRecorder();
     final Canvas canvas = Canvas(pictureRecorder);
 
     const double padding = 8.0;
     const double height = 28.0;
 
-    final textPainter = TextPainter(
+    const IconData grabIcon = Icons.local_taxi;
+    final iconPainter = TextPainter(
       text: TextSpan(
-        text: label,
-        style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
+        text: String.fromCharCode(grabIcon.codePoint),
+        style: TextStyle(fontSize: 14, fontFamily: grabIcon.fontFamily, color: Colors.white),
       ),
       textDirection: TextDirection.ltr,
     )..layout();
 
-    final iconPainter = TextPainter(
-      text: TextSpan(
-        text: String.fromCharCode(iconData.codePoint),
-        style: TextStyle(fontSize: 14, fontFamily: iconData.fontFamily, color: Colors.white),
+    final textPainter = TextPainter(
+      text: const TextSpan(
+        text: 'OPEN GRAB',
+        style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
       ),
       textDirection: TextDirection.ltr,
     )..layout();
@@ -296,21 +410,17 @@ class MarkerUtils {
     final double contentWidth = iconPainter.width + 4 + textPainter.width;
     final double totalWidth = padding * 2 + contentWidth;
 
-    // Shadow
     canvas.drawShadow(
       Path()..addRRect(RRect.fromRectAndRadius(
           Rect.fromLTWH(0, 2, totalWidth, height), const Radius.circular(14))),
       Colors.black.withValues(alpha: 0.3), 4.0, true,
     );
-
-    // Button
     canvas.drawRRect(
       RRect.fromRectAndRadius(
           Rect.fromLTWH(0, 0, totalWidth, height), const Radius.circular(14)),
-      Paint()..color = color,
+      Paint()..color = const Color(0xFF00B14F),
     );
 
-    // Content centered
     final double startX = (totalWidth - contentWidth) / 2;
     iconPainter.paint(canvas, Offset(startX, (height - iconPainter.height) / 2));
     textPainter.paint(canvas, Offset(startX + iconPainter.width + 4, (height - textPainter.height) / 2));
@@ -324,26 +434,9 @@ class MarkerUtils {
       return MarkerBitmapResult(BitmapDescriptor.defaultMarker, const Offset(0.5, 0.5));
     }
 
+    // Anchor at top-center so it renders below the map position
     return MarkerBitmapResult(
-        BitmapDescriptor.bytes(data.buffer.asUint8List()), const Offset(0.5, 0.5));
-  }
-
-  /// Creates the 'OPEN MAPS' button marker
-  static Future<MarkerBitmapResult> getGoogleMapsButtonMarker() async {
-    return _createPillButtonMarker(
-      label: 'OPEN MAPS',
-      iconData: Icons.directions,
-      color: const Color(0xFF4285F4),
-    );
-  }
-
-  /// Creates the 'OPEN GRAB' button marker
-  static Future<MarkerBitmapResult> getGrabButtonMarker() async {
-    return _createPillButtonMarker(
-      label: 'OPEN GRAB',
-      iconData: Icons.local_taxi,
-      color: const Color(0xFF00B14F),
-    );
+        BitmapDescriptor.bytes(data.buffer.asUint8List()), const Offset(0.5, 0.0));
   }
 
   /// Creates a custom bitmap for leg start/end markers.

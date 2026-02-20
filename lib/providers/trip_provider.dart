@@ -229,6 +229,7 @@ class TripNotifier extends StateNotifier<TripState> {
             scheduledDate:
                 saved.scheduledDate ?? _ref.read(selectedDateProvider),
             isSkipped: saved.isSkipped,
+            isDone: saved.isDone,
             stayDuration: Duration(seconds: saved.stayDuration),
             photoReference: saved.photoReference,
             photoAttributions: saved.photoAttributions,
@@ -287,6 +288,7 @@ class TripNotifier extends StateNotifier<TripState> {
         scheduledDate: locationWithDate.scheduledDate,
         stayDuration: locationWithDate.stayDuration.inSeconds,
         isSkipped: locationWithDate.isSkipped,
+        isDone: locationWithDate.isDone,
         // IMPORTANT: Set tripId if a trip is active, null if no trip is active
         tripId: activeTrip?.id,
         // userId and fingerprint will be handled by repository based on auth state
@@ -476,6 +478,60 @@ class TripNotifier extends StateNotifier<TripState> {
         await repository.updateLocation(id, {'is_skipped': false});
       } catch (e) {
         log('Error unskipping location in repository for id $id: $e');
+      }
+    }
+  }
+
+  Future<void> markLocationsAsDone(Set<String> locationIds) async {
+    final hasAccess = await _hasWriteAccess();
+    if (!hasAccess) {
+      debugPrint('markLocationsAsDone: Permission denied');
+      return;
+    }
+
+    state = state.copyWith(
+      optimizedRoute: [],
+      optimizedLocationsForSelectedDate: [],
+      legPolylines: [],
+      legDetails: [],
+      totalTravelTime: Duration.zero,
+      totalDistance: 0.0,
+    );
+    selectLeg(null);
+
+    final repository = _ref.read(locationRepositoryProvider);
+    for (final id in locationIds) {
+      try {
+        await repository.updateLocation(id, {'is_done': true});
+      } catch (e) {
+        log('Error marking location as done for id $id: $e');
+      }
+    }
+  }
+
+  Future<void> unmarkLocationsAsDone(Set<String> locationIds) async {
+    final hasAccess = await _hasWriteAccess();
+    if (!hasAccess) {
+      debugPrint('unmarkLocationsAsDone: Permission denied');
+      return;
+    }
+
+    state = state.copyWith(
+      optimizedRoute: [],
+      optimizedLocationsForSelectedDate: [],
+      legPolylines: [],
+      legDetails: [],
+      totalTravelTime: Duration.zero,
+      totalDistance: 0.0,
+    );
+    selectLeg(null);
+
+    final repository = _ref.read(locationRepositoryProvider);
+    for (final id in locationIds) {
+      try {
+        await repository.updateLocation(id, {'is_done': false});
+      } catch (e) {
+        log('Error unmarking location as done for id $id: $e');
       }
     }
   }
@@ -677,6 +733,7 @@ class TripNotifier extends StateNotifier<TripState> {
             lat: loc.coordinates.latitude,
             lng: loc.coordinates.longitude,
             isSkipped: loc.isSkipped,
+            isDone: loc.isDone,
             stayDuration: loc.stayDuration.inSeconds,
             scheduledDate: loc.scheduledDate,
             createdAt: loc.addedAt,
@@ -743,7 +800,7 @@ class TripNotifier extends StateNotifier<TripState> {
     final selectedDay = selectedDate.day;
     
     final locationsForDate = allLocations.where((loc) {
-      if (loc.isSkipped) {
+      if (loc.isSkipped || loc.isDone) {
         return false;
       }
       if (loc.scheduledDate == null) {
@@ -977,10 +1034,25 @@ class TripNotifier extends StateNotifier<TripState> {
             selectedDay == locDate.day;
       }).toList();
 
+      final doneLocationsForDate = allLocations.where((loc) {
+        if (!loc.isDone) return false;
+        if (loc.scheduledDate == null) {
+          final addedAt = loc.addedAt;
+          return selectedYear == addedAt.year &&
+              selectedMonth == addedAt.month &&
+              selectedDay == addedAt.day;
+        }
+        final locDate = loc.scheduledDate!;
+        return selectedYear == locDate.year &&
+            selectedMonth == locDate.month &&
+            selectedDay == locDate.day;
+      }).toList();
+
       final updatedPinnedLocations = [
         ...otherDateLocations,
         ...updatedLocationsForDate,
-        ...skippedLocationsForDate
+        ...skippedLocationsForDate,
+        ...doneLocationsForDate,
       ];
 
       final totalTravelTime =
@@ -1151,7 +1223,7 @@ final locationsForSelectedDateProvider = Provider<List<LocationModel>>((ref) {
       final skippedForDate = pinnedLocations.where((loc) {
         // Skip if already in optimized list
         if (optimizedIds.contains(loc.id)) return false;
-        if (!loc.isSkipped) return false;
+        if (!loc.isSkipped && !loc.isDone) return false;
 
         if (loc.scheduledDate == null) {
           final addedAt = loc.addedAt;

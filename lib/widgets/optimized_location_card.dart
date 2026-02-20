@@ -10,6 +10,7 @@ import 'package:voyza/providers/trip_collaborator_provider.dart';
 import 'package:voyza/widgets/location_detail_sheet.dart';
 import 'package:voyza/services/photo_service.dart';
 import 'package:voyza/services/photo_cache_service.dart';
+import 'package:voyza/utils/date_picker_utils.dart';
 
 /// Optimized location card widget that minimizes rebuilds
 /// Uses selective provider watching and RepaintBoundary for better performance
@@ -121,8 +122,19 @@ class OptimizedLocationCard extends ConsumerWidget {
 
   Widget _buildFallbackAvatar(BuildContext context, {bool showLoading = false}) {
     final isSkipped = location.isSkipped;
+    final isDone = location.isDone;
+
+    Color bgColor;
+    if (isDone) {
+      bgColor = Colors.green.shade500;
+    } else if (isSkipped) {
+      bgColor = Colors.grey;
+    } else {
+      bgColor = Theme.of(context).colorScheme.primary;
+    }
+
     return CircleAvatar(
-      backgroundColor: isSkipped ? Colors.grey : Theme.of(context).colorScheme.primary,
+      backgroundColor: bgColor,
       child: showLoading
           ? const SizedBox(
               width: 20,
@@ -132,13 +144,15 @@ class OptimizedLocationCard extends ConsumerWidget {
                 valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
               ),
             )
-          : Text(
-              isSkipped ? '-' : '$number',
-              style: const TextStyle(
-                color: Colors.black,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
+          : isDone
+              ? const Icon(Icons.check, color: Colors.white, size: 20)
+              : Text(
+                  isSkipped ? '-' : '$number',
+                  style: const TextStyle(
+                    color: Colors.black,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
     );
   }
 
@@ -338,6 +352,20 @@ class OptimizedLocationCard extends ConsumerWidget {
                       style: TextStyle(color: canEdit ? null : Colors.grey))),
             ),
           PopupMenuItem<String>(
+            value: location.isDone ? 'undone' : 'done',
+            enabled: hasWriteAccess,
+            child: ListTile(
+              leading: Icon(
+                location.isDone ? Icons.cancel_outlined : Icons.check_circle_outline,
+                color: hasWriteAccess ? Colors.green : Colors.grey,
+              ),
+              title: Text(
+                location.isDone ? 'Unmark as Done' : 'Mark as Done',
+                style: TextStyle(color: hasWriteAccess ? Colors.green : Colors.grey),
+              ),
+            ),
+          ),
+          PopupMenuItem<String>(
             value: 'move',
             enabled: canEdit,
             child: ListTile(
@@ -375,6 +403,39 @@ class OptimizedLocationCard extends ConsumerWidget {
       ref.read(tripProvider.notifier).skipMultipleLocations(selectedIds);
     } else if (value == 'unskip') {
       ref.read(tripProvider.notifier).unskipMultipleLocations(selectedIds);
+    } else if (value == 'move') {
+      _showMoveCopyDialog(context, ref, isCopy: false);
+    } else if (value == 'copy') {
+      _showMoveCopyDialog(context, ref, isCopy: true);
+    } else if (value == 'done') {
+      ref.read(tripProvider.notifier).markLocationsAsDone({location.id});
+    } else if (value == 'undone') {
+      ref.read(tripProvider.notifier).unmarkLocationsAsDone({location.id});
+    }
+  }
+
+  void _showMoveCopyDialog(BuildContext context, WidgetRef ref, {required bool isCopy}) async {
+    final highlightedDates = ref.read(datesWithLocationsProvider);
+    final earliestDate = highlightedDates.isNotEmpty
+        ? highlightedDates.reduce((a, b) => a.isBefore(b) ? a : b)
+        : DateTime.now();
+
+    final newDate = await DatePickerUtils.showCustomDatePicker(
+      context: context,
+      initialDate: ref.read(selectedDateProvider),
+      firstDate: earliestDate,
+      lastDate: DateTime.now().add(const Duration(days: 365 * 5)),
+      highlightedDates: highlightedDates,
+    );
+
+    if (newDate != null) {
+      final selectedIds = {location.id};
+      if (isCopy) {
+        await ref.read(tripProvider.notifier).copyMultipleLocationsToDate(selectedIds, newDate);
+      } else {
+        await ref.read(tripProvider.notifier).updateMultipleLocationsScheduledDate(selectedIds, newDate);
+      }
+      ref.read(selectedDateProvider.notifier).state = newDate;
     }
   }
 

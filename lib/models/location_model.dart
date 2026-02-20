@@ -11,6 +11,7 @@ class LocationModel {
   final DateTime? scheduledDate;
   final Duration stayDuration;
   final bool isSkipped;
+  final bool isDone;
   final String? photoReference;
   final List<String>? photoAttributions;
 
@@ -24,6 +25,7 @@ class LocationModel {
     this.distanceFromPrevious,
     this.stayDuration = const Duration(minutes: 30),
     this.isSkipped = false,
+    this.isDone = false,
     this.scheduledDate,
     this.photoReference,
     this.photoAttributions,
@@ -42,6 +44,7 @@ class LocationModel {
       'stayDurationSeconds': stayDuration.inSeconds,
       'scheduledDate': scheduledDate?.toIso8601String(),
       'isSkipped': isSkipped,
+      'isDone': isDone,
       'photoReference': photoReference,
       'photoAttributions': photoAttributions,
     };
@@ -59,6 +62,7 @@ class LocationModel {
           : null,
       distanceFromPrevious: json['distanceFromPrevious']?.toDouble(),
       isSkipped: json['isSkipped'] ?? false,
+      isDone: json['isDone'] ?? false,
       stayDuration: json['stayDurationSeconds'] != null
           ? Duration(seconds: json['stayDurationSeconds'])
           : const Duration(minutes: 30),
@@ -82,6 +86,7 @@ class LocationModel {
     double? distanceFromPrevious,
     Duration? stayDuration,
     bool? isSkipped,
+    bool? isDone,
     DateTime? scheduledDate,
     String? photoReference,
     List<String>? photoAttributions,
@@ -96,6 +101,7 @@ class LocationModel {
       distanceFromPrevious: distanceFromPrevious ?? this.distanceFromPrevious,
       stayDuration: stayDuration ?? this.stayDuration,
       isSkipped: isSkipped ?? this.isSkipped,
+      isDone: isDone ?? this.isDone,
       scheduledDate: scheduledDate ?? this.scheduledDate,
       photoReference: photoReference ?? this.photoReference,
       photoAttributions: photoAttributions ?? this.photoAttributions,

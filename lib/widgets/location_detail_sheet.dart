@@ -420,49 +420,98 @@ class LocationDetailSheet extends ConsumerWidget {
     // Disable editing if past date OR no write access
     final canEdit = !isPastDate && hasWriteAccess;
 
-    return Row(
+    return Column(
       children: [
-        Expanded(
-            child: ElevatedButton.icon(
-          onPressed: canEdit
-              ? () =>
-                  _showEditStayDurationDialog(context, ref, updatedLocation)
-              : null,
-          icon: const Icon(Icons.timer_outlined),
-          label: const Text('Set Stay'),
-          style: ElevatedButton.styleFrom(
-            backgroundColor: canEdit ? AppTheme.primaryColor : Colors.grey,
-            foregroundColor: Colors.black,
-            padding: const EdgeInsets.symmetric(vertical: 16),
-            shape:
-                RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          ),
-        )),
-        const SizedBox(width: 12),
-        Expanded(
+        Row(
+          children: [
+            Expanded(
+                child: ElevatedButton.icon(
+              onPressed: canEdit
+                  ? () =>
+                      _showEditStayDurationDialog(context, ref, updatedLocation)
+                  : null,
+              icon: const Icon(Icons.timer_outlined),
+              label: const Text('Set Stay'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: canEdit ? AppTheme.primaryColor : Colors.grey,
+                foregroundColor: Colors.black,
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12)),
+              ),
+            )),
+            const SizedBox(width: 12),
+            Expanded(
+              child: ElevatedButton.icon(
+                onPressed: () {
+                  Navigator.of(context).pop();
+                  onLocationTap?.call(updatedLocation.coordinates);
+                  parentSheetController?.animateTo(
+                    0.15, // minChildSize
+                    duration: const Duration(milliseconds: 300),
+                    curve: Curves.easeInOut,
+                  );
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    parentScrollController.animateTo(
+                      0,
+                      duration: const Duration(milliseconds: 300),
+                      curve: Curves.easeInOut,
+                    );
+                  });
+                },
+                icon: const Icon(Icons.map),
+                label: const Text('View on Map'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Theme.of(context)
+                      .colorScheme
+                      .primary
+                      .withValues(alpha: 0.2),
+                  foregroundColor: Theme.of(context).colorScheme.primary,
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12)),
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        SizedBox(
+          width: double.infinity,
           child: ElevatedButton.icon(
-            onPressed: () {
-              Navigator.of(context).pop();
-              onLocationTap?.call(updatedLocation.coordinates);
-              parentSheetController?.animateTo(
-                0.15, // minChildSize
-                duration: const Duration(milliseconds: 300),
-                curve: Curves.easeInOut,
-              );
-              WidgetsBinding.instance.addPostFrameCallback((_) {
-                parentScrollController.animateTo(
-                  0,
-                  duration: const Duration(milliseconds: 300),
-                  curve: Curves.easeInOut,
-                );
-              });
-            },
-            icon: const Icon(Icons.map),
-            label: const Text('View on Map'),
+            onPressed: hasWriteAccess
+                ? () {
+                    if (updatedLocation.isDone) {
+                      ref
+                          .read(tripProvider.notifier)
+                          .unmarkLocationsAsDone({updatedLocation.id});
+                    } else {
+                      ref
+                          .read(tripProvider.notifier)
+                          .markLocationsAsDone({updatedLocation.id});
+                      Navigator.of(context).pop();
+                    }
+                  }
+                : null,
+            icon: Icon(
+              updatedLocation.isDone
+                  ? Icons.cancel_outlined
+                  : Icons.check_circle_outline,
+            ),
+            label: Text(
+              updatedLocation.isDone ? 'Unmark as Done' : 'Mark as Done',
+              style: const TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
             style: ElevatedButton.styleFrom(
-              backgroundColor:
-                  Theme.of(context).colorScheme.primary.withValues(alpha: 0.2),
-              foregroundColor: Theme.of(context).colorScheme.primary,
+              backgroundColor: hasWriteAccess
+                  ? (updatedLocation.isDone
+                      ? Colors.grey[700]
+                      : Colors.green[600])
+                  : Colors.grey,
+              foregroundColor: Colors.white,
               padding: const EdgeInsets.symmetric(vertical: 16),
               shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12)),

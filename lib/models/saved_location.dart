@@ -52,6 +52,9 @@ class SavedLocation extends HiveObject {
   @HiveField(15)
   final List<String>? photoAttributions;
 
+  @HiveField(16)
+  final bool isDone;
+
   SavedLocation({
     required this.id,
     required this.userId,
@@ -64,6 +67,7 @@ class SavedLocation extends HiveObject {
     this.source = 'local',
     required this.fingerprint,
     this.isSkipped = false,
+    this.isDone = false,
     this.stayDuration = 0,
     this.scheduledDate,
     this.tripId,
@@ -83,6 +87,7 @@ class SavedLocation extends HiveObject {
     String? source,
     String? fingerprint,
     bool? isSkipped,
+    bool? isDone,
     int? stayDuration,
     DateTime? scheduledDate,
     String? tripId,
@@ -101,6 +106,7 @@ class SavedLocation extends HiveObject {
       source: source ?? this.source,
       fingerprint: fingerprint ?? this.fingerprint,
       isSkipped: isSkipped ?? this.isSkipped,
+      isDone: isDone ?? this.isDone,
       stayDuration: stayDuration ?? this.stayDuration,
       scheduledDate: scheduledDate ?? this.scheduledDate,
       tripId: tripId ?? this.tripId,
@@ -122,6 +128,7 @@ class SavedLocation extends HiveObject {
       source: json['source'] ?? 'synced',
       fingerprint: json['fingerprint'] ?? '',
       isSkipped: json['is_skipped'] ?? false,
+      isDone: json['is_done'] ?? false,
       stayDuration: json['stay_duration'] ?? 0,
       scheduledDate: json['scheduled_date'] != null ? DateTime.parse(json['scheduled_date']) : null,
       tripId: json['trip_id'],
@@ -146,6 +153,7 @@ class SavedLocation extends HiveObject {
       'source': source,
       'fingerprint': fingerprint,
       'is_skipped': isSkipped,
+      'is_done': isDone,
       'stay_duration': stayDuration,
       'scheduled_date': scheduledDate?.toIso8601String(),
       'photo_reference': photoReference,

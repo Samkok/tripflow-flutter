@@ -424,10 +424,6 @@ class SubscriptionNotifier extends StateNotifier<SubscriptionState> {
       debugPrint('SubscriptionProvider: 🔍 Validating database against SDK');
 
       final customerInfo = await _service.getCustomerInfo();
-      if (customerInfo == null) {
-        debugPrint('SubscriptionProvider: ⚠️ SDK returned null customer info');
-        return;
-      }
 
       final sdkIsPro = customerInfo.entitlements.active.containsKey(RevenueCatConfig.entitlementVoyZaPro);
       final sdkStatus = sdkIsPro ? 'active' : 'expired';
