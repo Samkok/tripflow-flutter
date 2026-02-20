@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:voyza/screens/splash_screen.dart';
+import 'package:voyza/screens/reset_password_screen.dart';
 import 'screens/main_screen.dart';
 
 import 'core/theme.dart';
@@ -21,6 +23,7 @@ import 'repositories/location_repository.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'models/saved_location.dart';
+import 'dart:async';
 
 /// PERFORMANCE: Global SharedPreferences cache to avoid repeated getInstance() calls
 /// Pre-initialized in main() before any provider accesses it
@@ -91,6 +94,8 @@ void _initializeHeavyServices() {
   });
 }
 
+final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
+
 class MyApp extends ConsumerStatefulWidget {
   const MyApp({super.key});
 
@@ -99,6 +104,8 @@ class MyApp extends ConsumerStatefulWidget {
 }
 
 class _MyAppState extends ConsumerState<MyApp> with WidgetsBindingObserver {
+  StreamSubscription<AuthState>? _authSubscription;
+
   @override
   void initState() {
     super.initState();
@@ -113,6 +120,7 @@ class _MyAppState extends ConsumerState<MyApp> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    _authSubscription?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -159,6 +167,18 @@ class _MyAppState extends ConsumerState<MyApp> with WidgetsBindingObserver {
         debugPrint('Main: Widget not mounted, aborting initialization');
         return;
       }
+
+      // Listen for password recovery deep link events
+      _authSubscription = SupabaseService.instance.client.auth.onAuthStateChange.listen(
+        (data) {
+          if (data.event == AuthChangeEvent.passwordRecovery) {
+            debugPrint('Main: passwordRecovery event — navigating to ResetPasswordScreen');
+            navigatorKey.currentState?.push(
+              MaterialPageRoute(builder: (_) => const ResetPasswordScreen()),
+            );
+          }
+        },
+      );
 
       // PERFORMANCE: Defer collaborator realtime to let UI render first
       // Initialize after a short delay so it doesn't compete with initial frame
@@ -215,6 +235,7 @@ class _MyAppState extends ConsumerState<MyApp> with WidgetsBindingObserver {
     final themeMode = ref.watch(themeProvider);
 
     return MaterialApp(
+      navigatorKey: navigatorKey,
       debugShowCheckedModeBanner: false,
       title: 'VoyZa',
       theme: AppTheme.lightTheme,

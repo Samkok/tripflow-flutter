@@ -123,24 +123,64 @@ class LocationDetailSheet extends ConsumerWidget {
         Row(
           children: [
             CircleAvatar(
-              backgroundColor: Theme.of(context).colorScheme.primary,
+              backgroundColor: updatedLocation.isDone
+                  ? Colors.green.shade500
+                  : Theme.of(context).colorScheme.primary,
               radius: 24,
-              child: Text(
-                '$number',
-                style: const TextStyle(
-                  color: Colors.black,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 20,
-                ),
-              ),
+              child: updatedLocation.isDone
+                  ? const Icon(Icons.check, color: Colors.white, size: 24)
+                  : Text(
+                      '$number',
+                      style: const TextStyle(
+                        color: Colors.black,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 20,
+                      ),
+                    ),
             ),
             const SizedBox(width: 16),
             Text(
-              'Stop $number',
+              updatedLocation.isDone ? 'Done' : 'Stop $number',
               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: Theme.of(context).colorScheme.primary,
+                    color: updatedLocation.isDone
+                        ? Colors.green.shade500
+                        : Theme.of(context).colorScheme.primary,
                     fontWeight: FontWeight.w600,
                   ),
+            ),
+            const Spacer(),
+            GestureDetector(
+              onTap: hasWriteAccess
+                  ? () {
+                      if (updatedLocation.isDone) {
+                        ref
+                            .read(tripProvider.notifier)
+                            .unmarkLocationsAsDone({updatedLocation.id});
+                      } else {
+                        ref
+                            .read(tripProvider.notifier)
+                            .markLocationsAsDone({updatedLocation.id});
+                        Navigator.of(context).pop();
+                      }
+                    }
+                  : null,
+              child: Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: !hasWriteAccess
+                      ? Colors.grey[400]
+                      : updatedLocation.isDone
+                          ? Colors.grey[700]
+                          : Colors.green[600],
+                ),
+                child: Icon(
+                  updatedLocation.isDone ? Icons.close : Icons.check,
+                  color: Colors.white,
+                  size: 22,
+                ),
+              ),
             ),
           ],
         ),
@@ -420,98 +460,49 @@ class LocationDetailSheet extends ConsumerWidget {
     // Disable editing if past date OR no write access
     final canEdit = !isPastDate && hasWriteAccess;
 
-    return Column(
+    return Row(
       children: [
-        Row(
-          children: [
-            Expanded(
-                child: ElevatedButton.icon(
-              onPressed: canEdit
-                  ? () =>
-                      _showEditStayDurationDialog(context, ref, updatedLocation)
-                  : null,
-              icon: const Icon(Icons.timer_outlined),
-              label: const Text('Set Stay'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: canEdit ? AppTheme.primaryColor : Colors.grey,
-                foregroundColor: Colors.black,
-                padding: const EdgeInsets.symmetric(vertical: 16),
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12)),
-              ),
-            )),
-            const SizedBox(width: 12),
-            Expanded(
-              child: ElevatedButton.icon(
-                onPressed: () {
-                  Navigator.of(context).pop();
-                  onLocationTap?.call(updatedLocation.coordinates);
-                  parentSheetController?.animateTo(
-                    0.15, // minChildSize
-                    duration: const Duration(milliseconds: 300),
-                    curve: Curves.easeInOut,
-                  );
-                  WidgetsBinding.instance.addPostFrameCallback((_) {
-                    parentScrollController.animateTo(
-                      0,
-                      duration: const Duration(milliseconds: 300),
-                      curve: Curves.easeInOut,
-                    );
-                  });
-                },
-                icon: const Icon(Icons.map),
-                label: const Text('View on Map'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Theme.of(context)
-                      .colorScheme
-                      .primary
-                      .withValues(alpha: 0.2),
-                  foregroundColor: Theme.of(context).colorScheme.primary,
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12)),
-                ),
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 12),
-        SizedBox(
-          width: double.infinity,
+        Expanded(
+            child: ElevatedButton.icon(
+          onPressed: canEdit
+              ? () =>
+                  _showEditStayDurationDialog(context, ref, updatedLocation)
+              : null,
+          icon: const Icon(Icons.timer_outlined),
+          label: const Text('Set Stay'),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: canEdit ? AppTheme.primaryColor : Colors.grey,
+            foregroundColor: Colors.black,
+            padding: const EdgeInsets.symmetric(vertical: 16),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          ),
+        )),
+        const SizedBox(width: 12),
+        Expanded(
           child: ElevatedButton.icon(
-            onPressed: hasWriteAccess
-                ? () {
-                    if (updatedLocation.isDone) {
-                      ref
-                          .read(tripProvider.notifier)
-                          .unmarkLocationsAsDone({updatedLocation.id});
-                    } else {
-                      ref
-                          .read(tripProvider.notifier)
-                          .markLocationsAsDone({updatedLocation.id});
-                      Navigator.of(context).pop();
-                    }
-                  }
-                : null,
-            icon: Icon(
-              updatedLocation.isDone
-                  ? Icons.cancel_outlined
-                  : Icons.check_circle_outline,
-            ),
-            label: Text(
-              updatedLocation.isDone ? 'Unmark as Done' : 'Mark as Done',
-              style: const TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
+            onPressed: () {
+              Navigator.of(context).pop();
+              onLocationTap?.call(updatedLocation.coordinates);
+              parentSheetController?.animateTo(
+                0.15, // minChildSize
+                duration: const Duration(milliseconds: 300),
+                curve: Curves.easeInOut,
+              );
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                parentScrollController.animateTo(
+                  0,
+                  duration: const Duration(milliseconds: 300),
+                  curve: Curves.easeInOut,
+                );
+              });
+            },
+            icon: const Icon(Icons.map),
+            label: const Text('View on Map'),
             style: ElevatedButton.styleFrom(
-              backgroundColor: hasWriteAccess
-                  ? (updatedLocation.isDone
-                      ? Colors.grey[700]
-                      : Colors.green[600])
-                  : Colors.grey,
-              foregroundColor: Colors.white,
+              backgroundColor:
+                  Theme.of(context).colorScheme.primary.withValues(alpha: 0.2),
+              foregroundColor: Theme.of(context).colorScheme.primary,
               padding: const EdgeInsets.symmetric(vertical: 16),
               shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12)),

@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:voyza/screens/signup_screen.dart';
+import 'package:voyza/screens/forgot_password_screen.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../providers/auth_provider.dart';
+import '../providers/subscription_provider.dart';
 import '../services/auth_service.dart';
 import '../widgets/sync_confirmation_dialog.dart';
 
@@ -77,6 +79,9 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
           await ref.read(authServiceProvider).declineSync();
         }
       }
+
+      // Reinitialize subscription for the newly signed-in user (fire-and-forget)
+      ref.read(subscriptionProvider.notifier).reinitialize();
 
       // Save preference before async gap (fire-and-forget is safe for prefs)
       AuthService.saveRememberMe(_rememberMe, _emailController.text.trim());
@@ -210,6 +215,14 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                               builder: (_) => const SignupScreen()));
                         },
                         child: const Text("Don't have an account? Sign Up"),
+                      ),
+                      const SizedBox(height: 8),
+                      TextButton(
+                        onPressed: () {
+                          Navigator.of(context).push(MaterialPageRoute(
+                              builder: (_) => const ForgotPasswordScreen()));
+                        },
+                        child: const Text('Forgot Password?'),
                       ),
                     ],
                   ),

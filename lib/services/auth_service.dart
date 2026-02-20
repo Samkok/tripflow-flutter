@@ -166,6 +166,21 @@ class AuthService {
     return _supabase.auth.onAuthStateChange;
   }
 
+  /// Sends a password reset email with the app's custom scheme redirect.
+  Future<void> sendPasswordResetEmail(String email) async {
+    await _supabase.auth.resetPasswordForEmail(
+      email,
+      redirectTo: 'voyza://reset-password',
+    );
+  }
+
+  /// Updates the authenticated user's password during a recovery session.
+  Future<void> updatePassword(String newPassword) async {
+    await _supabase.auth.updateUser(
+      UserAttributes(password: newPassword),
+    );
+  }
+
   /// Performs the actual sign-out operation.
   /// UI concerns like showing dialogs should be handled by the caller.
   Future<void> signOut() async {

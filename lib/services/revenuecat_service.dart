@@ -135,6 +135,9 @@ class RevenueCatService {
       debugPrint('RevenueCatService: Logging in user: $appUserId');
       final result = await Purchases.logIn(appUserId);
       debugPrint('RevenueCatService: Login successful');
+      // Always broadcast so SubscriptionNotifier updates immediately,
+      // regardless of whether addCustomerInfoUpdateListener fires.
+      _customerInfoController.add(result.customerInfo);
       return result.customerInfo;
     } catch (e) {
       debugPrint('RevenueCatService: Login failed - $e');

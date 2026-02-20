@@ -829,6 +829,39 @@ class SubscriptionNotifier extends StateNotifier<SubscriptionState> {
     }
   }
 
+  /// Called after sign-in to restore the realtime subscription and refresh state.
+  /// Clears the degraded mode that occurs when the realtime channel disconnects
+  /// during sign-out, and resubscribes with the newly authenticated user.
+  Future<void> reinitialize() async {
+    debugPrint('SubscriptionProvider: 🔄 Reinitializing for new user session');
+
+    // Clear degraded mode set when realtime failed during sign-out
+    if (!state.isDatabasePrimary) {
+      state = state.copyWith(isDatabasePrimary: true);
+    }
+
+    // Cancel old realtime listener and force-resubscribe with fresh auth
+    await _realtimeSubscription?.cancel();
+    _realtimeSubscription = null;
+
+    final realtimeService = SubscriptionRealtimeService();
+    await realtimeService.resubscribe(); // Clears old channel, subscribes for new userId
+
+    _realtimeSubscription = realtimeService.eventStream.listen(
+      (event) {
+        _handleRealtimeEvent(event);
+      },
+      onError: (error) {
+        debugPrint('SubscriptionProvider: ⚠️ Realtime stream error: $error');
+        _handleRealtimeFailure();
+      },
+    );
+
+    // Fetch fresh customer info from RevenueCat
+    await refresh(skipInit: true);
+    debugPrint('SubscriptionProvider: ✅ Reinitialized — isPro: ${state.isPro}');
+  }
+
   @override
   void dispose() {
     _subscription?.cancel();
