@@ -31,7 +31,7 @@ workflows:
     name: Build iOS App
     instance_type: mac_mini_m1
     integrations:
-      app_store_connect: CodeMagic
+      app_store_connect: CodeMagicKey
     environment:
       ios_signing:
         distribution_type: app_store
