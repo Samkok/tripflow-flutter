@@ -96,13 +96,22 @@ final syncManagerProvider = Provider<void>((ref) {
   }
 });
 
-/// Helper function to check sync choice and perform sync if approved
+/// Fetches remote locations and optionally merges anonymous local ones.
+///
+/// Always fetches remote locations to populate the Hive cache — this ensures
+/// trip locations are visible immediately after sign-in without requiring a
+/// manual pull-to-refresh.
+///
+/// The anonymous merge (syncOnLogin) remains gated by the user's explicit
+/// sync choice, since it involves uploading local data to the server.
 Future<void> _checkAndSync(LocationRepository repository) async {
-  // Import auth_service to access getSyncChoice
-  final syncChoice = await AuthService.getSyncChoice();
+  // Always fetch remote locations so the Hive cache is populated on login.
+  // Read-only: downloads owned + collaborative trip locations via RLS.
+  await repository.fetchRemoteLocations();
 
-  // Only sync if user explicitly chose to sync (true)
-  // If syncChoice is null (never asked) or false (declined), don't sync
+  // Merge anonymous local locations into the user's account only if the user
+  // explicitly agreed during the login sync dialog.
+  final syncChoice = await AuthService.getSyncChoice();
   if (syncChoice == true) {
     await repository.syncOnLogin();
   }

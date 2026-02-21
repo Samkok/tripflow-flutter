@@ -115,8 +115,15 @@ final collaboratorRealtimeInitProvider = StateNotifierProvider<CollaboratorRealt
 
 /// Provider for getting collaborators of a specific trip
 final tripCollaboratorsProvider = FutureProvider.family<List<TripCollaborator>, String>((ref, tripId) async {
-  // Watch refresh counter to trigger rebuild on collaborator changes
+  // Watch auth state — re-fetches on login/logout so the list is never stuck
+  // showing a stale cached result from an unauthenticated context.
+  final authState = ref.watch(authStateProvider);
+
+  // Watch refresh counter to trigger rebuild on realtime collaborator changes
   ref.watch(_collaboratorRefreshCounterProvider);
+
+  // Guard: don't query while unauthenticated (RLS would return nothing anyway)
+  if (authState.asData?.value.session == null) return [];
 
   final repository = ref.watch(tripCollaboratorRepositoryProvider);
   return repository.getCollaborators(tripId);

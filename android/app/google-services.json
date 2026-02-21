@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "210414534352",
+    "project_id": "voyza-ba94d",
+    "storage_bucket": "voyza-ba94d.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:210414534352:android:907fb13fb68f2b0b91e8d5",
+        "android_client_info": {
+          "package_name": "com.superiordev.voyza"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCC5WAhVL1Dyqdr5eS0E-StjCFrCrD4R7E"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

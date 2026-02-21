@@ -47,7 +47,7 @@ class TripCollaboratorRepository {
       if (userId == null) {
         return AddCollaboratorResult(
           success: false,
-          error: 'No user found with email: $email',
+          error: 'No account found with that email address. Make sure the person has signed up first.',
         );
       }
 
@@ -71,7 +71,7 @@ class TripCollaboratorRepository {
       if (existing != null) {
         return AddCollaboratorResult(
           success: false,
-          error: 'This user is already a collaborator on this trip',
+          error: 'This person is already a member of this trip',
         );
       }
 

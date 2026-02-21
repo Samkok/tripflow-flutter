@@ -18,6 +18,7 @@ import 'widgets/subscription_conflict_banner.dart';
 import 'services/supabase_service.dart';
 import 'services/revenuecat_service.dart';
 import 'services/auth_service.dart';
+import 'services/notification_service.dart';
 import 'repositories/location_repository.dart';
 
 import 'package:hive_flutter/hive_flutter.dart';
@@ -88,6 +89,12 @@ void _initializeHeavyServices() {
       debugPrint('Main: Initializing RevenueCat...');
       await RevenueCatService.initialize();
       debugPrint('Main: RevenueCat initialized');
+
+      // Initialize push notification service (requires Firebase)
+      // Note: GoogleService-Info.plist (iOS) and google-services.json (Android) must be present
+      debugPrint('Main: Initializing NotificationService...');
+      await NotificationService().initialize();
+      debugPrint('Main: NotificationService initialized');
     } catch (e) {
       debugPrint('Main: Error initializing heavy services: $e');
     }

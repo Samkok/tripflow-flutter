@@ -76,7 +76,7 @@ workflows:
       - build/ios/ipa/*.ipa
     triggering:
       events:
-        - push
+        - manual
       branch_patterns:
         - pattern: "main"
           include: true

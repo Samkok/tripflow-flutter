@@ -5,6 +5,7 @@ import 'package:voyza/repositories/location_repository.dart';
 import 'package:voyza/repositories/user_profile_repository.dart';
 import 'package:voyza/services/supabase_service.dart';
 import 'package:voyza/services/revenuecat_service.dart';
+import 'package:voyza/services/notification_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import '../models/saved_location.dart';
@@ -41,6 +42,13 @@ class AuthService {
         } catch (e) {
           print('Failed to link RevenueCat user: $e');
           // Don't fail the whole login if RevenueCat fails
+        }
+
+        // Register device for push notifications (fire-and-forget)
+        try {
+          await NotificationService().registerToken();
+        } catch (e) {
+          debugPrint('AuthService: Failed to register push token: $e');
         }
 
         // Check if there are local locations before syncing
@@ -184,6 +192,13 @@ class AuthService {
   /// Performs the actual sign-out operation.
   /// UI concerns like showing dialogs should be handled by the caller.
   Future<void> signOut() async {
+    // Deregister device token so this device stops receiving pushes for this user
+    try {
+      await NotificationService().deregisterToken();
+    } catch (e) {
+      debugPrint('AuthService: Failed to deregister push token: $e');
+    }
+
     // Logout from RevenueCat (creates new anonymous user)
     try {
       await RevenueCatService().logout();
