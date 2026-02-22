@@ -263,31 +263,58 @@ class NotificationService {
     debugPrint('NotificationService: Navigate to trip: $tripId');
   }
 
-  /// Upserts the FCM token for the current user into `device_tokens`.
+  /// Registers or reactivates the FCM token for the current user.
   ///
-  /// The unique key is (user_id, fcm_token) — one row per user per device.
-  /// This means different users on the same device each have their own row,
-  /// so there is no RLS conflict when switching accounts.
+  /// Uses SELECT → UPDATE/INSERT rather than upsert(onConflict:...) because
+  /// PostgreSQL validates the ON CONFLICT target against existing constraints
+  /// even when no conflict occurs — meaning if the expected unique constraint
+  /// is absent the entire query fails silently. This explicit approach works
+  /// regardless of which DB constraints are in place.
+  ///
+  /// Scenarios handled:
+  ///   • Same user, same device (re-login)   → UPDATE is_active = true
+  ///   • Same user, new device               → INSERT new row
+  ///   • Different user, same physical device → INSERT new row (different user_id)
   Future<void> _upsertToken({
     required String userId,
     required String token,
   }) async {
     final platform = Platform.isIOS ? 'ios' : 'android';
+    final now = DateTime.now().toUtc().toIso8601String();
+    final supabase = SupabaseService.instance.client;
 
-    await SupabaseService.instance.client.from('device_tokens').upsert(
-      {
+    // Check if this exact (user, device) pair already has a row
+    final existing = await supabase
+        .from('device_tokens')
+        .select('id')
+        .eq('user_id', userId)
+        .eq('fcm_token', token)
+        .maybeSingle();
+
+    if (existing != null) {
+      // Same user, same device — reactivate the existing row
+      await supabase
+          .from('device_tokens')
+          .update({'is_active': true, 'updated_at': now})
+          .eq('user_id', userId)
+          .eq('fcm_token', token);
+      debugPrint(
+        'NotificationService: Token reactivated for $platform device '
+        '(user: ${userId.substring(0, 8)}...)',
+      );
+    } else {
+      // New device or new user on this device — insert a fresh row
+      await supabase.from('device_tokens').insert({
         'user_id': userId,
         'fcm_token': token,
         'platform': platform,
         'is_active': true,
-        'updated_at': DateTime.now().toUtc().toIso8601String(),
-      },
-      onConflict: 'user_id,fcm_token',
-    );
-
-    debugPrint(
-      'NotificationService: Token registered for $platform device '
-      '(user: ${userId.substring(0, 8)}...)',
-    );
+        'updated_at': now,
+      });
+      debugPrint(
+        'NotificationService: Token registered for $platform device '
+        '(user: ${userId.substring(0, 8)}...)',
+      );
+    }
   }
 }

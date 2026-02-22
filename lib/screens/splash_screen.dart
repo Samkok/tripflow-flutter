@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:voyza/screens/main_screen.dart';
 import 'package:voyza/core/theme.dart';
+import 'package:voyza/services/supabase_service.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -18,9 +19,13 @@ class _SplashScreenState extends State<SplashScreen> {
   }
 
   Future<void> _initializeApp() async {
-    // Show splash briefly for branding, then navigate
-    // Marker cache will be warmed lazily in background when needed
-    await Future.delayed(const Duration(milliseconds: 500));
+    // Wait for Supabase to finish initializing before navigating.
+    // On slow Android devices the async init in main.dart can take >500ms,
+    // causing an "No host specified in URI" error if the user reaches auth screens first.
+    await Future.wait([
+      SupabaseService.waitForInitialization(),
+      Future.delayed(const Duration(milliseconds: 500)), // minimum splash duration
+    ]);
 
     // Navigate to the home screen
     if (mounted) {
