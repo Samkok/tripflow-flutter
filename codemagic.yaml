@@ -2,12 +2,17 @@ workflows:
   android-release:
     name: Android Release
     environment:
+      groups:
+        - supabase
+        - google_map
+        - revenuecat
       flutter: stable
       android_signing:
         - voyza_key
     scripts:
       - name: Create .env file
         script: |
+          echo "" > .env
           echo "REVENUECAT_API_KEY_ANDROID=$REVENUECAT_API_KEY_ANDROID" >> .env
           echo "REVENUECAT_API_KEY_IOS=$REVENUECAT_API_KEY_IOS" >> .env
           echo "REVENUECAT_WEBHOOK_AUTH_KEY=$REVENUECAT_WEBHOOK_AUTH_KEY" >> .env
@@ -33,6 +38,10 @@ workflows:
     integrations:
       app_store_connect: CodeMagicKey
     environment:
+      groups:
+        - supabase
+        - google_map
+        - revenuecat
       ios_signing:
         distribution_type: app_store
         bundle_identifier: com.superiordev.voyza

@@ -59,3 +59,5 @@ lib/generated_plugin_registrant.dart
 # Environment
 .env
 node_modules/
+
+~/
