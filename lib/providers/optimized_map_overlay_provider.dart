@@ -117,6 +117,10 @@ final finalMarkersProvider = Provider<Set<Marker>>((ref) {
   debugPrint('finalMarkersProvider: Building ${locationsForDate.length} markers (${locationsForDate.where((l) => !l.isSkipped).length} active)');
 
   return markerBitmapsAsync.when(
+    // During a RELOAD (background sync updates locations), keep showing the
+    // previous markers instead of flashing empty.  Only the very first load
+    // (no previous data) calls loading(), and the overlay covers that period.
+    skipLoadingOnReload: true,
     data: (cachedData) {
       final Set<Marker> markers = {};
       final markerIcons = cachedData.markerIcons;
@@ -472,6 +476,7 @@ final assembledMapOverlaysProvider =
   // Since finalMarkersProvider is synchronous (deriving from an async one),
   // we can treat it more directly. We'll use the async state of the bitmap provider to manage loading/error states.
   return ref.watch(cachedMarkerBitmapsProvider).when(
+    skipLoadingOnReload: true,
     data: (_) {
       // We don't need the data here, just the state.
       final routeInfoMarkers = routeInfoMarkersAsync.valueOrNull ?? {};

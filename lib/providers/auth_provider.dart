@@ -26,6 +26,24 @@ final currentUserProvider = Provider<User?>((ref) {
       ref.watch(authServiceProvider).currentUser;
 });
 
+/// Stable user-ID provider — only emits a new value on login / logout,
+/// NOT on every Supabase token refresh.
+///
+/// authStateProvider emits a new AsyncValue<AuthState> on every token refresh
+/// (roughly every hour). If providers that control expensive UI (like
+/// filteredLocationsForMapProvider or realtimeActiveTripProvider) watch
+/// authStateProvider directly, they restart their streams on every refresh,
+/// which immediately re-emits the full location list and triggers marker-bitmap
+/// regeneration → map blink.
+///
+/// By watching this Provider<String?> instead, dependents only rebuild when the
+/// user ID actually changes (login / logout), because String equality is
+/// value-based: "same-id" == "same-id" → true → Riverpod skips the rebuild.
+final currentUserIdProvider = Provider<String?>((ref) {
+  final authState = ref.watch(authStateProvider);
+  return authState.asData?.value.session?.user.id;
+});
+
 /// Provider that listens to auth state changes and links RevenueCat user ID
 /// This ensures RevenueCat is always in sync with Supabase authentication
 final revenueCatAuthSyncProvider = FutureProvider.autoDispose<void>((ref) async {

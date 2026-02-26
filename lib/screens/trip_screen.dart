@@ -70,9 +70,10 @@ class _TripScreenState extends ConsumerState<TripScreen> {
         }
       });
     } catch (e) {
+      debugPrint('Error creating trip: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error creating trip: $e')),
+          const SnackBar(content: Text('Could not create trip. Please check your connection and try again.')),
         );
       }
     }
@@ -92,9 +93,10 @@ class _TripScreenState extends ConsumerState<TripScreen> {
         );
       }
     } catch (e) {
+      debugPrint('Error setting active trip: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error setting active trip: $e')),
+          const SnackBar(content: Text('Could not activate trip. Please try again.')),
         );
       }
     }
@@ -112,9 +114,10 @@ class _TripScreenState extends ConsumerState<TripScreen> {
         );
       }
     } catch (e) {
+      debugPrint('Error deleting trip: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error deleting trip: $e')),
+          const SnackBar(content: Text('Could not delete trip. Please check your connection and try again.')),
         );
       }
     }
@@ -186,10 +189,7 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                 padding: EdgeInsets.all(16),
                 child: Center(child: CircularProgressIndicator()),
               ),
-              error: (err, _) => Padding(
-                padding: const EdgeInsets.all(16),
-                child: Text('Error: $err'),
-              ),
+              error: (_, __) => const SizedBox.shrink(),
             ),
           ),
 
@@ -277,8 +277,8 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                 child: CircularProgressIndicator(),
               )),
             ),
-            error: (err, _) => SliverToBoxAdapter(
-              child: Center(child: Text('Error: $err')),
+            error: (_, __) => SliverToBoxAdapter(
+              child: _buildConnectionError(context),
             ),
           ),
 
@@ -340,6 +340,42 @@ class _TripScreenState extends ConsumerState<TripScreen> {
           const SliverPadding(padding: EdgeInsets.symmetric(vertical: 50)),
         ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildConnectionError(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+      child: Column(
+        children: [
+          Icon(
+            Icons.wifi_off_rounded,
+            size: 40,
+            color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.4),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            'Connection issue',
+            style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Could not load your trips. Please check your connection and try refreshing.',
+            textAlign: TextAlign.center,
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6),
+                ),
+          ),
+          const SizedBox(height: 16),
+          OutlinedButton.icon(
+            onPressed: _refreshTrips,
+            icon: const Icon(Icons.refresh_rounded, size: 18),
+            label: const Text('Refresh'),
+          ),
+        ],
       ),
     );
   }
@@ -890,9 +926,10 @@ class _TripScreenState extends ConsumerState<TripScreen> {
         }
       }
     } catch (e) {
+      debugPrint('Error leaving trip: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error leaving trip: $e')),
+          const SnackBar(content: Text('Could not leave trip. Please check your connection and try again.')),
         );
       }
     }
@@ -1189,9 +1226,10 @@ class _TripScreenState extends ConsumerState<TripScreen> {
         );
       }
     } catch (e) {
+      debugPrint('Error deactivating trip: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error deactivating trip: $e')),
+          const SnackBar(content: Text('Could not deactivate trip. Please try again.')),
         );
       }
     }
@@ -1368,9 +1406,10 @@ class _TripScreenState extends ConsumerState<TripScreen> {
         );
       }
     } catch (e) {
+      debugPrint('Error updating trip: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error updating trip: $e')),
+          const SnackBar(content: Text('Could not update trip name. Please check your connection and try again.')),
         );
       }
     }

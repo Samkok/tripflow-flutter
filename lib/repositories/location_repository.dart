@@ -340,10 +340,16 @@ class LocationRepository {
       final List<dynamic> data = response;
       debugPrint('fetchRemoteLocations: Fetched ${data.length} locations (including collaborative trips)');
 
-      for (final item in data) {
-        final remoteLoc = SavedLocation.fromJson(item);
-        // Upsert to local Hive, overwriting any existing
-        await _box!.put(remoteLoc.id, remoteLoc);
+      // Batch-write all locations in a single putAll call instead of N individual
+      // put() calls. Each individual put fires its own Hive watch event, so N puts
+      // would trigger N stream emissions → N marker redraws → N map blinks.
+      if (data.isNotEmpty) {
+        final Map<String, SavedLocation> batch = {};
+        for (final item in data) {
+          final remoteLoc = SavedLocation.fromJson(item);
+          batch[remoteLoc.id] = remoteLoc;
+        }
+        await _box!.putAll(batch);
       }
     } catch (e) {
       debugPrint('Error fetching remote locations: $e');
@@ -411,6 +417,12 @@ class LocationRepository {
 
   /// Creates a stream that properly initializes the Hive box before watching.
   /// This returns a stream that first emits current contents, then watches for changes.
+  ///
+  /// The watch portion is DEBOUNCED (100 ms) so that bulk writes — e.g.
+  /// fetchRemoteLocations() writing N locations via putAll, or syncOnLogin()
+  /// writing N individual entries — collapse into a single stream emission.
+  /// Without debouncing, each individual Hive write fires its own watch event,
+  /// causing the marker-bitmap FutureProvider to re-run N times → N map blinks.
   Stream<List<SavedLocation>> _createWatchStream() async* {
     try {
       await _ensureInitialized();
@@ -419,17 +431,38 @@ class LocationRepository {
       // PERFORMANCE: Trigger lazy background sync if migration set the flag
       _syncDataInBackgroundIfNeeded();
 
-      // Emit current contents first
+      // Emit current contents immediately (no debounce for the initial snapshot)
       final initialData = _box!.values.toList();
       debugPrint('watchLocations: Emitting initial data with ${initialData.length} items');
       yield initialData;
 
-      // Then watch for future changes
-      yield* _box!.watch().map((event) {
-        final data = _box!.values.toList();
-        debugPrint('watchLocations: Box changed, now has ${data.length} items');
-        return data;
-      });
+      // Watch for future changes — debounced so rapid consecutive Hive writes
+      // (bulk fetch, sync loops, realtime bursts) only trigger ONE emission.
+      Timer? debounceTimer;
+      final controller = StreamController<void>();
+
+      final sub = _box!.watch().listen(
+        (_) {
+          debounceTimer?.cancel();
+          debounceTimer = Timer(const Duration(milliseconds: 100), () {
+            if (!controller.isClosed) controller.add(null);
+          });
+        },
+        onError: controller.addError,
+        onDone: controller.close,
+      );
+
+      try {
+        await for (final _ in controller.stream) {
+          final data = _box!.values.toList();
+          debugPrint('watchLocations: Box changed (debounced), now has ${data.length} items');
+          yield data;
+        }
+      } finally {
+        await sub.cancel();
+        debounceTimer?.cancel();
+        if (!controller.isClosed) await controller.close();
+      }
     } catch (e) {
       debugPrint('watchLocations error: $e');
       yield const <SavedLocation>[];
@@ -480,6 +513,10 @@ class LocationRepository {
   void subscribeToRealtimeChanges() {
     final user = _supabase.auth.currentUser;
     if (user == null) return;
+    // Guard against duplicate subscriptions. Since syncManagerProvider now uses
+    // ref.watch, it can be called multiple times when connectivity/auth changes.
+    // Without this guard, every reconnect would create a new leaking channel.
+    if (_subscription != null) return;
 
     // Don't filter by user_id - let RLS policies handle access control
     // This allows receiving updates for locations in collaborative trips
@@ -502,15 +539,19 @@ class LocationRepository {
 
             debugPrint('Realtime location change: ${payload.eventType}');
 
-            if (payload.eventType == PostgresChangeEvent.insert ||
-                payload.eventType == PostgresChangeEvent.update) {
-              final newLoc = SavedLocation.fromJson(payload.newRecord);
-              _box!.put(newLoc.id, newLoc);
-            } else if (payload.eventType == PostgresChangeEvent.delete) {
-              final oldRecord = payload.oldRecord;
-              if (oldRecord.containsKey('id')) {
-                _box!.delete(oldRecord['id']);
+            try {
+              if (payload.eventType == PostgresChangeEvent.insert ||
+                  payload.eventType == PostgresChangeEvent.update) {
+                final newLoc = SavedLocation.fromJson(payload.newRecord);
+                _box!.put(newLoc.id, newLoc);
+              } else if (payload.eventType == PostgresChangeEvent.delete) {
+                final oldRecord = payload.oldRecord;
+                if (oldRecord.containsKey('id')) {
+                  _box!.delete(oldRecord['id']);
+                }
               }
+            } catch (e) {
+              debugPrint('Realtime callback error for ${payload.eventType}: $e');
             }
           },
         )
@@ -520,6 +561,7 @@ class LocationRepository {
   void unsubscribe() {
     if (_subscription != null) {
       _supabase.removeChannel(_subscription!);
+      // Reset to null so subscribeToRealtimeChanges() can re-subscribe after reconnect
       _subscription = null;
     }
   }

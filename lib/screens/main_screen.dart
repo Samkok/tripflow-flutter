@@ -16,6 +16,22 @@ class MainScreen extends ConsumerStatefulWidget {
 class _MainScreenState extends ConsumerState<MainScreen> {
   int _selectedIndex = 0;
 
+  @override
+  void initState() {
+    super.initState();
+    // Perform initial data fetch once at startup (not in build, to avoid
+    // re-running on every auth-token refresh / connectivity change).
+    // After sync completes, set initialSyncCompleteProvider so the map screen
+    // can hide its loading overlay once marker bitmaps are also ready.
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      final repository = ref.read(locationRepositoryProvider);
+      await performInitialLocationSync(repository);
+      if (mounted) {
+        ref.read(initialSyncCompleteProvider.notifier).state = true;
+      }
+    });
+  }
+
   static final List<Widget> _widgetOptions = <Widget>[
     const TripScreen(),
     const MapScreen(),
@@ -30,8 +46,9 @@ class _MainScreenState extends ConsumerState<MainScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // Activate the sync manager
-    ref.read(syncManagerProvider);
+    // Watch the sync manager so it re-evaluates when connectivity/auth changes,
+    // ensuring the realtime subscription is re-established after reconnects.
+    ref.watch(syncManagerProvider);
 
     return Scaffold(
       extendBody: true, // Allows body to extend behind the bottom nav

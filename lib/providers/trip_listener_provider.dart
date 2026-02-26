@@ -64,10 +64,13 @@ final tripEventStreamProvider = StreamProvider<TripEvent>((ref) {
 /// Real-time active trip with Riverpod integration
 /// Now uses LOCAL storage instead of database for trip activation
 /// This allows each user to independently activate/deactivate trips
+///
+/// Uses currentUserIdProvider instead of authStateProvider so this provider
+/// does NOT restart on every Supabase token refresh — only on login / logout.
 final realtimeActiveTripProvider = StreamProvider<Trip?>((ref) async* {
-  final authState = ref.watch(authStateProvider);
-
-  final userId = authState.asData?.value.session?.user.id;
+  // currentUserIdProvider is a Provider<String?> whose value only changes on
+  // login/logout (not on token refresh), preventing unnecessary stream restarts.
+  final userId = ref.watch(currentUserIdProvider);
 
   if (userId == null) {
     yield null;

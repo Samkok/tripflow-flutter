@@ -20,6 +20,7 @@ import 'services/revenuecat_service.dart';
 import 'services/auth_service.dart';
 import 'services/notification_service.dart';
 import 'repositories/location_repository.dart';
+import 'providers/location_provider.dart' show initialSyncCompleteProvider;
 
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -55,7 +56,26 @@ Future<void> main() async {
   await Hive.initFlutter();
   Hive.registerAdapter(SavedLocationAdapter());
 
-  runApp(const ProviderScope(child: MyApp()));
+  // Check Hive cache BEFORE runApp so the map overlay can be skipped on
+  // restarts where locations are already cached.  Opening the box here is
+  // safe — _ensureInitialized() detects an already-open box via
+  // Hive.isBoxOpen() and simply retrieves the existing reference.
+  bool hasCachedLocations = false;
+  try {
+    final box = await Hive.openBox<SavedLocation>('locations');
+    hasCachedLocations = box.isNotEmpty;
+  } catch (_) {
+    // Corrupted box — _ensureInitialized() will handle recovery later.
+  }
+
+  runApp(ProviderScope(
+    overrides: [
+      // Start the overlay provider as already-complete when Hive has data,
+      // so returning users never see the loading screen on restart.
+      initialSyncCompleteProvider.overrideWith((ref) => hasCachedLocations),
+    ],
+    child: const MyApp(),
+  ));
 
   // OPTIMIZATION: Initialize heavy services in the background after app render
   _initializeHeavyServices();

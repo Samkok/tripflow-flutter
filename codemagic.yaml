@@ -42,6 +42,7 @@ workflows:
         - supabase
         - google_map
         - revenuecat
+        - app_store_credentials
       ios_signing:
         distribution_type: app_store
         bundle_identifier: com.superiordev.voyza

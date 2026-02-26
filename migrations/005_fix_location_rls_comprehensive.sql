@@ -22,6 +22,11 @@ DROP POLICY IF EXISTS "Users can update their own locations" ON public.locations
 DROP POLICY IF EXISTS "Users can update locations for trips they own or have write access" ON public.locations;
 DROP POLICY IF EXISTS "Users can delete their own locations" ON public.locations;
 DROP POLICY IF EXISTS "Users can delete locations for trips they own or have write access" ON public.locations;
+-- Also drop the policies this migration creates, so it is safe to re-run
+DROP POLICY IF EXISTS "locations_select_policy" ON public.locations;
+DROP POLICY IF EXISTS "locations_insert_policy" ON public.locations;
+DROP POLICY IF EXISTS "locations_update_policy" ON public.locations;
+DROP POLICY IF EXISTS "locations_delete_policy" ON public.locations;
 
 -- ============================================================================
 -- STEP 2: Ensure helper functions exist and are correct

@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:google_maps_url_extractor/google_maps_url_extractor.dart';
@@ -30,15 +29,24 @@ class TripDetailsScreen extends ConsumerStatefulWidget {
 class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
   final TextEditingController _searchController = TextEditingController();
   String _searchQuery = '';
+  // Stream created once so rebuilds (e.g. typing in search) don't recreate it,
+  // which would cause StreamBuilder to briefly flash ConnectionState.waiting.
+  late final Stream<List<SavedLocation>> _locationsStream;
 
   @override
   void initState() {
     super.initState();
-    // Invalidate permissions when screen is first created to ensure fresh data
+    _locationsStream = ref.read(locationRepositoryProvider).watchLocations();
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      // Invalidate permissions when screen is first created to ensure fresh data
       ref.invalidate(hasWriteAccessProvider(widget.trip.id));
       ref.invalidate(isTripOwnerProvider(widget.trip.id));
       ref.invalidate(userTripPermissionProvider(widget.trip.id));
+
+      // Refresh location cache from Supabase so collaborators see each other's locations.
+      // The local Hive box is only populated at login, so it may be stale if the user
+      // was invited after they last logged in.
+      ref.read(locationRepositoryProvider).fetchRemoteLocations();
     });
   }
 
@@ -192,7 +200,7 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
 
   Widget _buildLocationStreamBody() {
     return StreamBuilder<List<SavedLocation>>(
-      stream: ref.read(locationRepositoryProvider).watchLocations(),
+      stream: _locationsStream,
       initialData: const [],
       builder: (context, snapshot) {
         debugPrint(

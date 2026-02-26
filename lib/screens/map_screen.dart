@@ -9,6 +9,8 @@ import 'package:voyza/widgets/add_to_trip_sheet.dart';
 import 'package:voyza/widgets/location_detail_sheet.dart';
 import 'package:uuid/uuid.dart';
 import '../models/location_model.dart';
+import '../providers/location_provider.dart';
+import '../providers/optimized_map_overlay_provider.dart';
 import '../providers/trip_provider.dart';
 import '../providers/theme_provider.dart';
 import '../providers/map_ui_state_provider.dart';
@@ -865,12 +867,76 @@ class _MapScreenState extends ConsumerState<MapScreen>
             highlightedLocationIndex: _highlightedLocationIndex,
           ),
 
-          // Map controls (Current Location, Zone Settings)
-          // Positioned(
-          //   bottom: 120,
-          //   right: 16,
-          // ),
+          // Loading overlay — covers the map during the initial data sync so
+          // the user never sees the blink that occurs while marker bitmaps are
+          // being generated for the first time.  The overlay fades out once:
+          //   1. performInitialLocationSync() has completed (remote data written
+          //      to Hive), AND
+          //   2. cachedMarkerBitmapsProvider has finished its async bitmap
+          //      generation (the expensive part that would cause the blink).
+          Consumer(
+            builder: (context, ref, _) {
+              final syncDone = ref.watch(initialSyncCompleteProvider);
+              final markersAsync = ref.watch(cachedMarkerBitmapsProvider);
+              // Ready when sync is done AND the first set of bitmaps is computed.
+              // Keeping both conditions prevents the overlay from dismissing
+              // prematurely while bitmap generation is still in flight.
+              final isReady = syncDone && markersAsync.hasValue;
+              return AnimatedOpacity(
+                opacity: isReady ? 0.0 : 1.0,
+                duration: const Duration(milliseconds: 500),
+                child: IgnorePointer(
+                  ignoring: isReady,
+                  child: _buildLoadingOverlay(context),
+                ),
+              );
+            },
+          ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildLoadingOverlay(BuildContext context) {
+    return Container(
+      color: Theme.of(context).scaffoldBackgroundColor,
+      child: SafeArea(
+        child: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 80,
+                height: 80,
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(22),
+                ),
+                child: Icon(
+                  Icons.map_outlined,
+                  size: 40,
+                  color: Theme.of(context).colorScheme.primary,
+                ),
+              ),
+              const SizedBox(height: 24),
+              Text(
+                'Loading your locations...',
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 20),
+              SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2.5,
+                  color: Theme.of(context).colorScheme.primary,
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
