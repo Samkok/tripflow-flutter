@@ -72,10 +72,13 @@ class AuthService {
     await _locationRepository.syncOnLogin();
   }
 
-  /// Sets the sync choice flag when user declines to sync
+  /// Sets the sync choice flag when user declines to sync.
+  /// Also removes anonymous local locations from Hive so they don't appear
+  /// on the authenticated user's map.
   Future<void> declineSync() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_syncChoiceKey, false);
+    await _locationRepository.cleanUpAnonymousData();
   }
 
   /// Checks if user has chosen to sync anonymous locations

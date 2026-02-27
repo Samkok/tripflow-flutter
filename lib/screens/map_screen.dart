@@ -168,6 +168,11 @@ class _MapScreenState extends ConsumerState<MapScreen>
     final showPlaceNames = ref.read(showPlaceNamesProvider);
     final style = await MapWidget.getMapStyle(themeMode, showPlaceNames);
     _mapController!.setMapStyle(style);
+    // Now that the controller is ready, animate to current location.
+    // _initializeLocation() was already called from initState() but _mapController
+    // was null then so animateCamera was skipped. _startLocationTracking() has its
+    // own guard so calling this again is safe.
+    _initializeLocation();
   }
 
   Future<void> _onMapLongPress(LatLng coordinates) async {

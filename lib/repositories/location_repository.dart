@@ -253,21 +253,29 @@ class LocationRepository {
     // Step 3: Search for conflicts and upload missing
     for (final localLoc in localAnonymous) {
       if (remoteMap.containsKey(localLoc.fingerprint)) {
-        // CONFLICT: Fingerprint exists. Merge local-only changes into the remote version.
-        // Rule: We assume the user wants to keep the stay duration, skip status, and date
-        // they set while offline.
+        // CONFLICT: Fingerprint exists in remote DB.
         final remoteVersion = remoteMap[localLoc.fingerprint]!;
-        final mergedLocation = remoteVersion.copyWith(
-          isSkipped: localLoc.isSkipped,
-          stayDuration: localLoc.stayDuration,
-          scheduledDate: localLoc.scheduledDate,
-          isSynced: false, // Mark for sync
-        );
-        // Replace the old remote version with the merged one locally
-        await _box!.put(remoteVersion.id, mergedLocation);
-        // Delete the old anonymous record
-        await _box!.delete(localLoc.id);
-        await syncLocation(mergedLocation); // Sync the merged result
+
+        if (remoteVersion.userId == user.id) {
+          // The remote location belongs to us — merge local-only changes and sync.
+          final mergedLocation = remoteVersion.copyWith(
+            isSkipped: localLoc.isSkipped,
+            stayDuration: localLoc.stayDuration,
+            scheduledDate: localLoc.scheduledDate,
+            isSynced: false,
+          );
+          await _box!.put(remoteVersion.id, mergedLocation);
+          await _box!.delete(localLoc.id);
+          await syncLocation(mergedLocation);
+        } else {
+          // The remote location belongs to another user (e.g. a collaborative trip).
+          // We cannot write to their row — just adopt the remote version locally
+          // and discard the anonymous local copy.
+          if (_box!.get(remoteVersion.id) == null) {
+            await _box!.put(remoteVersion.id, remoteVersion);
+          }
+          await _box!.delete(localLoc.id);
+        }
       } else {
         // Rule: If local fingerprint does not exist in remote DB, upload it.
         // We must update the fields to match the authenticated user.
@@ -309,7 +317,8 @@ class LocationRepository {
     if (user == null) return;
 
     final unsynced = _box!.values
-        .where((loc) => !loc.isSynced && loc.source == 'synced')
+        .where((loc) =>
+            !loc.isSynced && loc.source == 'synced' && loc.userId == user.id)
         .toList();
 
     if (unsynced.isEmpty) return;
@@ -486,6 +495,34 @@ class LocationRepository {
         debugPrint('Error in background data sync: $e');
       }
     });
+  }
+
+  /// Deletes all locations belonging to [tripId] that are owned by the current user.
+  /// Removes from both Supabase and the local Hive cache.
+  /// Called before deleting a trip when the user chooses to discard locations too.
+  Future<void> deleteLocationsByTripId(String tripId) async {
+    await _ensureInitialized();
+    final user = _supabase.auth.currentUser;
+
+    // Delete from Supabase (filter by user_id so RLS is respected and other
+    // collaborators' locations are not touched)
+    await _supabase
+        .from('locations')
+        .delete()
+        .eq('trip_id', tripId)
+        .eq('user_id', user?.id ?? '');
+
+    // Delete matching entries from the local Hive cache immediately so the map
+    // updates without waiting for the realtime subscription.
+    final keysToDelete = _box!.values
+        .where((loc) =>
+            loc.tripId == tripId &&
+            (user == null || loc.userId == user.id))
+        .map((loc) => loc.id)
+        .toList();
+    if (keysToDelete.isNotEmpty) {
+      await _box!.deleteAll(keysToDelete);
+    }
   }
 
   /// Get the count of local (anonymous) locations

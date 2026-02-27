@@ -102,15 +102,30 @@ class _TripScreenState extends ConsumerState<TripScreen> {
     }
   }
 
-  Future<void> _deleteTrip(Trip trip) async {
+  Future<void> _deleteTrip(Trip trip, {bool deleteLocations = false}) async {
     try {
+      final locationRepository = ref.read(locationRepositoryProvider);
       final tripRepository = ref.read(tripRepositoryProvider);
+
+      if (deleteLocations) {
+        // Delete locations first while we can still filter by trip_id.
+        // Once the trip row is gone, ON DELETE SET NULL fires and the trip_id
+        // reference is lost.
+        await locationRepository.deleteLocationsByTripId(trip.id);
+      }
+
       await tripRepository.deleteTrip(trip.id);
       ref.invalidate(userTripsProvider);
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Trip deleted')),
+          SnackBar(
+            content: Text(
+              deleteLocations
+                  ? 'Trip and its locations deleted'
+                  : 'Trip deleted. Locations kept.',
+            ),
+          ),
         );
       }
     } catch (e) {
@@ -1236,14 +1251,11 @@ class _TripScreenState extends ConsumerState<TripScreen> {
   }
 
   void _showDeleteConfirmation(BuildContext context, Trip trip) {
-    // Get location count for this trip
     final locationsAsync = ref.read(savedLocationsProvider);
 
     locationsAsync.whenData((allLocations) {
-      final tripLocations = allLocations
-          .where((loc) => loc.tripId == trip.id)
-          .toList();
-      final locationCount = tripLocations.length;
+      final locationCount =
+          allLocations.where((loc) => loc.tripId == trip.id).length;
 
       showDialog(
         context: context,
@@ -1251,6 +1263,9 @@ class _TripScreenState extends ConsumerState<TripScreen> {
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(16),
           ),
+          // Buttons live inside content so they can be full-width stacked
+          // vertically — three items in an actions row look cramped on mobile.
+          actionsPadding: EdgeInsets.zero,
           title: Row(
             children: [
               Container(
@@ -1266,14 +1281,12 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                 ),
               ),
               const SizedBox(width: 12),
-              const Expanded(
-                child: Text('Delete Trip?'),
-              ),
+              const Expanded(child: Text('Delete Trip?')),
             ],
           ),
           content: Column(
             mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Text(
                 'Are you sure you want to delete "${trip.name}"?',
@@ -1282,36 +1295,35 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                   fontSize: 15,
                 ),
               ),
-              const SizedBox(height: 12),
               if (locationCount > 0) ...[
+                const SizedBox(height: 12),
                 Container(
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
-                    color: Colors.orange.withValues(alpha: 0.1),
+                    color: Colors.blue.withValues(alpha: 0.08),
                     borderRadius: BorderRadius.circular(8),
                     border: Border.all(
-                      color: Colors.orange.withValues(alpha: 0.3),
+                      color: Colors.blue.withValues(alpha: 0.3),
                     ),
                   ),
                   child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Icon(
-                        Icons.info_outline,
-                        color: Colors.orange,
-                        size: 20,
-                      ),
+                      const Icon(Icons.info_outline,
+                          color: Colors.blue, size: 20),
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
-                          'This trip has $locationCount ${locationCount == 1 ? 'location' : 'locations'}. All locations will also be deleted.',
+                          'This trip has $locationCount ${locationCount == 1 ? 'location' : 'locations'}. '
+                          'What would you like to do with them?',
                           style: const TextStyle(fontSize: 13),
                         ),
                       ),
                     ],
                   ),
                 ),
-                const SizedBox(height: 8),
               ],
+              const SizedBox(height: 8),
               const Text(
                 'This action cannot be undone.',
                 style: TextStyle(
@@ -1320,25 +1332,64 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                   fontWeight: FontWeight.w500,
                 ),
               ),
+              const SizedBox(height: 20),
+              // ── Action buttons ──────────────────────────────────────────
+              if (locationCount > 0) ...[
+                // Destructive option
+                ElevatedButton(
+                  onPressed: () {
+                    Navigator.pop(context);
+                    _deleteTrip(trip, deleteLocations: true);
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.red,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                  ),
+                  child: const Text('Delete Trip & Locations'),
+                ),
+                const SizedBox(height: 8),
+                // Safe option
+                OutlinedButton(
+                  onPressed: () {
+                    Navigator.pop(context);
+                    _deleteTrip(trip, deleteLocations: false);
+                  },
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                  ),
+                  child: const Text('Delete Trip, Keep Locations'),
+                ),
+              ] else
+                ElevatedButton(
+                  onPressed: () {
+                    Navigator.pop(context);
+                    _deleteTrip(trip);
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.red,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                  ),
+                  child: const Text('Delete'),
+                ),
+              const SizedBox(height: 4),
+              // Cancel is always a low-prominence text button at the bottom
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Cancel'),
+              ),
             ],
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel'),
-            ),
-            ElevatedButton(
-              onPressed: () {
-                Navigator.pop(context);
-                _deleteTrip(trip);
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.red,
-                foregroundColor: Colors.white,
-              ),
-              child: const Text('Delete'),
-            ),
-          ],
         ),
       );
     });
