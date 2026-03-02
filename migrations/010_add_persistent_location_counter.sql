@@ -70,7 +70,7 @@ BEGIN
         SELECT 1
         FROM public.user_subscriptions
         WHERE user_id = v_user_id
-        AND entitlement = 'VoyZa Pro'
+        AND entitlement = 'premium'
         AND status = 'active'
     ) INTO v_is_pro;
 

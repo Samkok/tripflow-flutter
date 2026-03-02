@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:voyza/providers/auth_provider.dart';
 import 'package:voyza/providers/location_provider.dart';
 import 'dart:ui';
 import 'package:voyza/screens/trip_screen.dart';
@@ -49,6 +50,22 @@ class _MainScreenState extends ConsumerState<MainScreen> {
     // Watch the sync manager so it re-evaluates when connectivity/auth changes,
     // ensuring the realtime subscription is re-established after reconnects.
     ref.watch(syncManagerProvider);
+
+    // Re-run the location sync whenever the user logs in mid-session.
+    // currentUserIdProvider is stable across token refreshes (only changes on
+    // actual login / logout), so this only fires on a real sign-in event.
+    // This is necessary because initState runs once at startup; after logout
+    // the Hive cache is cleared, so we must re-fetch when the user signs back in.
+    ref.listen<String?>(currentUserIdProvider, (previous, next) async {
+      if (previous == null && next != null) {
+        ref.read(initialSyncCompleteProvider.notifier).state = false;
+        final repository = ref.read(locationRepositoryProvider);
+        await performInitialLocationSync(repository);
+        if (mounted) {
+          ref.read(initialSyncCompleteProvider.notifier).state = true;
+        }
+      }
+    });
 
     return Scaffold(
       extendBody: true, // Allows body to extend behind the bottom nav

@@ -11,6 +11,7 @@ import 'package:voyza/providers/paginated_search_provider.dart';
 import 'package:voyza/providers/trip_collaborator_provider.dart';
 import 'package:voyza/models/saved_location.dart';
 import 'package:voyza/services/places_service.dart';
+import 'package:voyza/providers/auth_provider.dart';
 import 'package:voyza/widgets/collaborators_sheet.dart';
 import 'package:voyza/widgets/google_maps_url_dialog.dart';
 
@@ -122,12 +123,28 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
       ),
       floatingActionButton: hasWriteAccessAsync.when(
         data: (hasWriteAccess) => hasWriteAccess
-            ? FloatingActionButton.extended(
-                onPressed: () => _showAddLocationDialog(),
-                icon: const Icon(Icons.add_location_alt_outlined),
-                label: const Text('Add Location'),
-                backgroundColor: Theme.of(context).colorScheme.primary,
-                foregroundColor: Colors.black,
+            ? Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  FloatingActionButton.extended(
+                    heroTag: 'fab_add_existing',
+                    onPressed: () => _showExistingLocationsSheet(),
+                    icon: const Icon(Icons.playlist_add_rounded),
+                    label: const Text('Add Existing'),
+                    backgroundColor: Theme.of(context).cardColor,
+                    foregroundColor: Theme.of(context).colorScheme.primary,
+                  ),
+                  const SizedBox(height: 12),
+                  FloatingActionButton.extended(
+                    heroTag: 'fab_add_location',
+                    onPressed: () => _showAddLocationDialog(),
+                    icon: const Icon(Icons.add_location_alt_outlined),
+                    label: const Text('Add Location'),
+                    backgroundColor: Theme.of(context).colorScheme.primary,
+                    foregroundColor: Colors.black,
+                  ),
+                ],
               )
             : null,
         loading: () => null,
@@ -634,6 +651,15 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (context) => _LocationSearchSheet(tripId: widget.trip.id),
+    );
+  }
+
+  void _showExistingLocationsSheet() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => _ExistingLocationsSheet(tripId: widget.trip.id),
     );
   }
 }
@@ -1149,6 +1175,255 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
           ),
         );
       }
+    }
+  }
+}
+
+class _ExistingLocationsSheet extends ConsumerStatefulWidget {
+  final String tripId;
+
+  const _ExistingLocationsSheet({required this.tripId});
+
+  @override
+  ConsumerState<_ExistingLocationsSheet> createState() =>
+      _ExistingLocationsSheetState();
+}
+
+class _ExistingLocationsSheetState
+    extends ConsumerState<_ExistingLocationsSheet> {
+  final Set<String> _adding = {};
+
+  @override
+  Widget build(BuildContext context) {
+    final currentUserId = ref.watch(currentUserIdProvider);
+
+    return DraggableScrollableSheet(
+      initialChildSize: 0.6,
+      minChildSize: 0.4,
+      maxChildSize: 0.95,
+      builder: (context, scrollController) {
+        return Container(
+          decoration: BoxDecoration(
+            color: Theme.of(context).scaffoldBackgroundColor,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+          ),
+          child: Column(
+            children: [
+              // Drag handle
+              Container(
+                margin: const EdgeInsets.only(top: 12, bottom: 8),
+                height: 4,
+                width: 40,
+                decoration: BoxDecoration(
+                  color: Colors.grey[400],
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+
+              // Header
+              Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        'Add Existing Location',
+                        style:
+                            Theme.of(context).textTheme.titleLarge?.copyWith(
+                                  fontWeight: FontWeight.bold,
+                                ),
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close),
+                      onPressed: () => Navigator.pop(context),
+                    ),
+                  ],
+                ),
+              ),
+
+              const Divider(),
+
+              // Location list
+              Expanded(
+                child: currentUserId == null
+                    ? const Center(child: Text('Not signed in'))
+                    : _buildLocationList(currentUserId, scrollController),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildLocationList(
+      String currentUserId, ScrollController scrollController) {
+    return StreamBuilder<List<SavedLocation>>(
+      stream:
+          ref.read(locationRepositoryProvider).watchLocations(),
+      initialData: const [],
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting &&
+            snapshot.data == null) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        final unassigned = (snapshot.data ?? [])
+            .where((loc) =>
+                loc.tripId == null && loc.userId == currentUserId)
+            .toList();
+
+        if (unassigned.isEmpty) {
+          return Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  Icons.playlist_add_check_rounded,
+                  size: 64,
+                  color: Theme.of(context)
+                      .colorScheme
+                      .primary
+                      .withValues(alpha: 0.3),
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  'No saved locations available',
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Locations not assigned to any trip will appear here',
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: Theme.of(context)
+                            .textTheme
+                            .bodyMedium
+                            ?.color
+                            ?.withValues(alpha: 0.6),
+                      ),
+                ),
+              ],
+            ),
+          );
+        }
+
+        return ListView.separated(
+          controller: scrollController,
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          itemCount: unassigned.length,
+          separatorBuilder: (_, __) => const SizedBox(height: 8),
+          itemBuilder: (context, index) {
+            final loc = unassigned[index];
+            final isAdding = _adding.contains(loc.id);
+            return Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Theme.of(context).cardColor,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(
+                  color:
+                      Theme.of(context).dividerColor.withValues(alpha: 0.1),
+                  width: 1,
+                ),
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Theme.of(context)
+                          .colorScheme
+                          .primary
+                          .withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Icon(
+                      Icons.location_on_rounded,
+                      size: 18,
+                      color: Theme.of(context).colorScheme.primary,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          loc.name,
+                          style:
+                              Theme.of(context).textTheme.titleSmall?.copyWith(
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          '${loc.lat.toStringAsFixed(4)}, ${loc.lng.toStringAsFixed(4)}',
+                          style:
+                              Theme.of(context).textTheme.labelSmall?.copyWith(
+                                    color: Theme.of(context)
+                                        .textTheme
+                                        .bodyMedium
+                                        ?.color
+                                        ?.withValues(alpha: 0.6),
+                                  ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  isAdding
+                      ? const SizedBox(
+                          width: 24,
+                          height: 24,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : TextButton(
+                          onPressed: () => _assignToTrip(loc),
+                          child: const Text('Add'),
+                        ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Future<void> _assignToTrip(SavedLocation location) async {
+    setState(() => _adding.add(location.id));
+    try {
+      await ref
+          .read(locationRepositoryProvider)
+          .updateLocation(location.id, {'trip_id': widget.tripId});
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Added ${location.name} to trip'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to add location: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _adding.remove(location.id));
     }
   }
 }

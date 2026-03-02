@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 class TermsScreen extends StatelessWidget {
   const TermsScreen({super.key});
@@ -61,11 +62,7 @@ class TermsScreen extends StatelessWidget {
               '9. Changes to Terms',
               'We may revise these Terms and Conditions from time to time. We will notify you of any changes by posting the new Terms and Conditions on this page. You are advised to review this page periodically for any changes. Changes to these Terms are effective when they are posted on this page.',
             ),
-            _buildSection(
-              context,
-              '10. Contact Us',
-              'If you have any questions about these Terms and Conditions, you can contact us at hengsamkok76@gmail.com.',
-            ),
+            _buildContactSection(context),
             const SizedBox(height: 24),
             const Text(
               'Last updated: November 15, 2025',
@@ -73,6 +70,53 @@ class TermsScreen extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildContactSection(BuildContext context) {
+    const email = 'hengsamkok76@gmail.com';
+    final bodyStyle = Theme.of(context).textTheme.bodyMedium?.copyWith(height: 1.5);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 24.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '10. Contact Us',
+            style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                  fontWeight: FontWeight.bold,
+                ),
+          ),
+          const SizedBox(height: 8),
+          RichText(
+            text: TextSpan(
+              style: bodyStyle,
+              children: [
+                const TextSpan(
+                  text:
+                      'If you have any questions about these Terms and Conditions, you can contact us at ',
+                ),
+                WidgetSpan(
+                  alignment: PlaceholderAlignment.baseline,
+                  baseline: TextBaseline.alphabetic,
+                  child: GestureDetector(
+                    onTap: () => launchUrl(Uri(scheme: 'mailto', path: email)),
+                    child: Text(
+                      email,
+                      style: bodyStyle?.copyWith(
+                        color: Theme.of(context).colorScheme.primary,
+                        decoration: TextDecoration.underline,
+                        decorationColor: Theme.of(context).colorScheme.primary,
+                      ),
+                    ),
+                  ),
+                ),
+                const TextSpan(text: '.'),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }

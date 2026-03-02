@@ -73,7 +73,7 @@ curl -X POST https://YOUR_PROJECT.supabase.co/functions/v1/revenuecat-webhook \
     "event": {
       "type": "INITIAL_PURCHASE",
       "app_user_id": "YOUR_USER_UUID",
-      "entitlement_ids": ["VoyZa Pro"],
+      "entitlement_ids": ["premium"],
       "product_id": "monthly",
       "store": "play_store",
       "expiration_at_ms": 1735689600000,

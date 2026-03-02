@@ -12,7 +12,9 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
 interface RevenueCatWebhookEvent {
   event: {
     type: string;
-    app_user_id: string;
+    app_user_id?: string;       // Not present in TRANSFER events
+    transferred_from?: string[]; // TRANSFER events only
+    transferred_to?: string[];   // TRANSFER events only
     product_id?: string;
     new_product_id?: string;
     entitlement_ids?: string[];
@@ -72,9 +74,88 @@ const supabase = createClient(supabaseUrl, supabaseServiceRoleKey);
 // RevenueCat webhook authorization key (optional but recommended)
 const revenueCatAuthKey = Deno.env.get('REVENUECAT_WEBHOOK_AUTH_KEY');
 
+// RevenueCat secret API key — used to fetch full subscriber details via REST API.
+// Required for resolving product/expiry data on TRANSFER events.
+// Set this in Supabase Edge Function secrets: REVENUECAT_SECRET_API_KEY
+const revenueCatSecretApiKey = Deno.env.get('REVENUECAT_SECRET_API_KEY');
+
+// ============================================================================
+// Types
+// ============================================================================
+
+interface RevenueCatSubscriberData {
+  product_identifier: string | null;
+  expires_at: string | null;
+  period_type: string | null;
+  store: string | null;
+  will_renew: boolean;
+}
+
 // ============================================================================
 // Helper Functions
 // ============================================================================
+
+/**
+ * Fetches a subscriber's full subscription details from the RevenueCat REST API.
+ * Used during TRANSFER events where the webhook payload carries no product/expiry data.
+ *
+ * Requires REVENUECAT_SECRET_API_KEY to be set in edge function secrets.
+ * Returns null if the key is missing, the user is not found, or the call fails.
+ */
+async function fetchRevenueCatSubscriber(
+  appUserId: string,
+  entitlementId: string,
+): Promise<RevenueCatSubscriberData | null> {
+  if (!revenueCatSecretApiKey) {
+    console.warn('REVENUECAT_SECRET_API_KEY not set — cannot fetch subscriber data from RC API');
+    return null;
+  }
+
+  try {
+    const url = `https://api.revenuecat.com/v1/subscribers/${encodeURIComponent(appUserId)}`;
+    const response = await fetch(url, {
+      headers: {
+        'Authorization': `Bearer ${revenueCatSecretApiKey}`,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      console.warn(`RevenueCat API returned ${response.status} for subscriber ${appUserId}`);
+      return null;
+    }
+
+    const data = await response.json();
+    const subscriber = data?.subscriber;
+
+    if (!subscriber) {
+      console.warn(`RevenueCat API: no subscriber object for ${appUserId}`);
+      return null;
+    }
+
+    // The entitlement object contains product_identifier and expires_date
+    const entitlementInfo = subscriber.entitlements?.[entitlementId];
+    const productId: string | null = entitlementInfo?.product_identifier ?? null;
+
+    // The subscription object (keyed by product_id) contains period_type, store, will_renew
+    const subscriptionInfo = productId ? subscriber.subscriptions?.[productId] : null;
+
+    // expires_date is ISO 8601 from RC; prefer the entitlement-level date
+    const expiresDate: string | null =
+      entitlementInfo?.expires_date ?? subscriptionInfo?.expires_date ?? null;
+
+    return {
+      product_identifier: productId,
+      expires_at:         expiresDate,
+      period_type:        subscriptionInfo?.period_type ?? null,
+      store:              subscriptionInfo?.store       ?? null,
+      will_renew:         subscriptionInfo?.will_renew  ?? true,
+    };
+  } catch (e) {
+    console.error(`Failed to fetch RevenueCat subscriber data for ${appUserId}:`, e);
+    return null;
+  }
+}
 
 function isValidUUID(str: string): boolean {
   const uuidRegex =
@@ -189,15 +270,8 @@ function determineSubscriptionStatus(
     return 'expired';
   }
 
-  // TRANSFER - entitlements moved to different user
-  // Should preserve existing status or query REST API
-  // For now, check expiration
-  if (eventType === 'TRANSFER') {
-    if (expirationDate && expirationDate > now) {
-      return 'active';
-    }
-    return 'expired';
-  }
+  // TRANSFER is handled upstream with an early return before this function's
+  // result is used. It never reaches this branch.
 
   // TEST event
   if (eventType === 'TEST') {
@@ -284,7 +358,7 @@ serve(async (req) => {
 
     // 4. Extract subscription data
     const appUserId = event.app_user_id;
-    const entitlement = event.entitlement_ids?.[0] || 'VoyZa Pro';
+    const entitlement = event.entitlement_ids?.[0] || 'premium';
     const productId = event.product_id || event.new_product_id;
     const store = event.store;
     const periodType = event.period_type;
@@ -347,9 +421,140 @@ serve(async (req) => {
       console.log(`→ PRODUCT_CHANGE: From ${event.product_id} to ${event.new_product_id}`);
     }
 
+    // Handle TRANSFER events before the app_user_id check.
+    // TRANSFER events carry no app_user_id — entitlements are identified via
+    // transferred_from[] and transferred_to[] arrays instead.
+    // Logic:
+    //   - transferred_from UUIDs: they gave up the entitlement → mark expired
+    //   - transferred_to UUIDs: they received the entitlement → mark active
+    //   - Anonymous IDs ($RCAnonymousID:…) in either array are skipped
+    //     because they have no Supabase account to update.
+    if (event.type === 'TRANSFER') {
+      const transferredFrom: string[] = event.transferred_from ?? [];
+      const transferredTo: string[]   = event.transferred_to   ?? [];
+
+      console.log('→ TRANSFER event received');
+      console.log('  transferred_from:', transferredFrom);
+      console.log('  transferred_to:',   transferredTo);
+
+      // Read the existing subscription data from the transferred_from user(s) before
+      // expiring them. TRANSFER events carry no product/expiry details, so we inherit
+      // them from the source record. This ensures transferred_to users immediately
+      // get accurate data rather than nulls waiting on a follow-up RENEWAL event.
+      let inheritedProduct: string | null = null;
+      let inheritedExpiresAt: string | null = null;
+      let inheritedPeriodType: string | null = null;
+      let inheritedStore: string | null = store ?? null;
+
+      for (const fromUserId of transferredFrom) {
+        if (isValidUUID(fromUserId)) {
+          const { data: existingSub } = await supabase
+            .from('user_subscriptions')
+            .select('product_identifier, expires_at, period_type, store')
+            .eq('user_id', fromUserId)
+            .eq('entitlement', entitlement)
+            .maybeSingle();
+
+          if (existingSub) {
+            inheritedProduct    = existingSub.product_identifier ?? null;
+            inheritedExpiresAt  = existingSub.expires_at         ?? null;
+            inheritedPeriodType = existingSub.period_type        ?? null;
+            inheritedStore      = existingSub.store              ?? inheritedStore;
+            console.log(`  TRANSFER: inherited subscription data from ${fromUserId}:`, {
+              product: inheritedProduct,
+              expires_at: inheritedExpiresAt,
+              period_type: inheritedPeriodType,
+              store: inheritedStore,
+            });
+            break; // One source record is enough
+          }
+        }
+      }
+
+      // Expire subscriptions for Supabase users losing the entitlement
+      for (const fromUserId of transferredFrom) {
+        if (isValidUUID(fromUserId)) {
+          console.log(`  TRANSFER: expiring subscription for ${fromUserId}`);
+          const { error: fromError } = await supabase.rpc('upsert_subscription_status', {
+            p_user_id:                       fromUserId,
+            p_revenuecat_app_user_id:        fromUserId,
+            p_status:                        'expired',
+            p_entitlement:                   entitlement,
+            p_product_identifier:            null,
+            p_store:                         store ?? null,
+            p_expires_at:                    null,
+            p_period_type:                   null,
+            p_purchase_date:                 null,
+            p_will_renew:                    false,
+            p_billing_issues_detected_at:    null,
+            p_unsubscribe_detected_at:       null,
+            p_event_type:                    'TRANSFER',
+          });
+          if (fromError) {
+            console.error(`  TRANSFER: failed to expire for ${fromUserId}:`, fromError);
+          }
+        } else {
+          console.log(`  TRANSFER: skipping non-UUID transferred_from: ${fromUserId}`);
+        }
+      }
+
+      // Activate subscriptions for Supabase users gaining the entitlement.
+      // Resolution order for product/expiry details (best → fallback):
+      //   1. RevenueCat REST API  — live data, most accurate
+      //   2. DB record inherited from transferred_from — already in our DB
+      //   3. null — RPC COALESCE keeps any pre-existing value; follow-up RENEWAL fills the rest
+      for (const toUserId of transferredTo) {
+        if (isValidUUID(toUserId)) {
+          console.log(`  TRANSFER: activating subscription for ${toUserId}`);
+
+          // 1. Try to get fresh data directly from RevenueCat API
+          const rcData = await fetchRevenueCatSubscriber(toUserId, entitlement);
+          if (rcData) {
+            console.log(`  TRANSFER: resolved data from RevenueCat API for ${toUserId}:`, rcData);
+          } else {
+            console.log(`  TRANSFER: RC API unavailable, falling back to DB inheritance for ${toUserId}`);
+          }
+
+          const { error: toError } = await supabase.rpc('upsert_subscription_status', {
+            p_user_id:                       toUserId,
+            p_revenuecat_app_user_id:        toUserId,
+            p_status:                        'active',
+            p_entitlement:                   entitlement,
+            p_product_identifier:            rcData?.product_identifier ?? inheritedProduct,
+            p_store:                         rcData?.store?.toUpperCase()           ?? inheritedStore,
+            p_expires_at:                    rcData?.expires_at         ?? inheritedExpiresAt,
+            p_period_type:                   rcData?.period_type        ?? inheritedPeriodType,
+            p_purchase_date:                 null,
+            p_will_renew:                    rcData?.will_renew         ?? true,
+            p_billing_issues_detected_at:    null,
+            p_unsubscribe_detected_at:       null,
+            p_event_type:                    'TRANSFER',
+          });
+          if (toError) {
+            console.error(`  TRANSFER: failed to activate for ${toUserId}:`, toError);
+          }
+        } else {
+          console.log(`  TRANSFER: skipping non-UUID transferred_to: ${toUserId}`);
+        }
+      }
+
+      const fromUuids = transferredFrom.filter(isValidUUID);
+      const toUuids   = transferredTo.filter(isValidUUID);
+      console.log(`TRANSFER processed — expired: ${fromUuids.length}, activated: ${toUuids.length}`);
+
+      return new Response(
+        JSON.stringify({
+          message: 'TRANSFER event processed',
+          expired_user_ids:  fromUuids,
+          activated_user_ids: toUuids,
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
     // 6. Map RevenueCat app_user_id to Supabase user_id
     // RevenueCat app_user_id should be the Supabase user UUID
-    if (!isValidAppUserId(appUserId)) {
+    if (!appUserId || !isValidAppUserId(appUserId)) {
       console.error('app_user_id is not a valid format:', appUserId);
       return new Response(
         JSON.stringify({
@@ -429,6 +634,7 @@ serve(async (req) => {
       p_will_renew: willRenew,
       p_billing_issues_detected_at: billingIssuesDetectedAt,
       p_unsubscribe_detected_at: unsubscribeDetectedAt,
+      p_event_type: event.type,
     });
 
     if (error) {

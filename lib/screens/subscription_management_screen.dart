@@ -177,8 +177,6 @@ class _SubscriptionManagementScreenState
   Widget _buildManageSubscriptionSection(BuildContext context) {
     final theme = Theme.of(context);
     final managementUrlAsync = ref.watch(managementUrlProvider);
-    final isMonthlyAsync = ref.watch(isMonthlyPlanProvider);
-    final isYearlyAsync = ref.watch(isYearlyPlanProvider);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -192,38 +190,38 @@ class _SubscriptionManagementScreenState
         const SizedBox(height: 12),
 
         // Plan change buttons
-        isMonthlyAsync.when(
-          data: (isMonthly) {
-            return isYearlyAsync.when(
-              data: (isYearly) {
-                if (isMonthly) {
-                  // User is on monthly, offer yearly upgrade
-                  return _buildChangePlanButton(
-                    context,
-                    'Upgrade to Yearly Plan',
-                    'Save money with annual billing',
-                    Icons.trending_up,
-                    () => _changePlanToYearly(),
-                  );
-                } else if (isYearly) {
-                  // User is on yearly, offer monthly option
-                  return _buildChangePlanButton(
-                    context,
-                    'Switch to Monthly Plan',
-                    'More flexibility with monthly billing',
-                    Icons.swap_horiz,
-                    () => _changePlanToMonthly(),
-                  );
-                }
-                return const SizedBox.shrink();
-              },
-              loading: () => const SizedBox.shrink(),
-              error: (_, __) => const SizedBox.shrink(),
-            );
-          },
-          loading: () => const SizedBox.shrink(),
-          error: (_, __) => const SizedBox.shrink(),
-        ),
+        // isMonthlyAsync.when(
+        //   data: (isMonthly) {
+        //     return isYearlyAsync.when(
+        //       data: (isYearly) {
+        //         if (isMonthly) {
+        //           // User is on monthly, offer yearly upgrade
+        //           return _buildChangePlanButton(
+        //             context,
+        //             'Upgrade to Yearly Plan',
+        //             'Save money with annual billing',
+        //             Icons.trending_up,
+        //             () => _changePlanToYearly(),
+        //           );
+        //         } else if (isYearly) {
+        //           // User is on yearly, offer monthly option
+        //           return _buildChangePlanButton(
+        //             context,
+        //             'Switch to Monthly Plan',
+        //             'More flexibility with monthly billing',
+        //             Icons.swap_horiz,
+        //             () => _changePlanToMonthly(),
+        //           );
+        //         }
+        //         return const SizedBox.shrink();
+        //       },
+        //       loading: () => const SizedBox.shrink(),
+        //       error: (_, __) => const SizedBox.shrink(),
+        //     );
+        //   },
+        //   loading: () => const SizedBox.shrink(),
+        //   error: (_, __) => const SizedBox.shrink(),
+        // ),
         const SizedBox(height: 12),
 
         // App Store management button
@@ -247,51 +245,6 @@ class _SubscriptionManagementScreenState
     );
   }
 
-  Widget _buildChangePlanButton(
-    BuildContext context,
-    String title,
-    String subtitle,
-    IconData icon,
-    VoidCallback onPressed,
-  ) {
-    final theme = Theme.of(context);
-
-    return OutlinedButton(
-      onPressed: onPressed,
-      style: OutlinedButton.styleFrom(
-        padding: const EdgeInsets.all(16),
-        side: BorderSide(color: theme.colorScheme.primary),
-      ),
-      child: Row(
-        children: [
-          Icon(icon, color: theme.colorScheme.primary),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: theme.textTheme.titleSmall?.copyWith(
-                    color: theme.colorScheme.primary,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  subtitle,
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Icon(Icons.chevron_right, color: theme.colorScheme.primary),
-        ],
-      ),
-    );
-  }
 
   Widget _buildCustomerCenterButton(BuildContext context) {
     final theme = Theme.of(context);
@@ -357,13 +310,6 @@ class _SubscriptionManagementScreenState
             'Tap "Restore Purchases" above if you\'ve previously subscribed. '
                 'Make sure you\'re using the same App Store/Google Play account.',
           ),
-          const Divider(height: 24),
-          _buildFaqItem(
-            context,
-            'Can I switch between monthly and yearly plans?',
-            'Yes! You can change your plan anytime. Use the "Switch to Monthly Plan" or '
-                '"Upgrade to Yearly Plan" button above. Your new billing cycle will start according to store policies.',
-          ),
         ],
       ),
     );
@@ -422,137 +368,7 @@ class _SubscriptionManagementScreenState
     }
   }
 
-  Future<void> _changePlanToYearly() async {
-    // Show confirmation dialog
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Upgrade to Yearly Plan'),
-        content: const Text(
-          'You will be charged for the yearly plan and your current monthly subscription will be adjusted accordingly.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Upgrade'),
-          ),
-        ],
-      ),
-    );
 
-    if (confirmed != true) return;
-
-    setState(() => _isLoading = true);
-
-    try {
-      // Get yearly package
-      final yearlyPackageAsync = await ref.read(yearlyPackageProvider.future);
-
-      if (yearlyPackageAsync == null) {
-        throw Exception('Yearly package not available');
-      }
-
-      final success = await ref
-          .read(subscriptionProvider.notifier)
-          .changePlan(yearlyPackageAsync);
-
-      setState(() => _isLoading = false);
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              success
-                  ? 'Successfully upgraded to yearly plan!'
-                  : 'Failed to change plan. Please try again.',
-            ),
-            backgroundColor: success ? Colors.green : Colors.red,
-          ),
-        );
-      }
-    } catch (e) {
-      setState(() => _isLoading = false);
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('An error occurred. Please try again.'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    }
-  }
-
-  Future<void> _changePlanToMonthly() async {
-    // Show confirmation dialog
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Switch to Monthly Plan'),
-        content: const Text(
-          'You can switch to monthly billing. Your yearly subscription benefits will remain until the end of the current billing period.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Switch'),
-          ),
-        ],
-      ),
-    );
-
-    if (confirmed != true) return;
-
-    setState(() => _isLoading = true);
-
-    try {
-      // Get monthly package
-      final monthlyPackageAsync = await ref.read(monthlyPackageProvider.future);
-
-      if (monthlyPackageAsync == null) {
-        throw Exception('Monthly package not available');
-      }
-
-      final success = await ref
-          .read(subscriptionProvider.notifier)
-          .changePlan(monthlyPackageAsync);
-
-      setState(() => _isLoading = false);
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              success
-                  ? 'Successfully switched to monthly plan!'
-                  : 'Failed to change plan. Please try again.',
-            ),
-            backgroundColor: success ? Colors.green : Colors.red,
-          ),
-        );
-      }
-    } catch (e) {
-      setState(() => _isLoading = false);
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('An error occurred. Please try again.'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    }
-  }
 
   Future<void> _showCustomerCenter() async {
     try {

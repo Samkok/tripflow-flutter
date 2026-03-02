@@ -8,6 +8,7 @@ import 'package:voyza/providers/auth_provider.dart';
 import 'package:voyza/providers/location_provider.dart';
 import 'package:voyza/providers/trip_collaborator_provider.dart';
 import 'package:voyza/providers/local_active_trip_provider.dart';
+import 'package:voyza/screens/login_screen.dart';
 import 'package:voyza/screens/trip_details_screen.dart';
 
 class TripScreen extends ConsumerStatefulWidget {
@@ -33,6 +34,110 @@ class _TripScreenState extends ConsumerState<TripScreen> {
     _nameController.clear();
     _descriptionController.clear();
     setState(() => _showCreateForm = false);
+  }
+
+  void _showLoginRequiredModal(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (_) => Container(
+        decoration: BoxDecoration(
+          color: Theme.of(context).scaffoldBackgroundColor,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        padding: const EdgeInsets.fromLTRB(24, 12, 24, 40),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Drag handle
+            Container(
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.grey[400],
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(height: 28),
+            Container(
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.1),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                Icons.lock_outline_rounded,
+                size: 40,
+                color: Theme.of(context).colorScheme.primary,
+              ),
+            ),
+            const SizedBox(height: 20),
+            Text(
+              'Sign in to Create Trips',
+              style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                    fontWeight: FontWeight.bold,
+                  ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'You need to be signed in to create and manage trips.',
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: Theme.of(context)
+                        .textTheme
+                        .bodyMedium
+                        ?.color
+                        ?.withValues(alpha: 0.6),
+                  ),
+            ),
+            const SizedBox(height: 28),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: () {
+                  Navigator.pop(context);
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => const LoginScreen(),
+                    ),
+                  );
+                },
+                style: ElevatedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                child: const Text(
+                  'Sign In',
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: TextButton(
+                onPressed: () => Navigator.pop(context),
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                ),
+                child: Text(
+                  'Not now',
+                  style: TextStyle(
+                    color: Theme.of(context)
+                        .textTheme
+                        .bodyMedium
+                        ?.color
+                        ?.withValues(alpha: 0.5),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   Future<void> _createTrip() async {
@@ -217,7 +322,14 @@ class _TripScreenState extends ConsumerState<TripScreen> {
               child: _showCreateForm
                   ? _buildCreateForm(context)
                   : ElevatedButton.icon(
-                      onPressed: () => setState(() => _showCreateForm = true),
+                      onPressed: () {
+                        final userId = ref.read(currentUserIdProvider);
+                        if (userId == null) {
+                          _showLoginRequiredModal(context);
+                        } else {
+                          setState(() => _showCreateForm = true);
+                        }
+                      },
                       icon: const Icon(Icons.add_rounded),
                       label: const Text('New Trip'),
                       style: ElevatedButton.styleFrom(
@@ -551,9 +663,11 @@ class _TripScreenState extends ConsumerState<TripScreen> {
         children: [
           TextField(
             controller: _nameController,
+            maxLength: 30,
             decoration: InputDecoration(
               hintText: 'Trip name',
               labelText: 'Trip Name',
+              counterText: '',
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(8),
               ),
@@ -1404,9 +1518,11 @@ class _TripScreenState extends ConsumerState<TripScreen> {
         title: const Text('Edit Trip Name'),
         content: TextField(
           controller: editNameController,
+          maxLength: 30,
           decoration: InputDecoration(
             hintText: 'Trip name',
             labelText: 'Trip Name',
+            counterText: '',
             border: OutlineInputBorder(
               borderRadius: BorderRadius.circular(8),
             ),

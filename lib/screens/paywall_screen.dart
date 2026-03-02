@@ -433,7 +433,7 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
         TextButton(
-          onPressed: () => _openUrl('https://voyza.app/terms'),
+          onPressed: () => _openUrl('https://voyza.xtremon.com/terms'),
           child: Text(
             'Terms of Service',
             style: theme.textTheme.bodySmall?.copyWith(
@@ -446,7 +446,7 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
           style: TextStyle(color: theme.colorScheme.onSurfaceVariant),
         ),
         TextButton(
-          onPressed: () => _openUrl('https://voyza.app/privacy'),
+          onPressed: () => _openUrl('https://voyza.xtremon.com/privacy'),
           child: Text(
             'Privacy Policy',
             style: theme.textTheme.bodySmall?.copyWith(

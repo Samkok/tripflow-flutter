@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS public.user_subscriptions (
 
     -- Subscription status
     status text NOT NULL CHECK (status IN ('active', 'expired', 'grace_period', 'billing_retry', 'cancelled')),
-    entitlement text NOT NULL, -- 'VoyZa Pro'
+    entitlement text NOT NULL, -- 'premium'
 
     -- RevenueCat data
     revenuecat_app_user_id text NOT NULL,
@@ -198,7 +198,7 @@ GRANT EXECUTE ON FUNCTION public.upsert_subscription_status TO service_role;
 --      'YOUR_USER_UUID',
 --      'YOUR_USER_UUID',
 --      'active',
---      'VoyZa Pro',
+--      'premium,
 --      'monthly',
 --      'app_store',
 --      NOW() + INTERVAL '1 month',

@@ -214,6 +214,14 @@ class AuthService {
     await clearSyncChoice();
     await clearRememberMe();
 
+    // Clear local Hive cache so the next user who logs in on the same device
+    // cannot see the previous user's locations.
+    try {
+      await _locationRepository.clearUserData();
+    } catch (e) {
+      debugPrint('AuthService: Failed to clear location cache on logout: $e');
+    }
+
     await _supabase.auth.signOut();
   }
 

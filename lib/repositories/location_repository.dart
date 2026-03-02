@@ -544,6 +544,14 @@ class LocationRepository {
     }
   }
 
+  /// Clears all locations from the local Hive cache.
+  /// Called on sign-out so the next user who logs in on the same device starts
+  /// with an empty box and cannot see the previous user's locations.
+  Future<void> clearUserData() async {
+    await _ensureInitialized();
+    await _box!.clear();
+  }
+
   // Realtime subscription
   // Subscribe to ALL location changes that the user has access to
   // RLS policies on the database handle access control automatically

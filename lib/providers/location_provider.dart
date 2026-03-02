@@ -65,14 +65,18 @@ final filteredLocationsForMapProvider =
       final localLocations = locations
           .where((loc) => loc.source == 'local')
           .toList();
-      debugPrint('filteredLocationsForMapProvider: 👤 Anonymous mode → emitting ${localLocations.length} local locations');
+      debugPrint('filteredLocationsForMapProvider: Anonymous mode → emitting ${localLocations.length} local locations');
       yield localLocations;
     } else {
-      // Authenticated user with no active trip: show only locations that don't belong to any trip
+      // Authenticated user with no active trip: show only their own unassigned locations.
+      // The userId filter prevents stale entries from a previous user (who shared this
+      // device) from appearing on the current user's map.
       final unassignedLocations = locations
-          .where((loc) => loc.tripId == null || loc.tripId!.isEmpty)
+          .where((loc) =>
+              (loc.tripId == null || loc.tripId!.isEmpty) &&
+              loc.userId == currentUserId)
           .toList();
-      debugPrint('filteredLocationsForMapProvider: 📍 No trip active (authenticated) → emitting ${unassignedLocations.length} unassigned locations');
+      debugPrint('filteredLocationsForMapProvider: No trip active (authenticated) → emitting ${unassignedLocations.length} unassigned locations');
       yield unassignedLocations;
     }
   }

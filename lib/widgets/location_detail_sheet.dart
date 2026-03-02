@@ -380,8 +380,9 @@ class LocationDetailSheet extends ConsumerWidget {
               ? locationIndexInList
               : locationIndexInList - 1;
 
-          if (legIndex < 0 || locationIndexInList == 0)
+          if (legIndex < 0 || locationIndexInList == 0) {
             return const SizedBox.shrink();
+          }
           final previousLocation = routedLocations[locationIndexInList - 1];
 
           return Column(
@@ -535,8 +536,10 @@ class LocationDetailSheet extends ConsumerWidget {
           content: TextField(
             controller: textController,
             autofocus: true,
+            maxLength: 30,
             decoration: InputDecoration(
               hintText: 'Enter new name',
+              counterText: '',
               filled: true,
               fillColor: Theme.of(context).colorScheme.surface,
               border: OutlineInputBorder(
