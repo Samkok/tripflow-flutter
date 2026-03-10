@@ -17,6 +17,7 @@ import '../providers/map_ui_state_provider.dart';
 import '../providers/debounced_settings_provider.dart';
 import '../providers/trip_collaborator_provider.dart';
 import '../providers/trip_listener_provider.dart';
+import '../providers/auth_provider.dart';
 import '../services/location_service.dart';
 import '../services/places_service.dart';
 import '../services/subscription_limit_service.dart';
@@ -807,30 +808,41 @@ class _MapScreenState extends ConsumerState<MapScreen>
                     );
                   },
                 ),
-                const SizedBox(height: 12),
-                // Add to Trip FAB (multi-select)
-                FloatingActionButton(
-                  heroTag: 'addToTripFab',
-                  mini: true,
-                  onPressed: () async {
-                    // Show AddToTripSheet for all visible locations
-                    final locations = ref.read(locationsForSelectedDateProvider);
-                    if (locations.isEmpty) return;
-                    showModalBottomSheet(
-                      context: context,
-                      isScrollControlled: true,
-                      backgroundColor: Colors.transparent,
-                      builder: (context) => AddToTripSheet(
-                        availableLocations: locations,
-                        onSuccess: () {
-                          // Sheet already pops itself, no need to pop again
-                          // Just refresh or perform any additional actions here if needed
-                        },
-                      ),
+                Consumer(
+                  builder: (context, ref, child) {
+                    // Show only locations added by the current user and not yet assigned to any trip
+                    final currentUserId = ref.watch(currentUserIdProvider);
+                    final allSaved =
+                        ref.watch(savedLocationsProvider).asData?.value ?? [];
+                    final unassigned = allSaved
+                        .where((l) =>
+                            l.tripId == null && l.userId == currentUserId)
+                        .toList();
+                    if (unassigned.isEmpty) return const SizedBox.shrink();
+                    return Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const SizedBox(height: 12),
+                        FloatingActionButton(
+                          heroTag: 'addToTripFab',
+                          mini: true,
+                          onPressed: () {
+                            showModalBottomSheet(
+                              context: context,
+                              isScrollControlled: true,
+                              backgroundColor: Colors.transparent,
+                              builder: (context) => AddToTripSheet(
+                                availableLocations: unassigned,
+                                onSuccess: () {},
+                              ),
+                            );
+                          },
+                          tooltip: 'Add Locations to Trip',
+                          child: const Icon(Icons.playlist_add),
+                        ),
+                      ],
                     );
                   },
-                  tooltip: 'Add Locations to Trip',
-                  child: const Icon(Icons.playlist_add),
                 ),
                 const SizedBox(height: 12),
                 Consumer(builder: (context, ref, child) {

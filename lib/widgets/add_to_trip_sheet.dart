@@ -1,13 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../models/location_model.dart';
+import '../models/saved_location.dart';
 import '../models/trip.dart';
 import '../providers/user_trip_provider.dart';
 import '../providers/trip_provider.dart';
 import '../providers/trip_collaborator_provider.dart';
 
 class AddToTripSheet extends ConsumerStatefulWidget {
-  final List<LocationModel> availableLocations;
+  final List<SavedLocation> availableLocations;
   final VoidCallback? onSuccess;
 
   const AddToTripSheet({
@@ -249,7 +249,7 @@ class _AddToTripSheetState extends ConsumerState<AddToTripSheet> {
   }
 
   Widget _buildLocationTile(
-    LocationModel location,
+    SavedLocation location,
     bool isSelected,
     VoidCallback onToggle,
   ) {
@@ -292,7 +292,7 @@ class _AddToTripSheetState extends ConsumerState<AddToTripSheet> {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      '${location.coordinates.latitude.toStringAsFixed(4)}, ${location.coordinates.longitude.toStringAsFixed(4)}',
+                      '${location.lat.toStringAsFixed(4)}, ${location.lng.toStringAsFixed(4)}',
                       style: Theme.of(context).textTheme.labelSmall?.copyWith(
                             color: Theme.of(context)
                                 .textTheme

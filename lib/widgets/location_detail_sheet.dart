@@ -6,7 +6,6 @@ import 'package:voyza/providers/map_ui_state_provider.dart';
 import 'package:voyza/providers/trip_provider.dart';
 import 'package:voyza/providers/trip_collaborator_provider.dart';
 import 'package:voyza/utils/date_picker_utils.dart';
-import 'package:voyza/widgets/add_to_trip_sheet.dart';
 
 import '../core/theme.dart';
 
@@ -296,46 +295,6 @@ class LocationDetailSheet extends ConsumerWidget {
                       : Colors.grey.withValues(alpha: 0.3),
                 ),
               ),
-            ),
-            const SizedBox(width: 8),
-
-            // Add to Trip Icon Button - requires write access
-            IconButton(
-              icon: Icon(
-                Icons.playlist_add,
-                size: 24,
-                color: hasWriteAccess
-                    ? Theme.of(context).colorScheme.primary
-                    : Colors.grey,
-              ),
-              onPressed: hasWriteAccess
-                  ? () async {
-                      // Show trip selection bottom sheet for this location
-                      showModalBottomSheet(
-                        context: context,
-                        isScrollControlled: true,
-                        backgroundColor: Colors.transparent,
-                        builder: (context) => AddToTripSheet(
-                          availableLocations: [updatedLocation],
-                          onSuccess: () {
-                            // Sheet already pops itself, no need to pop again
-                            // Just refresh or perform any additional actions here if needed
-                          },
-                        ),
-                      );
-                    }
-                  : null,
-              style: IconButton.styleFrom(
-                side: BorderSide(
-                  color: hasWriteAccess
-                      ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.3)
-                      : Colors.grey.withValues(alpha: 0.3),
-                ),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
-                ),
-              ),
-              tooltip: hasWriteAccess ? 'Add to Trip' : 'Read-only access',
             ),
           ],
         ),

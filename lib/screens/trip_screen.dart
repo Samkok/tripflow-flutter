@@ -23,6 +23,10 @@ class _TripScreenState extends ConsumerState<TripScreen> {
   final _nameController = TextEditingController();
   final _descriptionController = TextEditingController();
 
+  // Multi-select state
+  bool _selectionMode = false;
+  final Set<String> _selectedTripIds = {};
+
   @override
   void dispose() {
     _nameController.dispose();
@@ -243,6 +247,39 @@ class _TripScreenState extends ConsumerState<TripScreen> {
     }
   }
 
+  void _enterSelectionMode(String tripId) {
+    setState(() {
+      _selectionMode = true;
+      _selectedTripIds.add(tripId);
+    });
+  }
+
+  void _toggleSelection(String tripId) {
+    setState(() {
+      if (_selectedTripIds.contains(tripId)) {
+        _selectedTripIds.remove(tripId);
+        if (_selectedTripIds.isEmpty) _selectionMode = false;
+      } else {
+        _selectedTripIds.add(tripId);
+      }
+    });
+  }
+
+  void _exitSelectionMode() {
+    setState(() {
+      _selectionMode = false;
+      _selectedTripIds.clear();
+    });
+  }
+
+  void _selectAll(List<Trip> trips) {
+    setState(() => _selectedTripIds.addAll(trips.map((t) => t.id)));
+  }
+
+  void _deselectAll() {
+    setState(() => _selectedTripIds.clear());
+  }
+
   Future<void> _refreshTrips() async {
     // Invalidate all trip-related providers to trigger refresh
     ref.invalidate(userTripsProvider);
@@ -271,7 +308,56 @@ class _TripScreenState extends ConsumerState<TripScreen> {
     final activeTripAsync = ref.watch(localActiveTripProvider);
     final sharedTripsAsync = ref.watch(sharedTripsProvider);
 
+    final ownedTrips = tripsAsync.asData?.value ?? [];
+    final allSelected =
+        ownedTrips.isNotEmpty && ownedTrips.every((t) => _selectedTripIds.contains(t.id));
+
+    // Build the selected trips list for bulk actions
+    final selectedTrips =
+        ownedTrips.where((t) => _selectedTripIds.contains(t.id)).toList();
+
     return Scaffold(
+      bottomNavigationBar: _selectionMode && _selectedTripIds.isNotEmpty
+          ? Container(
+              padding: EdgeInsets.fromLTRB(
+                16,
+                12,
+                16,
+                MediaQuery.of(context).padding.bottom + 12,
+              ),
+              decoration: BoxDecoration(
+                color: Theme.of(context).scaffoldBackgroundColor,
+                border: Border(
+                  top: BorderSide(
+                    color: Theme.of(context).dividerColor.withValues(alpha: 0.3),
+                  ),
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.08),
+                    blurRadius: 8,
+                    offset: const Offset(0, -2),
+                  ),
+                ],
+              ),
+              child: ElevatedButton.icon(
+                onPressed: () =>
+                    _showBulkDeleteConfirmation(context, selectedTrips),
+                icon: const Icon(Icons.delete_rounded),
+                label: Text(
+                  'Delete ${_selectedTripIds.length} trip${_selectedTripIds.length == 1 ? '' : 's'}',
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.red,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+              ),
+            )
+          : null,
       body: RefreshIndicator(
         onRefresh: _refreshTrips,
         child: CustomScrollView(
@@ -281,13 +367,80 @@ class _TripScreenState extends ConsumerState<TripScreen> {
             floating: true,
             pinned: true,
             elevation: 0,
-            backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-            title: Text(
-              'My Trips',
-              style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                    fontWeight: FontWeight.bold,
+            backgroundColor: _selectionMode
+                ? Theme.of(context).colorScheme.primaryContainer
+                : Theme.of(context).scaffoldBackgroundColor,
+            leading: _selectionMode
+                ? IconButton(
+                    icon: const Icon(Icons.close_rounded),
+                    onPressed: _exitSelectionMode,
+                  )
+                : null,
+            title: _selectionMode
+                ? Text(
+                    '${_selectedTripIds.length} selected',
+                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                          fontWeight: FontWeight.bold,
+                        ),
+                  )
+                : Text(
+                    'My Trips',
+                    style:
+                        Theme.of(context).textTheme.headlineMedium?.copyWith(
+                              fontWeight: FontWeight.bold,
+                            ),
                   ),
-            ),
+            actions: _selectionMode
+                ? [
+                    Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: Tooltip(
+                        message: allSelected ? 'Deselect All' : 'Select All',
+                        child: InkWell(
+                          borderRadius: BorderRadius.circular(8),
+                          onTap: allSelected
+                              ? _deselectAll
+                              : () => _selectAll(ownedTrips),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 8, vertical: 4),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                SizedBox(
+                                  width: 24,
+                                  height: 24,
+                                  child: Checkbox(
+                                    value: allSelected
+                                        ? true
+                                        : _selectedTripIds.isNotEmpty
+                                            ? null
+                                            : false,
+                                    tristate: true,
+                                    onChanged: (_) => allSelected
+                                        ? _deselectAll()
+                                        : _selectAll(ownedTrips),
+                                    materialTapTargetSize:
+                                        MaterialTapTargetSize.shrinkWrap,
+                                    visualDensity: VisualDensity.compact,
+                                  ),
+                                ),
+                                const SizedBox(width: 6),
+                                Text(
+                                  allSelected ? 'Deselect All' : 'Select All',
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .bodyMedium
+                                      ?.copyWith(fontWeight: FontWeight.w600),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ]
+                : null,
           ),
 
           // Active Trip Section
@@ -315,7 +468,8 @@ class _TripScreenState extends ConsumerState<TripScreen> {
 
           const SliverPadding(padding: EdgeInsets.symmetric(vertical: 8)),
 
-          // Create Trip Button or Form
+          // Create Trip Button or Form (hidden during multi-select)
+          if (!_selectionMode)
           SliverToBoxAdapter(
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -608,8 +762,7 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                 ),
               ),
               GestureDetector(
-                onTap: () async =>
-                    await _setActiveTrip(trip.copyWith(isActive: false)),
+                onTap: () => _deactivateTrip(trip),
                 child: Container(
                   padding: const EdgeInsets.all(8),
                   decoration: BoxDecoration(
@@ -710,17 +863,20 @@ class _TripScreenState extends ConsumerState<TripScreen> {
   }
 
   Widget _buildTripCard(BuildContext context, Trip trip) {
-    // Watch locations to get location count and date range
     final locationsAsync = ref.watch(savedLocationsProvider);
+    final isSelected = _selectedTripIds.contains(trip.id);
 
-    return locationsAsync.when(
+    Widget buildContent(int locationCount, DateTime? startDate, DateTime? endDate) {
+      return _buildTripCardContent(
+        context, trip, locationCount, startDate, endDate,
+        isSelected: isSelected,
+      );
+    }
+
+    final card = locationsAsync.when(
       data: (allLocations) {
-        // Filter locations for this trip
-        final tripLocations = allLocations
-            .where((loc) => loc.tripId == trip.id)
-            .toList();
-
-        // Calculate date range
+        final tripLocations =
+            allLocations.where((loc) => loc.tripId == trip.id).toList();
         DateTime? startDate;
         DateTime? endDate;
         if (tripLocations.isNotEmpty) {
@@ -731,17 +887,16 @@ class _TripScreenState extends ConsumerState<TripScreen> {
           startDate = dates.first;
           endDate = dates.last;
         }
-
-        return _buildTripCardContent(
-          context,
-          trip,
-          tripLocations.length,
-          startDate,
-          endDate,
-        );
+        return buildContent(tripLocations.length, startDate, endDate);
       },
-      loading: () => _buildTripCardContent(context, trip, 0, null, null),
-      error: (_, __) => _buildTripCardContent(context, trip, 0, null, null),
+      loading: () => buildContent(0, null, null),
+      error: (_, __) => buildContent(0, null, null),
+    );
+
+    return GestureDetector(
+      onLongPress: _selectionMode ? null : () => _enterSelectionMode(trip.id),
+      onTap: _selectionMode ? () => _toggleSelection(trip.id) : null,
+      child: card,
     );
   }
 
@@ -1069,45 +1224,60 @@ class _TripScreenState extends ConsumerState<TripScreen> {
     Trip trip,
     int locationCount,
     DateTime? startDate,
-    DateTime? endDate,
-  ) {
-    // Check if this trip is the locally active trip
+    DateTime? endDate, {
+    bool isSelected = false,
+  }) {
     final localActiveTripId = ref.watch(localActiveTripIdProvider);
     final isActive = localActiveTripId == trip.id;
 
     final statusColor = isActive ? Colors.green : Colors.orange;
     final statusText = isActive ? 'Active' : 'Inactive';
 
+    // Border and shadow change based on active / selected state
+    final borderColor = isSelected
+        ? Theme.of(context).colorScheme.primary
+        : isActive
+            ? Colors.green.withValues(alpha: 0.3)
+            : Theme.of(context).dividerColor.withValues(alpha: 0.2);
+    final borderWidth = (isSelected || isActive) ? 2.0 : 1.0;
+
     return GestureDetector(
-      onTap: () {
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (context) => TripDetailsScreen(trip: trip),
-          ),
-        );
-      },
-      child: Container(
-        decoration: BoxDecoration(
-          color: Theme.of(context).cardColor,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-            color: isActive
-                ? Colors.green.withValues(alpha: 0.3)
-                : Theme.of(context).dividerColor.withValues(alpha: 0.2),
-            width: isActive ? 2 : 1,
-          ),
-          boxShadow: [
-            BoxShadow(
-              color: isActive
-                  ? Colors.green.withValues(alpha: 0.1)
-                  : Colors.black.withValues(alpha: 0.05),
-              blurRadius: isActive ? 8 : 4,
-              offset: Offset(0, isActive ? 4 : 2),
-            ),
-          ],
-        ),
-        child: Column(
+      // In selection mode the outer GestureDetector in _buildTripCard handles
+      // taps; here we only navigate when NOT in selection mode.
+      onTap: _selectionMode
+          ? null
+          : () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => TripDetailsScreen(trip: trip),
+                ),
+              ),
+      child: AnimatedOpacity(
+        opacity: _selectionMode && !isSelected ? 0.55 : 1.0,
+        duration: const Duration(milliseconds: 150),
+        child: Stack(
+          children: [
+            Container(
+              decoration: BoxDecoration(
+                color: Theme.of(context).cardColor,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: borderColor, width: borderWidth),
+                boxShadow: [
+                  BoxShadow(
+                    color: isSelected
+                        ? Theme.of(context)
+                            .colorScheme
+                            .primary
+                            .withValues(alpha: 0.12)
+                        : isActive
+                            ? Colors.green.withValues(alpha: 0.1)
+                            : Colors.black.withValues(alpha: 0.05),
+                    blurRadius: (isSelected || isActive) ? 8 : 4,
+                    offset: Offset(0, (isSelected || isActive) ? 4 : 2),
+                  ),
+                ],
+              ),
+              child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             // Header with name and action menu
@@ -1125,6 +1295,7 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
+                  if (!_selectionMode)
                   PopupMenuButton<String>(
                     icon: Icon(
                       Icons.more_vert_rounded,
@@ -1338,6 +1509,41 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                 ],
               ),
             ),
+          ],
+        ),
+      ),
+            // Checkbox badge — overlays the card in selection mode
+            if (_selectionMode)
+              Positioned(
+                top: 10,
+                right: 10,
+                child: Container(
+                  width: 26,
+                  height: 26,
+                  decoration: BoxDecoration(
+                    color: isSelected
+                        ? Theme.of(context).colorScheme.primary
+                        : Theme.of(context).cardColor,
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: isSelected
+                          ? Theme.of(context).colorScheme.primary
+                          : Theme.of(context)
+                              .colorScheme
+                              .outline
+                              .withValues(alpha: 0.5),
+                      width: 2,
+                    ),
+                  ),
+                  child: isSelected
+                      ? const Icon(
+                          Icons.check_rounded,
+                          size: 14,
+                          color: Colors.white,
+                        )
+                      : null,
+                ),
+              ),
           ],
         ),
       ),
@@ -1577,6 +1783,197 @@ class _TripScreenState extends ConsumerState<TripScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Could not update trip name. Please check your connection and try again.')),
+        );
+      }
+    }
+  }
+
+  void _showBulkDeleteConfirmation(BuildContext context, List<Trip> trips) {
+    final locationsAsync = ref.read(savedLocationsProvider);
+
+    locationsAsync.whenData((allLocations) {
+      // Count total locations across all selected trips
+      final totalLocations = allLocations
+          .where((loc) => trips.any((t) => t.id == loc.tripId))
+          .length;
+      final hasLocations = totalLocations > 0;
+      final tripCount = trips.length;
+
+      showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          actionsPadding: EdgeInsets.zero,
+          title: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.red.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Icon(
+                  Icons.warning_rounded,
+                  color: Colors.red,
+                  size: 24,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  'Delete $tripCount ${tripCount == 1 ? 'Trip' : 'Trips'}?',
+                ),
+              ),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                'You are about to delete $tripCount ${tripCount == 1 ? 'trip' : 'trips'}.',
+                style: const TextStyle(
+                  fontWeight: FontWeight.w600,
+                  fontSize: 15,
+                ),
+              ),
+              if (hasLocations) ...[
+                const SizedBox(height: 12),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.blue.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: Colors.blue.withValues(alpha: 0.3),
+                    ),
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Icon(Icons.info_outline,
+                          color: Colors.blue, size: 20),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'These trips contain $totalLocations ${totalLocations == 1 ? 'location' : 'locations'}. '
+                          'What would you like to do with them?',
+                          style: const TextStyle(fontSize: 13),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+              const SizedBox(height: 8),
+              const Text(
+                'This action cannot be undone.',
+                style: TextStyle(
+                  color: Colors.red,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              const SizedBox(height: 20),
+              if (hasLocations) ...[
+                ElevatedButton(
+                  onPressed: () {
+                    Navigator.pop(context);
+                    _bulkDeleteTrips(trips, deleteLocations: true);
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.red,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                  ),
+                  child: const Text('Delete Trips & Locations'),
+                ),
+                const SizedBox(height: 8),
+                OutlinedButton(
+                  onPressed: () {
+                    Navigator.pop(context);
+                    _bulkDeleteTrips(trips, deleteLocations: false);
+                  },
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                  ),
+                  child: const Text('Delete Trips, Keep Locations'),
+                ),
+              ] else
+                ElevatedButton(
+                  onPressed: () {
+                    Navigator.pop(context);
+                    _bulkDeleteTrips(trips);
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.red,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                  ),
+                  child: Text(
+                    'Delete ${tripCount == 1 ? 'Trip' : 'Trips'}',
+                  ),
+                ),
+              const SizedBox(height: 4),
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Cancel'),
+              ),
+            ],
+          ),
+        ),
+      );
+    });
+  }
+
+  Future<void> _bulkDeleteTrips(
+    List<Trip> trips, {
+    bool deleteLocations = false,
+  }) async {
+    try {
+      final locationRepository = ref.read(locationRepositoryProvider);
+      final tripRepository = ref.read(tripRepositoryProvider);
+
+      for (final trip in trips) {
+        if (deleteLocations) {
+          await locationRepository.deleteLocationsByTripId(trip.id);
+        }
+        await tripRepository.deleteTrip(trip.id);
+      }
+
+      ref.invalidate(userTripsProvider);
+      _exitSelectionMode();
+
+      if (mounted) {
+        final count = trips.length;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              deleteLocations
+                  ? '$count ${count == 1 ? 'trip' : 'trips'} and their locations deleted'
+                  : '$count ${count == 1 ? 'trip' : 'trips'} deleted. Locations kept.',
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint('Error bulk deleting trips: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Could not delete all trips. Please check your connection and try again.'),
+          ),
         );
       }
     }

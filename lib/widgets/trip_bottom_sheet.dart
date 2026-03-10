@@ -220,49 +220,55 @@ class TripBottomSheet extends ConsumerWidget {
               const SizedBox(width: 8),
               Consumer(builder: (context, ref, _) {
                 final isGenerating = ref.watch(isGeneratingRouteProvider);
-                return Container(
+                final locationsForDate =
+                    ref.watch(locationsForSelectedDateProvider);
+                final hasLocations = locationsForDate.isNotEmpty;
+                final canTap = hasLocations && !isGenerating;
+                final primaryColor = Theme.of(context).colorScheme.primary;
+
+                final button = Container(
                   decoration: BoxDecoration(
                     gradient: LinearGradient(
-                      colors: [
-                        Theme.of(context).colorScheme.primary,
-                        Theme.of(context).colorScheme.primary.withValues(alpha: 0.8),
-                      ],
+                      colors: canTap
+                          ? [
+                              primaryColor,
+                              primaryColor.withValues(alpha: 0.8),
+                            ]
+                          : [
+                              primaryColor.withValues(alpha: 0.35),
+                              primaryColor.withValues(alpha: 0.25),
+                            ],
                       begin: Alignment.topLeft,
                       end: Alignment.bottomRight,
                     ),
                     borderRadius: BorderRadius.circular(12),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.4),
-                        blurRadius: 8,
-                        offset: const Offset(0, 2),
-                      ),
-                    ],
                   ),
                   child: Material(
                     color: Colors.transparent,
                     child: InkWell(
-                      onTap: isGenerating
-                          ? null
-                          : () {
-                              ref.read(locationsForSelectedDateProvider);
-                              _showChooseStartPointDialog(context, ref,
-                                  isReoptimizing: hasOptimizedRoute);
-                            },
+                      onTap: canTap
+                          ? () => _showChooseStartPointDialog(context, ref,
+                              isReoptimizing: hasOptimizedRoute)
+                          : null,
                       borderRadius: BorderRadius.circular(12),
                       child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 10),
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             Icon(
-                              isGenerating ? Icons.hourglass_empty : Icons.route_rounded,
+                              isGenerating
+                                  ? Icons.hourglass_empty
+                                  : Icons.route_rounded,
                               color: Colors.white,
                               size: 20,
                             ),
                             const SizedBox(width: 8),
                             Text(
-                              hasOptimizedRoute ? 'Re-optimize' : 'Optimize Route',
+                              hasOptimizedRoute
+                                  ? 'Re-optimize'
+                                  : 'Optimize Route',
                               style: const TextStyle(
                                 color: Colors.white,
                                 fontWeight: FontWeight.bold,
@@ -275,6 +281,9 @@ class TripBottomSheet extends ConsumerWidget {
                     ),
                   ),
                 );
+
+                if (!canTap) return button;
+                return _PulsingGlow(glowColor: primaryColor, child: button);
               }),
             ],
           ],
@@ -983,12 +992,14 @@ class TripBottomSheet extends ConsumerWidget {
       final hasRoute = ref
           .watch(tripProvider.select((s) => s.optimizedRoute.isNotEmpty));
       final selectedDate = ref.watch(selectedDateProvider);
+      final locationsForDate = ref.watch(locationsForSelectedDateProvider);
 
       final now = DateTime.now();
       final today = DateTime(now.year, now.month, now.day);
       final isPastDate = selectedDate.isBefore(today);
 
       final isViewingHistory = isPastDate && hasRoute;
+      final hasLocations = locationsForDate.isNotEmpty;
 
       String buttonText;
       VoidCallback? onPressedAction;
@@ -1006,13 +1017,19 @@ class TripBottomSheet extends ConsumerWidget {
           );
           ref.read(viewHistoricalRouteProvider.notifier).state = true;
         };
+      } else if (!hasLocations) {
+        buttonText = 'Optimize Route';
+        onPressedAction = null; // disabled — no locations for this date
       } else {
         buttonText = hasRoute ? 'Re-optimize Route' : 'Optimize Route';
         onPressedAction = () => _showChooseStartPointDialog(context, ref,
             isReoptimizing: hasRoute);
       }
 
-      return SizedBox(
+      final canGlow = onPressedAction != null && !isGenerating;
+      final primaryColor = Theme.of(context).colorScheme.primary;
+
+      final button = SizedBox(
         width: double.infinity,
         child: ElevatedButton.icon(
           onPressed: onPressedAction,
@@ -1032,6 +1049,9 @@ class TripBottomSheet extends ConsumerWidget {
           ),
         ),
       );
+
+      if (!canGlow) return button;
+      return _PulsingGlow(glowColor: primaryColor, child: button);
     });
   }
 
@@ -1339,5 +1359,64 @@ class TripBottomSheet extends ConsumerWidget {
       final kilometers = distanceInMeters / 1000;
       return '${kilometers.toStringAsFixed(1)}km';
     }
+  }
+}
+
+// Lightweight pulsing glow — no external dependencies.
+// Wraps its child with an animated box-shadow that pulses in and out.
+class _PulsingGlow extends StatefulWidget {
+  final Widget child;
+  final Color glowColor;
+
+  const _PulsingGlow({
+    required this.child,
+    required this.glowColor,
+  });
+
+  @override
+  State<_PulsingGlow> createState() => _PulsingGlowState();
+}
+
+class _PulsingGlowState extends State<_PulsingGlow>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+  late final Animation<double> _glow;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1600),
+    )..repeat(reverse: true);
+    _glow = CurvedAnimation(parent: _controller, curve: Curves.easeInOut);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _glow,
+      builder: (context, child) => DecoratedBox(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(12),
+          boxShadow: [
+            BoxShadow(
+              color: widget.glowColor
+                  .withValues(alpha: 0.25 + _glow.value * 0.45),
+              blurRadius: 6 + _glow.value * 18,
+              spreadRadius: _glow.value * 3,
+            ),
+          ],
+        ),
+        child: child,
+      ),
+      child: widget.child,
+    );
   }
 }

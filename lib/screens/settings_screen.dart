@@ -13,6 +13,8 @@ import '../widgets/logout_confirmation_dialog.dart';
 import '../widgets/delete_account_dialog.dart';
 import '../widgets/pro_feature_gate.dart';
 import 'login_screen.dart';
+import 'profile_screen.dart';
+import 'security_screen.dart';
 import 'signup_screen.dart';
 import 'subscription_management_screen.dart';
 
@@ -49,6 +51,13 @@ class SettingsScreen extends ConsumerWidget {
           _buildSectionHeader(context, 'Subscription'),
           _buildSubscriptionTile(context, ref),
           const SizedBox(height: 24),
+
+          // Security Section (only for signed-in users)
+          if (ref.watch(currentUserProvider) != null) ...[
+            _buildSectionHeader(context, 'Security'),
+            _buildSecurityTile(context),
+            const SizedBox(height: 24),
+          ],
 
           // Preferences Section
           _buildSectionHeader(context, 'Preferences'),
@@ -143,7 +152,11 @@ class SettingsScreen extends ConsumerWidget {
       );
     }
 
-    return Container(
+    return GestureDetector(
+      onTap: () => Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => const ProfileScreen()),
+      ),
+      child: Container(
       decoration: BoxDecoration(
         color: Theme.of(context).cardColor,
         borderRadius: BorderRadius.circular(20),
@@ -224,6 +237,7 @@ class SettingsScreen extends ConsumerWidget {
             ),
           ),
         ],
+      ),
       ),
     );
   }
@@ -321,7 +335,7 @@ class SettingsScreen extends ConsumerWidget {
     );
   }
 
-  Widget _buildTermsTile(BuildContext context) {
+  Widget _buildSecurityTile(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
         color: Theme.of(context).cardColor,
@@ -337,13 +351,53 @@ class SettingsScreen extends ConsumerWidget {
       child: ListTile(
         onTap: () {
           Navigator.of(context).push(
-            MaterialPageRoute(builder: (context) => const TermsScreen()),
+            MaterialPageRoute(builder: (_) => const SecurityScreen()),
           );
         },
         leading: Container(
           padding: const EdgeInsets.all(8),
           decoration: BoxDecoration(
             color: Theme.of(context).colorScheme.primary.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Icon(
+            Icons.lock_outline_rounded,
+            color: Theme.of(context).colorScheme.primary,
+          ),
+        ),
+        title: const Text('Change Password'),
+        subtitle: const Text('Update your account password'),
+        trailing: const Icon(Icons.arrow_forward_ios, size: 16),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTermsTile(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Theme.of(context).cardColor,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: ListTile(
+        onTap: () {
+          Navigator.of(context).push(
+            MaterialPageRoute(builder: (context) => const TermsScreen()),
+          );
+        },
+        leading: Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.1),
             borderRadius: BorderRadius.circular(10),
           ),
           child: Icon(
@@ -388,7 +442,7 @@ class SettingsScreen extends ConsumerWidget {
             children: [
               Row(
                 children: [
-                  Icon(Icons.warning_rounded, color: Colors.red, size: 20),
+                  const Icon(Icons.warning_rounded, color: Colors.red, size: 20),
                   const SizedBox(width: 8),
                   Text(
                     'Delete Account',
