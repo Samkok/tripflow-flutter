@@ -14,6 +14,11 @@ import 'package:voyza/services/places_service.dart';
 import 'package:voyza/providers/auth_provider.dart';
 import 'package:voyza/widgets/collaborators_sheet.dart';
 import 'package:voyza/widgets/google_maps_url_dialog.dart';
+import 'package:voyza/services/location_add_service.dart';
+import 'package:voyza/models/location_model.dart';
+import 'package:voyza/widgets/location_detail_sheet.dart';
+import 'package:voyza/providers/local_active_trip_provider.dart';
+import 'package:voyza/providers/trip_provider.dart';
 
 class TripDetailsScreen extends ConsumerStatefulWidget {
   final Trip trip;
@@ -33,6 +38,96 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
   // Stream created once so rebuilds (e.g. typing in search) don't recreate it,
   // which would cause StreamBuilder to briefly flash ConnectionState.waiting.
   late final Stream<List<SavedLocation>> _locationsStream;
+
+  // ─── Multi-select state ────────────────────────────────────────────────
+  bool _selectionMode = false;
+  final Set<String> _selectedIds = {};
+  List<SavedLocation> _currentTripLocations = [];
+
+  void _enterSelectionMode(String id) {
+    setState(() {
+      _selectionMode = true;
+      _selectedIds.add(id);
+    });
+  }
+
+  void _exitSelectionMode() {
+    setState(() {
+      _selectionMode = false;
+      _selectedIds.clear();
+    });
+  }
+
+  void _toggleSelection(String id) {
+    setState(() {
+      if (_selectedIds.contains(id)) {
+        _selectedIds.remove(id);
+        if (_selectedIds.isEmpty) _selectionMode = false;
+      } else {
+        _selectedIds.add(id);
+      }
+    });
+  }
+
+  Future<void> _deleteSelected() async {
+    final count = _selectedIds.length;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Delete locations?'),
+        content: Text(
+            'Delete $count location${count == 1 ? '' : 's'}? This cannot be undone.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    final repo = ref.read(locationRepositoryProvider);
+    for (final id in _selectedIds.toList()) {
+      await repo.deleteLocation(id);
+    }
+    _exitSelectionMode();
+  }
+
+
+  void _showLocationDetail(SavedLocation location, int indexInList) {
+    final locationModel = LocationModel(
+      id: location.id,
+      name: location.name,
+      address:
+          '${location.lat.toStringAsFixed(5)}, ${location.lng.toStringAsFixed(5)}',
+      coordinates: LatLng(location.lat, location.lng),
+      addedAt: location.createdAt,
+      stayDuration: Duration(seconds: location.stayDuration),
+      isSkipped: location.isSkipped,
+      isDone: location.isDone,
+      scheduledDate: location.scheduledDate,
+      photoReference: location.photoReference,
+      photoAttributions: location.photoAttributions,
+    );
+
+    final scrollController = ScrollController();
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (ctx) => LocationDetailSheet(
+        location: locationModel,
+        number: indexInList + 1,
+        parentScrollController: scrollController,
+      ),
+    ).whenComplete(scrollController.dispose);
+  }
 
   @override
   void initState() {
@@ -55,6 +150,41 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
   void dispose() {
     _searchController.dispose();
     super.dispose();
+  }
+
+  Future<void> _setActiveTrip() async {
+    try {
+      ref.read(tripProvider.notifier).clearTrip();
+      await ref.read(localActiveTripIdProvider.notifier).setActiveTrip(widget.trip.id);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('${widget.trip.name} is now active')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not activate trip. Please try again.')),
+        );
+      }
+    }
+  }
+
+  Future<void> _deactivateTrip() async {
+    try {
+      await ref.read(localActiveTripIdProvider.notifier).deactivateTrip();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Trip deactivated')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not deactivate trip. Please try again.')),
+        );
+      }
+    }
   }
 
   Future<void> _refreshPermissions() async {
@@ -80,36 +210,98 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
     final hasWriteAccessAsync = ref.watch(hasWriteAccessProvider(widget.trip.id));
 
     return Scaffold(
-      appBar: AppBar(
-        elevation: 0,
-        backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_rounded),
-          onPressed: () => Navigator.pop(context),
-        ),
-        title: Text(
-          widget.trip.name,
-          style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                fontWeight: FontWeight.bold,
+      appBar: _selectionMode
+          ? AppBar(
+              elevation: 0,
+              backgroundColor:
+                  Theme.of(context).colorScheme.primary.withValues(alpha: 0.08),
+              leading: IconButton(
+                icon: const Icon(Icons.close),
+                onPressed: _exitSelectionMode,
               ),
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-        ),
-        actions: [
-          // Team members button - only visible to trip owner
-          isOwnerAsync.when(
-            data: (isOwner) => isOwner
-                ? IconButton(
-                    icon: const Icon(Icons.group_outlined),
-                    tooltip: 'Team Members',
-                    onPressed: () => _showCollaboratorsSheet(),
-                  )
-                : const SizedBox.shrink(),
-            loading: () => const SizedBox.shrink(),
-            error: (_, __) => const SizedBox.shrink(),
-          ),
-        ],
-      ),
+              title: Text(
+                '${_selectedIds.length} selected',
+                style: Theme.of(context)
+                    .textTheme
+                    .headlineSmall
+                    ?.copyWith(fontWeight: FontWeight.bold),
+              ),
+              actions: [
+                // Tristate checkbox: null=some, true=all, false=none
+                Checkbox(
+                  tristate: true,
+                  value: _selectedIds.isEmpty
+                      ? false
+                      : _selectedIds.length == _currentTripLocations.length
+                          ? true
+                          : null,
+                  onChanged: (_) {
+                    setState(() {
+                      if (_selectedIds.length ==
+                          _currentTripLocations.length) {
+                        _selectedIds.clear();
+                      } else {
+                        _selectedIds.addAll(
+                            _currentTripLocations.map((l) => l.id));
+                      }
+                    });
+                  },
+                ),
+                IconButton(
+                  icon: const Icon(Icons.delete_outline, color: Colors.red),
+                  tooltip: 'Delete selected',
+                  onPressed:
+                      _selectedIds.isEmpty ? null : _deleteSelected,
+                ),
+              ],
+            )
+          : AppBar(
+              elevation: 0,
+              backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+              leading: IconButton(
+                icon: const Icon(Icons.arrow_back_rounded),
+                onPressed: () => Navigator.pop(context),
+              ),
+              title: Text(
+                widget.trip.name,
+                style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                      fontWeight: FontWeight.bold,
+                    ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              actions: [
+                // Team members button - only visible to trip owner
+                isOwnerAsync.when(
+                  data: (isOwner) => isOwner
+                      ? IconButton(
+                          icon: const Icon(Icons.group_outlined),
+                          tooltip: 'Team Members',
+                          onPressed: () => _showCollaboratorsSheet(),
+                        )
+                      : const SizedBox.shrink(),
+                  loading: () => const SizedBox.shrink(),
+                  error: (_, __) => const SizedBox.shrink(),
+                ),
+              ],
+            ),
+      bottomNavigationBar: _selectionMode
+          ? SafeArea(
+              child: Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                child: FilledButton.icon(
+                  style:
+                      FilledButton.styleFrom(backgroundColor: Colors.red),
+                  onPressed:
+                      _selectedIds.isEmpty ? null : _deleteSelected,
+                  icon: const Icon(Icons.delete_outline),
+                  label: Text(
+                      'Delete ${_selectedIds.length} location${_selectedIds.length == 1 ? '' : 's'}'),
+                ),
+              ),
+            )
+          : null,
       body: RefreshIndicator(
         onRefresh: _refreshPermissions,
         child: Column(
@@ -121,7 +313,9 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
           ],
         ),
       ),
-      floatingActionButton: hasWriteAccessAsync.when(
+      floatingActionButton: _selectionMode
+          ? null
+          : hasWriteAccessAsync.when(
         data: (hasWriteAccess) => hasWriteAccess
             ? Column(
                 mainAxisSize: MainAxisSize.min,
@@ -269,6 +463,13 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
           return _buildEmptyState(false);
         }
 
+        // Keep a reference so the selection-mode AppBar can select all
+        if (_currentTripLocations != tripLocations) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) setState(() => _currentTripLocations = tripLocations);
+          });
+        }
+
         return _buildLocationsList(tripLocations);
       },
     );
@@ -366,15 +567,18 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
   }
 
   Widget _buildTripInfoSection() {
+    final localActiveTripId = ref.watch(localActiveTripIdProvider);
+    final isActive = localActiveTripId == widget.trip.id;
+
     return Padding(
       padding: const EdgeInsets.all(16),
       child: Container(
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          color: Theme.of(context).colorScheme.primary.withOpacity(0.1),
+          color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.1),
           borderRadius: BorderRadius.circular(12),
           border: Border.all(
-            color: Theme.of(context).colorScheme.primary.withOpacity(0.2),
+            color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.2),
             width: 1,
           ),
         ),
@@ -382,95 +586,70 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
+                Icon(
+                  Icons.trip_origin_rounded,
+                  size: 18,
+                  color: Theme.of(context).colorScheme.primary,
+                ),
+                const SizedBox(width: 8),
                 Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                  child: Text(
+                    widget.trip.name,
+                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                          fontWeight: FontWeight.bold,
+                        ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                // Activate / Deactivate button
+                FilledButton.tonal(
+                  onPressed: isActive ? _deactivateTrip : _setActiveTrip,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: isActive
+                        ? Colors.green.withValues(alpha: 0.15)
+                        : Theme.of(context)
+                            .colorScheme
+                            .primary
+                            .withValues(alpha: 0.15),
+                    foregroundColor: isActive
+                        ? Colors.green
+                        : Theme.of(context).colorScheme.primary,
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 6),
+                    minimumSize: Size.zero,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      Row(
-                        children: [
-                          Icon(
-                            Icons.trip_origin_rounded,
-                            size: 18,
-                            color: Theme.of(context).colorScheme.primary,
+                      if (isActive) ...[
+                        Container(
+                          width: 6,
+                          height: 6,
+                          decoration: BoxDecoration(
+                            color: Colors.green,
+                            borderRadius: BorderRadius.circular(3),
                           ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              widget.trip.name,
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .titleLarge
-                                  ?.copyWith(
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 4,
                         ),
-                        decoration: BoxDecoration(
-                          color: _getStatusColor(widget.trip.status, context)
-                              .withOpacity(0.2),
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        child: Text(
-                          widget.trip.status.toUpperCase(),
-                          style: Theme.of(context)
-                              .textTheme
-                              .labelSmall
-                              ?.copyWith(
-                                color: _getStatusColor(
-                                    widget.trip.status, context),
-                                fontWeight: FontWeight.w600,
-                              ),
+                        const SizedBox(width: 5),
+                      ],
+                      Text(
+                        isActive ? 'Active' : 'Activate',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
                         ),
                       ),
                     ],
                   ),
                 ),
-                if (widget.trip.isActive)
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 4,
-                    ),
-                    decoration: BoxDecoration(
-                      color: Theme.of(context).colorScheme.primary,
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Container(
-                          width: 6,
-                          height: 6,
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(3),
-                          ),
-                        ),
-                        const SizedBox(width: 4),
-                        Text(
-                          'Active',
-                          style: Theme.of(context)
-                              .textTheme
-                              .labelSmall
-                              ?.copyWith(
-                                color: Colors.white,
-                                fontWeight: FontWeight.w600,
-                              ),
-                        ),
-                      ],
-                    ),
-                  ),
               ],
             ),
             if (widget.trip.description != null &&
@@ -483,7 +662,7 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
                           .textTheme
                           .bodyMedium
                           ?.color
-                          ?.withOpacity(0.7),
+                          ?.withValues(alpha: 0.7),
                     ),
               ),
             ],
@@ -524,8 +703,8 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
             separatorBuilder: (context, index) =>
                 const SizedBox(height: 8),
             itemBuilder: (context, index) {
-              final location = locations[index];
-              return _buildLocationCard(location);
+              final location = locations[index] as SavedLocation;
+              return _buildLocationCard(location, index);
             },
           ),
         ],
@@ -533,117 +712,134 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
     );
   }
 
-  Widget _buildLocationCard(SavedLocation location) {
-    // Show the time from createdAt
+  Widget _buildLocationCard(SavedLocation location, int index) {
     final timeString = DateFormat('HH:mm').format(location.createdAt);
+    final isSelected = _selectedIds.contains(location.id);
 
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Theme.of(context).cardColor,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(
-          color: Theme.of(context).dividerColor.withOpacity(0.1),
-          width: 1,
+    return GestureDetector(
+      onLongPress: () => _enterSelectionMode(location.id),
+      onTap: () {
+        if (_selectionMode) {
+          _toggleSelection(location.id);
+        } else {
+          _showLocationDetail(location, index);
+        }
+      },
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: isSelected
+              ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.1)
+              : Theme.of(context).cardColor,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: isSelected
+                ? Theme.of(context).colorScheme.primary
+                : Theme.of(context).dividerColor.withValues(alpha: 0.1),
+            width: isSelected ? 1.5 : 1,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.03),
+              blurRadius: 4,
+              offset: const Offset(0, 2),
+            ),
+          ],
         ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.03),
-            blurRadius: 4,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: Theme.of(context).colorScheme.primary.withOpacity(0.15),
-              borderRadius: BorderRadius.circular(8),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Checkbox in selection mode, icon otherwise
+            AnimatedSwitcher(
+              duration: const Duration(milliseconds: 150),
+              child: _selectionMode
+                  ? Checkbox(
+                      key: ValueKey('${location.id}_checkbox'),
+                      value: isSelected,
+                      onChanged: (_) => _toggleSelection(location.id),
+                      visualDensity: VisualDensity.compact,
+                    )
+                  : Container(
+                      key: ValueKey('${location.id}_icon'),
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: Theme.of(context)
+                            .colorScheme
+                            .primary
+                            .withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Icon(
+                        Icons.location_on_rounded,
+                        size: 18,
+                        color: Theme.of(context).colorScheme.primary,
+                      ),
+                    ),
             ),
-            child: Icon(
-              Icons.location_on_rounded,
-              size: 18,
-              color: Theme.of(context).colorScheme.primary,
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    location.name,
+                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                          fontWeight: FontWeight.w600,
+                        ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '${location.lat.toStringAsFixed(4)}, ${location.lng.toStringAsFixed(4)}',
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                          color: Theme.of(context)
+                              .textTheme
+                              .bodyMedium
+                              ?.color
+                              ?.withValues(alpha: 0.6),
+                        ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ),
             ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            const SizedBox(width: 4),
+            // Time + stay
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
               children: [
                 Text(
-                  location.name,
-                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                        fontWeight: FontWeight.w600,
-                      ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  '${location.lat.toStringAsFixed(4)}, ${location.lng.toStringAsFixed(4)}',
+                  timeString,
                   style: Theme.of(context).textTheme.labelSmall?.copyWith(
                         color: Theme.of(context)
                             .textTheme
                             .bodyMedium
                             ?.color
-                            ?.withOpacity(0.6),
+                            ?.withValues(alpha: 0.5),
                       ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
                 ),
+                if (location.stayDuration > 0)
+                  Text(
+                    '${(location.stayDuration / 60).toStringAsFixed(0)}m stay',
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                          color: Theme.of(context)
+                              .textTheme
+                              .bodyMedium
+                              ?.color
+                              ?.withValues(alpha: 0.5),
+                        ),
+                  ),
               ],
             ),
-          ),
-          const SizedBox(width: 8),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Text(
-                timeString,
-                style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                      color: Theme.of(context)
-                          .textTheme
-                          .bodyMedium
-                          ?.color
-                          ?.withOpacity(0.5),
-                    ),
-              ),
-              if (location.stayDuration > 0)
-                Text(
-                  '${(location.stayDuration / 60).toStringAsFixed(0)}m stay',
-                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                        color: Theme.of(context)
-                            .textTheme
-                            .bodyMedium
-                            ?.color
-                            ?.withOpacity(0.5),
-                      ),
-                ),
-            ],
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
 
-  Color _getStatusColor(String status, BuildContext context) {
-    switch (status.toLowerCase()) {
-      case 'planning':
-        return Colors.blue;
-      case 'active':
-        return Colors.green;
-      case 'completed':
-        return Colors.purple;
-      case 'archived':
-        return Colors.grey;
-      default:
-        return Theme.of(context).colorScheme.primary;
-    }
-  }
 
   void _showAddLocationDialog() {
     showModalBottomSheet(
@@ -981,6 +1177,8 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
       return;
     }
 
+    if (!mounted) return;
+
     setState(() => _isPastingUrl = true);
 
     // Show loading dialog
@@ -1067,18 +1265,22 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
         tripId: widget.tripId,
       );
 
-      await ref.read(locationRepositoryProvider).addLocation(newLocation);
-
-      if (mounted) {
+      if (!mounted) return;
+      final added = await LocationAddService(ref).addSavedLocation(context, newLocation);
+      if (!mounted) return;
+      if (!added) {
         Navigator.pop(context); // Close loading dialog
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Added ${placeDetails.name} to trip'),
-            backgroundColor: Colors.green,
-          ),
-        );
-        Navigator.pop(context); // Close search sheet
+        return;
       }
+
+      Navigator.pop(context); // Close loading dialog
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Added ${placeDetails.name} to trip'),
+          backgroundColor: Colors.green,
+        ),
+      );
+      Navigator.pop(context); // Close search sheet
     } catch (e) {
       if (mounted) {
         Navigator.pop(context); // Close loading dialog
@@ -1108,6 +1310,8 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
       }
       return;
     }
+
+    if (!mounted) return;
 
     // Show loading indicator
     if (mounted) {
@@ -1152,19 +1356,22 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
         tripId: widget.tripId, // Assign to this trip
       );
 
-      // Add to repository
-      await ref.read(locationRepositoryProvider).addLocation(newLocation);
-
-      if (mounted) {
+      if (!mounted) return;
+      final added = await LocationAddService(ref).addSavedLocation(context, newLocation);
+      if (!mounted) return;
+      if (!added) {
         Navigator.pop(context); // Close loading dialog
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Added ${placeDetails.name} to trip'),
-            backgroundColor: Colors.green,
-          ),
-        );
-        Navigator.pop(context); // Close search sheet
+        return;
       }
+
+      Navigator.pop(context); // Close loading dialog
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Added ${placeDetails.name} to trip'),
+          backgroundColor: Colors.green,
+        ),
+      );
+      Navigator.pop(context); // Close search sheet
     } catch (e) {
       if (mounted) {
         Navigator.pop(context); // Close loading dialog

@@ -20,7 +20,7 @@ import '../providers/trip_listener_provider.dart';
 import '../providers/auth_provider.dart';
 import '../services/location_service.dart';
 import '../services/places_service.dart';
-import '../services/subscription_limit_service.dart';
+import '../services/location_add_service.dart';
 import '../widgets/map_widget.dart';
 import '../widgets/search_widget.dart';
 import '../widgets/trip_bottom_sheet.dart';
@@ -190,13 +190,6 @@ class _MapScreenState extends ConsumerState<MapScreen>
       return;
     }
 
-    // Check subscription limit - show paywall if limit reached
-    final subscriptionLimitService = SubscriptionLimitService(ref);
-    final canAdd = await subscriptionLimitService.canAddLocation(context);
-    if (!canAdd) {
-      return; // User hit limit and didn't upgrade
-    }
-
     // Prevent adding locations to past dates
     final selectedDate = ref.read(selectedDateProvider);
     final now = DateTime.now();
@@ -213,8 +206,8 @@ class _MapScreenState extends ConsumerState<MapScreen>
     try {
       // Show loading indicator
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Row(
+        const SnackBar(
+          content: Row(
             children: [
               SizedBox(
                 height: 16,
@@ -246,9 +239,16 @@ class _MapScreenState extends ConsumerState<MapScreen>
           photoAttributions: placeDetails.photoAttributions,
         );
 
-        await ref.read(tripProvider.notifier).addLocation(location);
+        if (!mounted) return;
+        final added = await LocationAddService(ref).addLocation(context, location);
+        if (!mounted) return;
+        if (!added) {
+          ScaffoldMessenger.of(context).hideCurrentSnackBar();
+          return;
+        }
 
         // Hide loading snackbar and show success
+        if (!mounted) return;
         ScaffoldMessenger.of(context).hideCurrentSnackBar();
 
         if (mounted) {

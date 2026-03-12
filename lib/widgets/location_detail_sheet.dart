@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:voyza/models/location_model.dart';
 import 'package:voyza/providers/map_ui_state_provider.dart';
 import 'package:voyza/providers/trip_provider.dart';
@@ -62,31 +63,6 @@ class LocationDetailSheet extends ConsumerWidget {
         children: [
           // Header with stop number
           _buildHeader(context, ref, updatedLocation, isPastDate),
-          const SizedBox(height: 24),
-
-          // Address
-          _buildDetailRow(
-            context,
-            Icons.location_on,
-            'Address',
-            updatedLocation.address,
-          ),
-
-          // Stay Duration
-          _buildDetailRow(
-            context,
-            Icons.timer_outlined,
-            'Planned Stay',
-            _formatDuration(updatedLocation.stayDuration),
-          ),
-
-          // Coordinates
-          _buildDetailRow(
-            context,
-            Icons.my_location,
-            'Coordinates',
-            '${updatedLocation.coordinates.latitude.toStringAsFixed(6)}, ${updatedLocation.coordinates.longitude.toStringAsFixed(6)}',
-          ),
 
           // Travel info (if available)
           if (updatedLocation.travelTimeFromPrevious != null &&
@@ -94,11 +70,6 @@ class LocationDetailSheet extends ConsumerWidget {
             const Divider(height: 32),
             _buildTravelInfo(context, ref, updatedLocation),
           ],
-
-          const SizedBox(height: 24),
-
-          // Action buttons
-          _buildActionButtons(context, ref, updatedLocation, isPastDate),
         ],
       ),
     );
@@ -138,16 +109,44 @@ class LocationDetailSheet extends ConsumerWidget {
                     ),
             ),
             const SizedBox(width: 16),
-            Text(
-              updatedLocation.isDone ? 'Done' : 'Stop $number',
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: updatedLocation.isDone
-                        ? Colors.green.shade500
-                        : Theme.of(context).colorScheme.primary,
-                    fontWeight: FontWeight.w600,
-                  ),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  updatedLocation.isDone ? 'Done' : 'Stop $number',
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: updatedLocation.isDone
+                            ? Colors.green.shade500
+                            : Theme.of(context).colorScheme.primary,
+                        fontWeight: FontWeight.w600,
+                      ),
+                ),
+                Text(
+                  'Planned Stay: ${_formatDuration(updatedLocation.stayDuration)}',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Colors.grey[500],
+                      ),
+                ),
+              ],
             ),
             const Spacer(),
+            // Delete button
+            GestureDetector(
+              onTap: hasWriteAccess
+                  ? () => _showDeleteConfirmationDialog(context, ref, updatedLocation)
+                  : null,
+              child: Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: hasWriteAccess ? Colors.red[600] : Colors.grey[400],
+                ),
+                child: const Icon(Icons.delete_outline, color: Colors.white, size: 22),
+              ),
+            ),
+            const SizedBox(width: 8),
+            // Mark as done button
             GestureDetector(
               onTap: hasWriteAccess
                   ? () {
@@ -159,7 +158,6 @@ class LocationDetailSheet extends ConsumerWidget {
                         ref
                             .read(tripProvider.notifier)
                             .markLocationsAsDone({updatedLocation.id});
-                        Navigator.of(context).pop();
                       }
                     }
                   : null,
@@ -196,27 +194,20 @@ class LocationDetailSheet extends ConsumerWidget {
         ),
         const SizedBox(height: 16),
 
-        // Action buttons row - separated from name
+        // Action buttons — 2×2 grid
         Row(
           children: [
-            // Schedule Date Button
+            // Date
             Expanded(
               child: OutlinedButton.icon(
-                icon: Icon(
-                  Icons.calendar_today_outlined,
-                  size: 18,
-                  color: canEdit
-                      ? Theme.of(context).colorScheme.primary
-                      : Colors.grey,
-                ),
+                icon: Icon(Icons.calendar_today_outlined, size: 18,
+                    color: canEdit ? Theme.of(context).colorScheme.primary : Colors.grey),
                 label: const Text('Date'),
                 onPressed: canEdit
                     ? () async {
-                        final datesWithLocations =
-                            ref.read(datesWithLocationsProvider);
+                        final datesWithLocations = ref.read(datesWithLocationsProvider);
                         final now = DateTime.now();
-                        final newDate =
-                            await DatePickerUtils.showCustomDatePicker(
+                        final newDate = await DatePickerUtils.showCustomDatePicker(
                           context: context,
                           initialDate: updatedLocation.scheduledDate ?? now,
                           firstDate: DateTime(now.year, now.month, now.day),
@@ -224,17 +215,14 @@ class LocationDetailSheet extends ConsumerWidget {
                           highlightedDates: datesWithLocations,
                         );
                         if (newDate != null) {
-                          final normalizedDate = DateTime(
-                              newDate.year, newDate.month, newDate.day);
-                          ref
-                              .read(tripProvider.notifier)
-                              .updateLocationScheduledDate(
-                                  updatedLocation.id, normalizedDate);
+                          ref.read(tripProvider.notifier).updateLocationScheduledDate(
+                              updatedLocation.id,
+                              DateTime(newDate.year, newDate.month, newDate.day));
                         }
                       }
                     : null,
                 style: OutlinedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
+                  padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
                   side: BorderSide(
                     color: canEdit
                         ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.3)
@@ -244,24 +232,41 @@ class LocationDetailSheet extends ConsumerWidget {
               ),
             ),
             const SizedBox(width: 8),
-
-            // Edit Button
+            // Edit
             Expanded(
               child: OutlinedButton.icon(
-                icon: Icon(
-                  Icons.edit_outlined,
-                  size: 18,
-                  color: canEdit
-                      ? Theme.of(context).colorScheme.primary
-                      : Colors.grey,
-                ),
+                icon: Icon(Icons.edit_outlined, size: 18,
+                    color: canEdit ? Theme.of(context).colorScheme.primary : Colors.grey),
                 label: const Text('Edit'),
                 onPressed: canEdit
-                    ? () => _showEditLocationNameDialog(
-                        context, ref, updatedLocation)
+                    ? () => _showEditLocationNameDialog(context, ref, updatedLocation)
                     : null,
                 style: OutlinedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
+                  padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+                  side: BorderSide(
+                    color: canEdit
+                        ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.3)
+                        : Colors.grey.withValues(alpha: 0.3),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            // Set Stay
+            Expanded(
+              child: OutlinedButton.icon(
+                icon: Icon(Icons.timer_outlined, size: 18,
+                    color: canEdit ? Theme.of(context).colorScheme.primary : Colors.grey),
+                label: const Text('Set Stay'),
+                onPressed: canEdit
+                    ? () => _showEditStayDurationDialog(context, ref, updatedLocation)
+                    : null,
+                style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
                   side: BorderSide(
                     color: canEdit
                         ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.3)
@@ -271,28 +276,18 @@ class LocationDetailSheet extends ConsumerWidget {
               ),
             ),
             const SizedBox(width: 8),
-
-            // Delete Button - also requires write access
-            OutlinedButton.icon(
-              icon: Icon(
-                Icons.delete_outline,
-                size: 18,
-                color: hasWriteAccess ? Colors.red : Colors.grey,
-              ),
-              label: Text(
-                'Delete',
-                style: TextStyle(color: hasWriteAccess ? Colors.red : Colors.grey),
-              ),
-              onPressed: hasWriteAccess
-                  ? () => _showDeleteConfirmationDialog(
-                      context, ref, updatedLocation)
-                  : null,
-              style: OutlinedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
-                side: BorderSide(
-                  color: hasWriteAccess
-                      ? Colors.red.withValues(alpha: 0.3)
-                      : Colors.grey.withValues(alpha: 0.3),
+            // Google Map
+            Expanded(
+              child: OutlinedButton.icon(
+                icon: Icon(Icons.map_outlined, size: 18,
+                    color: Theme.of(context).colorScheme.primary),
+                label: const Text('Google Map'),
+                onPressed: () => _openGoogleMaps(updatedLocation.coordinates),
+                style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+                  side: BorderSide(
+                    color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.3),
+                  ),
                 ),
               ),
             ),
@@ -411,66 +406,12 @@ class LocationDetailSheet extends ConsumerWidget {
     );
   }
 
-  Widget _buildActionButtons(BuildContext context, WidgetRef ref,
-      LocationModel updatedLocation, bool isPastDate) {
-    // Check if user has write access to the active trip
-    final hasWriteAccessAsync = ref.watch(hasActiveTripWriteAccessProvider);
-    final hasWriteAccess = hasWriteAccessAsync.asData?.value ?? false;
-
-    // Disable editing if past date OR no write access
-    final canEdit = !isPastDate && hasWriteAccess;
-
-    return Row(
-      children: [
-        Expanded(
-            child: ElevatedButton.icon(
-          onPressed: canEdit
-              ? () =>
-                  _showEditStayDurationDialog(context, ref, updatedLocation)
-              : null,
-          icon: const Icon(Icons.timer_outlined),
-          label: const Text('Set Stay'),
-          style: ElevatedButton.styleFrom(
-            backgroundColor: canEdit ? AppTheme.primaryColor : Colors.grey,
-            foregroundColor: Colors.black,
-            padding: const EdgeInsets.symmetric(vertical: 16),
-            shape:
-                RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          ),
-        )),
-        const SizedBox(width: 12),
-        Expanded(
-          child: ElevatedButton.icon(
-            onPressed: () {
-              Navigator.of(context).pop();
-              onLocationTap?.call(updatedLocation.coordinates);
-              parentSheetController?.animateTo(
-                0.15, // minChildSize
-                duration: const Duration(milliseconds: 300),
-                curve: Curves.easeInOut,
-              );
-              WidgetsBinding.instance.addPostFrameCallback((_) {
-                parentScrollController.animateTo(
-                  0,
-                  duration: const Duration(milliseconds: 300),
-                  curve: Curves.easeInOut,
-                );
-              });
-            },
-            icon: const Icon(Icons.map),
-            label: const Text('View on Map'),
-            style: ElevatedButton.styleFrom(
-              backgroundColor:
-                  Theme.of(context).colorScheme.primary.withValues(alpha: 0.2),
-              foregroundColor: Theme.of(context).colorScheme.primary,
-              padding: const EdgeInsets.symmetric(vertical: 16),
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12)),
-            ),
-          ),
-        ),
-      ],
-    );
+  Future<void> _openGoogleMaps(LatLng coordinates) async {
+    final uri = Uri.parse(
+        'https://www.google.com/maps/search/?api=1&query=${coordinates.latitude},${coordinates.longitude}');
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    }
   }
 
   void _showEditLocationNameDialog(
@@ -557,115 +498,211 @@ class LocationDetailSheet extends ConsumerWidget {
 
   void _showEditStayDurationDialog(
       BuildContext context, WidgetRef ref, LocationModel location) {
-    final List<Duration> commonDurations = [
+    final List<Duration> presets = [
       const Duration(minutes: 15),
       const Duration(minutes: 30),
       const Duration(hours: 1),
       const Duration(hours: 2),
+      const Duration(hours: 3),
       const Duration(hours: 4),
     ];
 
-    final customMinutesController = TextEditingController();
-    final formKey = GlobalKey<FormState>();
+    final customController = TextEditingController();
 
     showDialog(
       context: context,
-      builder: (context) {
-        return AlertDialog(
-          backgroundColor: Theme.of(context).cardColor,
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: Row(
-            children: [
-              Icon(Icons.timer_outlined,
-                  color: Theme.of(context).colorScheme.primary, size: 24),
-              const SizedBox(width: 8),
-              const Text('Set Stay Duration'),
-            ],
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Wrap(
-                spacing: 8.0,
-                runSpacing: 8.0,
-                children: commonDurations.map((duration) {
-                  return ActionChip(
-                      label: Text(_formatDuration(duration)),
-                      backgroundColor: location.stayDuration == duration
-                          ? Theme.of(context).colorScheme.primary
-                          : Theme.of(context).colorScheme.surface,
-                      labelStyle: TextStyle(
-                        color: location.stayDuration == duration
-                            ? Colors.black
-                            : Theme.of(context).textTheme.bodyLarge?.color,
-                        fontWeight: FontWeight.bold,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocalState) {
+          Duration selected = location.stayDuration;
+
+          return AlertDialog(
+            backgroundColor: Theme.of(context).cardColor,
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(20)),
+            titlePadding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
+            contentPadding: const EdgeInsets.fromLTRB(20, 12, 20, 4),
+            title: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context)
+                        .colorScheme
+                        .primary
+                        .withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Icon(Icons.timer_outlined,
+                      color: Theme.of(context).colorScheme.primary, size: 20),
+                ),
+                const SizedBox(width: 12),
+                const Text('Set Stay Duration'),
+              ],
+            ),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const SizedBox(height: 4),
+                Text(
+                  'Quick select',
+                  style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                        color: Colors.grey[500],
+                        letterSpacing: 0.5,
                       ),
-                      onPressed: () {
-                        ref
-                            .read(tripProvider.notifier)
-                            .updateLocationStayDuration(location.id, duration);
-                        Navigator.of(context).pop();
-                      });
-                }).toList(),
-              ),
-              const Divider(height: 32),
-              Text(
-                'Or enter custom duration (minutes):',
-                style: Theme.of(context).textTheme.bodyMedium,
-              ),
-              const SizedBox(height: 12),
-              Form(
-                key: formKey,
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(
-                      child: TextFormField(
-                        controller: customMinutesController,
-                        keyboardType: TextInputType.number,
-                        decoration: const InputDecoration(
-                          hintText: 'e.g., 45',
-                          suffixText: 'min',
-                        ),
-                        validator: (value) {
-                          if (value == null || value.isEmpty) return 'Required';
-                          if (int.tryParse(value) == null) return 'Invalid';
-                          return null;
-                        },
+                ),
+                const SizedBox(height: 10),
+                ...[
+                  [presets[0], presets[1], presets[2]],
+                  [presets[3], presets[4], presets[5]],
+                ].map((rowPresets) => Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Row(
+                    children: rowPresets
+                        .expand((duration) {
+                          final isSelected = selected == duration;
+                          return [
+                            Expanded(
+                              child: InkWell(
+                                onTap: () {
+                                  ref
+                                      .read(tripProvider.notifier)
+                                      .updateLocationStayDuration(
+                                          location.id, duration);
+                                  Navigator.of(ctx).pop();
+                                },
+                                borderRadius: BorderRadius.circular(10),
+                                child: AnimatedContainer(
+                                  duration: const Duration(milliseconds: 150),
+                                  height: 40,
+                                  decoration: BoxDecoration(
+                                    color: isSelected
+                                        ? Theme.of(context).colorScheme.primary
+                                        : Theme.of(context)
+                                            .colorScheme
+                                            .primary
+                                            .withValues(alpha: 0.08),
+                                    borderRadius: BorderRadius.circular(10),
+                                    border: Border.all(
+                                      color: isSelected
+                                          ? Theme.of(context)
+                                              .colorScheme
+                                              .primary
+                                          : Theme.of(context)
+                                              .colorScheme
+                                              .primary
+                                              .withValues(alpha: 0.2),
+                                    ),
+                                  ),
+                                  child: Center(
+                                    child: Text(
+                                      _formatDuration(duration),
+                                      style: TextStyle(
+                                        color: isSelected
+                                            ? Colors.black
+                                            : Theme.of(context)
+                                                .textTheme
+                                                .bodyMedium
+                                                ?.color,
+                                        fontWeight: FontWeight.w600,
+                                        fontSize: 13,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                            if (duration != rowPresets.last)
+                              const SizedBox(width: 8),
+                          ];
+                        })
+                        .toList(),
+                  ),
+                )),
+                const SizedBox(height: 16),
+                const Divider(height: 1),
+                const SizedBox(height: 14),
+                Text(
+                  'Custom duration',
+                  style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                        color: Colors.grey[500],
+                        letterSpacing: 0.5,
+                      ),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: customController,
+                  keyboardType: TextInputType.number,
+                  decoration: InputDecoration(
+                    hintText: 'e.g. 45',
+                    suffixText: 'min',
+                    filled: true,
+                    fillColor: Theme.of(context).colorScheme.surface,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: BorderSide.none,
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: BorderSide(
+                        color: Theme.of(context).colorScheme.primary,
+                        width: 1.5,
                       ),
                     ),
-                    const SizedBox(width: 12),
-                    ElevatedButton(
-                      onPressed: () {
-                        if (formKey.currentState?.validate() ?? false) {
+                    contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 14, vertical: 12),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: () => Navigator.of(ctx).pop(),
+                        style: OutlinedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10)),
+                        ),
+                        child: const Text('Cancel'),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: FilledButton(
+                        onPressed: () {
                           final minutes =
-                              int.parse(customMinutesController.text);
-                          ref
-                              .read(tripProvider.notifier)
-                              .updateLocationStayDuration(
-                                  location.id, Duration(minutes: minutes));
-                          Navigator.of(context).pop();
-                        }
-                      },
-                      child: const Text('Set'),
+                              int.tryParse(customController.text);
+                          if (minutes != null && minutes > 0) {
+                            ref
+                                .read(tripProvider.notifier)
+                                .updateLocationStayDuration(
+                                    location.id,
+                                    Duration(minutes: minutes));
+                            Navigator.of(ctx).pop();
+                          }
+                        },
+                        style: FilledButton.styleFrom(
+                          backgroundColor:
+                              Theme.of(context).colorScheme.primary,
+                          foregroundColor: Colors.black,
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10)),
+                        ),
+                        child: const Text('Set',
+                            style: TextStyle(fontWeight: FontWeight.w600)),
+                      ),
                     ),
                   ],
                 ),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: Text('Close',
-                  style: TextStyle(
-                      color: Theme.of(context).textTheme.bodyMedium?.color)),
+                const SizedBox(height: 4),
+              ],
             ),
-          ],
-        );
-      },
+            actions: const [],
+          );
+        },
+      ),
     );
   }
 
@@ -715,38 +752,6 @@ class LocationDetailSheet extends ConsumerWidget {
           ],
         );
       },
-    );
-  }
-
-  Widget _buildDetailRow(
-      BuildContext context, IconData icon, String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 16),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(icon, size: 20, color: Theme.of(context).colorScheme.primary),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  label,
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: Colors.grey[400],
-                      ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  value,
-                  style: Theme.of(context).textTheme.bodyMedium,
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
     );
   }
 

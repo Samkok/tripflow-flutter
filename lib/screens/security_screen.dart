@@ -103,16 +103,58 @@ class _SecurityScreenState extends ConsumerState<SecurityScreen> {
         UserAttributes(password: _newPasswordController.text),
       );
 
-      if (mounted) {
-        // Clear everything and pop
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Password changed successfully'),
-            backgroundColor: Colors.green,
+      if (!mounted) return;
+
+      // Ask whether to sign out other devices
+      final signOutOthers = await showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => AlertDialog(
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Row(
+            children: [
+              Icon(Icons.devices_rounded, size: 22),
+              SizedBox(width: 10),
+              Text('Sign out other devices?'),
+            ],
           ),
-        );
-        Navigator.of(context).pop();
+          content: const Text(
+            'Would you like to sign out from all other devices logged into your account?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('No, keep them signed in'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('Yes, sign them out'),
+            ),
+          ],
+        ),
+      );
+
+      if (!mounted) return;
+
+      if (signOutOthers == true) {
+        await SupabaseService.instance.client.auth
+            .signOut(scope: SignOutScope.others);
       }
+
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            signOutOthers == true
+                ? 'Password changed and other devices signed out.'
+                : 'Password changed successfully.',
+          ),
+          backgroundColor: Colors.green,
+        ),
+      );
+      Navigator.of(context).pop();
     } on AuthException catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -448,7 +490,7 @@ class _SecurityScreenState extends ConsumerState<SecurityScreen> {
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    'After changing your password, you will remain signed in on this device.',
+                    'After changing your password, you\'ll be asked whether to sign out from all other devices.',
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
                           color: Colors.blue,
                         ),

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/saved_location.dart';
 import '../models/trip.dart';
+import '../providers/local_active_trip_provider.dart';
 import '../providers/user_trip_provider.dart';
 import '../providers/trip_provider.dart';
 import '../providers/trip_collaborator_provider.dart';
@@ -33,6 +34,7 @@ class _AddToTripSheetState extends ConsumerState<AddToTripSheet> {
   @override
   Widget build(BuildContext context) {
     final tripsAsync = ref.watch(userTripsProvider);
+    final activeTripId = ref.watch(localActiveTripIdProvider);
 
     return DraggableScrollableSheet(
       initialChildSize: 0.7,
@@ -119,7 +121,11 @@ class _AddToTripSheetState extends ConsumerState<AddToTripSheet> {
                     const SizedBox(height: 12),
                     tripsAsync.when(
                       data: (trips) {
-                        if (trips.isEmpty) {
+                        final displayTrips = activeTripId != null
+                            ? trips.where((t) => t.id == activeTripId).toList()
+                            : trips;
+
+                        if (displayTrips.isEmpty) {
                           return Container(
                             padding: const EdgeInsets.all(16),
                             decoration: BoxDecoration(
@@ -136,9 +142,16 @@ class _AddToTripSheetState extends ConsumerState<AddToTripSheet> {
                           );
                         }
 
+                        // Auto-select if only one trip is available
+                        if (displayTrips.length == 1 && selectedTrip == null) {
+                          WidgetsBinding.instance.addPostFrameCallback((_) {
+                            if (mounted) setState(() => selectedTrip = displayTrips.first);
+                          });
+                        }
+
                         return Wrap(
                           spacing: 8,
-                          children: trips.map((trip) {
+                          children: displayTrips.map((trip) {
                             final isSelected = selectedTrip?.id == trip.id;
                             return FilterChip(
                               selected: isSelected,

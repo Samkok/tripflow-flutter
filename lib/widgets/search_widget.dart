@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:google_maps_url_extractor/google_maps_url_extractor.dart';
@@ -8,10 +7,9 @@ import 'package:voyza/providers/map_ui_state_provider.dart';
 import 'package:uuid/uuid.dart';
 import '../models/location_model.dart';
 import '../providers/paginated_search_provider.dart';
-import '../providers/trip_provider.dart';
 import '../providers/trip_collaborator_provider.dart';
 import '../services/places_service.dart';
-import '../services/subscription_limit_service.dart';
+import '../services/location_add_service.dart';
 import '../core/theme.dart';
 import 'google_maps_url_dialog.dart';
 
@@ -87,7 +85,7 @@ class _SearchWidgetState extends ConsumerState<SearchWidget> {
                 decoration: InputDecoration(
                   filled: false,
                   hintText: 'Search for places...',
-                  prefixIcon: Icon(
+                  prefixIcon: const Icon(
                     Icons.search,
                     color: AppTheme.primaryColor,
                   ),
@@ -140,11 +138,11 @@ class _SearchWidgetState extends ConsumerState<SearchWidget> {
     final screenHeight = MediaQuery.of(context).size.height;
     final topPadding = MediaQuery.of(context).padding.top;
 
-    final searchBarHeight = 60.0;
-    final topSpacing = 50.0;
-    final spacing = 12.0;
-    final bottomSheetCollapsedHeight = screenHeight * 0.23;
-    final bottomPadding = 20.0;
+    const searchBarHeight = 60.0;
+    const topSpacing = 50.0;
+    const spacing = 12.0;
+    const bottomSheetCollapsedHeight = 100.0;
+    const bottomPadding = 20.0;
 
     final maxHeight = screenHeight -
         topPadding -
@@ -248,7 +246,7 @@ class _SearchWidgetState extends ConsumerState<SearchWidget> {
             const SizedBox(height: 4),
             Row(
               children: [
-                Icon(
+                const Icon(
                   Icons.near_me,
                   size: 12,
                   color: AppTheme.primaryColor,
@@ -374,10 +372,6 @@ class _SearchWidgetState extends ConsumerState<SearchWidget> {
         return;
       }
 
-      final subscriptionLimitService = SubscriptionLimitService(ref);
-      final canAdd = await subscriptionLimitService.canAddLocation(context);
-      if (!canAdd) return;
-
       final selectedDate = ref.read(selectedDateProvider);
       final now = DateTime.now();
       final today = DateTime(now.year, now.month, now.day);
@@ -404,7 +398,9 @@ class _SearchWidgetState extends ConsumerState<SearchWidget> {
         photoAttributions: placeDetails.photoAttributions,
       );
 
-      await ref.read(tripProvider.notifier).addLocation(location);
+      if (!mounted) return;
+      final added = await LocationAddService(ref).addLocation(context, location);
+      if (!added) return;
 
       widget.focusNode?.unfocus();
 
@@ -445,13 +441,6 @@ class _SearchWidgetState extends ConsumerState<SearchWidget> {
       return;
     }
 
-    // Check subscription limit - show paywall if limit reached
-    final subscriptionLimitService = SubscriptionLimitService(ref);
-    final canAdd = await subscriptionLimitService.canAddLocation(context);
-    if (!canAdd) {
-      return; // User hit limit and didn't upgrade
-    }
-
     // Check if trying to add to a past date
     final selectedDate = ref.read(selectedDateProvider);
     final now = DateTime.now();
@@ -483,7 +472,8 @@ class _SearchWidgetState extends ConsumerState<SearchWidget> {
         photoAttributions: placeDetails.photoAttributions,
       );
 
-      await ref.read(tripProvider.notifier).addLocation(location);
+      final added = await LocationAddService(ref).addLocation(context, location);
+      if (!added) return;
 
       _searchController.clear();
       ref.read(searchQueryProvider.notifier).state = '';

@@ -160,7 +160,7 @@ class _TripScreenState extends ConsumerState<TripScreen> {
         final userId = state.session?.user.id;
         if (userId == null) throw Exception('User not authenticated');
 
-        await tripRepository.createTrip(
+        final newTrip = await tripRepository.createTrip(
           userId: userId,
           name: _nameController.text.trim(),
           description: _descriptionController.text.trim().isEmpty
@@ -173,8 +173,11 @@ class _TripScreenState extends ConsumerState<TripScreen> {
         _resetForm();
 
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Trip created successfully!')),
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => TripDetailsScreen(trip: newTrip),
+            ),
           );
         }
       });
