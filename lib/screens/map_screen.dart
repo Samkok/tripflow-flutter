@@ -797,7 +797,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
                   builder: (context, ref, child) {
                     final locationsForDate =
                         ref.watch(locationsForSelectedDateProvider);
-                    if (locationsForDate.length < 2) {
+                    if (locationsForDate.isEmpty) {
                       return const SizedBox.shrink();
                     }
                     return FloatingActionButton(

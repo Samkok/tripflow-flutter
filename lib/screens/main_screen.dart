@@ -87,8 +87,8 @@ class _MainScreenState extends ConsumerState<MainScreen> {
         borderRadius: BorderRadius.circular(35),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: isDark ? 0.4 : 0.1),
-            blurRadius: 20,
+            color: Colors.black.withValues(alpha: isDark ? 0.35 : 0.12),
+            blurRadius: 24,
             offset: const Offset(0, 8),
             spreadRadius: 0,
           ),
@@ -97,18 +97,14 @@ class _MainScreenState extends ConsumerState<MainScreen> {
       child: ClipRRect(
         borderRadius: BorderRadius.circular(35),
         child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+          filter: ImageFilter.blur(sigmaX: 40, sigmaY: 40),
           child: Container(
             decoration: BoxDecoration(
-              color: isDark
-                ? Colors.white.withValues(alpha: 0.08)
-                : Colors.white.withValues(alpha: 0.85),
+              color: Colors.white.withValues(alpha: isDark ? 0.07 : 0.25),
               borderRadius: BorderRadius.circular(35),
               border: Border.all(
-                color: isDark
-                  ? Colors.white.withValues(alpha: 0.15)
-                  : Colors.white.withValues(alpha: 0.5),
-                width: 0.5,
+                color: Colors.white.withValues(alpha: isDark ? 0.1 : 0.5),
+                width: 0.8,
               ),
             ),
             child: Row(

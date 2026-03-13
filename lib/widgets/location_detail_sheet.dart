@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:voyza/models/location_model.dart';
+import 'package:voyza/providers/location_provider.dart';
 import 'package:voyza/providers/map_ui_state_provider.dart';
 import 'package:voyza/providers/trip_provider.dart';
 import 'package:voyza/providers/trip_collaborator_provider.dart';
@@ -731,8 +732,10 @@ class LocationDetailSheet extends ConsumerWidget {
                 Navigator.of(dialogContext).pop();
                 Navigator.of(context).pop();
 
-                // Perform the deletion
-                ref.read(tripProvider.notifier).removeLocation(location.id);
+                // Perform the deletion directly via repository (bypasses
+                // tripProvider's access-check which is tied to the active map
+                // trip, not the trip being viewed in trip details).
+                ref.read(locationRepositoryProvider).deleteLocation(location.id);
 
                 // Show a confirmation snackbar
                 ScaffoldMessenger.of(context).showSnackBar(
