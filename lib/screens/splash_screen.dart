@@ -1,17 +1,19 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:voyza/screens/main_screen.dart';
 import 'package:voyza/core/theme.dart';
+import 'package:voyza/providers/location_provider.dart' show initialSyncCompleteProvider;
 import 'package:voyza/services/supabase_service.dart';
 
-class SplashScreen extends StatefulWidget {
+class SplashScreen extends ConsumerStatefulWidget {
   const SplashScreen({super.key});
 
   @override
-  State<SplashScreen> createState() => _SplashScreenState();
+  ConsumerState<SplashScreen> createState() => _SplashScreenState();
 }
 
-class _SplashScreenState extends State<SplashScreen> {
+class _SplashScreenState extends ConsumerState<SplashScreen> {
   @override
   void initState() {
     super.initState();
@@ -19,12 +21,19 @@ class _SplashScreenState extends State<SplashScreen> {
   }
 
   Future<void> _initializeApp() async {
+    // If Hive cache already has locations (e.g. restart after permission change),
+    // skip the minimum splash delay so the app feels instant.
+    final hasCachedData = ref.read(initialSyncCompleteProvider);
+    final minDelay = hasCachedData
+        ? Duration.zero
+        : const Duration(milliseconds: 500);
+
     // Wait for Supabase to finish initializing before navigating.
     // On slow Android devices the async init in main.dart can take >500ms,
-    // causing an "No host specified in URI" error if the user reaches auth screens first.
+    // causing a "No host specified in URI" error if the user reaches auth screens first.
     await Future.wait([
       SupabaseService.waitForInitialization(),
-      Future.delayed(const Duration(milliseconds: 500)), // minimum splash duration
+      Future.delayed(minDelay),
     ]);
 
     // Navigate to the home screen

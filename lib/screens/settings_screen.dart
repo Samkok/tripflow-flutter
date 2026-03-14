@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:permission_handler/permission_handler.dart' as ph;
 import 'package:voyza/core/theme.dart';
 import 'package:voyza/providers/theme_provider.dart';
 import 'package:voyza/screens/terms_screen.dart';
 
 import '../providers/auth_provider.dart';
+import '../services/notification_service.dart';
 import '../providers/trip_collaborator_provider.dart';
 import '../providers/user_trip_provider.dart';
 import '../providers/trip_provider.dart';
@@ -62,6 +65,10 @@ class SettingsScreen extends ConsumerWidget {
           // Preferences Section
           _buildSectionHeader(context, 'Preferences'),
           _buildThemeTile(context, ref, themeMode),
+          const SizedBox(height: 12),
+          const _NotificationTile(),
+          const SizedBox(height: 12),
+          const _LocationTile(),
           const SizedBox(height: 24),
 
           // About Section
@@ -103,13 +110,13 @@ class SettingsScreen extends ConsumerWidget {
           borderRadius: BorderRadius.circular(20),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(0.05),
+              color: Colors.black.withValues(alpha:0.05),
               blurRadius: 10,
               offset: const Offset(0, 4),
             ),
           ],
           border: Border.all(
-            color: Theme.of(context).dividerColor.withOpacity(0.1),
+            color: Theme.of(context).dividerColor.withValues(alpha:0.1),
           ),
         ),
         padding: const EdgeInsets.all(20),
@@ -162,13 +169,13 @@ class SettingsScreen extends ConsumerWidget {
         borderRadius: BorderRadius.circular(20),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.05),
+            color: Colors.black.withValues(alpha:0.05),
             blurRadius: 10,
             offset: const Offset(0, 4),
           ),
         ],
         border: Border.all(
-          color: Theme.of(context).dividerColor.withOpacity(0.1),
+          color: Theme.of(context).dividerColor.withValues(alpha:0.1),
         ),
       ),
       padding: const EdgeInsets.all(20),
@@ -252,7 +259,7 @@ class SettingsScreen extends ConsumerWidget {
         borderRadius: BorderRadius.circular(20),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.05),
+            color: Colors.black.withValues(alpha:0.05),
             blurRadius: 10,
             offset: const Offset(0, 4),
           ),
@@ -264,7 +271,7 @@ class SettingsScreen extends ConsumerWidget {
         secondary: Container(
           padding: const EdgeInsets.all(8),
           decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.primary.withOpacity(0.1),
+            color: Theme.of(context).colorScheme.primary.withValues(alpha:0.1),
             borderRadius: BorderRadius.circular(10),
           ),
           child: Icon(
@@ -292,7 +299,7 @@ class SettingsScreen extends ConsumerWidget {
         borderRadius: BorderRadius.circular(20),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.05),
+            color: Colors.black.withValues(alpha:0.05),
             blurRadius: 10,
             offset: const Offset(0, 4),
           ),
@@ -314,8 +321,8 @@ class SettingsScreen extends ConsumerWidget {
           padding: const EdgeInsets.all(8),
           decoration: BoxDecoration(
             color: isPro
-                ? Theme.of(context).colorScheme.primary.withOpacity(0.1)
-                : Theme.of(context).colorScheme.secondary.withOpacity(0.1),
+                ? Theme.of(context).colorScheme.primary.withValues(alpha:0.1)
+                : Theme.of(context).colorScheme.secondary.withValues(alpha:0.1),
             borderRadius: BorderRadius.circular(10),
           ),
           child: Icon(
@@ -344,7 +351,7 @@ class SettingsScreen extends ConsumerWidget {
         borderRadius: BorderRadius.circular(20),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.05),
+            color: Colors.black.withValues(alpha:0.05),
             blurRadius: 10,
             offset: const Offset(0, 4),
           ),
@@ -359,7 +366,7 @@ class SettingsScreen extends ConsumerWidget {
         leading: Container(
           padding: const EdgeInsets.all(8),
           decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.primary.withOpacity(0.1),
+            color: Theme.of(context).colorScheme.primary.withValues(alpha:0.1),
             borderRadius: BorderRadius.circular(10),
           ),
           child: Icon(
@@ -497,6 +504,7 @@ class SettingsScreen extends ConsumerWidget {
   }
 
   Future<void> _deleteAccount(BuildContext context, WidgetRef ref) async {
+
     // Show loading dialog
     showDialog(
       context: context,
@@ -536,5 +544,245 @@ class SettingsScreen extends ConsumerWidget {
         );
       }
     }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Location permission tile — manages its own async state
+// ---------------------------------------------------------------------------
+
+class _LocationTile extends StatefulWidget {
+  const _LocationTile();
+
+  @override
+  State<_LocationTile> createState() => _LocationTileState();
+}
+
+class _LocationTileState extends State<_LocationTile> with WidgetsBindingObserver {
+  bool _enabled = false;
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _loadState();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  // Re-check when user returns from system Settings app
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _loadState();
+  }
+
+  Future<void> _loadState() async {
+    try {
+      final permission = await Geolocator.checkPermission();
+      final granted = permission == LocationPermission.whileInUse ||
+          permission == LocationPermission.always;
+      if (mounted) setState(() { _enabled = granted; _loading = false; });
+    } catch (e) {
+      debugPrint('_LocationTile: _loadState failed: $e');
+      if (mounted) setState(() { _enabled = false; _loading = false; });
+    }
+  }
+
+  Future<void> _onToggle(bool value) async {
+    setState(() => _loading = true);
+    try {
+      if (value) {
+        var permission = await Geolocator.checkPermission();
+
+        // Permanently denied — dialog suppressed, must go to settings
+        if (permission == LocationPermission.deniedForever) {
+          await ph.openAppSettings();
+          if (mounted) setState(() => _loading = false);
+          return;
+        }
+
+        // Request shows the OS permission dialog
+        permission = await Geolocator.requestPermission();
+
+        if (permission == LocationPermission.whileInUse ||
+            permission == LocationPermission.always) {
+          if (mounted) setState(() { _enabled = true; _loading = false; });
+        } else if (permission == LocationPermission.deniedForever) {
+          // "Don't ask again" was selected — open settings
+          await ph.openAppSettings();
+          if (mounted) setState(() { _enabled = false; _loading = false; });
+        } else {
+          // User tapped Deny on the dialog
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Location permission denied. Enable it in System Settings.'),
+              ),
+            );
+            setState(() { _enabled = false; _loading = false; });
+          }
+        }
+      } else {
+        // Cannot revoke programmatically — direct user to system settings
+        await ph.openAppSettings();
+        if (mounted) setState(() => _loading = false);
+      }
+    } catch (e) {
+      debugPrint('_LocationTile: _onToggle failed: $e');
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Theme.of(context).cardColor,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: SwitchListTile(
+        title: const Text('Location Access'),
+        subtitle: const Text('Used for map and nearby search'),
+        secondary: Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Icon(
+            _enabled ? Icons.location_on_rounded : Icons.location_off_outlined,
+            color: Theme.of(context).colorScheme.primary,
+          ),
+        ),
+        value: _enabled,
+        onChanged: _loading ? null : _onToggle,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Notification toggle tile — manages its own async state
+// ---------------------------------------------------------------------------
+
+class _NotificationTile extends StatefulWidget {
+  const _NotificationTile();
+
+  @override
+  State<_NotificationTile> createState() => _NotificationTileState();
+}
+
+class _NotificationTileState extends State<_NotificationTile> with WidgetsBindingObserver {
+  bool _enabled = false;
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _loadState();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  // Re-check when user returns from system Settings app
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _loadState();
+  }
+
+  Future<void> _loadState() async {
+    try {
+      final svc = NotificationService();
+      final pref = await svc.getPreference();
+      final granted = await svc.isSystemPermissionGranted();
+
+      final effective = pref && granted;
+      if (pref && !granted) {
+        await NotificationService().disableNotifications();
+      }
+
+      if (mounted) setState(() { _enabled = effective; _loading = false; });
+    } catch (e) {
+      debugPrint('_NotificationTile: _loadState failed: $e');
+      if (mounted) setState(() { _enabled = false; _loading = false; });
+    }
+  }
+
+  Future<void> _onToggle(bool value) async {
+    setState(() => _loading = true);
+    try {
+      if (value) {
+        final granted = await NotificationService().enableNotifications();
+        if (!granted && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Permission denied. Enable notifications in System Settings.',
+              ),
+            ),
+          );
+        }
+        if (mounted) setState(() { _enabled = granted; _loading = false; });
+      } else {
+        await NotificationService().disableNotifications();
+        if (mounted) setState(() { _enabled = false; _loading = false; });
+      }
+    } catch (e) {
+      debugPrint('_NotificationTile: _onToggle failed: $e');
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Theme.of(context).cardColor,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha:0.05),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: SwitchListTile(
+        title: const Text('Push Notifications'),
+        subtitle: const Text('Trip invites and activity alerts'),
+        secondary: Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.primary.withValues(alpha:0.1),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Icon(
+            _enabled ? Icons.notifications_rounded : Icons.notifications_off_outlined,
+            color: Theme.of(context).colorScheme.primary,
+          ),
+        ),
+        value: _enabled,
+        onChanged: _loading ? null : _onToggle,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      ),
+    );
   }
 }

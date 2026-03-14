@@ -3,6 +3,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:voyza/services/supabase_service.dart';
 
 // Top-level function required by Firebase for background message handling
@@ -73,6 +74,18 @@ class NotificationService {
       }
 
       debugPrint('NotificationService: Initialized successfully');
+
+      // If a user session is already active (app restart / session restore),
+      // re-register the token so device_tokens stays active and the
+      // onTokenRefresh listener is set up for this session.
+      final alreadySignedIn =
+          SupabaseService.instance.client.auth.currentUser != null;
+      if (alreadySignedIn) {
+        // Fire-and-forget — don't block initialization
+        registerToken().catchError((e) {
+          debugPrint('NotificationService: registerToken on restart failed: $e');
+        });
+      }
     } catch (e) {
       debugPrint('NotificationService: Initialization failed: $e');
       _initialized = false; // Allow retry
@@ -86,6 +99,8 @@ class NotificationService {
   /// Call this after a successful sign-in.
   Future<void> registerToken() async {
     try {
+      if (!_initialized) await initialize();
+
       final userId = SupabaseService.instance.client.auth.currentUser?.id;
       if (userId == null) {
         debugPrint('NotificationService: registerToken skipped — no signed-in user');
@@ -126,6 +141,53 @@ class NotificationService {
     } catch (e) {
       debugPrint('NotificationService: registerToken failed: $e');
     }
+  }
+
+  static const _prefKey = 'notifications_enabled';
+
+  /// Returns the user-stored notification preference (defaults to true).
+  Future<bool> getPreference() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_prefKey) ?? true;
+  }
+
+  /// Returns whether the OS has granted notification permission.
+  Future<bool> isSystemPermissionGranted() async {
+    if (!_initialized) await initialize();
+    final settings = await FirebaseMessaging.instance.getNotificationSettings();
+    return settings.authorizationStatus == AuthorizationStatus.authorized ||
+        settings.authorizationStatus == AuthorizationStatus.provisional;
+  }
+
+  /// Enables notifications: requests OS permission if needed, then registers
+  /// the FCM token. Returns true if permission was granted, false if denied.
+  Future<bool> enableNotifications() async {
+    if (!_initialized) await initialize();
+    final settings = await FirebaseMessaging.instance.requestPermission(
+      alert: true,
+      badge: true,
+      sound: true,
+      provisional: false,
+    );
+
+    final granted =
+        settings.authorizationStatus == AuthorizationStatus.authorized ||
+            settings.authorizationStatus == AuthorizationStatus.provisional;
+
+    if (granted) {
+      await registerToken();
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_prefKey, granted);
+    return granted;
+  }
+
+  /// Disables notifications: deregisters the FCM token and stores preference.
+  Future<void> disableNotifications() async {
+    await deregisterToken();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_prefKey, false);
   }
 
   /// Marks the current user's device token as inactive on sign-out.

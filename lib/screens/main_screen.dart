@@ -79,9 +79,12 @@ class _MainScreenState extends ConsumerState<MainScreen> {
 
   Widget _buildCustomBottomNavBar() {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    // Add system navigation bar height so the tab bar sits above it on all
+    // Android versions (gesture nav on Android 10+, 3-button nav on older).
+    final bottomInset = MediaQuery.of(context).padding.bottom;
 
     return Container(
-      margin: const EdgeInsets.only(left: 20, right: 20, bottom: 20),
+      margin: EdgeInsets.only(left: 20, right: 20, bottom: 20 + bottomInset),
       height: 70,
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(35),

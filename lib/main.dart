@@ -4,6 +4,7 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:voyza/screens/splash_screen.dart';
 import 'package:voyza/screens/reset_password_screen.dart';
+import 'package:voyza/screens/login_screen.dart';
 import 'screens/main_screen.dart';
 
 import 'core/theme.dart';
@@ -195,13 +196,23 @@ class _MyAppState extends ConsumerState<MyApp> with WidgetsBindingObserver {
         return;
       }
 
-      // Listen for password recovery deep link events
+      // Listen for auth state changes (password recovery deep links + forced sign-outs)
       _authSubscription = SupabaseService.instance.client.auth.onAuthStateChange.listen(
         (data) {
           if (data.event == AuthChangeEvent.passwordRecovery) {
             debugPrint('Main: passwordRecovery event — navigating to ResetPasswordScreen');
             navigatorKey.currentState?.push(
               MaterialPageRoute(builder: (_) => const ResetPasswordScreen()),
+            );
+          } else if (data.event == AuthChangeEvent.signedOut) {
+            // Fired when this device's session is revoked remotely (e.g. password
+            // changed on another device and "sign out others" was chosen), or when
+            // the refresh token expires. Push LoginScreen and clear the back stack
+            // so the user cannot navigate back into the app.
+            debugPrint('Main: signedOut event — redirecting to LoginScreen');
+            navigatorKey.currentState?.pushAndRemoveUntil(
+              MaterialPageRoute(builder: (_) => const LoginScreen()),
+              (_) => false,
             );
           }
         },
