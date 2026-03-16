@@ -34,8 +34,7 @@ class LocationService {
     LocationPermission permission = await checkLocationPermission();
 
     // If already granted (whileInUse or always), return true immediately
-    if (permission == LocationPermission.whileInUse ||
-        permission == LocationPermission.always) {
+    if (permission == LocationPermission.whileInUse) {
       print('Location permission already granted: $permission');
       return true;
     }
@@ -47,7 +46,7 @@ class LocationService {
 
       // Check if permission was granted after request
       if (permission == LocationPermission.whileInUse ||
-          permission == LocationPermission.always) {
+          permission == LocationPermission.whileInUse) {
         print('Location permission granted: $permission');
         return true;
       }

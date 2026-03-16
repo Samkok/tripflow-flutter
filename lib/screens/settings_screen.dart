@@ -584,8 +584,7 @@ class _LocationTileState extends State<_LocationTile> with WidgetsBindingObserve
   Future<void> _loadState() async {
     try {
       final permission = await Geolocator.checkPermission();
-      final granted = permission == LocationPermission.whileInUse ||
-          permission == LocationPermission.always;
+      final granted = permission == LocationPermission.whileInUse;
       if (mounted) setState(() { _enabled = granted; _loading = false; });
     } catch (e) {
       debugPrint('_LocationTile: _loadState failed: $e');
@@ -609,8 +608,7 @@ class _LocationTileState extends State<_LocationTile> with WidgetsBindingObserve
         // Request shows the OS permission dialog
         permission = await Geolocator.requestPermission();
 
-        if (permission == LocationPermission.whileInUse ||
-            permission == LocationPermission.always) {
+        if (permission == LocationPermission.whileInUse) {
           if (mounted) setState(() { _enabled = true; _loading = false; });
         } else if (permission == LocationPermission.deniedForever) {
           // "Don't ask again" was selected — open settings
