@@ -53,6 +53,10 @@ android {
         versionCode flutterVersionCode.toInteger()
         versionName flutterVersionName
         multiDexEnabled true
+        manifestPlaceholders = [
+            applicationName: "io.flutter.app.FlutterApplication",
+            googleMapsApiKey: keyProperties.getProperty('GOOGLE_MAPS_API_KEY', '')
+        ]
     }
 
     signingConfigs {

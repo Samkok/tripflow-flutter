@@ -21,6 +21,7 @@ workflows:
           echo "GOOGLE_DIRECTIONS_API_KEY=$GOOGLE_DIRECTIONS_API_KEY" >> .env
           echo "GOOGLE_PLACES_API_KEY=$GOOGLE_PLACES_API_KEY" >> .env
           echo "GOOGLE_MAPS_API_KEY=$GOOGLE_MAPS_API_KEY" >> .env
+          echo "GOOGLE_MAPS_API_KEY=$GOOGLE_MAPS_API_KEY" >> android/key.properties
       - name: Install dependencies
         script: |
           flutter pub get
@@ -63,6 +64,7 @@ workflows:
           echo "GOOGLE_DIRECTIONS_API_KEY=$GOOGLE_DIRECTIONS_API_KEY" >> .env
           echo "GOOGLE_PLACES_API_KEY=$GOOGLE_PLACES_API_KEY" >> .env
           echo "GOOGLE_MAPS_API_KEY=$GOOGLE_MAPS_API_KEY" >> .env
+          echo "GOOGLE_MAPS_API_KEY = $GOOGLE_MAPS_API_KEY" > ios/Flutter/AppConfig.xcconfig
 
       - name: Install Flutter dependencies
         script: flutter pub get

@@ -1324,9 +1324,9 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                         ),
                       ),
                       const PopupMenuDivider(),
-                      PopupMenuItem<String>(
+                      const PopupMenuItem<String>(
                         value: 'delete',
-                        child: const Row(
+                        child: Row(
                           children: [
                             Icon(
                               Icons.delete_rounded,

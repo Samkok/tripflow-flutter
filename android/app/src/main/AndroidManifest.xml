@@ -1,13 +1,10 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-          xmlns:tools="http://schemas.android.com/tools">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
     
     <!-- Permissions -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
-    <!-- Explicitly exclude background location — app only needs foreground location -->
-    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" tools:node="remove"/>
 
     <supports-screens android:smallScreens="true"
                         android:normalScreens="true"
@@ -25,7 +22,7 @@
         
         <!-- Google Maps API Key -->
         <meta-data android:name="com.google.android.geo.API_KEY"
-                   android:value="AIzaSyDuBPtEpO7gM7409RVrkTkXWimCKmNkgw8"/>
+                   android:value="${googleMapsApiKey}"/>
         
         <activity
             android:name=".MainActivity"

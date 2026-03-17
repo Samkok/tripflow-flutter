@@ -62,4 +62,4 @@ lib/generated_plugin_registrant.dart
 .env
 node_modules/
 
-~/
+~/ios/Flutter/AppConfig.xcconfig
