@@ -55,6 +55,11 @@ class SavedLocation extends HiveObject {
   @HiveField(16)
   final bool isDone;
 
+  /// Up to 5 photo references for the in-card gallery. The first item is
+  /// also stored in [photoReference] for back-compat with older clients.
+  @HiveField(17)
+  final List<String>? photoReferences;
+
   SavedLocation({
     required this.id,
     required this.userId,
@@ -72,8 +77,22 @@ class SavedLocation extends HiveObject {
     this.scheduledDate,
     this.tripId,
     this.photoReference,
+    this.photoReferences,
     this.photoAttributions,
   });
+
+  /// Effective gallery list: prefers [photoReferences]; falls back to a
+  /// single-item list built from [photoReference] for rows written by older
+  /// clients.
+  List<String> get effectivePhotoReferences {
+    if (photoReferences != null && photoReferences!.isNotEmpty) {
+      return photoReferences!;
+    }
+    if (photoReference != null && photoReference!.isNotEmpty) {
+      return [photoReference!];
+    }
+    return const [];
+  }
 
   SavedLocation copyWith({
     String? id,
@@ -92,6 +111,7 @@ class SavedLocation extends HiveObject {
     DateTime? scheduledDate,
     String? tripId,
     String? photoReference,
+    List<String>? photoReferences,
     List<String>? photoAttributions,
   }) {
     return SavedLocation(
@@ -111,11 +131,13 @@ class SavedLocation extends HiveObject {
       scheduledDate: scheduledDate ?? this.scheduledDate,
       tripId: tripId ?? this.tripId,
       photoReference: photoReference ?? this.photoReference,
+      photoReferences: photoReferences ?? this.photoReferences,
       photoAttributions: photoAttributions ?? this.photoAttributions,
     );
   }
 
   factory SavedLocation.fromJson(Map<String, dynamic> json) {
+    final refs = json['photo_references'];
     return SavedLocation(
       id: json['id'],
       userId: json['user_id'] ?? '',
@@ -133,6 +155,7 @@ class SavedLocation extends HiveObject {
       scheduledDate: json['scheduled_date'] != null ? DateTime.parse(json['scheduled_date']) : null,
       tripId: json['trip_id'],
       photoReference: json['photo_reference'],
+      photoReferences: refs is List ? List<String>.from(refs) : null,
       photoAttributions: json['photo_attributions'] != null
           ? List<String>.from(json['photo_attributions'])
           : null,
@@ -157,6 +180,7 @@ class SavedLocation extends HiveObject {
       'stay_duration': stayDuration,
       'scheduled_date': scheduledDate?.toIso8601String(),
       'photo_reference': photoReference,
+      'photo_references': photoReferences,
       'photo_attributions': photoAttributions,
     };
   }

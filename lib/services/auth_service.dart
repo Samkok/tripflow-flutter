@@ -40,7 +40,7 @@ class AuthService {
             email: response.user!.email,
           );
         } catch (e) {
-          print('Failed to link RevenueCat user: $e');
+          debugPrint('Failed to link RevenueCat user: $e');
           // Don't fail the whole login if RevenueCat fails
         }
 
@@ -154,7 +154,7 @@ class AuthService {
             phoneNumber: phoneNumber,
           );
         } catch (e) {
-          print('Failed to link RevenueCat user: $e');
+          debugPrint('Failed to link RevenueCat user: $e');
           // Don't fail the whole signup if RevenueCat fails
         }
 
@@ -168,7 +168,7 @@ class AuthService {
         );
       }
     } catch (e) {
-      print('e during sign up: $e');
+      debugPrint('e during sign up: $e');
       rethrow;
     }
   }
@@ -206,7 +206,7 @@ class AuthService {
     try {
       await RevenueCatService().logout();
     } catch (e) {
-      print('Failed to logout from RevenueCat: $e');
+      debugPrint('Failed to logout from RevenueCat: $e');
       // Don't fail the whole logout if RevenueCat fails
     }
 

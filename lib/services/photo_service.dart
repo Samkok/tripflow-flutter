@@ -1,4 +1,5 @@
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'api_service.dart';
 
 class PhotoService {
@@ -33,7 +34,7 @@ class PhotoService {
         );
         results[ref] = response.realUri.toString();
       } catch (e) {
-        print('Error preloading photo $ref: $e');
+        debugPrint('Error preloading photo $ref: $e');
       }
     }));
 

@@ -1,6 +1,7 @@
 import 'dart:collection';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class PhotoCacheService {
   static final PhotoCacheService _instance = PhotoCacheService._internal();
@@ -44,7 +45,7 @@ class PhotoCacheService {
           await prefs.remove('$_diskCachePrefix$photoReference');
         }
       } catch (e) {
-        print('Error reading photo cache: $e');
+        debugPrint('Error reading photo cache: $e');
       }
     }
 

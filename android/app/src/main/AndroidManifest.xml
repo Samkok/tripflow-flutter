@@ -17,6 +17,9 @@
         android:icon="@mipmap/ic_launcher"
         android:largeHeap="true"
         android:usesCleartextTraffic="false"
+        android:allowBackup="false"
+        android:fullBackupContent="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
         android:supportsRtl="false"
         android:enableOnBackInvokedCallback="true">
         

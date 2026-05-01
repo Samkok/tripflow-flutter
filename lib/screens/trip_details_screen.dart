@@ -19,6 +19,7 @@ import 'package:voyza/models/location_model.dart';
 import 'package:voyza/widgets/location_detail_sheet.dart';
 import 'package:voyza/providers/local_active_trip_provider.dart';
 import 'package:voyza/providers/trip_provider.dart';
+import 'package:voyza/utils/trip_date_validator.dart';
 
 class TripDetailsScreen extends ConsumerStatefulWidget {
   final Trip trip;
@@ -113,6 +114,7 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
       isDone: location.isDone,
       scheduledDate: location.scheduledDate,
       photoReference: location.photoReference,
+      photoReferences: location.effectivePhotoReferences,
       photoAttributions: location.photoAttributions,
     );
 
@@ -652,6 +654,32 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
                 ),
               ],
             ),
+            if (widget.trip.startDate != null && widget.trip.endDate != null) ...[
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Icon(
+                    Icons.calendar_today_rounded,
+                    size: 14,
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      widget.trip.startDate == widget.trip.endDate
+                          ? DateFormat('MMM d, y').format(widget.trip.startDate!)
+                          : '${DateFormat('MMM d').format(widget.trip.startDate!)} - ${DateFormat('MMM d, y').format(widget.trip.endDate!)}',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: Theme.of(context).colorScheme.primary,
+                            fontWeight: FontWeight.w600,
+                          ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
+              ),
+            ],
             if (widget.trip.description != null &&
                 widget.trip.description!.isNotEmpty) ...[
               const SizedBox(height: 12),
@@ -846,7 +874,9 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (context) => _LocationSearchSheet(tripId: widget.trip.id),
+      builder: (context) => _LocationSearchSheet(
+        trip: widget.trip,
+      ),
     );
   }
 
@@ -861,9 +891,14 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
 }
 
 class _LocationSearchSheet extends ConsumerStatefulWidget {
-  final String tripId;
+  final Trip trip;
 
-  const _LocationSearchSheet({required this.tripId});
+  const _LocationSearchSheet({
+    required this.trip,
+  });
+
+  String get tripId => trip.id;
+  String? get tripCountryCode => trip.countryCode;
 
   @override
   ConsumerState<_LocationSearchSheet> createState() =>
@@ -891,7 +926,10 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
       if (value.isEmpty) {
         ref.read(tripDetailSearchProvider.notifier).clear();
       } else {
-        ref.read(tripDetailSearchProvider.notifier).search(value);
+        ref.read(tripDetailSearchProvider.notifier).search(
+              value,
+              countryCodeOverride: widget.tripCountryCode,
+            );
       }
     });
     setState(() {}); // Update clear button visibility
@@ -1181,13 +1219,23 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
 
     setState(() => _isPastingUrl = true);
 
-    // Show loading dialog
+    // Show loading dialog. Tracked via [loadingShown] so we always pop it
+    // exactly once even when an error or early return happens at any point.
+    bool loadingShown = false;
+    void closeLoading() {
+      if (loadingShown && mounted) {
+        Navigator.pop(context);
+        loadingShown = false;
+      }
+    }
+
     if (mounted) {
       showDialog(
         context: context,
         barrierDismissible: false,
         builder: (context) => const Center(child: CircularProgressIndicator()),
       );
+      loadingShown = true;
     }
 
     try {
@@ -1222,8 +1270,8 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
       }
 
       if (placeDetails == null) {
+        closeLoading();
         if (mounted) {
-          Navigator.pop(context); // Close loading dialog
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
               content: Text('Could not decode location from URL'),
@@ -1238,8 +1286,8 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
       final hasWriteAccess =
           await ref.read(hasWriteAccessProvider(widget.tripId).future);
       if (!hasWriteAccess) {
+        closeLoading();
         if (mounted) {
-          Navigator.pop(context); // Close loading dialog
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
               content: Text(
@@ -1250,6 +1298,16 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
         }
         return;
       }
+
+      // Close the spinner before any confirm modal so they don't stack.
+      closeLoading();
+      if (!mounted) return;
+      final countryOk = await ensureLocationCountryAllowed(
+        context,
+        widget.trip,
+        placeDetails.countryCode,
+      );
+      if (!countryOk) return;
 
       final newLocation = SavedLocation(
         id: const Uuid().v4(),
@@ -1263,17 +1321,18 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
         scheduledDate: DateTime.now(),
         createdAt: DateTime.now(),
         tripId: widget.tripId,
+        photoReference: placeDetails.photoReference,
+        photoReferences: placeDetails.photoReferences.isEmpty
+            ? null
+            : placeDetails.photoReferences,
+        photoAttributions: placeDetails.photoAttributions,
       );
 
       if (!mounted) return;
       final added = await LocationAddService(ref).addSavedLocation(context, newLocation);
       if (!mounted) return;
-      if (!added) {
-        Navigator.pop(context); // Close loading dialog
-        return;
-      }
+      if (!added) return;
 
-      Navigator.pop(context); // Close loading dialog
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Added ${placeDetails.name} to trip'),
@@ -1282,8 +1341,8 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
       );
       Navigator.pop(context); // Close search sheet
     } catch (e) {
+      closeLoading();
       if (mounted) {
-        Navigator.pop(context); // Close loading dialog
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Failed to decode URL: $e'),
@@ -1313,7 +1372,15 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
 
     if (!mounted) return;
 
-    // Show loading indicator
+    // Show loading indicator. Tracked so we always pop it exactly once.
+    bool loadingShown = false;
+    void closeLoading() {
+      if (loadingShown && mounted) {
+        Navigator.pop(context);
+        loadingShown = false;
+      }
+    }
+
     if (mounted) {
       showDialog(
         context: context,
@@ -1322,6 +1389,7 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
           child: CircularProgressIndicator(),
         ),
       );
+      loadingShown = true;
     }
 
     try {
@@ -1329,8 +1397,8 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
       final placeDetails = await PlacesService.getPlaceDetails(prediction.placeId);
 
       if (placeDetails == null) {
+        closeLoading();
         if (mounted) {
-          Navigator.pop(context); // Close loading dialog
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
               content: Text('Failed to get location details'),
@@ -1340,6 +1408,16 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
         }
         return;
       }
+
+      // Close the spinner before any confirm modal so they don't stack.
+      closeLoading();
+      if (!mounted) return;
+      final countryOk = await ensureLocationCountryAllowed(
+        context,
+        widget.trip,
+        placeDetails.countryCode,
+      );
+      if (!countryOk) return;
 
       // Create SavedLocation
       final newLocation = SavedLocation(
@@ -1354,17 +1432,18 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
         scheduledDate: DateTime.now(),
         createdAt: DateTime.now(),
         tripId: widget.tripId, // Assign to this trip
+        photoReference: placeDetails.photoReference,
+        photoReferences: placeDetails.photoReferences.isEmpty
+            ? null
+            : placeDetails.photoReferences,
+        photoAttributions: placeDetails.photoAttributions,
       );
 
       if (!mounted) return;
       final added = await LocationAddService(ref).addSavedLocation(context, newLocation);
       if (!mounted) return;
-      if (!added) {
-        Navigator.pop(context); // Close loading dialog
-        return;
-      }
+      if (!added) return;
 
-      Navigator.pop(context); // Close loading dialog
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Added ${placeDetails.name} to trip'),
@@ -1373,8 +1452,8 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
       );
       Navigator.pop(context); // Close search sheet
     } catch (e) {
+      closeLoading();
       if (mounted) {
-        Navigator.pop(context); // Close loading dialog
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Error: $e'),

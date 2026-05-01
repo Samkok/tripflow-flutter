@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_compass/flutter_compass.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
@@ -26,7 +27,7 @@ class LocationService {
     // First check if location services are enabled
     final serviceEnabled = await isLocationServiceEnabled();
     if (!serviceEnabled) {
-      print('Location services are disabled on device');
+      debugPrint('Location services are disabled on device');
       return false;
     }
 
@@ -35,31 +36,31 @@ class LocationService {
 
     // If already granted (whileInUse or always), return true immediately
     if (permission == LocationPermission.whileInUse) {
-      print('Location permission already granted: $permission');
+      debugPrint('Location permission already granted: $permission');
       return true;
     }
 
     // If denied, request permission
     if (permission == LocationPermission.denied) {
-      print('Requesting location permission...');
+      debugPrint('Requesting location permission...');
       permission = await Geolocator.requestPermission();
 
       // Check if permission was granted after request
       if (permission == LocationPermission.whileInUse ||
           permission == LocationPermission.whileInUse) {
-        print('Location permission granted: $permission');
+        debugPrint('Location permission granted: $permission');
         return true;
       }
 
       if (permission == LocationPermission.denied) {
-        print('Location permission denied');
+        debugPrint('Location permission denied');
         return false;
       }
     }
 
     // If permanently denied
     if (permission == LocationPermission.deniedForever) {
-      print('Location permission permanently denied');
+      debugPrint('Location permission permanently denied');
       return false;
     }
 
@@ -78,7 +79,7 @@ class LocationService {
 
       return LatLng(position.latitude, position.longitude);
     } catch (e) {
-      print('Error getting current location: $e');
+      debugPrint('Error getting current location: $e');
       return null;
     }
   }
@@ -111,7 +112,7 @@ class LocationService {
       }
       return null;
     } catch (e) {
-      print('Error getting current country code: $e');
+      debugPrint('Error getting current country code: $e');
       return null;
     }
   }

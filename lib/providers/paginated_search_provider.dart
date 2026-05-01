@@ -38,9 +38,15 @@ class PaginatedSearchNotifier extends StateNotifier<PaginatedSearchState> {
 
   static const int _pageSize = 5;
   int _currentOffset = 0;
+  String? _countryCodeOverride;
 
-  /// Search with a new query
-  Future<void> search(String query) async {
+  /// Search with a new query.
+  ///
+  /// [countryCodeOverride] — when provided, prioritises results from this
+  /// ISO 3166-1 alpha-2 country instead of the device's current country.
+  /// Used so a planned trip's destination biases search before the user
+  /// physically arrives there.
+  Future<void> search(String query, {String? countryCodeOverride}) async {
     if (query.isEmpty) {
       state = const PaginatedSearchState();
       return;
@@ -49,6 +55,7 @@ class PaginatedSearchNotifier extends StateNotifier<PaginatedSearchState> {
     // If query changed, reset pagination
     if (query != state.currentQuery) {
       _currentOffset = 0;
+      _countryCodeOverride = countryCodeOverride;
       state = PaginatedSearchState(
         isLoading: true,
         currentQuery: query,
@@ -64,6 +71,7 @@ class PaginatedSearchNotifier extends StateNotifier<PaginatedSearchState> {
         query,
         offset: _currentOffset,
         limit: _pageSize,
+        countryCodeOverride: _countryCodeOverride,
       );
 
       // If we got fewer results than requested, we've reached the end
@@ -96,12 +104,18 @@ class PaginatedSearchNotifier extends StateNotifier<PaginatedSearchState> {
       return;
     }
 
-    await search(state.currentQuery);
+    // Reuse the override captured on the initial search so pagination keeps
+    // the same country bias across pages.
+    await search(
+      state.currentQuery,
+      countryCodeOverride: _countryCodeOverride,
+    );
   }
 
   /// Clear search results
   void clear() {
     _currentOffset = 0;
+    _countryCodeOverride = null;
     state = const PaginatedSearchState();
   }
 }

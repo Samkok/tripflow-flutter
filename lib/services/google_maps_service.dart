@@ -1,7 +1,8 @@
+import 'dart:async';
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
-import 'dart:async';
 import '../models/location_model.dart';
 
 class GoogleMapsService {
@@ -97,7 +98,7 @@ class GoogleMapsService {
         'legPolylines': extractedLegPolylines,
       };
     } catch (e) {
-      print('Error getting optimized route: $e');
+      debugPrint('Error getting optimized route: $e');
       return {
         'routePoints': <LatLng>[],
         'waypointOrder': <int>[],

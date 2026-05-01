@@ -220,6 +220,7 @@ class TripNotifier extends StateNotifier<TripState> {
 
         // Convert SavedLocation list to LocationModel list
         final newPinnedLocations = filteredLocations.map((saved) {
+          final refs = saved.effectivePhotoReferences;
           return LocationModel(
             id: saved.id,
             name: saved.name,
@@ -232,6 +233,7 @@ class TripNotifier extends StateNotifier<TripState> {
             isDone: saved.isDone,
             stayDuration: Duration(seconds: saved.stayDuration),
             photoReference: saved.photoReference,
+            photoReferences: refs.isEmpty ? null : refs,
             photoAttributions: saved.photoAttributions,
           );
         }).toList();
@@ -295,6 +297,9 @@ class TripNotifier extends StateNotifier<TripState> {
         userId: '',
         fingerprint: '',
         photoReference: locationWithDate.photoReference,
+        photoReferences: locationWithDate.photoReferences.isEmpty
+            ? null
+            : locationWithDate.photoReferences,
         photoAttributions: locationWithDate.photoAttributions,
       );
 
@@ -621,7 +626,7 @@ class TripNotifier extends StateNotifier<TripState> {
       totalTravelTime: newTotalTravelTime,
     );
 
-    print("Stay For: " + newDuration.inSeconds.toString());
+    debugPrint("Stay For: " + newDuration.inSeconds.toString());
 
     // Sync with Repository
     try {
@@ -740,6 +745,8 @@ class TripNotifier extends StateNotifier<TripState> {
             // IMPORTANT: Associate with active trip if available, null if no trip is active
             tripId: activeTrip?.id,
             photoReference: loc.photoReference,
+            photoReferences:
+                loc.photoReferences.isEmpty ? null : loc.photoReferences,
             photoAttributions: loc.photoAttributions,
           );
           debugPrint('copyMultipleLocationsToDate: Copying "${savedLoc.name}" with tripId=${savedLoc.tripId ?? "null (no trip)"}');
@@ -961,7 +968,7 @@ class TripNotifier extends StateNotifier<TripState> {
       ).timeout(
         const Duration(seconds: 20),
         onTimeout: () {
-          print('Route optimization API call timed out');
+          debugPrint('Route optimization API call timed out');
           return {
             'routePoints': <LatLng>[],
             'waypointOrder': <int>[],

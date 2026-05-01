@@ -5,9 +5,11 @@ import 'package:intl/intl.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:voyza/models/location_model.dart';
 import 'package:voyza/providers/map_ui_state_provider.dart';
+import '../providers/trip_listener_provider.dart';
 import '../providers/trip_provider.dart';
 import '../providers/trip_collaborator_provider.dart';
 import '../utils/date_picker_utils.dart';
+import '../utils/trip_date_validator.dart';
 import '../core/theme.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'optimized_location_card.dart';
@@ -162,7 +164,7 @@ class TripBottomSheet extends ConsumerWidget {
                     // CSV download button
                     _buildCsvDownloadButton(context, ref),
 
-                    const SizedBox(height: 75),
+                    const SizedBox(height: 130),
                   ],
                 ),
               ),
@@ -815,7 +817,7 @@ class TripBottomSheet extends ConsumerWidget {
         }
       }
     } catch (e) {
-      print('Error opening Google Maps: $e');
+      debugPrint('Error opening Google Maps: $e');
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -1254,6 +1256,16 @@ class TripBottomSheet extends ConsumerWidget {
     );
 
     if (newDate != null) {
+      final activeTrip = ref.read(realtimeActiveTripProvider).asData?.value;
+      if (!context.mounted) return;
+      final allowed = await ensureScheduledDateAllowed(
+        context,
+        activeTrip,
+        newDate,
+        actionLabel: 'Copy anyway',
+      );
+      if (!allowed) return;
+
       final selectedIds = ref.read(selectedLocationsProvider);
       await ref
           .read(tripProvider.notifier)
@@ -1283,6 +1295,16 @@ class TripBottomSheet extends ConsumerWidget {
     );
 
     if (newDate != null) {
+      final activeTrip = ref.read(realtimeActiveTripProvider).asData?.value;
+      if (!context.mounted) return;
+      final allowed = await ensureScheduledDateAllowed(
+        context,
+        activeTrip,
+        newDate,
+        actionLabel: 'Move anyway',
+      );
+      if (!allowed) return;
+
       final selectedIds = ref.read(selectedLocationsProvider);
       await ref
           .read(tripProvider.notifier)

@@ -1,6 +1,8 @@
+import 'package:flutter/foundation.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:dio/dio.dart';
 import 'package:geolocator/geolocator.dart';
+import '../utils/countries.dart';
 import 'api_service.dart';
 import 'location_service.dart';
 
@@ -34,38 +36,61 @@ class PlaceDetails {
   final String name;
   final String address;
   final LatLng coordinates;
+  /// Cover photo reference — equal to the first item of [photoReferences]
+  /// when any photos are present. Kept as a separate field so older code
+  /// paths and database columns that only carry one reference keep working.
   final String? photoReference;
+  /// All available photo references for the in-card gallery.
+  /// Empty when the place has no photos.
+  final List<String> photoReferences;
   final int? photoWidth;
   final int? photoHeight;
+  /// Combined HTML attributions across every fetched photo. Google's terms
+  /// require attributions to be displayed alongside any photo we render.
   final List<String>? photoAttributions;
+  /// ISO 3166-1 alpha-2 country code parsed from address_components, when
+  /// available. Used to flag cross-country adds against a trip's tagged
+  /// country.
+  final String? countryCode;
 
   PlaceDetails({
     required this.name,
     required this.address,
     required this.coordinates,
     this.photoReference,
+    List<String>? photoReferences,
     this.photoWidth,
     this.photoHeight,
     this.photoAttributions,
-  });
+    this.countryCode,
+  }) : photoReferences = photoReferences ?? const [];
 
   factory PlaceDetails.fromJson(Map<String, dynamic> json) {
     final geometry = json['geometry']['location'];
     final photos = json['photos'] as List?;
 
-    String? photoRef;
+    final photoRefs = <String>[];
+    final attributions = <String>[];
     int? photoWidth;
     int? photoHeight;
-    List<String>? attributions;
 
-    if (photos != null && photos.isNotEmpty) {
-      final firstPhoto = photos[0];
-      photoRef = firstPhoto['photo_reference'];
-      photoWidth = firstPhoto['width'];
-      photoHeight = firstPhoto['height'];
-      attributions = (firstPhoto['html_attributions'] as List?)
-          ?.map((e) => e.toString())
-          .toList();
+    if (photos != null) {
+      for (final photo in photos) {
+        if (photo is! Map) continue;
+        final ref = photo['photo_reference'];
+        if (ref is! String || ref.isEmpty) continue;
+        photoRefs.add(ref);
+        if (photoWidth == null) {
+          photoWidth = photo['width'] as int?;
+          photoHeight = photo['height'] as int?;
+        }
+        final attrs = photo['html_attributions'] as List?;
+        if (attrs != null) {
+          for (final a in attrs) {
+            attributions.add(a.toString());
+          }
+        }
+      }
     }
 
     return PlaceDetails(
@@ -75,22 +100,50 @@ class PlaceDetails {
         geometry['lat'].toDouble(),
         geometry['lng'].toDouble(),
       ),
-      photoReference: photoRef,
+      photoReference: photoRefs.isNotEmpty ? photoRefs.first : null,
+      photoReferences: photoRefs,
       photoWidth: photoWidth,
       photoHeight: photoHeight,
-      photoAttributions: attributions,
+      photoAttributions: attributions.isEmpty ? null : attributions,
+      countryCode: _extractCountryCode(json['address_components']),
     );
   }
 }
 
+/// Pulls the ISO-2 country code (e.g. "KH") out of a Google Places
+/// address_components array. Returns null when the array is missing or
+/// contains no entry of type "country".
+String? _extractCountryCode(dynamic addressComponents) {
+  if (addressComponents is! List) return null;
+  for (final component in addressComponents) {
+    if (component is! Map) continue;
+    final types = component['types'];
+    if (types is! List) continue;
+    if (types.contains('country')) {
+      final shortName = component['short_name'];
+      if (shortName is String && shortName.isNotEmpty) {
+        return shortName.toUpperCase();
+      }
+    }
+  }
+  return null;
+}
+
 class PlacesService {
-  static Future<List<PlacePrediction>> searchPlaces(String query) async {
+  static Future<List<PlacePrediction>> searchPlaces(
+    String query, {
+    String? countryCodeOverride,
+  }) async {
     if (query.isEmpty) return [];
 
     try {
       // Get current location to bias results and calculate distances
       final currentLocation = await LocationService.getCurrentLocation();
-      final countryCode = await LocationService.getCurrentCountryCode();
+      // A trip-tagged country (override) takes precedence over the device
+      // country so users planning a trip ahead of time see the destination
+      // country first.
+      final countryCode = countryCodeOverride?.toLowerCase() ??
+          await LocationService.getCurrentCountryCode();
 
       String url =
           'https://maps.googleapis.com/maps/api/place/autocomplete/json'
@@ -142,7 +195,7 @@ class PlacesService {
               }
               return prediction;
             } catch (e) {
-              print('Error calculating distance for ${prediction.placeId}: $e');
+              debugPrint('Error calculating distance for ${prediction.placeId}: $e');
               return prediction;
             }
           }),
@@ -161,7 +214,7 @@ class PlacesService {
 
       return predictionsList;
     } catch (e) {
-      print('Error searching places: $e');
+      debugPrint('Error searching places: $e');
       return [];
     }
   }
@@ -172,18 +225,35 @@ class PlacesService {
     String query, {
     int offset = 0,
     int limit = 5,
+    String? countryCodeOverride,
   }) async {
     if (query.isEmpty) return [];
 
     try {
       // Get current location and country for filtering
       final currentLocation = await LocationService.getCurrentLocation();
-      final countryCode = await LocationService.getCurrentCountryCode();
+      // A trip-tagged country (override) takes precedence over the device
+      // country so users planning a trip ahead of time see the destination
+      // country first.
+      final countryCode = countryCodeOverride?.toLowerCase() ??
+          await LocationService.getCurrentCountryCode();
+
+      // Text Search's `region` parameter is only a soft bias — Google may
+      // still return results from other countries. To make the override
+      // actually prioritize the chosen country, we fold the country *name*
+      // into the query string itself when an override is provided. This is
+      // what users do manually ("pizza Cambodia") and gets a strong bias.
+      final overrideCountry = countryCodeOverride == null
+          ? null
+          : findCountryByCode(countryCodeOverride);
+      final effectiveQuery = overrideCountry != null
+          ? '$query ${overrideCountry.name}'
+          : query;
 
       // Use Text Search API which supports better pagination
       String url =
           'https://maps.googleapis.com/maps/api/place/textsearch/json'
-          '?query=${Uri.encodeComponent(query)}'
+          '?query=${Uri.encodeComponent(effectiveQuery)}'
           '&key=${ApiService.googlePlacesApiKey}';
 
       // Add location bias
@@ -245,24 +315,41 @@ class PlacesService {
             distanceMeters: distanceMeters,
           ));
         } catch (e) {
-          print('Error parsing search result: $e');
+          debugPrint('Error parsing search result: $e');
           continue;
         }
       }
 
-      // Sort by distance if available
-      if (predictions.any((p) => p.distanceMeters != null)) {
-        predictions.sort((a, b) {
-          if (a.distanceMeters == null && b.distanceMeters == null) return 0;
-          if (a.distanceMeters == null) return 1;
-          if (b.distanceMeters == null) return -1;
-          return a.distanceMeters!.compareTo(b.distanceMeters!);
-        });
+      // Sort: when a country override is set, results whose address contains
+      // the country name come first; within each group, sort by distance.
+      // This is a belt-and-suspenders pass on top of the query-string trick
+      // above — Google still occasionally interleaves out-of-country hits
+      // when its name matches strongly.
+      final countryName = overrideCountry?.name.toLowerCase();
+      int distanceCompare(PlacePrediction a, PlacePrediction b) {
+        if (a.distanceMeters == null && b.distanceMeters == null) return 0;
+        if (a.distanceMeters == null) return 1;
+        if (b.distanceMeters == null) return -1;
+        return a.distanceMeters!.compareTo(b.distanceMeters!);
       }
+
+      bool matchesCountry(PlacePrediction p) {
+        if (countryName == null) return false;
+        return p.secondaryText.toLowerCase().contains(countryName);
+      }
+
+      predictions.sort((a, b) {
+        if (countryName != null) {
+          final aMatch = matchesCountry(a);
+          final bMatch = matchesCountry(b);
+          if (aMatch != bMatch) return aMatch ? -1 : 1;
+        }
+        return distanceCompare(a, b);
+      });
 
       return predictions;
     } catch (e) {
-      print('Error searching places (paginated): $e');
+      debugPrint('Error searching places (paginated): $e');
       return [];
     }
   }
@@ -271,7 +358,7 @@ class PlacesService {
     try {
       final url = 'https://maps.googleapis.com/maps/api/place/details/json'
           '?place_id=$placeId'
-          '&fields=name,formatted_address,geometry,photos'
+          '&fields=name,formatted_address,geometry,photos,address_components'
           '&key=${ApiService.googlePlacesApiKey}';
 
       final response = await ApiService.dio.get(url);
@@ -281,7 +368,7 @@ class PlacesService {
 
       return PlaceDetails.fromJson(data['result']);
     } catch (e) {
-      print('Error getting place details: $e');
+      debugPrint('Error getting place details: $e');
       return null;
     }
   }
@@ -315,13 +402,36 @@ class PlacesService {
         }
       }
 
+      // Best-effort enrichment: pull photo references via Place Details when
+      // the geocode hit carries a place_id. The geocoding endpoint itself
+      // never returns photos.
+      final placeId = result['place_id'] as String?;
+      final enriched =
+          placeId == null ? null : await _safeGetPlaceDetails(placeId);
+
       return PlaceDetails(
         name: name,
         address: result['formatted_address'] ?? address,
         coordinates: LatLng(lat, lng),
+        countryCode: _extractCountryCode(addressComponents),
+        photoReference: enriched?.photoReference,
+        photoReferences: enriched?.photoReferences,
+        photoWidth: enriched?.photoWidth,
+        photoHeight: enriched?.photoHeight,
+        photoAttributions: enriched?.photoAttributions,
       );
     } catch (e) {
-      print('Error geocoding address: $e');
+      debugPrint('Error geocoding address: $e');
+      return null;
+    }
+  }
+
+  /// Wraps [getPlaceDetails] so callers can opportunistically enrich a
+  /// geocoded result with photos without aborting the whole flow on failure.
+  static Future<PlaceDetails?> _safeGetPlaceDetails(String placeId) async {
+    try {
+      return await getPlaceDetails(placeId);
+    } catch (_) {
       return null;
     }
   }
@@ -369,7 +479,7 @@ class PlacesService {
       // If regex fails, throw an exception to be caught by the UI layer.
       throw Exception('Could not extract location coordinates from URL.');
     } catch (e) {
-      print('Error parsing Google Maps URL: $e');
+      debugPrint('Error parsing Google Maps URL: $e');
       // Re-throw the exception so the UI can handle it.
       rethrow;
     }
@@ -415,13 +525,24 @@ class PlacesService {
         name = addressComponents[0]['long_name'] ?? 'Pinned Location';
       }
 
+      // Best-effort: enrich with photos via Place Details lookup.
+      final placeId = result['place_id'] as String?;
+      final enriched =
+          placeId == null ? null : await _safeGetPlaceDetails(placeId);
+
       return PlaceDetails(
         name: name,
         address: result['formatted_address'] ?? '',
         coordinates: coordinates,
+        countryCode: _extractCountryCode(addressComponents),
+        photoReference: enriched?.photoReference,
+        photoReferences: enriched?.photoReferences,
+        photoWidth: enriched?.photoWidth,
+        photoHeight: enriched?.photoHeight,
+        photoAttributions: enriched?.photoAttributions,
       );
     } catch (e) {
-      print('Error getting place from coordinates: $e');
+      debugPrint('Error getting place from coordinates: $e');
       // Return a generic location if there's an error
       return PlaceDetails(
         name: 'Pinned Location',

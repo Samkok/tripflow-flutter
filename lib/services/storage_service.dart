@@ -1,7 +1,8 @@
 import 'dart:convert';
 import 'dart:developer';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter/foundation.dart';
 import 'package:hive_flutter/hive_flutter.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/trip_model.dart';
 import '../models/location_model.dart';
 import '../models/saved_location.dart';
@@ -20,7 +21,7 @@ class StorageService {
           .map((tripStr) => TripModel.fromJson(jsonDecode(tripStr)))
           .toList();
     } catch (e) {
-      print('Error loading saved trips: $e');
+      debugPrint('Error loading saved trips: $e');
       return [];
     }
   }
@@ -37,7 +38,7 @@ class StorageService {
       final tripsJson = trips.map((t) => jsonEncode(t.toJson())).toList();
       await prefs.setStringList(_tripsKey, tripsJson);
     } catch (e) {
-      print('Error saving trip: $e');
+      debugPrint('Error saving trip: $e');
     }
   }
 
@@ -50,7 +51,7 @@ class StorageService {
           .map((locationStr) => LocationModel.fromJson(jsonDecode(locationStr)))
           .toList();
     } catch (e) {
-      print('Error loading pinned locations: $e');
+      debugPrint('Error loading pinned locations: $e');
       return [];
     }
   }
@@ -61,7 +62,7 @@ class StorageService {
       final locationsJson = locations.map((l) => jsonEncode(l.toJson())).toList();
       await prefs.setStringList(_locationsKey, locationsJson);
     } catch (e) {
-      print('Error saving pinned locations: $e');
+      debugPrint('Error saving pinned locations: $e');
     }
   }
 

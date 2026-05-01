@@ -51,7 +51,7 @@ final cachedMarkerBitmapsProvider =
       locationsForDate, currentLocation, selectedDate);
 
   // DEBUG: Uncomment to track marker generation
-  // print('🎨 Generating cached markers - locations: ${pinnedLocations.length}, showNames: $showPlaceNames');
+  // debugPrint('🎨 Generating cached markers - locations: ${pinnedLocations.length}, showNames: $showPlaceNames');
 
   final Map<String, MarkerBitmapResult> markerIcons = {};
   final markerCache = MarkerCacheService();
@@ -98,7 +98,7 @@ final cachedMarkerBitmapsProvider =
   }
 
   // DEBUG: Uncomment to track marker generation completion
-  // print('✅ Generated ${markers.length} cached markers');
+  // debugPrint('✅ Generated ${markers.length} cached markers');
 
   return CachedMarkersState(markerIcons: markerIcons, cacheKey: cacheKey);
 });
@@ -206,7 +206,7 @@ final memoizedAutomaticZonesProvider = Provider<Set<Circle>>((ref) {
   }).toList();
 
   // DEBUG: Uncomment to track zone computation
-  // print('📏 Computing zones with key: $cacheKey');
+  // debugPrint('📏 Computing zones with key: $cacheKey');
 
   if (locationsForDate.isEmpty) {
     return {};
@@ -215,7 +215,7 @@ final memoizedAutomaticZonesProvider = Provider<Set<Circle>>((ref) {
   final zones = ZoneUtils.getZoneCircles(locationsForDate, threshold);
 
   // DEBUG: Uncomment to track zone generation
-  // print('🏞️ Generated ${zones.length} automatic zone circles');
+  // debugPrint('🏞️ Generated ${zones.length} automatic zone circles');
 
   return zones;
 });
@@ -225,7 +225,7 @@ final styledPolylinesProvider = Provider<Set<Polyline>>((ref) {
   final tappedPolylineId = ref.watch(tappedPolylineIdProvider);
 
   // DEBUG: Uncomment to track polyline styling
-  // print('🎨 Styling ${tripState.legPolylines.length} polylines, highlighted: $tappedPolylineId, optimized locations: ${tripState.optimizedLocationsForSelectedDate.length}');
+  // debugPrint('🎨 Styling ${tripState.legPolylines.length} polylines, highlighted: $tappedPolylineId, optimized locations: ${tripState.optimizedLocationsForSelectedDate.length}');
 
   final Set<Polyline> polylines = {};
 
@@ -482,7 +482,7 @@ final assembledMapOverlaysProvider =
       final routeInfoMarkers = routeInfoMarkersAsync.valueOrNull ?? {};
 
       // DEBUG: Uncomment to track overlay assembly
-      // print('✅ Assembling map overlays: ${markers.length} base markers, ${routeInfoMarkers.length} route info markers, ${polylines.length} polylines, ${automaticZones.length} auto zones');
+      // debugPrint('✅ Assembling map overlays: ${markers.length} base markers, ${routeInfoMarkers.length} route info markers, ${polylines.length} polylines, ${automaticZones.length} auto zones');
 
       return AsyncValue.data(AssembledMapOverlays(
         markers: {...markers, ...routeInfoMarkers},
@@ -492,12 +492,12 @@ final assembledMapOverlaysProvider =
     },
     loading: () {
       // DEBUG: Uncomment to track loading state
-      // print('⏳ Loading markers...');
+      // debugPrint('⏳ Loading markers...');
       return AsyncValue.loading();
     },
     error: (error, stack) {
       // Keep error logging for debugging issues
-      print('❌ Error loading markers: $error');
+      debugPrint('❌ Error loading markers: $error');
       return AsyncValue.error(error, stack);
     },
   );

@@ -60,6 +60,9 @@ lib/generated_plugin_registrant.dart
 
 # Environment
 .env
+.env.*
+!.env.example
 node_modules/
 
-~/ios/Flutter/AppConfig.xcconfig
+# Secrets — must never be committed (revoke any keys previously committed in git history)
+ios/Flutter/AppConfig.xcconfig

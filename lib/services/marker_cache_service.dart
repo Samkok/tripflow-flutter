@@ -24,7 +24,7 @@ class MarkerCacheService {
     // Run prewarming in background without blocking
     Future(() async {
       try {
-        print('🔥 Prewarming marker cache in background...');
+        debugPrint('🔥 Prewarming marker cache in background...');
 
         // Pre-generate only the most commonly used markers (2-3 markers)
         // to minimize initial load while still providing benefit
@@ -35,9 +35,9 @@ class MarkerCacheService {
         ]);
 
         _isPrewarmed = true;
-        print('✅ Marker cache prewarmed with ${_cache.length} markers');
+        debugPrint('✅ Marker cache prewarmed with ${_cache.length} markers');
       } catch (e) {
-        print('⚠️ Error prewarming marker cache: $e');
+        debugPrint('⚠️ Error prewarming marker cache: $e');
       } finally {
         _isPrewarming = false;
       }

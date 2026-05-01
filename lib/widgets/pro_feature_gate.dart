@@ -319,7 +319,7 @@ class ProUpgradeBanner extends ConsumerWidget {
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        'Unlimited locations, offline maps & more',
+                        'Plan your Tokyo trip, Paris trip, and Rome trip — all at once, without losing anything.',
                         style: theme.textTheme.bodySmall?.copyWith(
                           color: Colors.white.withValues(alpha: 0.9),
                         ),

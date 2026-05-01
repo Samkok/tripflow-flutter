@@ -5,9 +5,11 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:voyza/models/location_model.dart';
 import 'package:voyza/providers/location_provider.dart';
 import 'package:voyza/providers/map_ui_state_provider.dart';
+import 'package:voyza/providers/trip_listener_provider.dart';
 import 'package:voyza/providers/trip_provider.dart';
 import 'package:voyza/providers/trip_collaborator_provider.dart';
 import 'package:voyza/utils/date_picker_utils.dart';
+import 'package:voyza/utils/trip_date_validator.dart';
 
 import '../core/theme.dart';
 
@@ -215,11 +217,25 @@ class LocationDetailSheet extends ConsumerWidget {
                           lastDate: DateTime(now.year + 5),
                           highlightedDates: datesWithLocations,
                         );
-                        if (newDate != null) {
-                          ref.read(tripProvider.notifier).updateLocationScheduledDate(
-                              updatedLocation.id,
-                              DateTime(newDate.year, newDate.month, newDate.day));
-                        }
+                        if (newDate == null) return;
+                        final normalized = DateTime(
+                            newDate.year, newDate.month, newDate.day);
+                        final activeTrip = ref
+                            .read(realtimeActiveTripProvider)
+                            .asData
+                            ?.value;
+                        if (!context.mounted) return;
+                        final allowed = await ensureScheduledDateAllowed(
+                          context,
+                          activeTrip,
+                          normalized,
+                          actionLabel: 'Save anyway',
+                        );
+                        if (!allowed) return;
+                        ref
+                            .read(tripProvider.notifier)
+                            .updateLocationScheduledDate(
+                                updatedLocation.id, normalized);
                       }
                     : null,
                 style: OutlinedButton.styleFrom(

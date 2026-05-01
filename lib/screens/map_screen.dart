@@ -21,6 +21,7 @@ import '../providers/auth_provider.dart';
 import '../services/location_service.dart';
 import '../services/places_service.dart';
 import '../services/location_add_service.dart';
+import '../utils/trip_date_validator.dart';
 import '../widgets/map_widget.dart';
 import '../widgets/search_widget.dart';
 import '../widgets/trip_bottom_sheet.dart';
@@ -115,7 +116,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
         _startLocationTracking();
       }
     } catch (e) {
-      print("Failed to get location: $e");
+      debugPrint("Failed to get location: $e");
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -157,7 +158,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
       },
       onError: (error) {
         // Handle location stream errors gracefully
-        print('Location stream error: $error');
+        debugPrint('Location stream error: $error');
       },
     );
   }
@@ -227,6 +228,19 @@ class _MapScreenState extends ConsumerState<MapScreen>
           await PlacesService.getPlaceFromCoordinates(coordinates);
 
       if (placeDetails != null) {
+        final activeTrip =
+            ref.read(realtimeActiveTripProvider).asData?.value;
+        if (!mounted) return;
+        // Hide the "Adding location..." snackbar before showing the country
+        // confirm modal so the user sees a clean dialog.
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        final countryOk = await ensureLocationCountryAllowed(
+          context,
+          activeTrip,
+          placeDetails.countryCode,
+        );
+        if (!countryOk) return;
+
         final selectedDate = ref.read(selectedDateProvider);
         final location = LocationModel(
           id: const Uuid().v4(),
@@ -236,6 +250,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
           addedAt: DateTime.now(),
           scheduledDate: selectedDate,
           photoReference: placeDetails.photoReference,
+          photoReferences: placeDetails.photoReferences,
           photoAttributions: placeDetails.photoAttributions,
         );
 
@@ -278,7 +293,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
         ref.read(mapUIStateProvider.notifier).clearHighlights();
       }
     } catch (e) {
-      print('Error adding location from map: $e');
+      debugPrint('Error adding location from map: $e');
       ScaffoldMessenger.of(context).hideCurrentSnackBar();
 
       if (mounted) {
@@ -1013,7 +1028,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
           return;
         }
       } catch (e) {
-        print("Failed to get current location on demand: $e");
+        debugPrint("Failed to get current location on demand: $e");
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(

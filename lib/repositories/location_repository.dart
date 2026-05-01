@@ -204,7 +204,7 @@ class LocationRepository {
     final locationToSync = location.copyWith(userId: user.id);
 
     try {
-      print("Add location should arrive here");
+      debugPrint("Add location should arrive here");
       await _supabase.from('locations').upsert(locationToSync.toJson());
 
       // Update local state to synced

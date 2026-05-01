@@ -5,24 +5,28 @@ import 'package:dio/dio.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:voyza/models/location_model.dart';
 import 'package:voyza/providers/map_ui_state_provider.dart';
+import 'package:voyza/providers/trip_listener_provider.dart';
 import 'package:voyza/providers/trip_provider.dart';
 import 'package:voyza/providers/trip_collaborator_provider.dart';
 import 'package:voyza/widgets/location_detail_sheet.dart';
+import 'package:voyza/widgets/photo_gallery_viewer.dart';
 import 'package:voyza/services/photo_service.dart';
 import 'package:voyza/services/photo_cache_service.dart';
 import 'package:voyza/utils/date_picker_utils.dart';
+import 'package:voyza/utils/trip_date_validator.dart';
 
 /// Optimized location card widget that minimizes rebuilds
-/// Uses selective provider watching and RepaintBoundary for better performance
-class OptimizedLocationCard extends ConsumerWidget {
+/// Uses selective provider watching and RepaintBoundary for better performance.
+///
+/// The card is collapsible: collapsed shows the standard ListTile, expanded
+/// reveals a horizontal scrolling gallery of up to 5 photos that open in a
+/// full-screen viewer when tapped.
+class OptimizedLocationCard extends ConsumerStatefulWidget {
   final LocationModel location;
   final int number;
   final ScrollController scrollController;
   final DraggableScrollableController? sheetController;
   final Function(LatLng)? onLocationTap;
-
-  // PERFORMANCE: Static cache for photo URL futures to prevent re-fetching on rebuild
-  static final Map<String, Future<String?>> _photoUrlCache = {};
 
   const OptimizedLocationCard({
     super.key,
@@ -34,7 +38,22 @@ class OptimizedLocationCard extends ConsumerWidget {
   });
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<OptimizedLocationCard> createState() =>
+      _OptimizedLocationCardState();
+}
+
+class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
+  // PERFORMANCE: Static cache for photo URL futures to prevent re-fetching on
+  // rebuild. Shared across all card instances since photo refs are unique.
+  static final Map<String, Future<String?>> _photoUrlCache = {};
+
+  bool _isExpanded = false;
+
+  LocationModel get location => widget.location;
+  int get number => widget.number;
+
+  @override
+  Widget build(BuildContext context) {
     // OPTIMIZATION: Use .select() to watch only specific values
     // This prevents rebuilds when unrelated state changes
     final pinnedLocations =
@@ -45,6 +64,9 @@ class OptimizedLocationCard extends ConsumerWidget {
     final isSelectionMode = ref.watch(isSelectionModeProvider);
     final isSelected = ref.watch(
         selectedLocationsProvider.select((s) => s.contains(location.id)));
+
+    final photoRefs = location.photoReferences;
+    final hasPhotos = photoRefs.isNotEmpty;
 
     // OPTIMIZATION: Wrap in RepaintBoundary to isolate repaints
     return RepaintBoundary(
@@ -72,52 +94,145 @@ class OptimizedLocationCard extends ConsumerWidget {
           ],
         ),
         margin: const EdgeInsets.symmetric(vertical: 8.0),
-        child: ListTile(
-          onTap: () => _handleTap(context, ref, isSelectionMode, isSelected),
-          onLongPress: () => _handleLongPress(ref, isSelectionMode),
-          leading: _buildLeading(context),
-          title: _buildTitle(context),
-          subtitle: _buildSubtitle(context),
-          trailing: isSelectionMode
-              ? _buildCheckbox(ref, isSelected)
-              : _buildPopupMenu(context, ref),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            ListTile(
+              onTap: () =>
+                  _handleTap(context, ref, isSelectionMode, isSelected),
+              onLongPress: () => _handleLongPress(ref, isSelectionMode),
+              leading: _buildFallbackAvatar(context),
+              title: _buildTitle(context),
+              subtitle: _buildSubtitle(context),
+              trailing: isSelectionMode
+                  ? _buildCheckbox(ref, isSelected)
+                  : Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (hasPhotos)
+                          IconButton(
+                            visualDensity: VisualDensity.compact,
+                            tooltip: _isExpanded ? 'Hide photos' : 'Show photos',
+                            icon: AnimatedRotation(
+                              turns: _isExpanded ? 0.5 : 0,
+                              duration: const Duration(milliseconds: 200),
+                              child: const Icon(Icons.expand_more),
+                            ),
+                            onPressed: () => setState(
+                                () => _isExpanded = !_isExpanded),
+                          ),
+                        _buildPopupMenu(context, ref),
+                      ],
+                    ),
+            ),
+            AnimatedSize(
+              duration: const Duration(milliseconds: 200),
+              curve: Curves.easeOut,
+              alignment: Alignment.topCenter,
+              child: hasPhotos && _isExpanded
+                  ? _buildPhotoGallery(context, photoRefs)
+                  : const SizedBox(width: double.infinity, height: 0),
+            ),
+          ],
         ),
       ),
     );
   }
 
-  Widget _buildLeading(BuildContext context) {
-    if (location.photoReference != null && location.photoReference!.isNotEmpty) {
-      // PERFORMANCE: Memoize photo URL future to prevent re-fetching on rebuild
-      final photoFuture = _photoUrlCache.putIfAbsent(
-        location.photoReference!,
-        () => _loadPhotoUrl(location.photoReference!),
-      );
-      return FutureBuilder<String?>(
-        future: photoFuture,
-        builder: (context, snapshot) {
-          if (snapshot.hasData && snapshot.data != null) {
-            return ClipRRect(
-              borderRadius: BorderRadius.circular(25),
-              child: CachedNetworkImage(
-                imageUrl: snapshot.data!,
-                width: 50,
-                height: 50,
-                fit: BoxFit.cover,
-                memCacheWidth: 100, // Resize for performance (2x for retina)
-                memCacheHeight: 100,
-                placeholder: (context, url) => _buildFallbackAvatar(context, showLoading: true),
-                errorWidget: (context, url, error) => _buildFallbackAvatar(context),
-              ),
+  Widget _buildPhotoGallery(BuildContext context, List<String> photoRefs) {
+    const double tileWidth = 140;
+    const double tileHeight = 100;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+      child: SizedBox(
+        height: tileHeight,
+        child: ListView.separated(
+          scrollDirection: Axis.horizontal,
+          itemCount: photoRefs.length,
+          separatorBuilder: (_, __) => const SizedBox(width: 8),
+          itemBuilder: (context, index) {
+            final ref = photoRefs[index];
+            final future = _photoUrlCache.putIfAbsent(
+              ref,
+              () => _loadPhotoUrl(ref),
             );
-          } else {
-            return _buildFallbackAvatar(context);
-          }
-        },
-      );
-    } else {
-      return _buildFallbackAvatar(context);
-    }
+            return FutureBuilder<String?>(
+              future: future,
+              builder: (context, snapshot) {
+                final url = snapshot.data;
+                final placeholder = Container(
+                  width: tileWidth,
+                  height: tileHeight,
+                  decoration: BoxDecoration(
+                    color: Theme.of(context)
+                        .colorScheme
+                        .primary
+                        .withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: snapshot.connectionState == ConnectionState.waiting
+                      ? const Center(
+                          child: SizedBox(
+                            width: 24,
+                            height: 24,
+                            child:
+                                CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                        )
+                      : Icon(
+                          Icons.broken_image_outlined,
+                          color: Theme.of(context)
+                              .iconTheme
+                              .color
+                              ?.withValues(alpha: 0.4),
+                        ),
+                );
+
+                if (url == null) return placeholder;
+
+                return GestureDetector(
+                  onTap: () => _openGallery(context, photoRefs, index),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(10),
+                    child: Hero(
+                      tag: '${location.id}_photo_$index',
+                      child: CachedNetworkImage(
+                        imageUrl: url,
+                        width: tileWidth,
+                        height: tileHeight,
+                        fit: BoxFit.cover,
+                        memCacheWidth: (tileWidth * 2).round(),
+                        memCacheHeight: (tileHeight * 2).round(),
+                        placeholder: (_, __) => placeholder,
+                        errorWidget: (_, __, ___) => placeholder,
+                      ),
+                    ),
+                  ),
+                );
+              },
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openGallery(
+      BuildContext context, List<String> photoRefs, int initialIndex) async {
+    // Resolve every ref to its CDN URL up front so the viewer's PageView
+    // doesn't have to chase redirects mid-swipe.
+    final urls = await Future.wait(photoRefs.map((r) {
+      return _photoUrlCache.putIfAbsent(r, () => _loadPhotoUrl(r));
+    }));
+    final resolved = urls.whereType<String>().toList();
+    if (resolved.isEmpty || !context.mounted) return;
+    await showPhotoGalleryViewer(
+      context: context,
+      photoUrls: resolved,
+      initialIndex: initialIndex.clamp(0, resolved.length - 1),
+      heroTagPrefix: '${location.id}_photo',
+      title: location.name,
+    );
   }
 
   Widget _buildFallbackAvatar(BuildContext context, {bool showLoading = false}) {
@@ -179,7 +294,7 @@ class OptimizedLocationCard extends ConsumerWidget {
 
       return actualUrl;
     } catch (e) {
-      print('Error loading photo: $e');
+      debugPrint('Error loading photo: $e');
       return null;
     }
   }
@@ -201,9 +316,9 @@ class OptimizedLocationCard extends ConsumerWidget {
         builder: (modalContext) => LocationDetailSheet(
           location: location,
           number: number,
-          parentScrollController: scrollController,
-          parentSheetController: sheetController,
-          onLocationTap: onLocationTap,
+          parentScrollController: widget.scrollController,
+          parentSheetController: widget.sheetController,
+          onLocationTap: widget.onLocationTap,
         ),
       );
     }
@@ -429,6 +544,16 @@ class OptimizedLocationCard extends ConsumerWidget {
     );
 
     if (newDate != null) {
+      final activeTrip = ref.read(realtimeActiveTripProvider).asData?.value;
+      if (!context.mounted) return;
+      final allowed = await ensureScheduledDateAllowed(
+        context,
+        activeTrip,
+        newDate,
+        actionLabel: isCopy ? 'Copy anyway' : 'Move anyway',
+      );
+      if (!allowed) return;
+
       final selectedIds = {location.id};
       if (isCopy) {
         await ref.read(tripProvider.notifier).copyMultipleLocationsToDate(selectedIds, newDate);

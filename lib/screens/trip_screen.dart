@@ -10,6 +10,9 @@ import 'package:voyza/providers/trip_collaborator_provider.dart';
 import 'package:voyza/providers/local_active_trip_provider.dart';
 import 'package:voyza/screens/login_screen.dart';
 import 'package:voyza/screens/trip_details_screen.dart';
+import 'package:voyza/utils/countries.dart';
+import 'package:voyza/utils/trip_date_validator.dart';
+import 'package:voyza/widgets/country_picker_sheet.dart';
 
 class TripScreen extends ConsumerStatefulWidget {
   const TripScreen({super.key});
@@ -22,6 +25,9 @@ class _TripScreenState extends ConsumerState<TripScreen> {
   bool _showCreateForm = false;
   final _nameController = TextEditingController();
   final _descriptionController = TextEditingController();
+  String? _selectedCountryCode; // Optional ISO-3166-1 alpha-2 for new trip
+  DateTime? _selectedStartDate;
+  DateTime? _selectedEndDate;
 
   // Multi-select state
   bool _selectionMode = false;
@@ -37,7 +43,43 @@ class _TripScreenState extends ConsumerState<TripScreen> {
   void _resetForm() {
     _nameController.clear();
     _descriptionController.clear();
-    setState(() => _showCreateForm = false);
+    setState(() {
+      _showCreateForm = false;
+      _selectedCountryCode = null;
+      _selectedStartDate = null;
+      _selectedEndDate = null;
+    });
+  }
+
+  Future<void> _pickCreateFormCountry() async {
+    final result = await showCountryPickerSheet(
+      context,
+      selectedCode: _selectedCountryCode,
+    );
+    if (result == null) return;
+    setState(() {
+      _selectedCountryCode =
+          result.code == kClearCountry.code ? null : result.code;
+    });
+  }
+
+  Future<void> _pickCreateFormDateRange() async {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final initialRange = (_selectedStartDate != null && _selectedEndDate != null)
+        ? DateTimeRange(start: _selectedStartDate!, end: _selectedEndDate!)
+        : null;
+    final picked = await showDateRangePicker(
+      context: context,
+      initialDateRange: initialRange,
+      firstDate: DateTime(today.year - 1),
+      lastDate: DateTime(today.year + 5),
+    );
+    if (picked == null) return;
+    setState(() {
+      _selectedStartDate = picked.start;
+      _selectedEndDate = picked.end;
+    });
   }
 
   void _showLoginRequiredModal(BuildContext context) {
@@ -166,6 +208,9 @@ class _TripScreenState extends ConsumerState<TripScreen> {
           description: _descriptionController.text.trim().isEmpty
               ? null
               : _descriptionController.text.trim(),
+          countryCode: _selectedCountryCode,
+          startDate: _selectedStartDate,
+          endDate: _selectedEndDate,
         );
 
         // Invalidate and refresh
@@ -842,6 +887,10 @@ class _TripScreenState extends ConsumerState<TripScreen> {
             minLines: 2,
             maxLines: 3,
           ),
+          const SizedBox(height: 12),
+          _buildCountryField(context),
+          const SizedBox(height: 12),
+          _buildDateRangeField(context),
           const SizedBox(height: 16),
           Row(
             children: [
@@ -865,6 +914,100 @@ class _TripScreenState extends ConsumerState<TripScreen> {
     );
   }
 
+  Widget _buildCountryField(BuildContext context) {
+    final country = findCountryByCode(_selectedCountryCode);
+    final theme = Theme.of(context);
+    return InkWell(
+      onTap: _pickCreateFormCountry,
+      borderRadius: BorderRadius.circular(8),
+      child: InputDecorator(
+        decoration: InputDecoration(
+          labelText: 'Destination Country',
+          hintText: 'Optional — biases location search',
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(8),
+          ),
+          suffixIcon: country == null
+              ? const Icon(Icons.arrow_drop_down)
+              : IconButton(
+                  icon: const Icon(Icons.clear, size: 20),
+                  tooltip: 'Clear country',
+                  onPressed: () =>
+                      setState(() => _selectedCountryCode = null),
+                ),
+        ),
+        child: Row(
+          children: [
+            if (country != null) ...[
+              Text(country.flagEmoji, style: const TextStyle(fontSize: 20)),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  country.name,
+                  style: theme.textTheme.bodyLarge,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ] else
+              Expanded(
+                child: Text(
+                  'Choose a country',
+                  style: theme.textTheme.bodyLarge?.copyWith(
+                    color: theme.hintColor,
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDateRangeField(BuildContext context) {
+    final theme = Theme.of(context);
+    final hasRange =
+        _selectedStartDate != null && _selectedEndDate != null;
+    final fmt = DateFormat('MMM d, y');
+    return InkWell(
+      onTap: _pickCreateFormDateRange,
+      borderRadius: BorderRadius.circular(8),
+      child: InputDecorator(
+        decoration: InputDecoration(
+          labelText: 'Trip Dates',
+          hintText: 'Optional — pick start and end dates',
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(8),
+          ),
+          suffixIcon: !hasRange
+              ? const Icon(Icons.calendar_today_outlined)
+              : IconButton(
+                  icon: const Icon(Icons.clear, size: 20),
+                  tooltip: 'Clear dates',
+                  onPressed: () => setState(() {
+                    _selectedStartDate = null;
+                    _selectedEndDate = null;
+                  }),
+                ),
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                hasRange
+                    ? '${fmt.format(_selectedStartDate!)} - ${fmt.format(_selectedEndDate!)}'
+                    : 'Add a date range',
+                style: theme.textTheme.bodyLarge?.copyWith(
+                  color: hasRange ? null : theme.hintColor,
+                ),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildTripCard(BuildContext context, Trip trip) {
     final locationsAsync = ref.watch(savedLocationsProvider);
     final isSelected = _selectedTripIds.contains(trip.id);
@@ -880,9 +1023,14 @@ class _TripScreenState extends ConsumerState<TripScreen> {
       data: (allLocations) {
         final tripLocations =
             allLocations.where((loc) => loc.tripId == trip.id).toList();
-        DateTime? startDate;
-        DateTime? endDate;
-        if (tripLocations.isNotEmpty) {
+
+        // Prefer the trip's explicit date range; otherwise derive from the
+        // earliest/latest scheduled date among the trip's locations so the
+        // user still sees a meaningful range on cards that haven't been
+        // tagged with planning dates.
+        DateTime? startDate = trip.startDate;
+        DateTime? endDate = trip.endDate;
+        if (startDate == null && endDate == null && tripLocations.isNotEmpty) {
           final dates = tripLocations
               .map((loc) => loc.scheduledDate ?? loc.createdAt)
               .toList()
@@ -892,8 +1040,8 @@ class _TripScreenState extends ConsumerState<TripScreen> {
         }
         return buildContent(tripLocations.length, startDate, endDate);
       },
-      loading: () => buildContent(0, null, null),
-      error: (_, __) => buildContent(0, null, null),
+      loading: () => buildContent(0, trip.startDate, trip.endDate),
+      error: (_, __) => buildContent(0, trip.startDate, trip.endDate),
     );
 
     return GestureDetector(
@@ -1283,19 +1431,49 @@ class _TripScreenState extends ConsumerState<TripScreen> {
               child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Header with name and action menu
+            // Header with name, country chip, and action menu
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 16, 8, 0),
               child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Expanded(
-                    child: Text(
-                      trip.name,
-                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                            fontWeight: FontWeight.bold,
-                          ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          trip.name,
+                          style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                                fontWeight: FontWeight.bold,
+                              ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        if (trip.countryCode != null) ...[
+                          const SizedBox(height: 6),
+                          Builder(builder: (context) {
+                            final country = findCountryByCode(trip.countryCode);
+                            if (country == null) return const SizedBox.shrink();
+                            return Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  country.flagEmoji,
+                                  style: const TextStyle(fontSize: 14),
+                                ),
+                                const SizedBox(width: 5),
+                                Text(
+                                  country.name,
+                                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                        color: Theme.of(context).colorScheme.primary,
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                ),
+                              ],
+                            );
+                          }),
+                        ],
+                      ],
                     ),
                   ),
                   if (!_selectionMode)
@@ -1319,7 +1497,7 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                               color: Theme.of(context).colorScheme.primary,
                             ),
                             const SizedBox(width: 12),
-                            const Text('Rename'),
+                            const Text('Edit'),
                           ],
                         ),
                       ),
@@ -1719,43 +1897,41 @@ class _TripScreenState extends ConsumerState<TripScreen> {
   }
 
   void _showEditTripDialog(BuildContext context, Trip trip) {
-    final editNameController = TextEditingController(text: trip.name);
-
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Edit Trip Name'),
-        content: TextField(
-          controller: editNameController,
-          maxLength: 30,
-          decoration: InputDecoration(
-            hintText: 'Trip name',
-            labelText: 'Trip Name',
-            counterText: '',
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(8),
-            ),
-          ),
-          autofocus: true,
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () {
-              Navigator.pop(context);
-              _updateTripName(trip, editNameController.text.trim());
-            },
-            child: const Text('Save'),
-          ),
-        ],
+      builder: (context) => _EditTripDialog(
+        trip: trip,
+        onSave: ({
+          required String newName,
+          required String? newCountryCode,
+          required bool clearCountry,
+          required DateTime? newStartDate,
+          required DateTime? newEndDate,
+          required bool clearDates,
+        }) {
+          _updateTripDetails(
+            trip,
+            newName: newName,
+            newCountryCode: newCountryCode,
+            clearCountry: clearCountry,
+            newStartDate: newStartDate,
+            newEndDate: newEndDate,
+            clearDates: clearDates,
+          );
+        },
       ),
     );
   }
 
-  Future<void> _updateTripName(Trip trip, String newName) async {
+  Future<void> _updateTripDetails(
+    Trip trip, {
+    required String newName,
+    required String? newCountryCode,
+    required bool clearCountry,
+    required DateTime? newStartDate,
+    required DateTime? newEndDate,
+    required bool clearDates,
+  }) async {
     if (newName.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Trip name cannot be empty')),
@@ -1763,29 +1939,65 @@ class _TripScreenState extends ConsumerState<TripScreen> {
       return;
     }
 
-    if (newName == trip.name) {
+    final nameUnchanged = newName == trip.name;
+    final countryUnchanged = !clearCountry &&
+        (newCountryCode?.toUpperCase() ?? trip.countryCode) ==
+            trip.countryCode;
+    final datesUnchanged = !clearDates &&
+        newStartDate == trip.startDate &&
+        newEndDate == trip.endDate;
+    if (nameUnchanged && countryUnchanged && datesUnchanged) {
       return; // No changes made
+    }
+
+    // When the user changed the trip's date range to a non-empty range,
+    // verify that existing locations still fit; if any fall outside, ask
+    // for confirmation before persisting.
+    if (!datesUnchanged && !clearDates &&
+        (newStartDate != null || newEndDate != null)) {
+      final allLocations =
+          ref.read(savedLocationsProvider).asData?.value ?? const [];
+      final tripLocationDates = allLocations
+          .where((loc) => loc.tripId == trip.id && loc.scheduledDate != null)
+          .map((loc) => loc.scheduledDate!)
+          .toList();
+      if (tripLocationDates.isNotEmpty) {
+        if (!mounted) return;
+        final ok = await ensureLocationsFitNewTripRange(
+          context,
+          tripName: trip.name,
+          newStart: newStartDate,
+          newEnd: newEndDate,
+          existingScheduledDates: tripLocationDates,
+        );
+        if (!ok) return;
+      }
     }
 
     try {
       final tripRepository = ref.read(tripRepositoryProvider);
       await tripRepository.updateTrip(
         trip.id,
-        name: newName,
+        name: nameUnchanged ? null : newName,
+        countryCode: clearCountry ? null : newCountryCode,
+        clearCountryCode: clearCountry,
+        startDate: clearDates ? null : newStartDate,
+        endDate: clearDates ? null : newEndDate,
+        clearDates: clearDates,
       );
 
       ref.invalidate(userTripsProvider);
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Trip name updated')),
+          const SnackBar(content: Text('Trip updated')),
         );
       }
     } catch (e) {
       debugPrint('Error updating trip: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Could not update trip name. Please check your connection and try again.')),
+          const SnackBar(content: Text('Could not update trip. Please check your connection and try again.')),
         );
       }
     }
@@ -1984,4 +2196,230 @@ class _TripScreenState extends ConsumerState<TripScreen> {
 }
 
 extension on String {
+}
+
+typedef _EditTripSaveCallback = void Function({
+  required String newName,
+  required String? newCountryCode,
+  required bool clearCountry,
+  required DateTime? newStartDate,
+  required DateTime? newEndDate,
+  required bool clearDates,
+});
+
+class _EditTripDialog extends StatefulWidget {
+  final Trip trip;
+  final _EditTripSaveCallback onSave;
+
+  const _EditTripDialog({required this.trip, required this.onSave});
+
+  @override
+  State<_EditTripDialog> createState() => _EditTripDialogState();
+}
+
+class _EditTripDialogState extends State<_EditTripDialog> {
+  late final TextEditingController _nameController;
+  late String? _countryCode;
+  late bool _clearedCountry;
+  late DateTime? _startDate;
+  late DateTime? _endDate;
+  late bool _clearedDates;
+
+  @override
+  void initState() {
+    super.initState();
+    _nameController = TextEditingController(text: widget.trip.name);
+    _countryCode = widget.trip.countryCode;
+    _clearedCountry = false;
+    _startDate = widget.trip.startDate;
+    _endDate = widget.trip.endDate;
+    _clearedDates = false;
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pickCountry() async {
+    final result = await showCountryPickerSheet(
+      context,
+      selectedCode: _countryCode,
+    );
+    if (result == null) return;
+    setState(() {
+      if (result.code == kClearCountry.code) {
+        _countryCode = null;
+        _clearedCountry = true;
+      } else {
+        _countryCode = result.code;
+        _clearedCountry = false;
+      }
+    });
+  }
+
+  Future<void> _pickDateRange() async {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final initialRange = (_startDate != null && _endDate != null)
+        ? DateTimeRange(start: _startDate!, end: _endDate!)
+        : null;
+    final picked = await showDateRangePicker(
+      context: context,
+      initialDateRange: initialRange,
+      firstDate: DateTime(today.year - 1),
+      lastDate: DateTime(today.year + 5),
+    );
+    if (picked == null) return;
+    setState(() {
+      _startDate = picked.start;
+      _endDate = picked.end;
+      _clearedDates = false;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final country = findCountryByCode(_countryCode);
+
+    return AlertDialog(
+      title: const Text('Edit Trip'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TextField(
+            controller: _nameController,
+            maxLength: 30,
+            decoration: InputDecoration(
+              hintText: 'Trip name',
+              labelText: 'Trip Name',
+              counterText: '',
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+            ),
+            autofocus: true,
+          ),
+          const SizedBox(height: 12),
+          InkWell(
+            onTap: _pickCountry,
+            borderRadius: BorderRadius.circular(8),
+            child: InputDecorator(
+              decoration: InputDecoration(
+                labelText: 'Destination Country',
+                hintText: 'Optional — biases location search',
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                suffixIcon: country == null
+                    ? const Icon(Icons.arrow_drop_down)
+                    : IconButton(
+                        icon: const Icon(Icons.clear, size: 20),
+                        tooltip: 'Clear country',
+                        onPressed: () => setState(() {
+                          _countryCode = null;
+                          _clearedCountry = true;
+                        }),
+                      ),
+              ),
+              child: Row(
+                children: [
+                  if (country != null) ...[
+                    Text(
+                      country.flagEmoji,
+                      style: const TextStyle(fontSize: 20),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        country.name,
+                        style: theme.textTheme.bodyLarge,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ] else
+                    Expanded(
+                      child: Text(
+                        'Choose a country',
+                        style: theme.textTheme.bodyLarge?.copyWith(
+                          color: theme.hintColor,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          _buildDateRangeField(theme),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        TextButton(
+          onPressed: () {
+            Navigator.pop(context);
+            widget.onSave(
+              newName: _nameController.text.trim(),
+              newCountryCode: _countryCode,
+              clearCountry: _clearedCountry,
+              newStartDate: _startDate,
+              newEndDate: _endDate,
+              clearDates: _clearedDates,
+            );
+          },
+          child: const Text('Save'),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildDateRangeField(ThemeData theme) {
+    final hasRange = _startDate != null && _endDate != null;
+    final fmt = DateFormat('MMM d, y');
+    return InkWell(
+      onTap: _pickDateRange,
+      borderRadius: BorderRadius.circular(8),
+      child: InputDecorator(
+        decoration: InputDecoration(
+          labelText: 'Trip Dates',
+          hintText: 'Optional — pick start and end dates',
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(8),
+          ),
+          suffixIcon: !hasRange
+              ? const Icon(Icons.calendar_today_outlined)
+              : IconButton(
+                  icon: const Icon(Icons.clear, size: 20),
+                  tooltip: 'Clear dates',
+                  onPressed: () => setState(() {
+                    _startDate = null;
+                    _endDate = null;
+                    _clearedDates = true;
+                  }),
+                ),
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                hasRange
+                    ? '${fmt.format(_startDate!)} - ${fmt.format(_endDate!)}'
+                    : 'Add a date range',
+                style: theme.textTheme.bodyLarge?.copyWith(
+                  color: hasRange ? null : theme.hintColor,
+                ),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }

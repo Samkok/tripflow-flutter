@@ -14,6 +14,7 @@ class TripRepository {
     String? description,
     DateTime? startDate,
     DateTime? endDate,
+    String? countryCode,
   }) async {
     try {
       final data = <String, dynamic>{
@@ -22,6 +23,7 @@ class TripRepository {
         if (description != null) 'description': description,
         if (startDate != null) 'start_date': startDate.toIso8601String(),
         if (endDate != null) 'end_date': endDate.toIso8601String(),
+        if (countryCode != null) 'country_code': countryCode.toUpperCase(),
         'status': 'planning',
         'is_active': false,
       };
@@ -121,6 +123,12 @@ class TripRepository {
   }
 
   /// Update trip details
+  ///
+  /// Pass [countryCode] to set a country (uppercased ISO 3166-1 alpha-2).
+  /// Pass [clearCountryCode] = true to explicitly clear it back to NULL.
+  /// Pass [clearDates] = true to explicitly clear start_date and end_date back
+  /// to NULL — distinct from passing null for [startDate]/[endDate], which
+  /// leaves the existing values untouched.
   Future<Trip> updateTrip(String tripId, {
     String? name,
     String? description,
@@ -128,16 +136,29 @@ class TripRepository {
     DateTime? endDate,
     double? totalDistance,
     int? totalDurationMinutes,
+    String? countryCode,
+    bool clearCountryCode = false,
+    bool clearDates = false,
   }) async {
     try {
       final updates = <String, dynamic>{
         if (name != null) 'name': name,
         if (description != null) 'description': description,
-        if (startDate != null) 'start_date': startDate.toIso8601String(),
-        if (endDate != null) 'end_date': endDate.toIso8601String(),
+        if (clearDates)
+          'start_date': null
+        else if (startDate != null)
+          'start_date': startDate.toIso8601String(),
+        if (clearDates)
+          'end_date': null
+        else if (endDate != null)
+          'end_date': endDate.toIso8601String(),
         if (totalDistance != null) 'total_distance': totalDistance,
         if (totalDurationMinutes != null)
           'total_duration_minutes': totalDurationMinutes,
+        if (clearCountryCode)
+          'country_code': null
+        else if (countryCode != null)
+          'country_code': countryCode.toUpperCase(),
         'updated_at': DateTime.now().toIso8601String(),
       };
 

@@ -12,7 +12,11 @@ class LocationModel {
   final Duration stayDuration;
   final bool isSkipped;
   final bool isDone;
+  /// Cover photo reference. Equal to the first item of [photoReferences]
+  /// when any photos are present.
   final String? photoReference;
+  /// Up to 5 photo references for the in-card gallery.
+  final List<String> photoReferences;
   final List<String>? photoAttributions;
 
   LocationModel({
@@ -28,8 +32,12 @@ class LocationModel {
     this.isDone = false,
     this.scheduledDate,
     this.photoReference,
+    List<String>? photoReferences,
     this.photoAttributions,
-  });
+  }) : photoReferences = photoReferences ??
+            (photoReference != null && photoReference.isNotEmpty
+                ? [photoReference]
+                : const []);
 
   Map<String, dynamic> toJson() {
     return {
@@ -46,11 +54,13 @@ class LocationModel {
       'isSkipped': isSkipped,
       'isDone': isDone,
       'photoReference': photoReference,
+      'photoReferences': photoReferences,
       'photoAttributions': photoAttributions,
     };
   }
 
   factory LocationModel.fromJson(Map<String, dynamic> json) {
+    final refs = json['photoReferences'];
     return LocationModel(
       id: json['id'],
       name: json['name'],
@@ -70,6 +80,7 @@ class LocationModel {
           ? DateTime.parse(json['scheduledDate'])
           : null,
       photoReference: json['photoReference'],
+      photoReferences: refs is List ? List<String>.from(refs) : null,
       photoAttributions: json['photoAttributions'] != null
           ? List<String>.from(json['photoAttributions'])
           : null,
@@ -89,6 +100,7 @@ class LocationModel {
     bool? isDone,
     DateTime? scheduledDate,
     String? photoReference,
+    List<String>? photoReferences,
     List<String>? photoAttributions,
   }) {
     return LocationModel(
@@ -104,6 +116,7 @@ class LocationModel {
       isDone: isDone ?? this.isDone,
       scheduledDate: scheduledDate ?? this.scheduledDate,
       photoReference: photoReference ?? this.photoReference,
+      photoReferences: photoReferences ?? this.photoReferences,
       photoAttributions: photoAttributions ?? this.photoAttributions,
     );
   }

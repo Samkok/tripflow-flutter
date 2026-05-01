@@ -6,11 +6,13 @@ import 'package:google_maps_url_extractor/google_maps_url_extractor.dart';
 import 'package:voyza/providers/map_ui_state_provider.dart';
 import 'package:uuid/uuid.dart';
 import '../models/location_model.dart';
+import '../providers/local_active_trip_provider.dart';
 import '../providers/paginated_search_provider.dart';
 import '../providers/trip_collaborator_provider.dart';
 import '../services/places_service.dart';
 import '../services/location_add_service.dart';
 import '../core/theme.dart';
+import '../utils/trip_date_validator.dart';
 import 'google_maps_url_dialog.dart';
 
 final searchQueryProvider = StateProvider.autoDispose<String>((ref) => '');
@@ -63,7 +65,13 @@ class _SearchWidgetState extends ConsumerState<SearchWidget> {
       if (value.isEmpty) {
         ref.read(paginatedSearchProvider.notifier).clear();
       } else {
-        ref.read(paginatedSearchProvider.notifier).search(value);
+        // If a trip is active and tagged with a country, bias the search
+        // toward that country instead of the device's current country.
+        final activeTrip = ref.read(localActiveTripProvider).asData?.value;
+        ref.read(paginatedSearchProvider.notifier).search(
+              value,
+              countryCodeOverride: activeTrip?.countryCode,
+            );
       }
     });
   }
@@ -387,6 +395,15 @@ class _SearchWidgetState extends ConsumerState<SearchWidget> {
         return;
       }
 
+      final activeTrip = ref.read(localActiveTripProvider).asData?.value;
+      if (!mounted) return;
+      final countryOk = await ensureLocationCountryAllowed(
+        context,
+        activeTrip,
+        placeDetails.countryCode,
+      );
+      if (!countryOk) return;
+
       final location = LocationModel(
         id: const Uuid().v4(),
         name: placeDetails.name,
@@ -395,6 +412,7 @@ class _SearchWidgetState extends ConsumerState<SearchWidget> {
         addedAt: DateTime.now(),
         scheduledDate: selectedDate,
         photoReference: placeDetails.photoReference,
+        photoReferences: placeDetails.photoReferences,
         photoAttributions: placeDetails.photoAttributions,
       );
 
@@ -461,6 +479,16 @@ class _SearchWidgetState extends ConsumerState<SearchWidget> {
     if (placeDetails != null) {
       if (!mounted) return;
 
+      final activeTrip = ref.read(localActiveTripProvider).asData?.value;
+      final countryOk = await ensureLocationCountryAllowed(
+        context,
+        activeTrip,
+        placeDetails.countryCode,
+      );
+      if (!countryOk) return;
+
+      if (!mounted) return;
+
       final location = LocationModel(
         id: const Uuid().v4(),
         name: placeDetails.name,
@@ -469,6 +497,7 @@ class _SearchWidgetState extends ConsumerState<SearchWidget> {
         addedAt: DateTime.now(),
         scheduledDate: selectedDate,
         photoReference: placeDetails.photoReference,
+        photoReferences: placeDetails.photoReferences,
         photoAttributions: placeDetails.photoAttributions,
       );
 

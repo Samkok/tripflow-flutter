@@ -9,6 +9,7 @@ class Trip {
   final DateTime? endDate;
   final double totalDistance;
   final int totalDurationMinutes;
+  final String? countryCode; // ISO 3166-1 alpha-2, e.g. 'JP', 'KH'
   final DateTime createdAt;
   final DateTime updatedAt;
 
@@ -23,6 +24,7 @@ class Trip {
     this.endDate,
     this.totalDistance = 0,
     this.totalDurationMinutes = 0,
+    this.countryCode,
     required this.createdAt,
     required this.updatedAt,
   });
@@ -43,6 +45,7 @@ class Trip {
           : null,
       totalDistance: (json['total_distance'] as num?)?.toDouble() ?? 0,
       totalDurationMinutes: json['total_duration_minutes'] as int? ?? 0,
+      countryCode: (json['country_code'] as String?)?.toUpperCase(),
       createdAt: DateTime.parse(json['created_at'] as String),
       updatedAt: DateTime.parse(json['updated_at'] as String),
     );
@@ -60,6 +63,7 @@ class Trip {
       'end_date': endDate?.toIso8601String(),
       'total_distance': totalDistance,
       'total_duration_minutes': totalDurationMinutes,
+      'country_code': countryCode,
       'created_at': createdAt.toIso8601String(),
       'updated_at': updatedAt.toIso8601String(),
     };
@@ -72,6 +76,7 @@ class Trip {
     String? description,
     DateTime? startDate,
     DateTime? endDate,
+    String? countryCode,
   }) {
     final now = DateTime.now();
     return Trip(
@@ -85,6 +90,7 @@ class Trip {
       endDate: endDate,
       totalDistance: 0,
       totalDurationMinutes: 0,
+      countryCode: countryCode,
       createdAt: now,
       updatedAt: now,
     );
@@ -102,6 +108,7 @@ class Trip {
     DateTime? endDate,
     double? totalDistance,
     int? totalDurationMinutes,
+    String? countryCode,
     DateTime? createdAt,
     DateTime? updatedAt,
   }) {
@@ -116,6 +123,7 @@ class Trip {
       endDate: endDate ?? this.endDate,
       totalDistance: totalDistance ?? this.totalDistance,
       totalDurationMinutes: totalDurationMinutes ?? this.totalDurationMinutes,
+      countryCode: countryCode ?? this.countryCode,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
     );
