@@ -135,10 +135,36 @@ class RevenueCatService {
       debugPrint('RevenueCatService: Logging in user: $appUserId');
       final result = await Purchases.logIn(appUserId);
       debugPrint('RevenueCatService: Login successful');
+
+      // RevenueCat's logIn only pulls entitlements *already attributed* to
+      // this app_user_id server-side. If the user previously subscribed under
+      // a different app_user_id (e.g. anonymous-then-auth on the same device,
+      // or a different VoyZa account on the same Apple ID / Google account),
+      // the store-side receipt is invisible until we explicitly restore.
+      //
+      // Auto-restoring here closes the window where the user would otherwise
+      // see "Start free trial" on the paywall and end up colliding with their
+      // own active subscription at the StoreKit layer. No-op if nothing to
+      // restore. Only triggered when login returned no active entitlements,
+      // so we don't ping the stores on every auth event.
+      CustomerInfo info = result.customerInfo;
+      if (info.entitlements.active.isEmpty) {
+        try {
+          debugPrint(
+              'RevenueCatService: No active entitlements after login — auto-restoring device receipts');
+          info = await Purchases.restorePurchases();
+          debugPrint(
+              'RevenueCatService: Auto-restore complete, active entitlements = ${info.entitlements.active.keys.toList()}');
+        } catch (e) {
+          debugPrint('RevenueCatService: Auto-restore failed (non-fatal): $e');
+          // Manual Restore Purchases button in the paywall remains as fallback.
+        }
+      }
+
       // Always broadcast so SubscriptionNotifier updates immediately,
       // regardless of whether addCustomerInfoUpdateListener fires.
-      _customerInfoController.add(result.customerInfo);
-      return result.customerInfo;
+      _customerInfoController.add(info);
+      return info;
     } catch (e) {
       debugPrint('RevenueCatService: Login failed - $e');
       rethrow;
@@ -151,8 +177,27 @@ class RevenueCatService {
     await waitForInitialization();
     try {
       debugPrint('RevenueCatService: Logging out user');
-      final customerInfo = await Purchases.logOut();
+      CustomerInfo customerInfo = await Purchases.logOut();
       debugPrint('RevenueCatService: Logout successful');
+
+      // Mirror the login() flow: the freshly created anonymous user has no
+      // entitlements attributed to it. Auto-restore so any active store-side
+      // subscription on the device (Apple/Google account) becomes visible
+      // immediately without forcing the user to tap Restore in the paywall.
+      if (customerInfo.entitlements.active.isEmpty) {
+        try {
+          debugPrint(
+              'RevenueCatService: No active entitlements after logout — auto-restoring device receipts');
+          customerInfo = await Purchases.restorePurchases();
+          debugPrint(
+              'RevenueCatService: Auto-restore complete, active entitlements = ${customerInfo.entitlements.active.keys.toList()}');
+        } catch (e) {
+          debugPrint('RevenueCatService: Auto-restore failed (non-fatal): $e');
+        }
+      }
+
+      // Broadcast so SubscriptionNotifier picks up the new state immediately.
+      _customerInfoController.add(customerInfo);
       return customerInfo;
     } catch (e) {
       debugPrint('RevenueCatService: Logout failed - $e');

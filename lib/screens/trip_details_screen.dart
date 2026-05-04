@@ -17,6 +17,7 @@ import 'package:voyza/widgets/google_maps_url_dialog.dart';
 import 'package:voyza/services/location_add_service.dart';
 import 'package:voyza/models/location_model.dart';
 import 'package:voyza/widgets/location_detail_sheet.dart';
+import 'package:voyza/widgets/location_photo_gallery.dart';
 import 'package:voyza/providers/local_active_trip_provider.dart';
 import 'package:voyza/providers/trip_provider.dart';
 import 'package:voyza/utils/trip_date_validator.dart';
@@ -44,6 +45,9 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
   bool _selectionMode = false;
   final Set<String> _selectedIds = {};
   List<SavedLocation> _currentTripLocations = [];
+
+  // Per-location expand state for the photo dropdown.
+  final Set<String> _photoExpandedIds = {};
 
   void _enterSelectionMode(String id) {
     setState(() {
@@ -529,7 +533,7 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
           ),
         ),
 
-        const SliverPadding(padding: EdgeInsets.symmetric(vertical: 20)),
+        const SliverPadding(padding: EdgeInsets.symmetric(vertical: 50)),
       ],
     );
   }
@@ -743,6 +747,19 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
   Widget _buildLocationCard(SavedLocation location, int index) {
     final timeString = DateFormat('HH:mm').format(location.createdAt);
     final isSelected = _selectedIds.contains(location.id);
+    final photoRefs = location.effectivePhotoReferences;
+    final hasPhotos = photoRefs.isNotEmpty;
+    final isExpanded = _photoExpandedIds.contains(location.id);
+
+    void togglePhotos() {
+      setState(() {
+        if (isExpanded) {
+          _photoExpandedIds.remove(location.id);
+        } else {
+          _photoExpandedIds.add(location.id);
+        }
+      });
+    }
 
     return GestureDetector(
       onLongPress: () => _enterSelectionMode(location.id),
@@ -755,7 +772,6 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
       },
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 180),
-        padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
           color: isSelected
               ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.1)
@@ -775,92 +791,132 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
             ),
           ],
         ),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // Checkbox in selection mode, icon otherwise
-            AnimatedSwitcher(
-              duration: const Duration(milliseconds: 150),
-              child: _selectionMode
-                  ? Checkbox(
-                      key: ValueKey('${location.id}_checkbox'),
-                      value: isSelected,
-                      onChanged: (_) => _toggleSelection(location.id),
-                      visualDensity: VisualDensity.compact,
-                    )
-                  : Container(
-                      key: ValueKey('${location.id}_icon'),
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: Theme.of(context)
-                            .colorScheme
-                            .primary
-                            .withValues(alpha: 0.15),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Icon(
-                        Icons.location_on_rounded,
-                        size: 18,
-                        color: Theme.of(context).colorScheme.primary,
-                      ),
-                    ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
+            Padding(
+              padding: const EdgeInsets.all(12),
+              child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    location.name,
-                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                          fontWeight: FontWeight.w600,
-                        ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+                  // Checkbox in selection mode, icon otherwise
+                  AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 150),
+                    child: _selectionMode
+                        ? Checkbox(
+                            key: ValueKey('${location.id}_checkbox'),
+                            value: isSelected,
+                            onChanged: (_) => _toggleSelection(location.id),
+                            visualDensity: VisualDensity.compact,
+                          )
+                        : Container(
+                            key: ValueKey('${location.id}_icon'),
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .primary
+                                  .withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Icon(
+                              Icons.location_on_rounded,
+                              size: 18,
+                              color: Theme.of(context).colorScheme.primary,
+                            ),
+                          ),
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    '${location.lat.toStringAsFixed(4)}, ${location.lng.toStringAsFixed(4)}',
-                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                          color: Theme.of(context)
-                              .textTheme
-                              .bodyMedium
-                              ?.color
-                              ?.withValues(alpha: 0.6),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          location.name,
+                          style:
+                              Theme.of(context).textTheme.titleSmall?.copyWith(
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                         ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+                        const SizedBox(height: 4),
+                        Text(
+                          '${location.lat.toStringAsFixed(4)}, ${location.lng.toStringAsFixed(4)}',
+                          style:
+                              Theme.of(context).textTheme.labelSmall?.copyWith(
+                                    color: Theme.of(context)
+                                        .textTheme
+                                        .bodyMedium
+                                        ?.color
+                                        ?.withValues(alpha: 0.6),
+                                  ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                    ),
                   ),
+                  const SizedBox(width: 4),
+                  // Time + stay
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Text(
+                        timeString,
+                        style:
+                            Theme.of(context).textTheme.labelSmall?.copyWith(
+                                  color: Theme.of(context)
+                                      .textTheme
+                                      .bodyMedium
+                                      ?.color
+                                      ?.withValues(alpha: 0.5),
+                                ),
+                      ),
+                      if (location.stayDuration > 0)
+                        Text(
+                          '${(location.stayDuration / 60).toStringAsFixed(0)}m stay',
+                          style:
+                              Theme.of(context).textTheme.labelSmall?.copyWith(
+                                    color: Theme.of(context)
+                                        .textTheme
+                                        .bodyMedium
+                                        ?.color
+                                        ?.withValues(alpha: 0.5),
+                                  ),
+                        ),
+                    ],
+                  ),
+                  if (hasPhotos && !_selectionMode) ...[
+                    const SizedBox(width: 4),
+                    IconButton(
+                      visualDensity: VisualDensity.compact,
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(
+                          minWidth: 32, minHeight: 32),
+                      tooltip: isExpanded ? 'Hide photos' : 'Show photos',
+                      icon: AnimatedRotation(
+                        turns: isExpanded ? 0.5 : 0,
+                        duration: const Duration(milliseconds: 200),
+                        child: const Icon(Icons.expand_more),
+                      ),
+                      onPressed: togglePhotos,
+                    ),
+                  ],
                 ],
               ),
             ),
-            const SizedBox(width: 4),
-            // Time + stay
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Text(
-                  timeString,
-                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                        color: Theme.of(context)
-                            .textTheme
-                            .bodyMedium
-                            ?.color
-                            ?.withValues(alpha: 0.5),
-                      ),
-                ),
-                if (location.stayDuration > 0)
-                  Text(
-                    '${(location.stayDuration / 60).toStringAsFixed(0)}m stay',
-                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                          color: Theme.of(context)
-                              .textTheme
-                              .bodyMedium
-                              ?.color
-                              ?.withValues(alpha: 0.5),
-                        ),
-                  ),
-              ],
+            AnimatedSize(
+              duration: const Duration(milliseconds: 200),
+              curve: Curves.easeOut,
+              alignment: Alignment.topCenter,
+              child: hasPhotos && isExpanded
+                  ? LocationPhotoGallery(
+                      photoRefs: photoRefs,
+                      heroTagPrefix: '${location.id}_trip_detail_photo',
+                      title: location.name,
+                    )
+                  : const SizedBox(width: double.infinity, height: 0),
             ),
           ],
         ),

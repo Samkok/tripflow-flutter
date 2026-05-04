@@ -178,8 +178,8 @@ class MarkerUtils {
 
     // --- 2. Calculate Canvas Dimensions ---
     final double circleRadius = size / 2;
-    final double shadowRadius = 4.0; // Shadow offset
-    final double paddingBelowCircle = 16.0; // Increased padding
+    const double shadowRadius = 4.0; // Shadow offset
+    const double paddingBelowCircle = 16.0; // Increased padding
     final double totalWidth =
         namePainter.width > size ? namePainter.width : size;
     final double totalHeight = size + paddingBelowCircle + namePainter.height + shadowRadius;
@@ -191,7 +191,7 @@ class MarkerUtils {
 
     // Apply grayscale filter if skipped
     if (isSkipped) {
-      final ColorFilter greyscaleFilter = ColorFilter.matrix(<double>[
+      const ColorFilter greyscaleFilter = ColorFilter.matrix(<double>[
         0.2126, 0.7152, 0.0722, 0, 0,
         0.2126, 0.7152, 0.0722, 0, 0,
         0.2126, 0.7152, 0.0722, 0, 0,
@@ -527,9 +527,9 @@ class MarkerUtils {
     );
     distancePainter.layout();
 
-    final double padding = 12.0;
-    final double separatorWidth = 2.0;
-    final double separatorPadding = 16.0;
+    const double padding = 12.0;
+    const double separatorWidth = 2.0;
+    const double separatorPadding = 16.0;
     final double totalWidth = durationPainter.width +
         distancePainter.width +
         (padding * 2) +
@@ -559,7 +559,7 @@ class MarkerUtils {
     canvas.drawRRect(backgroundRRect, borderPaint);
 
     // Draw duration
-    durationPainter.paint(canvas, Offset(padding, padding));
+    durationPainter.paint(canvas, const Offset(padding, padding));
 
     // Draw separator
     final double separatorX =

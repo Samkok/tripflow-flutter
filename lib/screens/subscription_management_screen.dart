@@ -52,9 +52,9 @@ class _SubscriptionManagementScreenState
                     const SizedBox(height: 24),
 
                     // Customer Center button
-                    _buildCustomerCenterButton(context),
+                    // _buildCustomerCenterButton(context),
 
-                    const SizedBox(height: 24),
+                    // const SizedBox(height: 24),
 
                     // Help section
                     _buildHelpSection(context),

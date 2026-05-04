@@ -61,6 +61,24 @@ final voyZaProEntitlementProvider = FutureProvider<EntitlementInfo?>((ref) async
   );
 });
 
+/// Active entitlement when (and only when) the user is in the store-managed
+/// introductory free-trial window. Returns null for paid users and for users
+/// without any active entitlement, so callers can use `!= null` as an
+/// in-trial check without needing to peek at PeriodType themselves.
+final activeTrialEntitlementProvider = Provider<EntitlementInfo?>((ref) {
+  final state = ref.watch(subscriptionProvider);
+  final entitlement = state.customerInfo?.entitlements
+      .active[RevenueCatConfig.entitlementVoyZaPro];
+  if (entitlement == null) return null;
+  if (entitlement.periodType != PeriodType.trial) return null;
+  return entitlement;
+});
+
+/// Convenience: true while the user is in the native introductory free trial.
+final isInTrialProvider = Provider<bool>((ref) {
+  return ref.watch(activeTrialEntitlementProvider) != null;
+});
+
 /// Provider for available offerings
 final offeringsProvider = FutureProvider<Offerings?>((ref) async {
   try {
@@ -127,6 +145,48 @@ final yearlyPackageProvider = FutureProvider<Package?>((ref) async {
     error: (_, __) => null,
   );
 });
+
+/// Per-product intro-offer (free-trial) eligibility for the current device.
+///
+/// Backed by [Purchases.checkTrialOrIntroductoryPriceEligibility], which on
+/// iOS consults StoreKit and is therefore tied to the Apple ID — it returns
+/// the same answer across RevenueCat sign-in/sign-out and anonymous sessions
+/// on the same device, closing the loophole where a user could log out to
+/// "reset" their trial. Android always returns `unknown`; Google Play still
+/// enforces eligibility at purchase, so callers should treat unknown as
+/// optimistically eligible to keep the flow visible.
+final introEligibilityProvider =
+    FutureProvider<Map<String, IntroEligibilityStatus>>((ref) async {
+  final monthly = await ref.watch(monthlyPackageProvider.future);
+  final yearly = await ref.watch(yearlyPackageProvider.future);
+  final productIds = <String>{
+    if (monthly != null) monthly.storeProduct.identifier,
+    if (yearly != null) yearly.storeProduct.identifier,
+  }.toList();
+  if (productIds.isEmpty) return const {};
+  try {
+    final result =
+        await Purchases.checkTrialOrIntroductoryPriceEligibility(productIds);
+    return result.map((id, e) => MapEntry(id, e.status));
+  } catch (e) {
+    debugPrint('introEligibilityProvider: lookup failed - $e');
+    return const {};
+  }
+});
+
+/// True when the device may still be offered the intro free trial for the
+/// given product. Treats `unknown` (Android, or iOS with missing subscription
+/// group info) as eligible so the trial CTA stays visible — the store rejects
+/// the offer at purchase time if the user is actually ineligible.
+bool isEligibleForIntroOffer(
+  Map<String, IntroEligibilityStatus> eligibility,
+  String productId,
+) {
+  final status = eligibility[productId];
+  if (status == null) return true; // not loaded yet — be optimistic
+  return status == IntroEligibilityStatus.introEligibilityStatusEligible ||
+      status == IntroEligibilityStatus.introEligibilityStatusUnknown;
+}
 
 /// Conflict information when database and SDK disagree
 class ConflictInfo {

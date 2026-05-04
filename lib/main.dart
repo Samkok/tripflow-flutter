@@ -15,6 +15,7 @@ import 'providers/auth_provider.dart';
 
 import 'widgets/connectivity_wrapper.dart';
 import 'widgets/subscription_conflict_banner.dart';
+import 'widgets/trial_countdown_banner.dart';
 
 import 'services/supabase_service.dart';
 import 'services/revenuecat_service.dart';
@@ -283,6 +284,7 @@ class _MyAppState extends ConsumerState<MyApp> with WidgetsBindingObserver {
         return Column(
           children: [
             const SubscriptionConflictBanner(),
+            const TrialCountdownBanner(),
             Expanded(
               child: ConnectivityWrapper(child: child!),
             ),

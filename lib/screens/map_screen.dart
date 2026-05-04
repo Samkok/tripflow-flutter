@@ -22,7 +22,9 @@ import '../services/location_service.dart';
 import '../services/places_service.dart';
 import '../services/location_add_service.dart';
 import '../utils/trip_date_validator.dart';
+import '../providers/nearby_radius_provider.dart';
 import '../widgets/map_widget.dart';
+import '../widgets/nearby_places_picker_sheet.dart';
 import '../widgets/search_widget.dart';
 import '../widgets/trip_bottom_sheet.dart';
 
@@ -205,107 +207,146 @@ class _MapScreenState extends ConsumerState<MapScreen>
       return;
     }
     try {
-      // Show loading indicator
+      final radius = ref.read(nearbyRadiusProvider).round();
+
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Row(
             children: [
-              SizedBox(
+              const SizedBox(
                 height: 16,
                 width: 16,
                 child: CircularProgressIndicator(strokeWidth: 2),
               ),
-              SizedBox(width: 16),
-              Text('Adding location...'), // Uses theme colors
+              const SizedBox(width: 16),
+              Text('Looking up places within ${_formatRadius(radius)}...'),
             ],
           ),
-          duration: Duration(seconds: 2),
+          duration: const Duration(seconds: 3),
         ),
       );
 
-      // Get place details from coordinates
-      final placeDetails =
-          await PlacesService.getPlaceFromCoordinates(coordinates);
-
-      if (placeDetails != null) {
-        final activeTrip =
-            ref.read(realtimeActiveTripProvider).asData?.value;
-        if (!mounted) return;
-        // Hide the "Adding location..." snackbar before showing the country
-        // confirm modal so the user sees a clean dialog.
-        ScaffoldMessenger.of(context).hideCurrentSnackBar();
-        final countryOk = await ensureLocationCountryAllowed(
-          context,
-          activeTrip,
-          placeDetails.countryCode,
-        );
-        if (!countryOk) return;
-
-        final selectedDate = ref.read(selectedDateProvider);
-        final location = LocationModel(
-          id: const Uuid().v4(),
-          name: placeDetails.name,
-          address: placeDetails.address,
-          coordinates: placeDetails.coordinates,
-          addedAt: DateTime.now(),
-          scheduledDate: selectedDate,
-          photoReference: placeDetails.photoReference,
-          photoReferences: placeDetails.photoReferences,
-          photoAttributions: placeDetails.photoAttributions,
-        );
-
-        if (!mounted) return;
-        final added = await LocationAddService(ref).addLocation(context, location);
-        if (!mounted) return;
-        if (!added) {
-          ScaffoldMessenger.of(context).hideCurrentSnackBar();
-          return;
-        }
-
-        // Hide loading snackbar and show success
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).hideCurrentSnackBar();
-
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              // Uses theme colors
-              content: Text('Added ${location.name} to your trip',
-                  style: TextStyle(
-                      color: Theme.of(context).colorScheme.onPrimary)),
-              backgroundColor: Theme.of(context).colorScheme.primary,
-              behavior: SnackBarBehavior.floating,
-              action: SnackBarAction(
-                textColor: Theme.of(context).colorScheme.onPrimary,
-                label: 'Undo',
-                onPressed: () {
-                  ref.read(tripProvider.notifier).removeLocation(location.id);
-                },
-              ),
-            ),
-          );
-        }
-
-        // Clear polyline highlighting
-        setState(() {
-          _highlightedLocationIndex = null;
-        });
-        ref.read(mapUIStateProvider.notifier).clearHighlights();
-      }
-    } catch (e) {
-      debugPrint('Error adding location from map: $e');
+      final nearby = await PlacesService.searchNearbyPlaces(
+        coordinates,
+        radiusMeters: radius,
+      );
+      if (!mounted) return;
       ScaffoldMessenger.of(context).hideCurrentSnackBar();
 
+      final picked = await showNearbyPlacesPicker(
+        context,
+        places: nearby,
+        radiusMeters: radius,
+      );
+      if (picked.isEmpty || !mounted) return;
+
+      await _addNearbyPlaces(picked);
+    } catch (e) {
+      debugPrint('Error adding location from map: $e');
       if (mounted) {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            // Uses theme colors
             content: Text('Failed to add location. Please try again.'),
             backgroundColor: Colors.red,
           ),
         );
       }
     }
+  }
+
+  /// Adds each picked nearby place to the trip. Each pick is first enriched
+  /// via [PlacesService.getPlaceDetails] so it carries the full photo list
+  /// and the parsed country code — Nearby Search alone returns only the
+  /// cover photo and no `address_components`, which is why a manual-search
+  /// add ends up with more photos than a long-press add did before.
+  ///
+  /// The first enriched place drives the country-confirmation modal;
+  /// subsequent picks within the same long-press almost always share its
+  /// country (radius-bounded), so we don't spam the user with N prompts.
+  Future<void> _addNearbyPlaces(List<NearbyPlace> picked) async {
+    final enriched = await Future.wait(
+      picked.map((p) => PlacesService.getPlaceDetails(p.placeId)),
+    );
+    if (!mounted) return;
+
+    final activeTrip = ref.read(realtimeActiveTripProvider).asData?.value;
+    String? countryForPrompt;
+    for (final d in enriched) {
+      if (d?.countryCode != null) {
+        countryForPrompt = d!.countryCode;
+        break;
+      }
+    }
+    final countryOk = await ensureLocationCountryAllowed(
+      context,
+      activeTrip,
+      countryForPrompt,
+    );
+    if (!countryOk || !mounted) return;
+
+    final scheduledDate = ref.read(selectedDateProvider);
+    final addedLocations = <LocationModel>[];
+    for (var i = 0; i < picked.length; i++) {
+      final fallback = picked[i];
+      final details = enriched[i];
+      final location = LocationModel(
+        id: const Uuid().v4(),
+        name: details?.name.isNotEmpty == true ? details!.name : fallback.name,
+        address: details?.address.isNotEmpty == true
+            ? details!.address
+            : fallback.vicinity,
+        coordinates: details?.coordinates ?? fallback.coordinates,
+        addedAt: DateTime.now(),
+        scheduledDate: scheduledDate,
+        photoReference:
+            details?.photoReference ?? fallback.photoReference,
+        photoReferences: details?.photoReferences.isNotEmpty == true
+            ? details!.photoReferences
+            : fallback.photoReferences,
+        photoAttributions:
+            details?.photoAttributions ?? fallback.photoAttributions,
+      );
+      final added =
+          await LocationAddService(ref).addLocation(context, location);
+      if (!mounted) return;
+      if (added) addedLocations.add(location);
+    }
+
+    if (!mounted || addedLocations.isEmpty) return;
+
+    final count = addedLocations.length;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          count == 1
+              ? 'Added ${addedLocations.first.name} to your trip'
+              : 'Added $count locations to your trip',
+          style: TextStyle(color: Theme.of(context).colorScheme.onPrimary),
+        ),
+        backgroundColor: Theme.of(context).colorScheme.primary,
+        behavior: SnackBarBehavior.floating,
+        action: SnackBarAction(
+          textColor: Theme.of(context).colorScheme.onPrimary,
+          label: 'Undo',
+          onPressed: () {
+            for (final l in addedLocations) {
+              ref.read(tripProvider.notifier).removeLocation(l.id);
+            }
+          },
+        ),
+      ),
+    );
+
+    setState(() {
+      _highlightedLocationIndex = null;
+    });
+    ref.read(mapUIStateProvider.notifier).clearHighlights();
+  }
+
+  String _formatRadius(int meters) {
+    if (meters < 1000) return '${meters}m';
+    return '${(meters / 1000).toStringAsFixed(meters % 1000 == 0 ? 0 : 1)}km';
   }
 
   void _onMarkerTapped(LocationModel location) {

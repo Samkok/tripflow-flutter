@@ -10,9 +10,11 @@ import 'package:voyza/providers/trip_collaborator_provider.dart';
 import 'package:voyza/providers/local_active_trip_provider.dart';
 import 'package:voyza/screens/login_screen.dart';
 import 'package:voyza/screens/trip_details_screen.dart';
+import 'package:voyza/services/subscription_limit_service.dart';
 import 'package:voyza/utils/countries.dart';
 import 'package:voyza/utils/trip_date_validator.dart';
 import 'package:voyza/widgets/country_picker_sheet.dart';
+import 'package:voyza/widgets/trip_skeleton.dart';
 
 class TripScreen extends ConsumerStatefulWidget {
   const TripScreen({super.key});
@@ -193,6 +195,14 @@ class _TripScreenState extends ConsumerState<TripScreen> {
       );
       return;
     }
+
+    // Trial / Pro gate. Pro users always pass; trial users pass while their
+    // 72-hour window is open; otherwise the paywall is shown and we abort
+    // unless the user just subscribed.
+    final canCreate =
+        await SubscriptionLimitService(ref).canCreate(context);
+    if (!canCreate) return;
+    if (!mounted) return;
 
     try {
       final authState = ref.read(authStateProvider);
@@ -508,7 +518,7 @@ class _TripScreenState extends ConsumerState<TripScreen> {
               },
               loading: () => const Padding(
                 padding: EdgeInsets.all(16),
-                child: Center(child: CircularProgressIndicator()),
+                child: ActiveTripSkeleton(),
               ),
               error: (_, __) => const SizedBox.shrink(),
             ),
@@ -601,10 +611,7 @@ class _TripScreenState extends ConsumerState<TripScreen> {
               );
             },
             loading: () => const SliverToBoxAdapter(
-              child: Center(child: Padding(
-                padding: EdgeInsets.all(32),
-                child: CircularProgressIndicator(),
-              )),
+              child: TripsListSkeleton(),
             ),
             error: (_, __) => SliverToBoxAdapter(
               child: _buildConnectionError(context),

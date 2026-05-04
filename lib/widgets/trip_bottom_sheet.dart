@@ -15,13 +15,13 @@ import 'package:url_launcher/url_launcher.dart';
 import 'optimized_location_card.dart';
 import '../services/csv_service.dart';
 
-class TripBottomSheet extends ConsumerWidget {
+class TripBottomSheet extends ConsumerStatefulWidget {
   final DraggableScrollableController? sheetController;
   final Function(LatLng)? onLocationTap;
   final VoidCallback? onShowZoneSettings;
   final int? highlightedLocationIndex;
 
-  TripBottomSheet({
+  const TripBottomSheet({
     super.key,
     this.sheetController,
     this.onLocationTap,
@@ -34,7 +34,40 @@ class TripBottomSheet extends ConsumerWidget {
       StateProvider<bool>((ref) => false);
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<TripBottomSheet> createState() => _TripBottomSheetState();
+}
+
+class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
+    with SingleTickerProviderStateMixin {
+  late final TabController _tabController;
+
+  // Provider to clear the optimized route when the date changes.
+  // This prevents showing an old route on a new day's location list.
+  final routeClearerProvider = Provider<void>((ref) {
+    ref.listen<DateTime>(selectedDateProvider, (previous, next) {
+      // When the date changes, clear the old route from the state.
+      ref.read(tripProvider.notifier).clearOptimizedRoute();
+    });
+  });
+
+  DraggableScrollableController? get sheetController => widget.sheetController;
+  Function(LatLng)? get onLocationTap => widget.onLocationTap;
+  VoidCallback? get onShowZoneSettings => widget.onShowZoneSettings;
+
+  @override
+  void initState() {
+    super.initState();
+    _tabController = TabController(length: 2, vsync: this);
+  }
+
+  @override
+  void dispose() {
+    _tabController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     // OPTIMIZATION: Watch only specific fields to prevent rebuilds during drag
     // Don't watch entire tripState here since it rebuilds on every state change
     final hasPinnedLocations =
@@ -145,24 +178,55 @@ class TripBottomSheet extends ConsumerWidget {
                     // Date Selector - Always visible to allow date switching
                     _buildDatePicker(context, ref),
 
-                    // Locations List - PERFORMANCE: Spread widgets to avoid nested ListView
-                    Consumer(builder: (context, ref, _) {
-                      final locationsForDate =
-                          ref.watch(locationsForSelectedDateProvider);
-                      return Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: _buildLocationsListWidgets(
-                            context, ref, locationsForDate, scrollController),
-                      );
-                    }),
+                    // Tabs: Selected Date vs. All (grouped by date)
+                    if (hasPinnedLocations) _buildLocationsTabBar(context),
 
-                    // Optimize button
-                    _buildOptimizeButton(context, ref),
+                    // Locations List — content depends on active tab
+                    ListenableBuilder(
+                      listenable: _tabController,
+                      builder: (context, _) {
+                        if (!hasPinnedLocations || _tabController.index == 0) {
+                          return Consumer(builder: (context, ref, _) {
+                            final locationsForDate =
+                                ref.watch(locationsForSelectedDateProvider);
+                            return Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: _buildLocationsListWidgets(context,
+                                  ref, locationsForDate, scrollController),
+                            );
+                          });
+                        }
+                        return Consumer(builder: (context, ref, _) {
+                          final all = ref.watch(tripProvider
+                              .select((s) => s.pinnedLocations));
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: _buildAllLocationsGroupedByDate(
+                                context, ref, all, scrollController),
+                          );
+                        });
+                      },
+                    ),
 
-                    const SizedBox(height: 12),
-
-                    // CSV download button
-                    _buildCsvDownloadButton(context, ref),
+                    // Optimize / CSV buttons act on the selected date —
+                    // only show on the Selected Date tab.
+                    ListenableBuilder(
+                      listenable: _tabController,
+                      builder: (context, _) {
+                        if (hasPinnedLocations && _tabController.index != 0) {
+                          return const SizedBox.shrink();
+                        }
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            _buildOptimizeButton(
+                                context, ref, scrollController),
+                            const SizedBox(height: 12),
+                            _buildCsvDownloadButton(context, ref),
+                          ],
+                        );
+                      },
+                    ),
 
                     const SizedBox(height: 130),
                   ],
@@ -174,15 +238,6 @@ class TripBottomSheet extends ConsumerWidget {
       },
     );
   }
-
-  // Provider to clear the optimized route when the date changes.
-  // This prevents showing an old route on a new day's location list.
-  final routeClearerProvider = Provider<void>((ref) {
-    ref.listen<DateTime>(selectedDateProvider, (previous, next) {
-      // When the date changes, clear the old route from the state.
-      ref.read(tripProvider.notifier).clearOptimizedRoute();
-    });
-  });
 
   Widget _buildDefaultHeader(BuildContext context, WidgetRef ref) {
     // OPTIMIZATION: Read values only when needed, not watched in parent
@@ -896,19 +951,6 @@ class TripBottomSheet extends ConsumerWidget {
           onLocationTap: onLocationTap,
         ),
       );
-
-      // Add divider between items (but not after the last one)
-      if (i < normalLocations.length - 1) {
-        widgets.add(
-          Divider(
-            height: 1,
-            thickness: 1,
-            color: Theme.of(context).dividerColor.withValues(alpha: 0.1),
-            indent: 20,
-            endIndent: 20,
-          ),
-        );
-      }
     }
 
     // Done locations section
@@ -987,8 +1029,206 @@ class TripBottomSheet extends ConsumerWidget {
     return widgets;
   }
 
+  /// Tab bar that switches between the locations for the selected date
+  /// and a grouped-by-date view of every location in the trip.
+  Widget _buildLocationsTabBar(BuildContext context) {
+    final theme = Theme.of(context);
+    final primary = theme.colorScheme.primary;
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 8, bottom: 4),
+      child: Container(
+        decoration: BoxDecoration(
+          color: primary.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: TabBar(
+          controller: _tabController,
+          labelColor: Colors.black,
+          unselectedLabelColor: theme.textTheme.bodyMedium?.color,
+          indicator: BoxDecoration(
+            color: primary,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          indicatorSize: TabBarIndicatorSize.tab,
+          dividerColor: Colors.transparent,
+          tabs: const [
+            Tab(text: 'Selected Date'),
+            Tab(text: 'All'),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Builds the "All" tab — every location in the trip, grouped by their
+  /// scheduledDate. Tapping a date header makes that date the selected date
+  /// and switches the user back to the "Selected Date" tab.
+  List<Widget> _buildAllLocationsGroupedByDate(
+    BuildContext context,
+    WidgetRef ref,
+    List<LocationModel> all,
+    ScrollController scrollController,
+  ) {
+    if (all.isEmpty) {
+      return [
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 32, horizontal: 16),
+          child: Column(
+            children: [
+              Icon(Icons.event_note_outlined,
+                  size: 64,
+                  color: Theme.of(context).textTheme.bodyMedium?.color),
+              const SizedBox(height: 16),
+              Text('No locations yet',
+                  style: Theme.of(context).textTheme.titleMedium),
+              const SizedBox(height: 8),
+              Text('Add locations to see them grouped by date here.',
+                  style: Theme.of(context).textTheme.bodyMedium,
+                  textAlign: TextAlign.center),
+            ],
+          ),
+        ),
+      ];
+    }
+
+    // Group by date-only key. Locations without a scheduledDate fall back to
+    // their addedAt date — matches the behavior of locationsForSelectedDateProvider.
+    final Map<DateTime, List<LocationModel>> grouped = {};
+    for (final loc in all) {
+      final raw = loc.scheduledDate ?? loc.addedAt;
+      final key = DateTime(raw.year, raw.month, raw.day);
+      grouped.putIfAbsent(key, () => []).add(loc);
+    }
+    final sortedDates = grouped.keys.toList()..sort();
+
+    final selectedDate = ref.watch(selectedDateProvider);
+    final today = DateTime(
+        DateTime.now().year, DateTime.now().month, DateTime.now().day);
+
+    final widgets = <Widget>[];
+    for (final date in sortedDates) {
+      final locs = grouped[date]!;
+      final isSelected = date == selectedDate;
+      widgets.add(_buildDateGroupHeader(context, date, today, locs.length,
+          isSelected: isSelected, onTap: () {
+        ref.read(selectedDateProvider.notifier).state = date;
+        _tabController.animateTo(0);
+      }));
+
+      // Sort within a date: upcoming first, then done, then skipped.
+      final normal = locs.where((l) => !l.isSkipped && !l.isDone).toList();
+      final done = locs.where((l) => l.isDone).toList();
+      final skipped = locs.where((l) => l.isSkipped).toList();
+      final ordered = [...normal, ...done, ...skipped];
+
+      for (int i = 0; i < ordered.length; i++) {
+        final loc = ordered[i];
+        widgets.add(OptimizedLocationCard(
+          key: ValueKey('all_${date.toIso8601String()}_${loc.id}'),
+          location: loc,
+          number: loc.isDone ? -2 : (loc.isSkipped ? -1 : i + 1),
+          scrollController: scrollController,
+          sheetController: sheetController,
+          onLocationTap: onLocationTap,
+        ));
+      }
+    }
+    return widgets;
+  }
+
+  Widget _buildDateGroupHeader(
+    BuildContext context,
+    DateTime date,
+    DateTime today,
+    int count, {
+    required bool isSelected,
+    required VoidCallback onTap,
+  }) {
+    final theme = Theme.of(context);
+    final primary = theme.colorScheme.primary;
+    final isToday = date == today;
+    final isPast = date.isBefore(today);
+
+    String label;
+    if (isToday) {
+      label = 'Today · ${DateFormat.MMMd().format(date)}';
+    } else if (date == today.add(const Duration(days: 1))) {
+      label = 'Tomorrow · ${DateFormat.MMMd().format(date)}';
+    } else {
+      label = DateFormat('EEE, MMM d, y').format(date);
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 16, bottom: 8),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(12),
+          child: Container(
+            padding:
+                const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: isSelected
+                  ? primary.withValues(alpha: 0.18)
+                  : primary.withValues(alpha: 0.06),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: isSelected
+                    ? primary
+                    : primary.withValues(alpha: 0.2),
+                width: isSelected ? 1.5 : 1,
+              ),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  isPast ? Icons.history : Icons.calendar_today_outlined,
+                  size: 18,
+                  color: primary,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    label,
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      color: isSelected ? primary : null,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 8, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: primary.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Text(
+                    '$count',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: primary,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Icon(Icons.chevron_right,
+                    size: 18,
+                    color: theme.textTheme.bodyMedium?.color
+                        ?.withValues(alpha: 0.6)),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   /// Build optimize and CSV buttons as separate widgets
-  Widget _buildOptimizeButton(BuildContext context, WidgetRef ref) {
+  Widget _buildOptimizeButton(BuildContext context, WidgetRef ref,
+      ScrollController scrollController) {
     return Consumer(builder: (context, ref, _) {
       final isGenerating = ref.watch(isGeneratingRouteProvider);
       final hasRoute = ref
@@ -1012,12 +1252,26 @@ class TripBottomSheet extends ConsumerWidget {
       } else if (isViewingHistory) {
         buttonText = 'View Route';
         onPressedAction = () {
-          sheetController?.animateTo(
+          ref.read(TripBottomSheet.viewHistoricalRouteProvider.notifier)
+              .state = true;
+          final collapse = sheetController?.animateTo(
             0.12,
             duration: const Duration(milliseconds: 300),
             curve: Curves.easeInOut,
           );
-          ref.read(viewHistoricalRouteProvider.notifier).state = true;
+          // Reset the list to the top after the sheet finishes collapsing.
+          // Animating during collapse fights the shrinking viewport (the
+          // DraggableScrollableSheet's scroll controller treats edge-pulls
+          // as drags), and the list is hidden anyway by the time it lands —
+          // so a post-collapse jumpTo is both reliable and invisible.
+          void resetScroll() {
+            if (scrollController.hasClients) scrollController.jumpTo(0);
+          }
+          if (collapse != null) {
+            collapse.then((_) => resetScroll());
+          } else {
+            WidgetsBinding.instance.addPostFrameCallback((_) => resetScroll());
+          }
         };
       } else if (!hasLocations) {
         buttonText = 'Optimize Route';

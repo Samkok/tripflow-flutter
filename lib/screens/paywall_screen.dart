@@ -7,9 +7,28 @@ import '../providers/subscription_provider.dart';
 import '../services/revenuecat_service.dart';
 import '../services/supabase_service.dart';
 
+/// Reasons the paywall might be shown — drives the headline copy.
+enum PaywallTrigger {
+  trialExpired,
+  upgradePrompt,
+}
+
+/// True while a paywall route is on the Navigator stack. Lets app-level
+/// chrome (e.g. the trial countdown banner mounted above the Navigator)
+/// hide itself so it can't be tapped to push a duplicate paywall.
+final paywallVisibleProvider = StateProvider<bool>((_) => false);
+
 /// Paywall screen that displays subscription options using RevenueCat Paywall UI
 class PaywallScreen extends ConsumerStatefulWidget {
-  const PaywallScreen({super.key});
+  /// What triggered this paywall presentation. Drives the headline copy so
+  /// users coming from an expired trial see "Your free trial has ended"
+  /// instead of the generic upsell.
+  final PaywallTrigger trigger;
+
+  const PaywallScreen({
+    super.key,
+    this.trigger = PaywallTrigger.upgradePrompt,
+  });
 
   @override
   ConsumerState<PaywallScreen> createState() => _PaywallScreenState();
@@ -19,10 +38,45 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
   bool _isLoading = false;
   Package? _selectedPackage;
 
+  /// One-shot diagnostic so we can verify whether the App Store / Play Store
+  /// intro offer is reaching the app. Look for `[Paywall diag]` in logs.
+  bool _loggedDiag = false;
+  void _logIntroOfferDiagnostic() {
+    if (_loggedDiag) return;
+    final monthly = ref.read(monthlyPackageProvider).asData?.value;
+    final yearly = ref.read(yearlyPackageProvider).asData?.value;
+    if (monthly == null && yearly == null) return; // not loaded yet
+    _loggedDiag = true;
+    void dump(String label, Package? p) {
+      if (p == null) {
+        debugPrint('[Paywall diag] $label: <not in offering>');
+        return;
+      }
+      final sp = p.storeProduct;
+      final intro = sp.introductoryPrice;
+      debugPrint(
+        '[Paywall diag] $label: id=${sp.identifier} '
+        'price=${sp.priceString} '
+        'introductoryPrice=${intro == null ? "null (no offer reaching app)" : "${intro.priceString} for ${intro.periodNumberOfUnits} ${intro.periodUnit.name}"}',
+      );
+    }
+
+    dump('monthly', monthly);
+    dump('yearly', yearly);
+    final info = ref.read(subscriptionProvider).customerInfo;
+    final ent = info?.entitlements
+        .all[RevenueCatConfig.entitlementVoyZaPro];
+    debugPrint(
+      '[Paywall diag] entitlement: active=${ent?.isActive} '
+      'periodType=${ent?.periodType} expires=${ent?.expirationDate}',
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final subscriptionState = ref.watch(subscriptionProvider);
     final theme = Theme.of(context);
+    _logIntroOfferDiagnostic();
 
     return Scaffold(
       appBar: AppBar(
@@ -90,6 +144,28 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
 
   Widget _buildHeroSection(BuildContext context) {
     final theme = Theme.of(context);
+    final hasEligibleTrial = _anyPackageHasEligibleIntroOffer();
+    final hasUsedTrialBefore = _anyPackageHasIntroOfferButIneligible();
+    final isTrialExpired = widget.trigger == PaywallTrigger.trialExpired;
+
+    final String headline;
+    final String subheadline;
+    final IconData heroIcon;
+    if (isTrialExpired || hasUsedTrialBefore) {
+      headline = 'Your free trial has ended';
+      subheadline = 'Subscribe to keep creating trips and locations.';
+      heroIcon = Icons.lock_clock;
+    } else if (hasEligibleTrial) {
+      headline = 'Try VoyZa Pro free for 3 days';
+      subheadline =
+          'Then continue with a subscription. Cancel anytime in your store account.';
+      heroIcon = Icons.card_giftcard;
+    } else {
+      headline = 'Upgrade to VoyZa Pro';
+      subheadline =
+          'Unlock all premium features and take your trip planning to the next level';
+      heroIcon = Icons.star_rounded;
+    }
 
     return Column(
       children: [
@@ -107,15 +183,15 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
             ),
             borderRadius: BorderRadius.circular(24),
           ),
-          child: const Icon(
-            Icons.star_rounded,
+          child: Icon(
+            heroIcon,
             size: 56,
             color: Colors.white,
           ),
         ),
         const SizedBox(height: 24),
         Text(
-          'Upgrade to VoyZa Pro',
+          headline,
           style: theme.textTheme.headlineMedium?.copyWith(
             fontWeight: FontWeight.bold,
           ),
@@ -123,7 +199,7 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
         ),
         const SizedBox(height: 8),
         Text(
-          'Unlock all premium features and take your trip planning to the next level',
+          subheadline,
           style: theme.textTheme.bodyLarge?.copyWith(
             color: theme.colorScheme.onSurfaceVariant,
           ),
@@ -131,6 +207,68 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
         ),
       ],
     );
+  }
+
+  /// True when this device can still claim the intro offer for [package],
+  /// i.e. the product has an intro offer AND StoreKit/Play say the user is
+  /// eligible. Treats `unknown` as eligible (Android always returns unknown;
+  /// the store enforces ineligibility at purchase time).
+  bool _packageHasEligibleTrial(Package? package) {
+    if (package == null) return false;
+    if (package.storeProduct.introductoryPrice == null) return false;
+    final eligibility = ref.watch(introEligibilityProvider).asData?.value ??
+        const <String, IntroEligibilityStatus>{};
+    return isEligibleForIntroOffer(
+        eligibility, package.storeProduct.identifier);
+  }
+
+  /// True when at least one loaded package has a trial AND the device is
+  /// eligible for it.
+  bool _anyPackageHasEligibleIntroOffer() {
+    final monthly = ref.watch(monthlyPackageProvider).asData?.value;
+    final yearly = ref.watch(yearlyPackageProvider).asData?.value;
+    return _packageHasEligibleTrial(monthly) ||
+        _packageHasEligibleTrial(yearly);
+  }
+
+  /// True when at least one loaded package has an intro offer configured but
+  /// this device is *ineligible* for all of them — i.e. the user has already
+  /// used the trial on this Apple ID / Google account. Used to swap to "trial
+  /// has ended" copy so we don't dangle a benefit they can't actually claim.
+  bool _anyPackageHasIntroOfferButIneligible() {
+    final monthly = ref.watch(monthlyPackageProvider).asData?.value;
+    final yearly = ref.watch(yearlyPackageProvider).asData?.value;
+    final eligibility = ref.watch(introEligibilityProvider).asData?.value;
+    if (eligibility == null) return false;
+    bool ineligible(Package? p) {
+      if (p == null) return false;
+      if (p.storeProduct.introductoryPrice == null) return false;
+      return eligibility[p.storeProduct.identifier] ==
+          IntroEligibilityStatus.introEligibilityStatusIneligible;
+    }
+    final monthlyHasOffer = monthly?.storeProduct.introductoryPrice != null;
+    final yearlyHasOffer = yearly?.storeProduct.introductoryPrice != null;
+    if (!monthlyHasOffer && !yearlyHasOffer) return false;
+    final monthlyBlocked = monthlyHasOffer ? ineligible(monthly) : true;
+    final yearlyBlocked = yearlyHasOffer ? ineligible(yearly) : true;
+    return monthlyBlocked && yearlyBlocked;
+  }
+
+  /// Human-readable label for an intro offer, e.g. "3 days free".
+  /// Falls back to the store-provided priceString for paid intro offers.
+  String _introOfferLabel(IntroductoryPrice intro) {
+    final isFree = intro.price == 0;
+    final unit = intro.periodUnit;
+    final count = intro.periodNumberOfUnits;
+    if (!isFree) return '${intro.priceString} for ${count > 1 ? '$count ' : ''}${unit.name}${count > 1 ? 's' : ''}';
+    final unitLabel = switch (unit) {
+      PeriodUnit.day => count == 1 ? 'day' : 'days',
+      PeriodUnit.week => count == 1 ? 'week' : 'weeks',
+      PeriodUnit.month => count == 1 ? 'month' : 'months',
+      PeriodUnit.year => count == 1 ? 'year' : 'years',
+      _ => 'days',
+    };
+    return '$count $unitLabel free';
   }
 
   Widget _buildFeaturesList(BuildContext context) {
@@ -259,6 +397,14 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
     final priceString = package.storeProduct.priceString;
     final period = package.packageType == PackageType.annual ? '/year' : '/month';
     final isSelected = _selectedPackage?.identifier == package.identifier;
+    final intro = package.storeProduct.introductoryPrice;
+    // Only surface the intro-offer subtitle when this device can actually
+    // claim it. Showing "3 days free" to a user who already used the trial
+    // would be misleading — the store charges them immediately on purchase.
+    final showTrialCopy = intro != null && _packageHasEligibleTrial(package);
+    final effectiveSubtitle = showTrialCopy
+        ? '${_introOfferLabel(intro)}, then $priceString$period'
+        : subtitle;
 
     return GestureDetector(
       onTap: () {
@@ -345,7 +491,7 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    subtitle,
+                    effectiveSubtitle,
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: theme.colorScheme.onSurfaceVariant,
                     ),
@@ -392,12 +538,27 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
 
   Widget _buildSubscribeButton(BuildContext context) {
     final theme = Theme.of(context);
+    final selected = _selectedPackage;
+    // Only label the CTA "Start free trial" when the device is actually
+    // eligible. If they've used the trial before, subscribing charges them
+    // immediately — the label needs to reflect that.
+    final selectedHasEligibleTrial = _packageHasEligibleTrial(selected);
+    final String label;
+    if (selected == null) {
+      label = 'Select a Plan';
+    } else if (selectedHasEligibleTrial) {
+      label = 'Start free trial';
+    } else {
+      final planName =
+          selected.packageType == PackageType.annual ? 'Yearly' : 'Monthly';
+      label = 'Subscribe to $planName Plan';
+    }
 
     return SizedBox(
       width: double.infinity,
       height: 56,
       child: ElevatedButton(
-        onPressed: _selectedPackage != null ? _purchaseSelectedPackage : null,
+        onPressed: selected != null ? _purchaseSelectedPackage : null,
         style: ElevatedButton.styleFrom(
           backgroundColor: theme.colorScheme.primary,
           foregroundColor: theme.colorScheme.onPrimary,
@@ -407,9 +568,7 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
           elevation: 2,
         ),
         child: Text(
-          _selectedPackage != null
-              ? 'Subscribe to ${_selectedPackage!.packageType == PackageType.annual ? 'Yearly' : 'Monthly'} Plan'
-              : 'Select a Plan',
+          label,
           style: theme.textTheme.titleMedium?.copyWith(
             fontWeight: FontWeight.bold,
             color: theme.colorScheme.onPrimary,
@@ -463,8 +622,26 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
 
     setState(() => _isLoading = true);
 
+    final pkg = _selectedPackage!;
+    debugPrint(
+      '[Paywall diag] purchasing: id=${pkg.storeProduct.identifier} '
+      'introductoryPrice=${pkg.storeProduct.introductoryPrice == null ? "null" : "present"}',
+    );
+
     final success =
-        await ref.read(subscriptionProvider.notifier).purchasePackage(_selectedPackage!);
+        await ref.read(subscriptionProvider.notifier).purchasePackage(pkg);
+
+    final entAfter = ref
+        .read(subscriptionProvider)
+        .customerInfo
+        ?.entitlements
+        .all[RevenueCatConfig.entitlementVoyZaPro];
+    debugPrint(
+      '[Paywall diag] post-purchase: success=$success '
+      'entitlement.isActive=${entAfter?.isActive} '
+      'periodType=${entAfter?.periodType} '
+      'expires=${entAfter?.expirationDate}',
+    );
 
     setState(() => _isLoading = false);
 
@@ -558,27 +735,48 @@ Future<bool> showRevenueCatPaywall(BuildContext context) async {
   }
 }
 
-/// Shows the custom paywall screen
-Future<bool?> showCustomPaywall(BuildContext context) async {
-  return Navigator.of(context).push<bool>(
-    MaterialPageRoute(
-      fullscreenDialog: true,
-      builder: (context) => const PaywallScreen(),
-    ),
-  );
+/// Shows the custom paywall screen.
+///
+/// Flips [paywallVisibleProvider] for the duration of the route so app-level
+/// chrome (the trial banner) can hide while the paywall is up. The try/finally
+/// ensures the flag clears on system-back/gesture dismissal too.
+Future<bool?> showCustomPaywall(
+  BuildContext context, {
+  PaywallTrigger trigger = PaywallTrigger.upgradePrompt,
+}) async {
+  final container = ProviderScope.containerOf(context, listen: false);
+  if (container.read(paywallVisibleProvider)) {
+    // Already showing — don't stack a second paywall.
+    return null;
+  }
+  container.read(paywallVisibleProvider.notifier).state = true;
+  try {
+    return await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        fullscreenDialog: true,
+        builder: (context) => PaywallScreen(trigger: trigger),
+      ),
+    );
+  } finally {
+    container.read(paywallVisibleProvider.notifier).state = false;
+  }
 }
 
 /// Helper function to show the appropriate paywall
 /// Defaults to custom paywall (preferNative = false to avoid v2 paywall warning)
-Future<bool> showPaywall(BuildContext context, {bool preferNative = false}) async {
+Future<bool> showPaywall(
+  BuildContext context, {
+  bool preferNative = false,
+  PaywallTrigger trigger = PaywallTrigger.upgradePrompt,
+}) async {
   if (preferNative) {
     // Try RevenueCat native paywall first
     final result = await showRevenueCatPaywall(context);
     if (result) return true;
 
     // If native paywall couldn't be shown (no offering configured), show custom
-    return await showCustomPaywall(context) ?? false;
+    return await showCustomPaywall(context, trigger: trigger) ?? false;
   } else {
-    return await showCustomPaywall(context) ?? false;
+    return await showCustomPaywall(context, trigger: trigger) ?? false;
   }
 }

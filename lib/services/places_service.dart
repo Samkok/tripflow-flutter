@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/foundation.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:dio/dio.dart';
@@ -108,6 +110,106 @@ class PlaceDetails {
       countryCode: _extractCountryCode(json['address_components']),
     );
   }
+}
+
+/// Lightweight summary returned by Google Places Nearby Search. Carries
+/// just enough to render a picker row (name, photo, distance, type) without
+/// the per-place follow-up call that full [PlaceDetails] would require.
+class NearbyPlace {
+  final String placeId;
+  final String name;
+  final String vicinity;
+  final LatLng coordinates;
+  final String? photoReference;
+  final List<String> photoReferences;
+  final List<String>? photoAttributions;
+  /// Primary type from Google's `types` array (e.g. "restaurant"). Useful
+  /// for a one-line subtitle alongside the distance.
+  final String? primaryType;
+  /// Haversine distance from the long-press coordinate, in meters.
+  final double distanceMeters;
+
+  const NearbyPlace({
+    required this.placeId,
+    required this.name,
+    required this.vicinity,
+    required this.coordinates,
+    required this.distanceMeters,
+    this.photoReference,
+    this.photoReferences = const [],
+    this.photoAttributions,
+    this.primaryType,
+  });
+
+  static NearbyPlace? fromJson(
+    Map<String, dynamic> json, {
+    required LatLng origin,
+  }) {
+    final placeId = json['place_id'];
+    final geometry = json['geometry'];
+    if (placeId is! String || placeId.isEmpty || geometry is! Map) return null;
+    final loc = geometry['location'];
+    if (loc is! Map) return null;
+    final lat = (loc['lat'] as num?)?.toDouble();
+    final lng = (loc['lng'] as num?)?.toDouble();
+    if (lat == null || lng == null) return null;
+
+    final photoRefs = <String>[];
+    final attributions = <String>[];
+    final photos = json['photos'];
+    if (photos is List) {
+      for (final p in photos) {
+        if (p is! Map) continue;
+        final ref = p['photo_reference'];
+        if (ref is String && ref.isNotEmpty) photoRefs.add(ref);
+        final attrs = p['html_attributions'];
+        if (attrs is List) {
+          for (final a in attrs) {
+            attributions.add(a.toString());
+          }
+        }
+      }
+    }
+
+    String? primaryType;
+    final types = json['types'];
+    if (types is List && types.isNotEmpty) {
+      // Skip the generic catch-all types so the subtitle is informative.
+      const generic = {'point_of_interest', 'establishment', 'place'};
+      for (final t in types) {
+        if (t is String && !generic.contains(t)) {
+          primaryType = t;
+          break;
+        }
+      }
+      primaryType ??= types.first is String ? types.first as String : null;
+    }
+
+    return NearbyPlace(
+      placeId: placeId,
+      name: (json['name'] as String?) ?? 'Unnamed place',
+      vicinity: (json['vicinity'] as String?) ?? '',
+      coordinates: LatLng(lat, lng),
+      distanceMeters: _haversineMeters(origin, LatLng(lat, lng)),
+      photoReference: photoRefs.isNotEmpty ? photoRefs.first : null,
+      photoReferences: photoRefs,
+      photoAttributions: attributions.isEmpty ? null : attributions,
+      primaryType: primaryType,
+    );
+  }
+}
+
+double _haversineMeters(LatLng a, LatLng b) {
+  const earthRadius = 6371000.0;
+  double toRad(double d) => d * math.pi / 180.0;
+  final lat1 = toRad(a.latitude);
+  final lat2 = toRad(b.latitude);
+  final dLat = toRad(b.latitude - a.latitude);
+  final dLng = toRad(b.longitude - a.longitude);
+  final sLat = math.sin(dLat / 2);
+  final sLng = math.sin(dLng / 2);
+  final h = sLat * sLat + math.cos(lat1) * math.cos(lat2) * sLng * sLng;
+  return 2 * earthRadius * math.atan2(math.sqrt(h), math.sqrt(1 - h));
 }
 
 /// Pulls the ISO-2 country code (e.g. "KH") out of a Google Places
@@ -482,6 +584,53 @@ class PlacesService {
       debugPrint('Error parsing Google Maps URL: $e');
       // Re-throw the exception so the UI can handle it.
       rethrow;
+    }
+  }
+
+  /// Returns up to 20 POIs (Google Places Nearby Search caps a single page
+   /// at 20) within [radiusMeters] of [center]. Each result carries a
+   /// `distanceMeters` derived from the haversine distance to [center] so
+   /// callers can sort/display proximity without an extra round trip.
+   ///
+   /// We deliberately do NOT call `getPlaceDetails` per-result here — that
+   /// would be 20× the cost of the single Nearby Search call. Photo refs
+   /// returned by Nearby Search work directly with the Photos endpoint, so
+   /// the picker UI can render thumbnails without follow-up requests; the
+   /// per-place enrichment (full address, more photos, country code) only
+   /// happens when the user actually selects a POI to add.
+  static Future<List<NearbyPlace>> searchNearbyPlaces(
+    LatLng center, {
+    required int radiusMeters,
+  }) async {
+    try {
+      final url =
+          'https://maps.googleapis.com/maps/api/place/nearbysearch/json'
+          '?location=${center.latitude},${center.longitude}'
+          '&radius=$radiusMeters'
+          '&key=${ApiService.googlePlacesApiKey}';
+
+      final response = await ApiService.dio.get(url);
+      final data = response.data;
+      final status = data['status'];
+      if (status != 'OK' && status != 'ZERO_RESULTS') {
+        debugPrint('searchNearbyPlaces: non-OK status $status');
+        return const [];
+      }
+      final results = data['results'] as List? ?? const [];
+      final out = <NearbyPlace>[];
+      for (final r in results) {
+        if (r is! Map) continue;
+        final place = NearbyPlace.fromJson(
+          Map<String, dynamic>.from(r),
+          origin: center,
+        );
+        if (place != null) out.add(place);
+      }
+      out.sort((a, b) => a.distanceMeters.compareTo(b.distanceMeters));
+      return out;
+    } catch (e) {
+      debugPrint('searchNearbyPlaces failed: $e');
+      return const [];
     }
   }
 

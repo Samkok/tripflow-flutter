@@ -86,7 +86,16 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
       // Save preference before async gap (fire-and-forget is safe for prefs)
       AuthService.saveRememberMe(_rememberMe, _emailController.text.trim());
       if (mounted) {
-        Navigator.of(context).pop(); // Go back to settings
+        // If we were pushed on top of an existing screen (e.g. settings),
+        // just pop back. If we ARE the root route — typically after a
+        // sign-out cleared the stack — replace ourselves with /home so the
+        // user lands inside the app instead of an empty navigator.
+        final navigator = Navigator.of(context);
+        if (navigator.canPop()) {
+          navigator.pop();
+        } else {
+          navigator.pushReplacementNamed('/home');
+        }
       }
     } on AuthException catch (e) {
       if (mounted) {
@@ -110,7 +119,26 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Scaffold(
+    // True when LoginScreen is the only route on the stack — i.e. it was
+    // shown via pushAndRemoveUntil after a sign-out. In that case the
+    // dismiss action takes the user into anonymous mode instead of popping
+    // into a blank navigator.
+    final isRootRoute = !(ModalRoute.of(context)?.canPop ?? false);
+    void dismiss() {
+      final navigator = Navigator.of(context);
+      if (navigator.canPop()) {
+        navigator.pop();
+      } else {
+        navigator.pushReplacementNamed('/home_anonymous');
+      }
+    }
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        dismiss();
+      },
+      child: Scaffold(
       body: SafeArea(
         child: Stack(
           children: [
@@ -123,10 +151,10 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                     mainAxisAlignment: MainAxisAlignment.center,
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      Icon(
-                        Icons.explore_outlined,
-                        size: 80,
-                        color: theme.colorScheme.primary,
+                      Image.asset(
+                        'assets/images/logo.png',
+                        width: 100,
+                        height: 100,
                       ),
                       const SizedBox(height: 16),
                       Text(
@@ -224,6 +252,13 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                         },
                         child: const Text('Forgot Password?'),
                       ),
+                      if (isRootRoute) ...[
+                        const SizedBox(height: 8),
+                        TextButton(
+                          onPressed: dismiss,
+                          child: const Text('Continue as guest'),
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -234,12 +269,13 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
               right: 8,
               child: IconButton(
                 icon: const Icon(Icons.close),
-                onPressed: () => Navigator.of(context).pop(),
-                tooltip: 'Dismiss',
+                onPressed: dismiss,
+                tooltip: isRootRoute ? 'Continue as guest' : 'Dismiss',
               ),
             ),
           ],
         ),
+      ),
       ),
     );
   }

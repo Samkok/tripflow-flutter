@@ -53,8 +53,7 @@ class LocationAddService {
   /// Returns true if the location was added, false if the paywall blocked it
   /// or the user cancelled an out-of-range confirmation.
   Future<bool> addLocation(BuildContext context, LocationModel location) async {
-    final canAdd =
-        await SubscriptionLimitService(_ref).canAddLocation(context);
+    final canAdd = await SubscriptionLimitService(_ref).canCreate(context);
     if (!canAdd) return false;
 
     final activeTrip =
@@ -87,8 +86,7 @@ class LocationAddService {
   /// or the user cancelled an out-of-range confirmation.
   Future<bool> addSavedLocation(
       BuildContext context, SavedLocation location) async {
-    final canAdd =
-        await SubscriptionLimitService(_ref).canAddLocation(context);
+    final canAdd = await SubscriptionLimitService(_ref).canCreate(context);
     if (!canAdd) return false;
 
     final trip = _findTripById(location.tripId);

@@ -166,6 +166,7 @@ class AuthService {
           lastName: lastName,
           phoneNumber: phoneNumber,
         );
+
       }
     } catch (e) {
       debugPrint('e during sign up: $e');
