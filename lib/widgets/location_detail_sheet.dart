@@ -1,14 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
-import 'package:url_launcher/url_launcher.dart';
 import 'package:voyza/models/location_model.dart';
+import 'package:voyza/models/saved_location.dart' show OpeningPeriod;
 import 'package:voyza/providers/location_provider.dart';
 import 'package:voyza/providers/map_ui_state_provider.dart';
 import 'package:voyza/providers/trip_listener_provider.dart';
 import 'package:voyza/providers/trip_provider.dart';
 import 'package:voyza/providers/trip_collaborator_provider.dart';
 import 'package:voyza/utils/date_picker_utils.dart';
+import 'package:voyza/utils/external_app_links.dart';
 import 'package:voyza/utils/trip_date_validator.dart';
 
 import '../core/theme.dart';
@@ -19,6 +20,10 @@ class LocationDetailSheet extends ConsumerWidget {
   final ScrollController parentScrollController;
   final DraggableScrollableController? parentSheetController;
   final Function(LatLng)? onLocationTap;
+  /// When opened from a context that isn't the active map trip (e.g. trip
+  /// details screen), pass the sibling locations for the same date here so
+  /// the From/To picker shows the correct list instead of the active-trip list.
+  final List<LocationModel>? locationsForDate;
 
   const LocationDetailSheet({
     super.key,
@@ -27,6 +32,7 @@ class LocationDetailSheet extends ConsumerWidget {
     required this.parentScrollController,
     this.parentSheetController,
     this.onLocationTap,
+    this.locationsForDate,
   });
 
   @override
@@ -66,6 +72,16 @@ class LocationDetailSheet extends ConsumerWidget {
         children: [
           // Header with stop number
           _buildHeader(context, ref, updatedLocation, isPastDate),
+
+          // Hours section — Google's hours for the planned day + user override
+          // for the closing-time-aware optimizer. Only shown when there's
+          // something to show (Google data, user override, or a placeId that
+          // makes refresh actionable) so empty manual-coord rows don't get a
+          // dead section.
+          if (_hasAnyHoursAffordance(updatedLocation)) ...[
+            const Divider(height: 32),
+            _buildHoursSection(context, ref, updatedLocation, isPastDate),
+          ],
 
           // Travel info (if available)
           if (updatedLocation.travelTimeFromPrevious != null &&
@@ -299,7 +315,7 @@ class LocationDetailSheet extends ConsumerWidget {
                 icon: Icon(Icons.map_outlined, size: 18,
                     color: Theme.of(context).colorScheme.primary),
                 label: const Text('Google Map'),
-                onPressed: () => _openGoogleMaps(updatedLocation.coordinates),
+                onPressed: () => _openGoogleMaps(updatedLocation),
                 style: OutlinedButton.styleFrom(
                   padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
                   side: BorderSide(
@@ -310,9 +326,389 @@ class LocationDetailSheet extends ConsumerWidget {
             ),
           ],
         ),
+        // Route preview row — pick another stop to use as the start ("From")
+        // or end ("To") of a single-leg route drawn on the map. Disabled
+        // when there's no other location on the selected date to pair with.
+        //
+        // `locationsForDate` (field) is set by callers outside the active-trip
+        // context (e.g. trip details screen) so the picker shows the correct
+        // sibling list rather than the active-map-trip list.
+        Builder(builder: (context) {
+          final List<LocationModel> effectiveLocations = locationsForDate ??
+              ref.watch(locationsForSelectedDateProvider);
+          final others = effectiveLocations
+              .where((l) => l.id != updatedLocation.id)
+              .toList();
+          final canRoute = others.isNotEmpty;
+          final primary = Theme.of(context).colorScheme.primary;
+          OutlinedButton btn({
+            required IconData icon,
+            required String label,
+            required VoidCallback? onPressed,
+          }) {
+            return OutlinedButton.icon(
+              icon: Icon(icon,
+                  size: 18,
+                  color: canRoute ? primary : Colors.grey),
+              label: Text(label),
+              onPressed: onPressed,
+              style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(
+                    vertical: 10, horizontal: 8),
+                side: BorderSide(
+                  color: canRoute
+                      ? primary.withValues(alpha: 0.3)
+                      : Colors.grey.withValues(alpha: 0.3),
+                ),
+              ),
+            );
+          }
+
+          return Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Row(
+              children: [
+                Expanded(
+                  child: btn(
+                    icon: Icons.flag_outlined,
+                    label: 'From',
+                    onPressed: !canRoute
+                        ? null
+                        : () => _pickAndPreviewRoute(
+                              context: context,
+                              ref: ref,
+                              current: updatedLocation,
+                              others: others,
+                              role: _RouteEndpoint.from,
+                            ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: btn(
+                    icon: Icons.place_outlined,
+                    label: 'To',
+                    onPressed: !canRoute
+                        ? null
+                        : () => _pickAndPreviewRoute(
+                              context: context,
+                              ref: ref,
+                              current: updatedLocation,
+                              others: others,
+                              role: _RouteEndpoint.to,
+                            ),
+                  ),
+                ),
+              ],
+            ),
+          );
+        }),
       ],
     );
   }
+
+  /// Opens a small picker listing the other locations on the selected date.
+  /// On pick: dismiss the picker → dismiss this detail sheet → collapse the
+  /// parent trip-plan bottom sheet → scroll its list to the top → render
+  /// the From→To route on the map.
+  ///
+  /// The collapse-then-scroll order (and post-collapse jumpTo) mirrors the
+  /// View Route flow in trip_bottom_sheet.dart: animating the inner scroll
+  /// while the DraggableScrollableSheet is shrinking fights its physics.
+  Future<void> _pickAndPreviewRoute({
+    required BuildContext context,
+    required WidgetRef ref,
+    required LocationModel current,
+    required List<LocationModel> others,
+    required _RouteEndpoint role,
+  }) async {
+    final picked = await showModalBottomSheet<LocationModel>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) => _RouteEndpointPicker(
+        title: role == _RouteEndpoint.from
+            ? 'Pick start location'
+            : 'Pick destination',
+        subtitle: role == _RouteEndpoint.from
+            ? 'Route will go from the picked stop to ${current.name}'
+            : 'Route will go from ${current.name} to the picked stop',
+        candidates: others,
+      ),
+    );
+    if (picked == null) return;
+
+    // Resolve which is from/to.
+    final from = role == _RouteEndpoint.from ? picked : current;
+    final to = role == _RouteEndpoint.from ? current : picked;
+
+    // 1. Dismiss the detail sheet itself.
+    if (context.mounted) Navigator.of(context).pop();
+
+    // 2. Collapse the parent trip-plan sheet, then jump the inner list to
+    //    top once the collapse animation lands.
+    final collapse = parentSheetController?.animateTo(
+      0.12,
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeInOut,
+    );
+    void resetScroll() {
+      if (parentScrollController.hasClients) {
+        parentScrollController.jumpTo(0);
+      }
+    }
+    if (collapse != null) {
+      collapse.then((_) => resetScroll());
+    } else {
+      WidgetsBinding.instance.addPostFrameCallback((_) => resetScroll());
+    }
+
+    // 3. Kick off the route render. previewRouteBetween populates the same
+    //    state slots the map overlay reads from, so the polyline appears
+    //    without any further wiring here.
+    await ref.read(tripProvider.notifier).previewRouteBetween(from, to);
+  }
+
+  // ─── Hours section ────────────────────────────────────────────────────
+
+  /// Whether to render the hours block at all. Hidden for manual-coord rows
+  /// with no Google data, no user override, and no placeId to refresh from —
+  /// otherwise we'd show an empty section the user can't act on.
+  bool _hasAnyHoursAffordance(LocationModel loc) {
+    return loc.googleOpeningHours != null ||
+        loc.userClosingMinuteOverride != null ||
+        (loc.placeId != null && loc.placeId!.isNotEmpty);
+  }
+
+  static const _weekdayNames = [
+    'Sunday',
+    'Monday',
+    'Tuesday',
+    'Wednesday',
+    'Thursday',
+    'Friday',
+    'Saturday',
+  ];
+
+  /// Dart `DateTime.weekday` is 1=Mon..7=Sun; Google's `periods[].open.day`
+  /// is 0=Sun..6=Sat. We store rows in Google's convention, so translate at
+  /// the boundary.
+  int _googleDayFor(DateTime date) =>
+      date.weekday == DateTime.sunday ? 0 : date.weekday;
+
+  String _formatMinutes(int minutes) {
+    final h = (minutes ~/ 60) % 24;
+    final m = minutes % 60;
+    return '${h.toString().padLeft(2, '0')}:${m.toString().padLeft(2, '0')}';
+  }
+
+  String _formatRelative(DateTime past) {
+    final diff = DateTime.now().difference(past);
+    if (diff.inMinutes < 1) return 'just now';
+    if (diff.inHours < 1) return '${diff.inMinutes}m ago';
+    if (diff.inDays < 1) return '${diff.inHours}h ago';
+    if (diff.inDays < 30) return '${diff.inDays}d ago';
+    if (diff.inDays < 365) return '${(diff.inDays / 30).floor()}mo ago';
+    return '${(diff.inDays / 365).floor()}y ago';
+  }
+
+  /// Renders Google's hours for [googleDay] as one or two lines:
+  ///   • "Open 24 hours" for an always-open marker.
+  ///   • "09:00 – 22:00" for a single period.
+  ///   • "09:00 – 13:00, 14:00 – 22:00" for split hours (lunch break, etc).
+  ///   • "Closed" when no period covers this day.
+  String _formatGoogleHoursForDay(
+      List<OpeningPeriod>? hours, int googleDay) {
+    if (hours == null || hours.isEmpty) return 'No data';
+    if (hours.length == 1 && hours.first.isAlwaysOpen) {
+      return 'Open 24 hours';
+    }
+    final periodsForDay = hours.where((p) => p.openDay == googleDay).toList();
+    if (periodsForDay.isEmpty) return 'Closed';
+    return periodsForDay.map((p) {
+      final open = _formatMinutes(p.openMinutes);
+      if (p.closeMinutes == null) return 'Opens $open';
+      return '$open – ${_formatMinutes(p.closeMinutes!)}';
+    }).join(', ');
+  }
+
+  /// Default minutes for the override time picker when the user hasn't set
+  /// one yet — pre-fills with Google's first close time on the planned day,
+  /// or 22:00 as a sensible neutral fallback.
+  int _defaultClosingForDay(List<OpeningPeriod>? hours, int googleDay) {
+    if (hours != null) {
+      for (final p in hours) {
+        if (p.openDay == googleDay && p.closeMinutes != null) {
+          return p.closeMinutes!;
+        }
+      }
+    }
+    return 22 * 60;
+  }
+
+  Widget _buildHoursSection(
+    BuildContext context,
+    WidgetRef ref,
+    LocationModel loc,
+    bool isPastDate,
+  ) {
+    final theme = Theme.of(context);
+    final hasWriteAccessAsync = ref.watch(hasActiveTripWriteAccessProvider);
+    final hasWriteAccess =
+        hasWriteAccessAsync.whenOrNull(data: (v) => v) ?? false;
+    final canEdit = !isPastDate && hasWriteAccess;
+
+    final selectedDate = ref.watch(selectedDateProvider);
+    final googleDay = _googleDayFor(selectedDate);
+    final dayLabel = _weekdayNames[googleDay];
+
+    final googleHours = loc.googleOpeningHours;
+    final overrideMin = loc.userClosingMinuteOverride;
+    final placeId = loc.placeId;
+    final canRefresh = placeId != null && placeId.isNotEmpty;
+
+    final googleSummary = _formatGoogleHoursForDay(googleHours, googleDay);
+    final defaultClose = _defaultClosingForDay(googleHours, googleDay);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(Icons.access_time_rounded,
+                size: 18, color: theme.colorScheme.primary),
+            const SizedBox(width: 8),
+            Text(
+              'Hours',
+              style: theme.textTheme.titleMedium?.copyWith(
+                color: theme.colorScheme.primary,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const Spacer(),
+            if (canRefresh)
+              IconButton(
+                visualDensity: VisualDensity.compact,
+                padding: EdgeInsets.zero,
+                constraints:
+                    const BoxConstraints(minWidth: 32, minHeight: 32),
+                tooltip: 'Refresh from Google',
+                icon: const Icon(Icons.refresh, size: 20),
+                onPressed: canEdit ? () => _refreshHours(context, ref, loc) : null,
+              ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Text(
+          '$dayLabel · $googleSummary',
+          style: theme.textTheme.bodyMedium,
+        ),
+        if (loc.hoursLastRefreshedAt != null) ...[
+          const SizedBox(height: 4),
+          Text(
+            'Updated ${_formatRelative(loc.hoursLastRefreshedAt!)}',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.textTheme.bodyMedium?.color?.withValues(alpha: 0.6),
+            ),
+          ),
+        ],
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Text('Close by:', style: theme.textTheme.bodyMedium),
+            const SizedBox(width: 8),
+            OutlinedButton.icon(
+              icon: Icon(Icons.schedule_outlined,
+                  size: 16,
+                  color: canEdit ? theme.colorScheme.primary : Colors.grey),
+              label: Text(
+                overrideMin != null ? _formatMinutes(overrideMin) : 'Set',
+              ),
+              onPressed: canEdit
+                  ? () => _editClosingOverride(context, ref, loc, defaultClose)
+                  : null,
+              style: OutlinedButton.styleFrom(
+                padding:
+                    const EdgeInsets.symmetric(vertical: 6, horizontal: 12),
+                side: BorderSide(
+                  color: canEdit
+                      ? theme.colorScheme.primary.withValues(alpha: 0.4)
+                      : Colors.grey.withValues(alpha: 0.3),
+                ),
+              ),
+            ),
+            if (overrideMin != null && canEdit)
+              TextButton(
+                onPressed: () => ref
+                    .read(tripProvider.notifier)
+                    .setUserClosingMinuteOverride(loc.id, null),
+                style: TextButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                ),
+                child: const Text('Reset'),
+              ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Future<void> _editClosingOverride(
+    BuildContext context,
+    WidgetRef ref,
+    LocationModel loc,
+    int defaultMinutes,
+  ) async {
+    final initial = loc.userClosingMinuteOverride ?? defaultMinutes;
+    final picked = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay(hour: initial ~/ 60, minute: initial % 60),
+      helpText: 'Close by',
+    );
+    if (picked == null) return;
+    final minutes = picked.hour * 60 + picked.minute;
+    await ref
+        .read(tripProvider.notifier)
+        .setUserClosingMinuteOverride(loc.id, minutes);
+  }
+
+  Future<void> _refreshHours(
+    BuildContext context,
+    WidgetRef ref,
+    LocationModel loc,
+  ) async {
+    final placeId = loc.placeId;
+    if (placeId == null || placeId.isEmpty) return;
+
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.showSnackBar(
+      const SnackBar(
+        content: Text('Refreshing hours…'),
+        duration: Duration(seconds: 1),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+    final ok = await ref
+        .read(tripProvider.notifier)
+        .refreshLocationHours(loc.id, placeId);
+    if (!context.mounted) return;
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(ok
+            ? 'Hours updated'
+            : 'Could not refresh hours — try again later'),
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
+  // ──────────────────────────────────────────────────────────────────────
 
   Widget _buildTravelInfo(
       BuildContext context, WidgetRef ref, LocationModel updatedLocation) {
@@ -423,13 +819,8 @@ class LocationDetailSheet extends ConsumerWidget {
     );
   }
 
-  Future<void> _openGoogleMaps(LatLng coordinates) async {
-    final uri = Uri.parse(
-        'https://www.google.com/maps/search/?api=1&query=${coordinates.latitude},${coordinates.longitude}');
-    if (await canLaunchUrl(uri)) {
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
-    }
-  }
+  Future<void> _openGoogleMaps(LocationModel loc) =>
+      openLocationInGoogleMaps(loc);
 
   void _showEditLocationNameDialog(
       BuildContext context, WidgetRef ref, LocationModel location) {
@@ -827,5 +1218,153 @@ class LocationDetailSheet extends ConsumerWidget {
       final kilometers = distanceInMeters / 1000;
       return '${kilometers.toStringAsFixed(1)}km';
     }
+  }
+}
+
+/// Whether the picked stop should be used as the route's start ("from") or
+/// end ("to"). The detail sheet's anchor location takes the opposite role.
+enum _RouteEndpoint { from, to }
+
+class _RouteEndpointPicker extends StatelessWidget {
+  final String title;
+  final String subtitle;
+  final List<LocationModel> candidates;
+
+  const _RouteEndpointPicker({
+    required this.title,
+    required this.subtitle,
+    required this.candidates,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return DraggableScrollableSheet(
+      initialChildSize: 0.55,
+      minChildSize: 0.35,
+      maxChildSize: 0.9,
+      expand: false,
+      builder: (context, scrollController) {
+        return Column(
+          children: [
+            Center(
+              child: Container(
+                width: 40,
+                height: 4,
+                margin: const EdgeInsets.only(top: 12, bottom: 12),
+                decoration: BoxDecoration(
+                  color: theme.dividerColor,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          title,
+                          style: theme.textTheme.titleLarge?.copyWith(
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          subtitle,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close),
+                    onPressed: () => Navigator.of(context).pop(),
+                    tooltip: 'Cancel',
+                  ),
+                ],
+              ),
+            ),
+            const Divider(height: 1),
+            Expanded(
+              child: ListView.separated(
+                controller: scrollController,
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 12, vertical: 8),
+                itemCount: candidates.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 4),
+                itemBuilder: (context, i) {
+                  final loc = candidates[i];
+                  return Material(
+                    color: theme.cardColor,
+                    borderRadius: BorderRadius.circular(12),
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(12),
+                      onTap: () => Navigator.of(context).pop(loc),
+                      child: Padding(
+                        padding: const EdgeInsets.all(12),
+                        child: Row(
+                          children: [
+                            CircleAvatar(
+                              radius: 18,
+                              backgroundColor: theme.colorScheme.primary
+                                  .withValues(alpha: 0.15),
+                              child: Text(
+                                '${i + 1}',
+                                style: TextStyle(
+                                  color: theme.colorScheme.primary,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment:
+                                    CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    loc.name,
+                                    style: theme.textTheme.titleSmall
+                                        ?.copyWith(
+                                            fontWeight: FontWeight.w600),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                  if (loc.address.isNotEmpty) ...[
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      loc.address,
+                                      style: theme.textTheme.bodySmall
+                                          ?.copyWith(
+                                        color: theme
+                                            .colorScheme.onSurfaceVariant,
+                                      ),
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ],
+                                ],
+                              ),
+                            ),
+                            const Icon(Icons.chevron_right, size: 22),
+                          ],
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        );
+      },
+    );
   }
 }

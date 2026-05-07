@@ -21,8 +21,8 @@ import '../providers/auth_provider.dart';
 import '../services/location_service.dart';
 import '../services/places_service.dart';
 import '../services/location_add_service.dart';
-import '../utils/trip_date_validator.dart';
 import '../providers/nearby_radius_provider.dart';
+import '../providers/zoom_fit_settings_provider.dart';
 import '../widgets/map_widget.dart';
 import '../widgets/nearby_places_picker_sheet.dart';
 import '../widgets/search_widget.dart';
@@ -42,7 +42,13 @@ class _MapScreenState extends ConsumerState<MapScreen>
   bool _isTrackingLocation = false;
   int? _highlightedLocationIndex;
   final FocusNode _searchFocusNode = FocusNode();
-  bool _isSearchFocused = false;
+  // ValueNotifier instead of a setState-driven bool so focus changes don't
+  // rebuild the entire MapScreen subtree (which includes BackdropFilter
+  // blurs and the GoogleMap). Only the consumers that actually depend on
+  // focus — the search bar's animated chrome and the FAB layout — listen
+  // to it. This is what eliminates the visible jank when the keyboard
+  // animates in.
+  final ValueNotifier<bool> _isSearchFocused = ValueNotifier(false);
   StreamSubscription<LatLng>?
       _locationSubscription; // PERFORMANCE: Track subscription for cleanup
 
@@ -73,10 +79,9 @@ class _MapScreenState extends ConsumerState<MapScreen>
   }
 
   void _onSearchFocusChange() {
-    if (_searchFocusNode.hasFocus != _isSearchFocused) {
-      setState(() {
-        _isSearchFocused = _searchFocusNode.hasFocus;
-      });
+    final hasFocus = _searchFocusNode.hasFocus;
+    if (_isSearchFocused.value != hasFocus) {
+      _isSearchFocused.value = hasFocus;
     }
   }
 
@@ -88,6 +93,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
     _sheetController?.dispose();
     _searchFocusNode.removeListener(_onSearchFocusChange);
     _searchFocusNode.dispose();
+    _isSearchFocused.dispose();
 
     // PERFORMANCE: Cancel location stream to prevent memory leaks and battery drain
     _locationSubscription?.cancel();
@@ -261,38 +267,26 @@ class _MapScreenState extends ConsumerState<MapScreen>
   /// cover photo and no `address_components`, which is why a manual-search
   /// add ends up with more photos than a long-press add did before.
   ///
-  /// The first enriched place drives the country-confirmation modal;
-  /// subsequent picks within the same long-press almost always share its
-  /// country (radius-bounded), so we don't spam the user with N prompts.
+  /// The strict country guard inside [LocationAddService.addLocation]
+  /// runs once per pick. Picks within the same radius are essentially
+  /// always in the same country as each other, so in practice the first
+  /// mismatch dialog (if any) covers the whole batch.
   Future<void> _addNearbyPlaces(List<NearbyPlace> picked) async {
     final enriched = await Future.wait(
       picked.map((p) => PlacesService.getPlaceDetails(p.placeId)),
     );
     if (!mounted) return;
 
-    final activeTrip = ref.read(realtimeActiveTripProvider).asData?.value;
-    String? countryForPrompt;
-    for (final d in enriched) {
-      if (d?.countryCode != null) {
-        countryForPrompt = d!.countryCode;
-        break;
-      }
-    }
-    final countryOk = await ensureLocationCountryAllowed(
-      context,
-      activeTrip,
-      countryForPrompt,
-    );
-    if (!countryOk || !mounted) return;
-
     final scheduledDate = ref.read(selectedDateProvider);
     final addedLocations = <LocationModel>[];
     for (var i = 0; i < picked.length; i++) {
       final fallback = picked[i];
       final details = enriched[i];
+      final resolvedName =
+          details?.name.isNotEmpty == true ? details!.name : fallback.name;
       final location = LocationModel(
         id: const Uuid().v4(),
-        name: details?.name.isNotEmpty == true ? details!.name : fallback.name,
+        name: resolvedName,
         address: details?.address.isNotEmpty == true
             ? details!.address
             : fallback.vicinity,
@@ -306,9 +300,17 @@ class _MapScreenState extends ConsumerState<MapScreen>
             : fallback.photoReferences,
         photoAttributions:
             details?.photoAttributions ?? fallback.photoAttributions,
+        placeId: details?.placeId ?? fallback.placeId,
+        originalName: resolvedName,
+        googleOpeningHours: details?.openingHours,
+        hoursLastRefreshedAt:
+            details?.openingHours != null ? DateTime.now() : null,
       );
-      final added =
-          await LocationAddService(ref).addLocation(context, location);
+      final added = await LocationAddService(ref).addLocation(
+        context,
+        location,
+        locationCountryCode: details?.countryCode,
+      );
       if (!mounted) return;
       if (added) addedLocations.add(location);
     }
@@ -675,6 +677,11 @@ class _MapScreenState extends ConsumerState<MapScreen>
     });
 
     return Scaffold(
+      // Don't reflow the body when the soft keyboard appears — the search
+      // results render inside the search-bar overlay and the bottom sheet
+      // already handles scroll. Resizing on every keyboard frame caused
+      // the visible "page pulls down" jank when the input was focused.
+      resizeToAvoidBottomInset: false,
       body: Stack(
         children: [
           // Map
@@ -739,7 +746,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
                                       color: Colors.white.withValues(alpha: 0.2),
                                       borderRadius: BorderRadius.circular(10),
                                     ),
-                                    child: Icon(
+                                    child: const Icon(
                                       Icons.navigation_rounded,
                                       color: Colors.white,
                                       size: 22,
@@ -797,32 +804,39 @@ class _MapScreenState extends ConsumerState<MapScreen>
                       borderRadius: BorderRadius.circular(30),
                       child: BackdropFilter(
                         filter: ImageFilter.blur(sigmaX: 10.0, sigmaY: 10.0),
-                        child: AnimatedContainer(
-                          duration: const Duration(milliseconds: 300),
-                          decoration: BoxDecoration(
-                            color: _isSearchFocused
-                                ? Theme.of(context).colorScheme.surface
-                                : Theme.of(context)
-                                    .colorScheme
-                                    .surface
-                                    .withValues(alpha: 0.92),
-                            borderRadius: BorderRadius.circular(30),
-                            border: Border.all(
-                              color: _isSearchFocused
-                                  ? Theme.of(context).colorScheme.primary
-                                  : Theme.of(context)
-                                      .dividerColor
-                                      .withValues(alpha: 0.2),
-                              width: 1.5,
-                            ),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withValues(alpha: 0.15),
-                                blurRadius: 20,
-                                offset: const Offset(0, 5),
+                        child: ValueListenableBuilder<bool>(
+                          valueListenable: _isSearchFocused,
+                          builder: (context, focused, child) {
+                            return AnimatedContainer(
+                              duration: const Duration(milliseconds: 300),
+                              decoration: BoxDecoration(
+                                color: focused
+                                    ? Theme.of(context).colorScheme.surface
+                                    : Theme.of(context)
+                                        .colorScheme
+                                        .surface
+                                        .withValues(alpha: 0.92),
+                                borderRadius: BorderRadius.circular(30),
+                                border: Border.all(
+                                  color: focused
+                                      ? Theme.of(context).colorScheme.primary
+                                      : Theme.of(context)
+                                          .dividerColor
+                                          .withValues(alpha: 0.2),
+                                  width: 1.5,
+                                ),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color:
+                                        Colors.black.withValues(alpha: 0.15),
+                                    blurRadius: 20,
+                                    offset: const Offset(0, 5),
+                                  ),
+                                ],
                               ),
-                            ],
-                          ),
+                              child: child,
+                            );
+                          },
                           child: SearchWidget(focusNode: _searchFocusNode),
                         ),
                       ),
@@ -833,111 +847,146 @@ class _MapScreenState extends ConsumerState<MapScreen>
             ),
           ),
 
-          // Floating Action Buttons for Map Controls
+          // Floating Action Buttons for Map Controls — flips to a
+          // horizontal row when the search bar is focused so it doesn't
+          // crowd the search results column. Direction is driven by the
+          // focus ValueNotifier (so only this subtree rebuilds), and the
+          // bounding-box change is smoothed with AnimatedSize.
           Positioned(
             bottom: MediaQuery.of(context).size.height * 0.23 +
                 16, // Position above collapsed sheet
             right: 16,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                FloatingActionButton(
-                  heroTag: 'currentLocationFab',
-                  mini: true,
-                  onPressed: _goToCurrentLocation,
-                  child: const Icon(Icons.my_location),
-                ),
-                const SizedBox(height: 12),
-                Consumer(
-                  builder: (context, ref, child) {
-                    final locationsForDate =
-                        ref.watch(locationsForSelectedDateProvider);
-                    if (locationsForDate.isEmpty) {
-                      return const SizedBox.shrink();
-                    }
-                    return FloatingActionButton(
-                      heroTag: 'zoomToFitFab',
-                      mini: true,
-                      onPressed: _zoomToFitTrip,
-                      child: const Icon(Icons.zoom_out_map),
-                    );
-                  },
-                ),
-                Consumer(
-                  builder: (context, ref, child) {
-                    // Show only locations added by the current user and not yet assigned to any trip
-                    final currentUserId = ref.watch(currentUserIdProvider);
-                    final allSaved =
-                        ref.watch(savedLocationsProvider).asData?.value ?? [];
-                    final unassigned = allSaved
-                        .where((l) =>
-                            l.tripId == null && l.userId == currentUserId)
-                        .toList();
-                    if (unassigned.isEmpty) return const SizedBox.shrink();
-                    return Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const SizedBox(height: 12),
+            child: ValueListenableBuilder<bool>(
+              valueListenable: _isSearchFocused,
+              builder: (context, focused, _) {
+                return AnimatedSize(
+                  duration: const Duration(milliseconds: 250),
+                  curve: Curves.easeInOut,
+                  alignment: Alignment.bottomRight,
+                  child: Consumer(
+                    builder: (context, ref, _) {
+                      final locationsForDate =
+                          ref.watch(locationsForSelectedDateProvider);
+                      final hasRoute = ref.watch(tripProvider
+                          .select((s) => s.optimizedRoute.isNotEmpty));
+                      final isGenerating =
+                          ref.watch(isGeneratingRouteProvider);
+                      final currentUserId =
+                          ref.watch(currentUserIdProvider);
+                      final allSaved =
+                          ref.watch(savedLocationsProvider).asData?.value ??
+                              const [];
+                      final unassigned = allSaved
+                          .where((l) =>
+                              l.tripId == null && l.userId == currentUserId)
+                          .toList();
+                      final showPlaceNames = ref.watch(showPlaceNamesProvider);
+
+                      final fabs = <Widget>[
                         FloatingActionButton(
-                          heroTag: 'addToTripFab',
+                          heroTag: 'currentLocationFab',
+                          mini: true,
+                          onPressed: _goToCurrentLocation,
+                          child: const Icon(Icons.my_location),
+                        ),
+                        if (locationsForDate.isNotEmpty)
+                          FloatingActionButton(
+                            heroTag: 'zoomToFitFab',
+                            mini: true,
+                            onPressed: _zoomToFitTrip,
+                            child: const Icon(Icons.zoom_out_map),
+                          ),
+                        if (hasRoute && !isGenerating)
+                          FloatingActionButton(
+                            heroTag: 'clearRouteFab',
+                            mini: true,
+                            backgroundColor:
+                                Theme.of(context).colorScheme.errorContainer,
+                            foregroundColor: Theme.of(context)
+                                .colorScheme
+                                .onErrorContainer,
+                            onPressed: () => ref
+                                .read(tripProvider.notifier)
+                                .clearOptimizedRoute(),
+                            tooltip: 'Clear Route',
+                            child: const Icon(Icons.clear_outlined),
+                          ),
+                        if (unassigned.isNotEmpty)
+                          FloatingActionButton(
+                            heroTag: 'addToTripFab',
+                            mini: true,
+                            onPressed: () {
+                              showModalBottomSheet(
+                                context: context,
+                                isScrollControlled: true,
+                                backgroundColor: Colors.transparent,
+                                builder: (context) => AddToTripSheet(
+                                  availableLocations: unassigned,
+                                  onSuccess: () {},
+                                ),
+                              );
+                            },
+                            tooltip: 'Add Locations to Trip',
+                            child: const Icon(Icons.playlist_add),
+                          ),
+                        FloatingActionButton(
+                          heroTag: 'togglePlaceNamesFab',
                           mini: true,
                           onPressed: () {
-                            showModalBottomSheet(
-                              context: context,
-                              isScrollControlled: true,
-                              backgroundColor: Colors.transparent,
-                              builder: (context) => AddToTripSheet(
-                                availableLocations: unassigned,
-                                onSuccess: () {},
-                              ),
-                            );
+                            ref.read(showPlaceNamesProvider.notifier).state =
+                                !showPlaceNames;
                           },
-                          tooltip: 'Add Locations to Trip',
-                          child: const Icon(Icons.playlist_add),
+                          tooltip: 'Toggle Place Names',
+                          child: Icon(
+                            showPlaceNames
+                                ? Icons.visibility_off_outlined
+                                : Icons.visibility_outlined,
+                          ),
                         ),
-                      ],
-                    );
-                  },
-                ),
-                const SizedBox(height: 12),
-                Consumer(builder: (context, ref, child) {
-                  final showPlaceNames = ref.watch(showPlaceNamesProvider);
-                  return FloatingActionButton(
-                    heroTag: 'togglePlaceNamesFab',
-                    mini: true,
-                    onPressed: () {
-                      ref.read(showPlaceNamesProvider.notifier).state =
-                          !showPlaceNames;
+                      ];
+
+                      // Build axis-aware separators between visible FABs.
+                      final gap = focused
+                          ? const SizedBox(width: 12)
+                          : const SizedBox(height: 12);
+                      final children = <Widget>[];
+                      for (var i = 0; i < fabs.length; i++) {
+                        if (i > 0) children.add(gap);
+                        children.add(fabs[i]);
+                      }
+
+                      return Flex(
+                        direction:
+                            focused ? Axis.horizontal : Axis.vertical,
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: children,
+                      );
                     },
-                    tooltip: 'Toggle Place Names',
-                    child: Icon(
-                      showPlaceNames
-                          ? Icons.visibility_off_outlined
-                          : Icons.visibility_outlined,
-                    ),
-                  );
-                }),
-                // const SizedBox(height: 12),
-                // FloatingActionButton(
-                //   heroTag: 'addFromUrlFab',
-                //   mini: true,
-                //   onPressed: _showAddLocationFromUrlDialog,
-                //   tooltip: 'Add from Google Maps URL',
-                //   child: const Icon(Icons.add_link),
-                // ),
-              ],
+                  ),
+                );
+              },
             ),
           ),
 
-          // Trip bottom sheet
-          TripBottomSheet(
-            sheetController: _sheetController,
-            onLocationTap: _zoomToLocation,
-            // onGoToCurrentLocation is now handled by the FAB
-            onShowZoneSettings: _showProximitySliderBottomSheet,
-            // onZoomToFitTrip is now handled by the FAB
-            highlightedLocationIndex: _highlightedLocationIndex,
+          // Trip bottom sheet — wrapped in a Listener so any pointer-down
+          // inside the sheet also dismisses the search keyboard. Listener
+          // observes pointer events without competing for gesture
+          // recognition, so the sheet's own drag/tap handlers still work.
+          Listener(
+            onPointerDown: (_) {
+              if (_searchFocusNode.hasFocus) {
+                _searchFocusNode.unfocus();
+              }
+            },
+            child: TripBottomSheet(
+              sheetController: _sheetController,
+              onLocationTap: _zoomToLocation,
+              // onGoToCurrentLocation is now handled by the FAB
+              onShowZoneSettings: _showProximitySliderBottomSheet,
+              // onZoomToFitTrip is now handled by the FAB
+              highlightedLocationIndex: _highlightedLocationIndex,
+            ),
           ),
 
           // Loading overlay — covers the map during the initial data sync so
@@ -1115,15 +1164,25 @@ class _MapScreenState extends ConsumerState<MapScreen>
     if (_mapController == null) return;
 
     final locations = ref.read(locationsForSelectedDateProvider);
-    if (locations.length < 2) {
-      // If only one location, zoom to it. If none, do nothing.
-      if (locations.isNotEmpty) {
-        _zoomToLocation(locations.first.coordinates);
+    final includeCurrent = ref.read(includeCurrentInFitProvider);
+    final currentLocation = ref.read(tripProvider).currentLocation;
+    final currentForFit =
+        includeCurrent ? currentLocation : null;
+
+    // Build the points list before the small-list short-circuit so the
+    // current-location preference also takes effect when there's only 0–1
+    // stops on the date.
+    final points = <LatLng>[
+      ...locations.map((loc) => loc.coordinates),
+      if (currentForFit != null) currentForFit,
+    ];
+
+    if (points.length < 2) {
+      if (points.isNotEmpty) {
+        _zoomToLocation(points.first);
       }
       return;
     }
-
-    final points = locations.map((loc) => loc.coordinates).toList();
 
     double minLat = points.first.latitude;
     double maxLat = points.first.latitude;

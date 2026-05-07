@@ -11,6 +11,7 @@ import '../models/location_model.dart';
 import '../models/trip_model.dart';
 import '../models/trip.dart';
 import '../services/google_maps_service.dart';
+import '../services/places_service.dart';
 import '../services/storage_service.dart';
 import '../providers/debounced_settings_provider.dart';
 import '../utils/zone_utils.dart';
@@ -92,8 +93,7 @@ class TripState {
         other.totalTravelTime == totalTravelTime &&
         other.totalDistance == totalDistance &&
         other.selectedLegIndex == selectedLegIndex;
-    // Note: Deliberately excluding legPolylines and legDetails from equality
-    // to keep the check fast. They change together with optimizedRoute anyway.
+    // Note: Deliberately excluding legPolylines and legDetails from equality to keep the check fast. They change together with optimizedRoute anyway.
   }
 
   @override
@@ -235,6 +235,11 @@ class TripNotifier extends StateNotifier<TripState> {
             photoReference: saved.photoReference,
             photoReferences: refs.isEmpty ? null : refs,
             photoAttributions: saved.photoAttributions,
+            placeId: saved.placeId,
+            originalName: saved.originalName,
+            googleOpeningHours: saved.googleOpeningHours,
+            userClosingMinuteOverride: saved.userClosingMinuteOverride,
+            hoursLastRefreshedAt: saved.hoursLastRefreshedAt,
           );
         }).toList();
 
@@ -301,6 +306,11 @@ class TripNotifier extends StateNotifier<TripState> {
             ? null
             : locationWithDate.photoReferences,
         photoAttributions: locationWithDate.photoAttributions,
+        placeId: locationWithDate.placeId,
+        originalName: locationWithDate.originalName,
+        googleOpeningHours: locationWithDate.googleOpeningHours,
+        userClosingMinuteOverride: locationWithDate.userClosingMinuteOverride,
+        hoursLastRefreshedAt: locationWithDate.hoursLastRefreshedAt,
       );
 
       debugPrint('addLocation: Adding location "${savedLoc.name}" with tripId=${savedLoc.tripId ?? "null (no trip)"}');
@@ -666,6 +676,55 @@ class TripNotifier extends StateNotifier<TripState> {
     }
   }
 
+  /// Sets (or clears) the user-supplied closing-time override for a single
+  /// location. Pass [minutes] = `null` to clear (the simulation will then
+  /// fall back to Google's hours).
+  Future<void> setUserClosingMinuteOverride(
+      String locationId, int? minutes) async {
+    final hasAccess = await _hasWriteAccess();
+    if (!hasAccess) {
+      debugPrint('setUserClosingMinuteOverride: Permission denied');
+      return;
+    }
+    try {
+      await _ref.read(locationRepositoryProvider).updateLocation(
+        locationId,
+        {'user_closing_minute_override': minutes},
+      );
+    } catch (e) {
+      log('Error setting closing override: $e');
+    }
+  }
+
+  /// Re-fetches a place's hours from Google Places and persists them along
+  /// with the refresh timestamp. Caller passes [placeId] so this works in
+  /// every context (active trip, trip details, …) without a state lookup.
+  /// Returns true on success, false if Places API returned nothing or a
+  /// permission/auth check blocked the write.
+  Future<bool> refreshLocationHours(
+      String locationId, String placeId) async {
+    final hasAccess = await _hasWriteAccess();
+    if (!hasAccess) {
+      debugPrint('refreshLocationHours: Permission denied');
+      return false;
+    }
+    final details = await PlacesService.getPlaceDetails(placeId);
+    if (details == null) return false;
+    try {
+      await _ref.read(locationRepositoryProvider).updateLocation(
+        locationId,
+        {
+          'google_opening_hours': details.openingHours,
+          'hours_last_refreshed_at': DateTime.now(),
+        },
+      );
+      return true;
+    } catch (e) {
+      log('Error refreshing hours: $e');
+      return false;
+    }
+  }
+
   Future<void> updateMultipleLocationsScheduledDate(
       Set<String> locationIds, DateTime newDate) async {
     // Permission check at function level
@@ -748,6 +807,11 @@ class TripNotifier extends StateNotifier<TripState> {
             photoReferences:
                 loc.photoReferences.isEmpty ? null : loc.photoReferences,
             photoAttributions: loc.photoAttributions,
+            placeId: loc.placeId,
+            originalName: loc.originalName,
+            googleOpeningHours: loc.googleOpeningHours,
+            userClosingMinuteOverride: loc.userClosingMinuteOverride,
+            hoursLastRefreshedAt: loc.hoursLastRefreshedAt,
           );
           debugPrint('copyMultipleLocationsToDate: Copying "${savedLoc.name}" with tripId=${savedLoc.tripId ?? "null (no trip)"}');
           await repository.addLocation(savedLoc);
@@ -1128,6 +1192,96 @@ class TripNotifier extends StateNotifier<TripState> {
       totalTravelTime: Duration.zero,
       totalDistance: 0.0,
     );
+  }
+
+  /// Renders a single-leg route between two specific locations on the map by
+  /// reusing the existing `optimizedRoute` / `legPolylines` slots that the
+  /// map overlay reads from. This is the "From → To" preview triggered from
+  /// the location detail sheet — it overrides any prior multi-stop optimized
+  /// route, which is intentional: the user is asking to see this specific
+  /// pair, and the existing Clear Route controls can wipe it just like an
+  /// optimization result.
+  Future<void> previewRouteBetween(
+      LocationModel from, LocationModel to) async {
+    if (from.id == to.id) return;
+    _ref.read(isGeneratingRouteProvider.notifier).state = true;
+    try {
+      final result = await GoogleMapsService.getOptimizedRouteDetails(
+        origin: from.coordinates,
+        destination: to,
+        waypoints: const [],
+        optimizeWaypoints: false,
+      ).timeout(
+        const Duration(seconds: 20),
+        onTimeout: () => {
+          'routePoints': <LatLng>[],
+          'waypointOrder': <int>[],
+          'legDetails': <Map<String, dynamic>>[],
+          'legPolylines': <List<LatLng>>[],
+        },
+      );
+
+      final routePoints = result['routePoints'] as List<LatLng>;
+      final legDetails =
+          result['legDetails'] as List<Map<String, dynamic>>;
+      final legPolylines = result['legPolylines'] as List<List<LatLng>>;
+
+      if (routePoints.isEmpty) {
+        // API failure / timeout — leave existing state alone so we don't
+        // wipe a previously-rendered route on a transient error.
+        return;
+      }
+
+      final totalTravelTime = legDetails.fold<Duration>(
+        Duration.zero,
+        (sum, leg) => sum + ((leg['duration'] as Duration?) ?? Duration.zero),
+      );
+      final totalDistance = legDetails.fold<double>(
+        0.0,
+        (sum, leg) => sum + ((leg['distance'] as num?)?.toDouble() ?? 0.0),
+      );
+
+      // Annotate the destination with this leg's travel info so the
+      // existing "Travel from Previous Stop" UI can read it without a
+      // separate code path.
+      final pinned = state.pinnedLocations;
+      final updatedPinned = [
+        for (final loc in pinned)
+          if (loc.id == to.id)
+            loc.copyWith(
+              travelTimeFromPrevious: legDetails.isNotEmpty
+                  ? legDetails.first['duration'] as Duration?
+                  : null,
+              distanceFromPrevious: legDetails.isNotEmpty
+                  ? (legDetails.first['distance'] as num?)?.toDouble()
+                  : null,
+            )
+          else
+            loc,
+      ];
+
+      final updatedFrom = updatedPinned.firstWhere((l) => l.id == from.id,
+          orElse: () => from);
+      final updatedTo = updatedPinned.firstWhere((l) => l.id == to.id,
+          orElse: () => to);
+
+      state = state.copyWith(
+        pinnedLocations: updatedPinned,
+        optimizedLocationsForSelectedDate: [updatedFrom, updatedTo],
+        optimizedRoute: routePoints,
+        legPolylines: legPolylines,
+        legDetails: legDetails,
+        totalTravelTime: totalTravelTime,
+        totalDistance: totalDistance,
+        startLocationId: from.id,
+      );
+
+      _ref.read(zoomToFitRouteTrigger.notifier).update((s) => s + 1);
+    } catch (e) {
+      debugPrint('previewRouteBetween failed: $e');
+    } finally {
+      _ref.read(isGeneratingRouteProvider.notifier).state = false;
+    }
   }
 
   void clearTrip() {

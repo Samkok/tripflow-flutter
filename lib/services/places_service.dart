@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:dio/dio.dart';
 import 'package:geolocator/geolocator.dart';
+import '../models/saved_location.dart' show OpeningPeriod;
 import '../utils/countries.dart';
 import 'api_service.dart';
 import 'location_service.dart';
@@ -54,6 +55,13 @@ class PlaceDetails {
   /// available. Used to flag cross-country adds against a trip's tagged
   /// country.
   final String? countryCode;
+  /// Google Places `place_id`. Captured here so add-paths can persist it
+  /// alongside the other place metadata for later external-app handoff.
+  final String? placeId;
+  /// Per-day opening periods parsed from Google's `regular_opening_hours`.
+  /// Null when the place has no hours data, or for paths that didn't request
+  /// hours (e.g. lightweight Nearby Search results).
+  final List<OpeningPeriod>? openingHours;
 
   PlaceDetails({
     required this.name,
@@ -65,6 +73,8 @@ class PlaceDetails {
     this.photoHeight,
     this.photoAttributions,
     this.countryCode,
+    this.placeId,
+    this.openingHours,
   }) : photoReferences = photoReferences ?? const [];
 
   factory PlaceDetails.fromJson(Map<String, dynamic> json) {
@@ -108,8 +118,67 @@ class PlaceDetails {
       photoHeight: photoHeight,
       photoAttributions: attributions.isEmpty ? null : attributions,
       countryCode: _extractCountryCode(json['address_components']),
+      placeId: json['place_id'] as String?,
+      // Prefer `opening_hours` (regular weekly schedule) and fall back to
+      // `current_opening_hours` (this-week's schedule, may include special
+      // days). Both are legacy Contact-Data fields with identical shape;
+      // some places populate only one of them.
+      openingHours: _parseOpeningHours(
+        json['opening_hours'] ?? json['current_opening_hours'],
+      ),
     );
   }
+}
+
+/// Parses Google's `opening_hours.periods` array into our [OpeningPeriod]
+/// shape. Returns null when [hours] is null/malformed or has no usable
+/// periods. Times are converted from `"HHMM"` strings to minutes since
+/// midnight; days are passed through unchanged (Google's convention is
+/// 0 = Sunday, which we adopt verbatim).
+List<OpeningPeriod>? _parseOpeningHours(dynamic hours) {
+  if (hours is! Map) return null;
+  final periods = hours['periods'];
+  if (periods is! List) return null;
+  final out = <OpeningPeriod>[];
+  for (final p in periods) {
+    if (p is! Map) continue;
+    final open = p['open'];
+    if (open is! Map) continue;
+    final openDay = open['day'];
+    final openTime = open['time'];
+    if (openDay is! int) continue;
+    final openMinutes = _hhmmToMinutes(openTime);
+    if (openMinutes == null) continue;
+
+    int? closeDay;
+    int? closeMinutes;
+    final close = p['close'];
+    if (close is Map) {
+      final cd = close['day'];
+      final cm = _hhmmToMinutes(close['time']);
+      if (cd is int && cm != null) {
+        closeDay = cd;
+        closeMinutes = cm;
+      }
+    }
+
+    out.add(OpeningPeriod(
+      openDay: openDay,
+      openMinutes: openMinutes,
+      closeDay: closeDay,
+      closeMinutes: closeMinutes,
+    ));
+  }
+  return out.isEmpty ? null : out;
+}
+
+int? _hhmmToMinutes(dynamic raw) {
+  if (raw is! String || raw.length < 4) return null;
+  final h = int.tryParse(raw.substring(0, 2));
+  final m = int.tryParse(raw.substring(2, 4));
+  if (h == null || m == null) return null;
+  if (h < 0 || h > 23 || m < 0 || m > 59) return null;
+  return h * 60 + m;
 }
 
 /// Lightweight summary returned by Google Places Nearby Search. Carries
@@ -458,17 +527,48 @@ class PlacesService {
 
   static Future<PlaceDetails?> getPlaceDetails(String placeId) async {
     try {
+      // Legacy Places Details endpoint. Both `opening_hours` and
+      // `current_opening_hours` are valid legacy Contact-Data fields
+      // (`regular_opening_hours` is NOT — that one is Places API v1 only,
+      // and including it makes Google return INVALID_REQUEST for the whole
+      // request). We request both: some places only populate one or the
+      // other, and falling back gives the parser a second chance.
+      //
+      // Note: `opening_hours` lives in the Contact Data SKU tier — your
+      // Places API key must have it enabled for hours to come back. If hours
+      // are silently absent for every place, that's the most likely cause;
+      // the diagnostic prints below will say so.
       final url = 'https://maps.googleapis.com/maps/api/place/details/json'
           '?place_id=$placeId'
-          '&fields=name,formatted_address,geometry,photos,address_components'
+          '&fields=name,formatted_address,geometry,photos,address_components,'
+          'opening_hours,current_opening_hours'
           '&key=${ApiService.googlePlacesApiKey}';
 
       final response = await ApiService.dio.get(url);
       final data = response.data;
 
-      if (data['status'] != 'OK') return null;
+      final status = data['status'];
+      if (status != 'OK') {
+        // Don't swallow non-OK silently — every previous capture-path
+        // regression looked like "things just stopped working" because we
+        // returned null with no log.
+        debugPrint(
+            'getPlaceDetails($placeId): status=$status, error=${data['error_message']}');
+        return null;
+      }
 
-      return PlaceDetails.fromJson(data['result']);
+      final result = data['result'];
+      if (kDebugMode) {
+        final hasOpen = result['opening_hours'] != null;
+        final hasCurrent = result['current_opening_hours'] != null;
+        if (!hasOpen && !hasCurrent) {
+          debugPrint(
+              'getPlaceDetails($placeId): no opening_hours in response — '
+              'either this place has no hours data on Google, or the '
+              "API key's Contact Data SKU is not enabled.");
+        }
+      }
+      return PlaceDetails.fromJson(result);
     } catch (e) {
       debugPrint('Error getting place details: $e');
       return null;
@@ -521,6 +621,7 @@ class PlacesService {
         photoWidth: enriched?.photoWidth,
         photoHeight: enriched?.photoHeight,
         photoAttributions: enriched?.photoAttributions,
+        openingHours: enriched?.openingHours,
       );
     } catch (e) {
       debugPrint('Error geocoding address: $e');
@@ -689,6 +790,8 @@ class PlacesService {
         photoWidth: enriched?.photoWidth,
         photoHeight: enriched?.photoHeight,
         photoAttributions: enriched?.photoAttributions,
+        placeId: placeId,
+        openingHours: enriched?.openingHours,
       );
     } catch (e) {
       debugPrint('Error getting place from coordinates: $e');

@@ -9,8 +9,8 @@ import '../providers/debounced_settings_provider.dart';
 import '../services/marker_cache_service.dart';
 import '../utils/zone_utils.dart';
 import '../utils/marker_utils.dart'; // Needed for MarkerBitmapResult type
+import '../utils/external_app_links.dart';
 import '../core/theme.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 class CachedMarkersState {
   // This will now hold the generated bitmaps AND anchors
@@ -362,6 +362,27 @@ final routeInfoMarkersProvider = FutureProvider<Set<Marker>>((ref) async {
   final start = legPoints.first;
   final end = legPoints.last;
 
+  // Resolve the leg's start/end LocationModels so the external-app handoff
+  // can use place_id + originalName instead of bare coordinates. Index
+  // mapping mirrors _performRouteOptimization in trip_provider.dart:
+  //   - When startLocationId == 'current_location', `optimizedLocationsForSelectedDate`
+  //     contains only the waypoints (no start), so leg i goes from
+  //     [i-1] → [i], and leg 0's "from" is the device's current position
+  //     (no LocationModel, falls back to coords).
+  //   - Otherwise, the start stop is at index 0, so leg i goes from
+  //     [i] → [i+1].
+  final ordered = tripState.optimizedLocationsForSelectedDate;
+  final isStartCurrentLocation =
+      tripState.startLocationId == 'current_location';
+  final fromIdx = isStartCurrentLocation ? legIndex - 1 : legIndex;
+  final toIdx = isStartCurrentLocation ? legIndex : legIndex + 1;
+  final fromLoc = (fromIdx >= 0 && fromIdx < ordered.length)
+      ? ordered[fromIdx]
+      : _coordOnlyLocation(start);
+  final toLoc = (toIdx >= 0 && toIdx < ordered.length)
+      ? ordered[toIdx]
+      : _coordOnlyLocation(end);
+
   // mapsResult anchor=(0.5, 1.0) → entire combined stack renders above midpoint
   // grabResult anchor=(0.5, 0.0) → renders below midpoint
   return {
@@ -373,7 +394,7 @@ final routeInfoMarkersProvider = FutureProvider<Set<Marker>>((ref) async {
         zIndex: 100,
         consumeTapEvents: true,
         onTap: () {
-          _launchMapsUrl(start, end);
+          openDirectionsInGoogleMaps(origin: fromLoc, destination: toLoc);
         }),
     Marker(
         markerId: MarkerId('route_grab_$legIndex'),
@@ -383,76 +404,22 @@ final routeInfoMarkersProvider = FutureProvider<Set<Marker>>((ref) async {
         zIndex: 100,
         consumeTapEvents: true,
         onTap: () {
-          launchGrab(start.latitude, start.longitude, end.latitude, end.longitude);
+          openGrabRoute(origin: fromLoc, destination: toLoc);
         }),
   };
 });
 
-Future<void> _launchMapsUrl(LatLng origin, LatLng destination) async {
-  // For mobile devices, use the comgooglemaps:// URL scheme which opens Google Maps app directly
-  // For web/desktop, fall back to https:// URL
-
-  // First, try the Google Maps app URL scheme (works on both Android and iOS)
-  final mapsAppUrl = Uri.parse(
-    'comgooglemaps://?saddr=${origin.latitude},${origin.longitude}&daddr=${destination.latitude},${destination.longitude}&directionsmode=driving',
-  );
-
-  try {
-    // Try to launch Google Maps app first
-    if (await canLaunchUrl(mapsAppUrl)) {
-      await launchUrl(mapsAppUrl, mode: LaunchMode.externalApplication);
-      return;
-    }
-  } catch (e) {
-    debugPrint('Google Maps app not available, trying web URL: $e');
-  }
-
-  // Fallback to web URL (works universally but opens in browser or maps app depending on platform)
-  final webUrl = Uri.parse(
-    'https://www.google.com/maps/dir/?api=1&origin=${origin.latitude},${origin.longitude}&destination=${destination.latitude},${destination.longitude}&travelmode=driving',
-  );
-
-  try {
-    if (await canLaunchUrl(webUrl)) {
-      await launchUrl(webUrl, mode: LaunchMode.externalApplication);
-    } else {
-      debugPrint('Could not launch maps URL');
-    }
-  } catch (e) {
-    debugPrint('Error launching maps: $e');
-  }
-}
-
-Future<void> launchGrab(double pLat, double pLng, double dLat, double dLng) async {
-  final grabDeepLink = Uri.parse(
-    'grab://open?screenType=BOOKING&pickUpLatitude=$pLat&pickUpLongitude=$pLng&dropOffLatitude=$dLat&dropOffLongitude=$dLng',
-  );
-
-  try {
-    if (await canLaunchUrl(grabDeepLink)) {
-      await launchUrl(grabDeepLink, mode: LaunchMode.externalApplication);
-      return;
-    }
-  } catch (e) {
-    debugPrint('Grab deep link failed: $e');
-  }
-
-  // Fallback: try launching without canLaunchUrl check
-  try {
-    await launchUrl(grabDeepLink, mode: LaunchMode.externalApplication);
-    return;
-  } catch (e) {
-    debugPrint('Grab direct launch failed: $e');
-  }
-
-  // Final fallback: open Grab website
-  final webUrl = Uri.parse('https://grab.onelink.me/2695613898');
-  try {
-    await launchUrl(webUrl, mode: LaunchMode.externalApplication);
-  } catch (e) {
-    debugPrint('Could not launch Grab: $e');
-  }
-}
+/// Builds a synthetic [LocationModel] from a bare [LatLng] for legs whose
+/// "from" side is the device's current position (no saved place_id) — keeps
+/// [openDirectionsInGoogleMaps] / [openGrabRoute] callable without
+/// nullable params.
+LocationModel _coordOnlyLocation(LatLng coord) => LocationModel(
+      id: 'leg_anchor',
+      name: '',
+      address: '',
+      coordinates: coord,
+      addedAt: DateTime.now(),
+    );
 
 class AssembledMapOverlays {
   final Set<Marker> markers;

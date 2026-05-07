@@ -74,7 +74,19 @@ class MapWidget extends ConsumerWidget {
             onMapCreated: onMapCreated,
             onLongPress: onMapLongPress,
             onTap: (_) {
+              // Two pieces of "selected route" state exist:
+              //   - mapUIStateProvider.tappedPolylineId (drives the
+              //     tapped-leg highlight + info marker)
+              //   - tripProvider.selectedLegIndex (drives the in-list
+              //     leg selection)
+              // Both need to clear on a map tap so the route returns to
+              // its idle visual state without removing the route itself.
               ref.read(mapUIStateProvider.notifier).clearHighlights();
+              ref.read(tripProvider.notifier).selectLeg(null);
+              // Tapping the map should also dismiss the search keyboard if
+              // it's open. Routing through FocusManager keeps this widget
+              // unaware of the search bar's FocusNode.
+              FocusManager.instance.primaryFocus?.unfocus();
             },
             initialCameraPosition: CameraPosition(
               target: currentLocation ?? const LatLng(37.422, -122.084),

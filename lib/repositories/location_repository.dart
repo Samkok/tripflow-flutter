@@ -3,7 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:voyza/main.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import '../models/saved_location.dart';
+import '../models/saved_location.dart' show SavedLocation, OpeningPeriod;
 import '../services/supabase_service.dart';
 import '../services/anonymous_user_service.dart';
 import '../utils/fingerprint_utils.dart';
@@ -177,7 +177,46 @@ class LocationRepository {
     if (updates.containsKey('name')) {
       updatedLocation = updatedLocation.copyWith(name: updates['name'] as String);
     }
-    
+    if (updates.containsKey('google_opening_hours')) {
+      // Accept either an in-memory typed list (from the refresh path) or a
+      // JSON list (from a Supabase write that came through this method).
+      final raw = updates['google_opening_hours'];
+      List<OpeningPeriod>? periods;
+      if (raw is List<OpeningPeriod>) {
+        periods = raw;
+      } else if (raw is List) {
+        periods = raw
+            .map((e) => OpeningPeriod.fromJson(Map<String, dynamic>.from(e)))
+            .toList();
+      }
+      // Note: googleOpeningHours uses simple `?? this.x` in copyWith — we
+      // never need to clear it (a refetch either returns new periods or we
+      // keep the old ones), so passing null here would be a no-op. Skip the
+      // copyWith call entirely on null to match that semantic.
+      if (periods != null) {
+        updatedLocation =
+            updatedLocation.copyWith(googleOpeningHours: periods);
+      }
+    }
+    if (updates.containsKey('user_closing_minute_override')) {
+      // copyWith uses a sentinel for this field, so passing null clears it
+      // (this is "Reset to Google" from the UI).
+      updatedLocation = updatedLocation.copyWith(
+        userClosingMinuteOverride:
+            updates['user_closing_minute_override'] as int?,
+      );
+    }
+    if (updates.containsKey('hours_last_refreshed_at')) {
+      final raw = updates['hours_last_refreshed_at'];
+      final dt = raw is DateTime
+          ? raw
+          : (raw is String ? DateTime.parse(raw) : null);
+      if (dt != null) {
+        updatedLocation =
+            updatedLocation.copyWith(hoursLastRefreshedAt: dt);
+      }
+    }
+
     // Mark as not synced since we made local changes
     updatedLocation = updatedLocation.copyWith(isSynced: false);
 

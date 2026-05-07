@@ -214,7 +214,15 @@ Future<bool> ensureLocationsFitNewTripRange(
 /// than the trip's tagged country. Returns true when no check is needed
 /// (trip has no country, location has no detected country, or they match)
 /// or the user chose to proceed.
-Future<bool> ensureLocationCountryAllowed(
+/// Strict country guard for the active trip. Returns true when the
+/// location may be added (no trip context, the trip has no tagged country,
+/// the location's country is unknown, or the two match), false when the
+/// add must be blocked because of a known cross-country mismatch.
+///
+/// On a known mismatch this surfaces a single-button informational dialog —
+/// there is no "Add anyway" path, since the requirement is to forbid
+/// cross-country adds outright.
+Future<bool> assertLocationInTripCountry(
   BuildContext context,
   Trip? trip,
   String? locationCountryCode,
@@ -222,7 +230,10 @@ Future<bool> ensureLocationCountryAllowed(
   if (trip == null) return true;
   final tripCode = trip.countryCode;
   if (tripCode == null) return true;
-  if (locationCountryCode == null) return true; // unknown — allow
+  // Unknown location-side country: allow rather than block, otherwise the
+  // manual-coord paths (no place_id, no reverse-geocode hit) would be
+  // unreachable. We only block on a *known* mismatch.
+  if (locationCountryCode == null) return true;
   if (locationCountryCode.toUpperCase() == tripCode.toUpperCase()) return true;
 
   final tripCountry = findCountryByCode(tripCode);
@@ -234,32 +245,29 @@ Future<bool> ensureLocationCountryAllowed(
       ? '${locationCountry.flagEmoji} ${locationCountry.name}'
       : locationCountryCode.toUpperCase();
 
-  final result = await showDialog<bool>(
+  await showDialog<void>(
     context: context,
     builder: (ctx) => AlertDialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       title: const Row(
         children: [
-          Icon(Icons.public_rounded, color: Colors.orange),
+          Icon(Icons.public_off_rounded, color: Colors.red),
           SizedBox(width: 12),
           Expanded(child: Text('Different country')),
         ],
       ),
       content: Text(
         'This location is in $locationDisplay, but "${trip.name}" is tagged '
-        'for $tripDisplay. Add it anyway?',
+        'for $tripDisplay. Locations from a different country can\'t be '
+        'added to this trip.',
       ),
       actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(ctx, false),
-          child: const Text('Cancel'),
-        ),
         FilledButton(
-          onPressed: () => Navigator.pop(ctx, true),
-          child: const Text('Add anyway'),
+          onPressed: () => Navigator.pop(ctx),
+          child: const Text('OK'),
         ),
       ],
     ),
   );
-  return result == true;
+  return false;
 }

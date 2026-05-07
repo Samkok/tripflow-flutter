@@ -20,7 +20,6 @@ import 'package:voyza/widgets/location_detail_sheet.dart';
 import 'package:voyza/widgets/location_photo_gallery.dart';
 import 'package:voyza/providers/local_active_trip_provider.dart';
 import 'package:voyza/providers/trip_provider.dart';
-import 'package:voyza/utils/trip_date_validator.dart';
 
 class TripDetailsScreen extends ConsumerStatefulWidget {
   final Trip trip;
@@ -105,22 +104,17 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
   }
 
 
-  void _showLocationDetail(SavedLocation location, int indexInList) {
-    final locationModel = LocationModel(
-      id: location.id,
-      name: location.name,
-      address:
-          '${location.lat.toStringAsFixed(5)}, ${location.lng.toStringAsFixed(5)}',
-      coordinates: LatLng(location.lat, location.lng),
-      addedAt: location.createdAt,
-      stayDuration: Duration(seconds: location.stayDuration),
-      isSkipped: location.isSkipped,
-      isDone: location.isDone,
-      scheduledDate: location.scheduledDate,
-      photoReference: location.photoReference,
-      photoReferences: location.effectivePhotoReferences,
-      photoAttributions: location.photoAttributions,
-    );
+  void _showLocationDetail(
+    SavedLocation location,
+    int indexInList,
+    List<SavedLocation> dateGroup,
+  ) {
+    String coordAddress(SavedLocation l) =>
+        '${l.lat.toStringAsFixed(5)}, ${l.lng.toStringAsFixed(5)}';
+
+    final locationModel = location.toLocationModel(address: coordAddress(location));
+    final dateGroupModels =
+        dateGroup.map((l) => l.toLocationModel(address: coordAddress(l))).toList();
 
     final scrollController = ScrollController();
     showModalBottomSheet(
@@ -131,6 +125,7 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
         location: locationModel,
         number: indexInList + 1,
         parentScrollController: scrollController,
+        locationsForDate: dateGroupModels,
       ),
     ).whenComplete(scrollController.dispose);
   }
@@ -490,7 +485,7 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
 
     // Group locations by scheduledDate (or createdAt if scheduledDate is null
 
-    final groupedByDate = <String, List<dynamic>>{};
+    final groupedByDate = <String, List<SavedLocation>>{};
 
     for (final location in locations) {
       // Use scheduledDate if available, otherwise fall back to createdAt
@@ -525,9 +520,8 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
           delegate: SliverChildBuilderDelegate(
             (context, index) {
               final date = sortedDates[index];
-              final locationsForDate = groupedByDate[date] ?? [];
-
-              return _buildDateSection(date, locationsForDate);
+              final dateGroup = groupedByDate[date] ?? [];
+              return _buildDateSection(date, dateGroup);
             },
             childCount: sortedDates.length,
           ),
@@ -704,7 +698,7 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
     );
   }
 
-  Widget _buildDateSection(String date, List<dynamic> locations) {
+  Widget _buildDateSection(String date, List<SavedLocation> locations) {
     return Padding(
       padding: const EdgeInsets.only(top: 16, left: 16, right: 16),
       child: Column(
@@ -734,17 +728,15 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
             itemCount: locations.length,
             separatorBuilder: (context, index) =>
                 const SizedBox(height: 8),
-            itemBuilder: (context, index) {
-              final location = locations[index] as SavedLocation;
-              return _buildLocationCard(location, index);
-            },
+            itemBuilder: (context, index) =>
+                _buildLocationCard(locations[index], index, locations),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildLocationCard(SavedLocation location, int index) {
+  Widget _buildLocationCard(SavedLocation location, int index, List<SavedLocation> dateGroup) {
     final timeString = DateFormat('HH:mm').format(location.createdAt);
     final isSelected = _selectedIds.contains(location.id);
     final photoRefs = location.effectivePhotoReferences;
@@ -767,7 +759,7 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
         if (_selectionMode) {
           _toggleSelection(location.id);
         } else {
-          _showLocationDetail(location, index);
+          _showLocationDetail(location, index, dateGroup);
         }
       },
       child: AnimatedContainer(
@@ -1358,12 +1350,6 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
       // Close the spinner before any confirm modal so they don't stack.
       closeLoading();
       if (!mounted) return;
-      final countryOk = await ensureLocationCountryAllowed(
-        context,
-        widget.trip,
-        placeDetails.countryCode,
-      );
-      if (!countryOk) return;
 
       final newLocation = SavedLocation(
         id: const Uuid().v4(),
@@ -1382,10 +1368,18 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
             ? null
             : placeDetails.photoReferences,
         photoAttributions: placeDetails.photoAttributions,
+        placeId: placeDetails.placeId,
+        originalName: placeDetails.name,
+        googleOpeningHours: placeDetails.openingHours,
+        hoursLastRefreshedAt:
+            placeDetails.openingHours != null ? DateTime.now() : null,
       );
 
-      if (!mounted) return;
-      final added = await LocationAddService(ref).addSavedLocation(context, newLocation);
+      final added = await LocationAddService(ref).addSavedLocation(
+        context,
+        newLocation,
+        locationCountryCode: placeDetails.countryCode,
+      );
       if (!mounted) return;
       if (!added) return;
 
@@ -1468,12 +1462,6 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
       // Close the spinner before any confirm modal so they don't stack.
       closeLoading();
       if (!mounted) return;
-      final countryOk = await ensureLocationCountryAllowed(
-        context,
-        widget.trip,
-        placeDetails.countryCode,
-      );
-      if (!countryOk) return;
 
       // Create SavedLocation
       final newLocation = SavedLocation(
@@ -1493,10 +1481,18 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
             ? null
             : placeDetails.photoReferences,
         photoAttributions: placeDetails.photoAttributions,
+        placeId: placeDetails.placeId,
+        originalName: placeDetails.name,
+        googleOpeningHours: placeDetails.openingHours,
+        hoursLastRefreshedAt:
+            placeDetails.openingHours != null ? DateTime.now() : null,
       );
 
-      if (!mounted) return;
-      final added = await LocationAddService(ref).addSavedLocation(context, newLocation);
+      final added = await LocationAddService(ref).addSavedLocation(
+        context,
+        newLocation,
+        locationCountryCode: placeDetails.countryCode,
+      );
       if (!mounted) return;
       if (!added) return;
 

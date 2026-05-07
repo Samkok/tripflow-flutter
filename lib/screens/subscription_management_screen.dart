@@ -246,30 +246,30 @@ class _SubscriptionManagementScreenState
   }
 
 
-  Widget _buildCustomerCenterButton(BuildContext context) {
-    final theme = Theme.of(context);
+  // Widget _buildCustomerCenterButton(BuildContext context) {
+  //   final theme = Theme.of(context);
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Text(
-          'Need Help?',
-          style: theme.textTheme.titleMedium?.copyWith(
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-        const SizedBox(height: 12),
-        OutlinedButton.icon(
-          onPressed: _showCustomerCenter,
-          icon: const Icon(Icons.help_outline),
-          label: const Text('Open Customer Center'),
-          style: OutlinedButton.styleFrom(
-            padding: const EdgeInsets.symmetric(vertical: 16),
-          ),
-        ),
-      ],
-    );
-  }
+  //   return Column(
+  //     crossAxisAlignment: CrossAxisAlignment.stretch,
+  //     children: [
+  //       Text(
+  //         'Need Help?',
+  //         style: theme.textTheme.titleMedium?.copyWith(
+  //           fontWeight: FontWeight.bold,
+  //         ),
+  //       ),
+  //       const SizedBox(height: 12),
+  //       OutlinedButton.icon(
+  //         onPressed: _showCustomerCenter,
+  //         icon: const Icon(Icons.help_outline),
+  //         label: const Text('Open Customer Center'),
+  //         style: OutlinedButton.styleFrom(
+  //           padding: const EdgeInsets.symmetric(vertical: 16),
+  //         ),
+  //       ),
+  //     ],
+  //   );
+  // }
 
   Widget _buildHelpSection(BuildContext context) {
     final theme = Theme.of(context);

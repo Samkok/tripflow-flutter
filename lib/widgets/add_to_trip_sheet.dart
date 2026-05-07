@@ -4,8 +4,8 @@ import '../models/saved_location.dart';
 import '../models/trip.dart';
 import '../providers/local_active_trip_provider.dart';
 import '../providers/user_trip_provider.dart';
-import '../providers/trip_provider.dart';
 import '../providers/trip_collaborator_provider.dart';
+import '../services/location_add_service.dart';
 
 class AddToTripSheet extends ConsumerStatefulWidget {
   final List<SavedLocation> availableLocations;
@@ -224,29 +224,36 @@ class _AddToTripSheetState extends ConsumerState<AddToTripSheet> {
                                       return;
                                     }
 
-                                    // Add locations to trip
-                                    await ref
-                                        .read(tripProvider.notifier)
-                                        .addLocationsToTrip(
-                                          selectedLocationIds.toList(),
-                                          selectedTrip!.id,
-                                        );
+                                    // Strict country guard + attach is
+                                    // handled inside LocationAddService so
+                                    // every add path (this one, search,
+                                    // long-press, trip-detail) shares the
+                                    // same gating.
+                                    final picks = widget.availableLocations
+                                        .where((l) => selectedLocationIds
+                                            .contains(l.id))
+                                        .toList();
+                                    if (!mounted) return;
+                                    final added = await LocationAddService(ref)
+                                        .attachLocationsToTrip(
+                                      context,
+                                      picks,
+                                      selectedTrip!.id,
+                                    );
+                                    if (!added || !mounted) return;
 
-                                    if (mounted) {
-                                      Navigator.pop(context);
-                                      widget.onSuccess?.call();
+                                    Navigator.pop(context);
+                                    widget.onSuccess?.call();
 
-                                      ScaffoldMessenger.of(context)
-                                          .showSnackBar(
-                                        SnackBar(
-                                          content: Text(
-                                            '${selectedLocationIds.length} location${selectedLocationIds.length != 1 ? 's' : ''} added to ${selectedTrip!.name}',
-                                          ),
-                                          duration:
-                                              const Duration(seconds: 2),
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        content: Text(
+                                          '${picks.length} location${picks.length != 1 ? 's' : ''} added to ${selectedTrip!.name}',
                                         ),
-                                      );
-                                    }
+                                        duration:
+                                            const Duration(seconds: 2),
+                                      ),
+                                    );
                                   },
                         child: const Text('Add to Trip'),
                       ),

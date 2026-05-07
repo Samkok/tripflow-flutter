@@ -12,7 +12,6 @@ import '../providers/trip_collaborator_provider.dart';
 import '../services/places_service.dart';
 import '../services/location_add_service.dart';
 import '../core/theme.dart';
-import '../utils/trip_date_validator.dart';
 import 'google_maps_url_dialog.dart';
 
 final searchQueryProvider = StateProvider.autoDispose<String>((ref) => '');
@@ -395,15 +394,6 @@ class _SearchWidgetState extends ConsumerState<SearchWidget> {
         return;
       }
 
-      final activeTrip = ref.read(localActiveTripProvider).asData?.value;
-      if (!mounted) return;
-      final countryOk = await ensureLocationCountryAllowed(
-        context,
-        activeTrip,
-        placeDetails.countryCode,
-      );
-      if (!countryOk) return;
-
       final location = LocationModel(
         id: const Uuid().v4(),
         name: placeDetails.name,
@@ -414,10 +404,19 @@ class _SearchWidgetState extends ConsumerState<SearchWidget> {
         photoReference: placeDetails.photoReference,
         photoReferences: placeDetails.photoReferences,
         photoAttributions: placeDetails.photoAttributions,
+        placeId: placeDetails.placeId,
+        originalName: placeDetails.name,
+        googleOpeningHours: placeDetails.openingHours,
+        hoursLastRefreshedAt:
+            placeDetails.openingHours != null ? DateTime.now() : null,
       );
 
       if (!mounted) return;
-      final added = await LocationAddService(ref).addLocation(context, location);
+      final added = await LocationAddService(ref).addLocation(
+        context,
+        location,
+        locationCountryCode: placeDetails.countryCode,
+      );
       if (!added) return;
 
       widget.focusNode?.unfocus();
@@ -479,16 +478,6 @@ class _SearchWidgetState extends ConsumerState<SearchWidget> {
     if (placeDetails != null) {
       if (!mounted) return;
 
-      final activeTrip = ref.read(localActiveTripProvider).asData?.value;
-      final countryOk = await ensureLocationCountryAllowed(
-        context,
-        activeTrip,
-        placeDetails.countryCode,
-      );
-      if (!countryOk) return;
-
-      if (!mounted) return;
-
       final location = LocationModel(
         id: const Uuid().v4(),
         name: placeDetails.name,
@@ -499,9 +488,15 @@ class _SearchWidgetState extends ConsumerState<SearchWidget> {
         photoReference: placeDetails.photoReference,
         photoReferences: placeDetails.photoReferences,
         photoAttributions: placeDetails.photoAttributions,
+        placeId: placeDetails.placeId ?? prediction.placeId,
+        originalName: placeDetails.name,
       );
 
-      final added = await LocationAddService(ref).addLocation(context, location);
+      final added = await LocationAddService(ref).addLocation(
+        context,
+        location,
+        locationCountryCode: placeDetails.countryCode,
+      );
       if (!added) return;
 
       _searchController.clear();

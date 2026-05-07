@@ -10,6 +10,7 @@ import 'package:voyza/screens/terms_screen.dart';
 
 import '../providers/auth_provider.dart';
 import '../providers/nearby_radius_provider.dart';
+import '../providers/zoom_fit_settings_provider.dart';
 import '../services/notification_service.dart';
 import '../providers/trip_collaborator_provider.dart';
 import '../providers/user_trip_provider.dart';
@@ -83,6 +84,8 @@ class SettingsScreen extends ConsumerWidget {
           const _LocationTile(),
           const SizedBox(height: 12),
           const _NearbyRadiusTile(),
+          const SizedBox(height: 12),
+          const _IncludeCurrentInFitTile(),
           const SizedBox(height: 24),
 
           // About Section
@@ -885,6 +888,57 @@ class _NearbyRadiusTile extends ConsumerWidget {
                 ref.read(nearbyRadiusProvider.notifier).set(v),
           ),
         ],
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Include current location in zoom-to-fit — toggles whether the map's
+// "zoom to fit" FAB also fits the device's current position into the
+// camera bounds. Defaults to on; persisted via [includeCurrentInFitProvider].
+// ---------------------------------------------------------------------------
+
+class _IncludeCurrentInFitTile extends ConsumerWidget {
+  const _IncludeCurrentInFitTile();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final value = ref.watch(includeCurrentInFitProvider);
+    final theme = Theme.of(context);
+    return Container(
+      decoration: BoxDecoration(
+        color: theme.cardColor,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: SwitchListTile(
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+        secondary: Icon(Icons.my_location,
+            color: theme.colorScheme.primary, size: 22),
+        title: Text(
+          'Include current location in fit',
+          style: theme.textTheme.titleMedium?.copyWith(
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        subtitle: Text(
+          'When you tap the zoom-to-fit button, also frame your current location alongside your stops.',
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+        ),
+        value: value,
+        onChanged: (v) =>
+            ref.read(includeCurrentInFitProvider.notifier).set(v),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
       ),
     );
   }

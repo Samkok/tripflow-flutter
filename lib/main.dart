@@ -56,6 +56,10 @@ Future<void> main() async {
 
   // OPTIMIZATION: Initialize Hive first (fast)
   await Hive.initFlutter();
+  // OpeningPeriod must register before SavedLocation: SavedLocation rows
+  // reference OpeningPeriod values, and Hive throws on unknown typeIds while
+  // decoding nested fields.
+  Hive.registerAdapter(OpeningPeriodAdapter());
   Hive.registerAdapter(SavedLocationAdapter());
 
   // Check Hive cache BEFORE runApp so the map overlay can be skipped on

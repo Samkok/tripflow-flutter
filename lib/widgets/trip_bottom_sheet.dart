@@ -8,10 +8,12 @@ import 'package:voyza/providers/map_ui_state_provider.dart';
 import '../providers/trip_listener_provider.dart';
 import '../providers/trip_provider.dart';
 import '../providers/trip_collaborator_provider.dart';
+import '../providers/trip_simulation_provider.dart';
 import '../utils/date_picker_utils.dart';
+import 'timing_warnings_sheet.dart';
+import '../utils/external_app_links.dart';
 import '../utils/trip_date_validator.dart';
 import '../core/theme.dart';
-import 'package:url_launcher/url_launcher.dart';
 import 'optimized_location_card.dart';
 import '../services/csv_service.dart';
 
@@ -72,6 +74,24 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
     // Don't watch entire tripState here since it rebuilds on every state change
     final hasPinnedLocations =
         ref.watch(tripProvider.select((s) => s.pinnedLocations.isNotEmpty));
+
+    // Auto-open the warnings sheet whenever an optimization run lands with
+    // simulation warnings. zoomToFitRouteTrigger increments at the end of
+    // _performRouteOptimization (and previewRouteBetween — both are user-
+    // initiated route renders, both should surface timing problems). We
+    // schedule on the next frame so the modal doesn't try to push during
+    // build, and re-read the simulation provider then so we see the result
+    // computed from the just-landed route.
+    ref.listen<int>(zoomToFitRouteTrigger, (prev, next) {
+      if (prev == next) return;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!context.mounted) return;
+        final sim = ref.read(tripSimulationProvider);
+        if (sim != null && !sim.fullyFeasible) {
+          TimingWarningsSheet.show(context);
+        }
+      });
+    });
 
     return DraggableScrollableSheet(
       controller: sheetController,
@@ -274,6 +294,52 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
             //   },
             // ),
             if (hasPinnedLocations) ...[
+              // Clear Route chip — visible whenever there's a live optimized
+              // route, regardless of the selected date. Sits next to the
+              // Re-optimize chip so it's discoverable from the header
+              // without scrolling to the bottom of the list. We still
+              // suppress while the optimizer is mid-run to avoid a
+              // clear-vs-write race.
+              Consumer(builder: (context, ref, _) {
+                final isGenerating = ref.watch(isGeneratingRouteProvider);
+                if (!hasOptimizedRoute || isGenerating) {
+                  return const SizedBox.shrink();
+                }
+                final errorColor = Theme.of(context).colorScheme.error;
+                return Padding(
+                  padding: const EdgeInsets.only(left: 6),
+                  child: Material(
+                    color: errorColor.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(12),
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(12),
+                      onTap: () => ref
+                          .read(tripProvider.notifier)
+                          .clearOptimizedRoute(),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 10),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.clear_all_rounded,
+                                color: errorColor, size: 18),
+                            const SizedBox(width: 6),
+                            Text(
+                              'Clear',
+                              style: TextStyle(
+                                color: errorColor,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              }),
               const SizedBox(width: 8),
               Consumer(builder: (context, ref, _) {
                 final isGenerating = ref.watch(isGeneratingRouteProvider);
@@ -781,7 +847,10 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
     );
   }
 
-  // Opens Google Maps with directions from the first to last location with waypoints
+  // Opens Google Maps with directions from the first to last location with
+  // waypoints. Hands off via [openDirectionsInGoogleMaps] so each stop's
+  // place_id is preferred over its lat/lng — that way renamed entries
+  // still resolve to the exact Google place on the receiving end.
   Future<void> _openGoogleMaps(BuildContext context, WidgetRef ref) async {
     try {
       final locations = ref.read(locationsForSelectedDateProvider);
@@ -798,79 +867,13 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
         return;
       }
 
-      final firstLocation = locations.first;
-      final lastLocation = locations.last;
-
-      // BUGFIX: Build proper Google Maps URL with all waypoints
-      // Using google.navigation:// scheme for better compatibility with Google Maps app
-      final startLat = firstLocation.coordinates.latitude;
-      final startLng = firstLocation.coordinates.longitude;
-      final endLat = lastLocation.coordinates.latitude;
-      final endLng = lastLocation.coordinates.longitude;
-
-      // Build waypoints string if more than 2 locations
-      String waypointsString = '';
-      if (locations.length > 2) {
-        // Add intermediate locations as waypoints
-        final waypoints = locations.sublist(1, locations.length - 1);
-        waypointsString = waypoints
-            .map((loc) => '${loc.coordinates.latitude},${loc.coordinates.longitude}')
-            .join('|');
-      }
-
-      // BUGFIX: Use proper URL encoding and format for Google Maps
-      // Try multiple URL formats for better compatibility
-      Uri url;
-      
-      if (waypointsString.isNotEmpty) {
-        // Format with waypoints for web
-        url = Uri.https(
-          'www.google.com',
-          '/maps/dir/',
-          {
-            'api': '1',
-            'origin': '$startLat,$startLng',
-            'destination': '$endLat,$endLng',
-            'waypoints': waypointsString,
-            'travelmode': 'driving',
-          },
-        );
-      } else {
-        // Format without waypoints
-        url = Uri.https(
-          'www.google.com',
-          '/maps/dir/',
-          {
-            'api': '1',
-            'origin': '$startLat,$startLng',
-            'destination': '$endLat,$endLng',
-            'travelmode': 'driving',
-          },
-        );
-      }
-
-      // Try to launch the URL
-      if (await canLaunchUrl(url)) {
-        await launchUrl(url, mode: LaunchMode.externalApplication);
-      } else {
-        // Fallback: Try alternative format with geo: scheme
-        final fallbackUrl = Uri.parse(
-          'geo:$startLat,$startLng?q=$endLat,$endLng(Route End)',
-        );
-        
-        if (await canLaunchUrl(fallbackUrl)) {
-          await launchUrl(fallbackUrl, mode: LaunchMode.externalApplication);
-        } else {
-          if (context.mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('Google Maps app not found. Please install it.'),
-                backgroundColor: Colors.red,
-              ),
-            );
-          }
-        }
-      }
+      await openDirectionsInGoogleMaps(
+        origin: locations.first,
+        destination: locations.last,
+        waypoints: locations.length > 2
+            ? locations.sublist(1, locations.length - 1)
+            : const [],
+      );
     } catch (e) {
       debugPrint('Error opening Google Maps: $e');
       if (context.mounted) {
@@ -1306,8 +1309,39 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
         ),
       );
 
-      if (!canGlow) return button;
-      return _PulsingGlow(glowColor: primaryColor, child: button);
+      final primary =
+          canGlow ? _PulsingGlow(glowColor: primaryColor, child: button) : button;
+
+      // Clear Route is shown whenever there's a live optimized route and
+      // locations to anchor it — past, today, and future alike. Suppressed
+      // only while the optimizer is mid-run, to avoid a clear-vs-write
+      // race against the in-flight optimization.
+      final showClear = hasRoute && !isGenerating && hasLocations;
+      if (!showClear) return primary;
+
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          primary,
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            onPressed: () =>
+                ref.read(tripProvider.notifier).clearOptimizedRoute(),
+            icon: const Icon(Icons.clear_all_rounded, size: 18),
+            label: const Text('Clear Route'),
+            style: OutlinedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              foregroundColor: Theme.of(context).colorScheme.error,
+              side: BorderSide(
+                color: Theme.of(context)
+                    .colorScheme
+                    .error
+                    .withValues(alpha: 0.5),
+              ),
+            ),
+          ),
+        ],
+      );
     });
   }
 
@@ -1389,6 +1423,15 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                 child: ListView(
                   shrinkWrap: true,
                   children: [
+                    // "Start at" — wall-clock the simulation should treat as
+                    // arrival time at the first stop. Defaults to now (today)
+                    // / 09:00 (future); user can override here. The picker
+                    // writes to tripStartTimeOverrideProvider so the
+                    // simulation provider sees the new value before it runs.
+                    _StartAtRow(
+                      onChanged: () => setDialogState(() {}),
+                    ),
+                    const Divider(height: 16),
                     if (tripState.currentLocation != null)
                       RadioListTile<String>(
                         title: const Text('My Current Location'),
@@ -1693,6 +1736,50 @@ class _PulsingGlowState extends State<_PulsingGlow>
         child: child,
       ),
       child: widget.child,
+    );
+  }
+}
+
+/// "Start at" row inside the choose-starting-point dialog. Reads the
+/// effective start time (override-or-default) from
+/// [effectiveTripStartTimeProvider] and writes user picks to
+/// [tripStartTimeOverrideProvider]. The dialog passes [onChanged] so its
+/// outer StatefulBuilder can repaint with the new label after the user
+/// picks a time.
+class _StartAtRow extends ConsumerWidget {
+  final VoidCallback onChanged;
+  const _StartAtRow({required this.onChanged});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
+    final start = ref.watch(effectiveTripStartTimeProvider);
+    final label =
+        '${start.hour.toString().padLeft(2, '0')}:${start.minute.toString().padLeft(2, '0')}';
+
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      leading: Icon(Icons.schedule_rounded,
+          color: theme.colorScheme.primary, size: 22),
+      title: const Text('Start at'),
+      subtitle: Text(
+        label,
+        style: theme.textTheme.bodyMedium?.copyWith(
+          color: theme.colorScheme.primary,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+      trailing: const Icon(Icons.edit_outlined, size: 18),
+      onTap: () async {
+        final picked = await showTimePicker(
+          context: context,
+          initialTime: TimeOfDay(hour: start.hour, minute: start.minute),
+          helpText: 'Start at',
+        );
+        if (picked == null) return;
+        ref.read(tripStartTimeOverrideProvider.notifier).state = picked;
+        onChanged();
+      },
     );
   }
 }

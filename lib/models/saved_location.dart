@@ -2,6 +2,50 @@ import 'package:hive/hive.dart';
 
 part 'saved_location.g.dart';
 
+/// One contiguous open→close interval for a place, mirroring a single entry
+/// in Google Places `regular_opening_hours.periods`. Days follow Google's
+/// convention: 0 = Sunday … 6 = Saturday (NOT Dart's `DateTime.weekday`).
+/// Times are stored as minutes since midnight on [openDay] / [closeDay] so
+/// comparisons and arithmetic don't need TimeOfDay around.
+///
+/// A 24/7 place is represented by a single period with [closeDay] and
+/// [closeMinutes] both null. After-midnight closes (bar closes 02:00) are
+/// represented by [closeDay] = openDay + 1 (mod 7).
+@HiveType(typeId: 2)
+class OpeningPeriod {
+  @HiveField(0)
+  final int openDay;
+  @HiveField(1)
+  final int openMinutes;
+  @HiveField(2)
+  final int? closeDay;
+  @HiveField(3)
+  final int? closeMinutes;
+
+  const OpeningPeriod({
+    required this.openDay,
+    required this.openMinutes,
+    this.closeDay,
+    this.closeMinutes,
+  });
+
+  bool get isAlwaysOpen => closeDay == null && closeMinutes == null;
+
+  Map<String, dynamic> toJson() => {
+        'open_day': openDay,
+        'open_minutes': openMinutes,
+        'close_day': closeDay,
+        'close_minutes': closeMinutes,
+      };
+
+  factory OpeningPeriod.fromJson(Map<String, dynamic> json) => OpeningPeriod(
+        openDay: json['open_day'] as int,
+        openMinutes: json['open_minutes'] as int,
+        closeDay: json['close_day'] as int?,
+        closeMinutes: json['close_minutes'] as int?,
+      );
+}
+
 @HiveType(typeId: 1)
 class SavedLocation extends HiveObject {
   @HiveField(0)
@@ -60,6 +104,43 @@ class SavedLocation extends HiveObject {
   @HiveField(17)
   final List<String>? photoReferences;
 
+  /// Google Places `place_id` for this location, captured at add time when
+  /// the place came from a Places API result (search, nearby, reverse
+  /// geocode). Null for older rows and for the manual-coord add path.
+  /// When present, used to anchor external-app handoff (Google Maps, Grab)
+  /// to the exact place rather than a coordinate, which avoids name-search
+  /// ambiguity for renamed entries.
+  @HiveField(18)
+  final String? placeId;
+
+  /// The Google place name as returned by the Places API at add time. We
+  /// keep this separate from [name] so that even after a user edits the
+  /// in-app label, we still have the canonical name to send to external
+  /// apps. Null for older rows and rows that never had a Places result.
+  @HiveField(19)
+  final String? originalName;
+
+  /// Per-day opening periods captured from Google Places at add time (or
+  /// last refresh). Null for places with no hours data and for older rows
+  /// captured before this column existed. Read-only — never overwritten by
+  /// user edits; the user-facing override lives in [userClosingMinuteOverride].
+  @HiveField(20)
+  final List<OpeningPeriod>? googleOpeningHours;
+
+  /// User-supplied closing time, in minutes since midnight (0–1439). When
+  /// set, the optimizer's timing simulation treats this as the effective
+  /// closing time regardless of what Google says — useful when the user
+  /// knows local hours better, or wants a self-imposed cutoff. Null means
+  /// "use Google's hours."
+  @HiveField(21)
+  final int? userClosingMinuteOverride;
+
+  /// When [googleOpeningHours] was last fetched. Surfaced in the UI as
+  /// "last refreshed N days ago" so users know whether to refresh before
+  /// trusting the warnings.
+  @HiveField(22)
+  final DateTime? hoursLastRefreshedAt;
+
   SavedLocation({
     required this.id,
     required this.userId,
@@ -79,6 +160,11 @@ class SavedLocation extends HiveObject {
     this.photoReference,
     this.photoReferences,
     this.photoAttributions,
+    this.placeId,
+    this.originalName,
+    this.googleOpeningHours,
+    this.userClosingMinuteOverride,
+    this.hoursLastRefreshedAt,
   });
 
   /// Effective gallery list: prefers [photoReferences]; falls back to a
@@ -93,6 +179,10 @@ class SavedLocation extends HiveObject {
     }
     return const [];
   }
+
+  // Sentinel used to distinguish "caller passed null" from "caller omitted the param".
+  // Required because `param ?? this.field` silently ignores an explicit null.
+  static const _unset = Object();
 
   SavedLocation copyWith({
     String? id,
@@ -109,10 +199,15 @@ class SavedLocation extends HiveObject {
     bool? isDone,
     int? stayDuration,
     DateTime? scheduledDate,
-    String? tripId,
+    Object? tripId = _unset,
     String? photoReference,
     List<String>? photoReferences,
     List<String>? photoAttributions,
+    String? placeId,
+    String? originalName,
+    List<OpeningPeriod>? googleOpeningHours,
+    Object? userClosingMinuteOverride = _unset,
+    DateTime? hoursLastRefreshedAt,
   }) {
     return SavedLocation(
       id: id ?? this.id,
@@ -129,10 +224,17 @@ class SavedLocation extends HiveObject {
       isDone: isDone ?? this.isDone,
       stayDuration: stayDuration ?? this.stayDuration,
       scheduledDate: scheduledDate ?? this.scheduledDate,
-      tripId: tripId ?? this.tripId,
+      tripId: identical(tripId, _unset) ? this.tripId : tripId as String?,
       photoReference: photoReference ?? this.photoReference,
       photoReferences: photoReferences ?? this.photoReferences,
       photoAttributions: photoAttributions ?? this.photoAttributions,
+      placeId: placeId ?? this.placeId,
+      originalName: originalName ?? this.originalName,
+      googleOpeningHours: googleOpeningHours ?? this.googleOpeningHours,
+      userClosingMinuteOverride: identical(userClosingMinuteOverride, _unset)
+          ? this.userClosingMinuteOverride
+          : userClosingMinuteOverride as int?,
+      hoursLastRefreshedAt: hoursLastRefreshedAt ?? this.hoursLastRefreshedAt,
     );
   }
 
@@ -159,6 +261,15 @@ class SavedLocation extends HiveObject {
       photoAttributions: json['photo_attributions'] != null
           ? List<String>.from(json['photo_attributions'])
           : null,
+      placeId: json['place_id'] as String?,
+      originalName: json['original_name'] as String?,
+      googleOpeningHours: (json['google_opening_hours'] as List?)
+          ?.map((e) => OpeningPeriod.fromJson(Map<String, dynamic>.from(e)))
+          .toList(),
+      userClosingMinuteOverride: json['user_closing_minute_override'] as int?,
+      hoursLastRefreshedAt: json['hours_last_refreshed_at'] != null
+          ? DateTime.parse(json['hours_last_refreshed_at'])
+          : null,
     );
   }
 
@@ -182,6 +293,12 @@ class SavedLocation extends HiveObject {
       'photo_reference': photoReference,
       'photo_references': photoReferences,
       'photo_attributions': photoAttributions,
+      'place_id': placeId,
+      'original_name': originalName,
+      'google_opening_hours':
+          googleOpeningHours?.map((p) => p.toJson()).toList(),
+      'user_closing_minute_override': userClosingMinuteOverride,
+      'hours_last_refreshed_at': hoursLastRefreshedAt?.toIso8601String(),
     };
   }
 }

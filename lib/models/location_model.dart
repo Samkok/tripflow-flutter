@@ -1,4 +1,5 @@
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:voyza/models/saved_location.dart';
 
 class LocationModel {
   final String id;
@@ -18,6 +19,20 @@ class LocationModel {
   /// Up to 5 photo references for the in-card gallery.
   final List<String> photoReferences;
   final List<String>? photoAttributions;
+  /// Google Places place_id. See [SavedLocation.placeId] — used for the
+  /// external-app handoff so renamed entries still resolve to the exact
+  /// Google place.
+  final String? placeId;
+  /// Original Google name at add time. Preserved across in-app renames so
+  /// external handoff doesn't lose the canonical label.
+  final String? originalName;
+  /// Per-day opening periods. See [SavedLocation.googleOpeningHours].
+  final List<OpeningPeriod>? googleOpeningHours;
+  /// User-supplied closing time, in minutes since midnight (0–1439).
+  /// See [SavedLocation.userClosingMinuteOverride].
+  final int? userClosingMinuteOverride;
+  /// When [googleOpeningHours] was last fetched.
+  final DateTime? hoursLastRefreshedAt;
 
   LocationModel({
     required this.id,
@@ -34,6 +49,11 @@ class LocationModel {
     this.photoReference,
     List<String>? photoReferences,
     this.photoAttributions,
+    this.placeId,
+    this.originalName,
+    this.googleOpeningHours,
+    this.userClosingMinuteOverride,
+    this.hoursLastRefreshedAt,
   }) : photoReferences = photoReferences ??
             (photoReference != null && photoReference.isNotEmpty
                 ? [photoReference]
@@ -56,6 +76,12 @@ class LocationModel {
       'photoReference': photoReference,
       'photoReferences': photoReferences,
       'photoAttributions': photoAttributions,
+      'placeId': placeId,
+      'originalName': originalName,
+      'googleOpeningHours':
+          googleOpeningHours?.map((p) => p.toJson()).toList(),
+      'userClosingMinuteOverride': userClosingMinuteOverride,
+      'hoursLastRefreshedAt': hoursLastRefreshedAt?.toIso8601String(),
     };
   }
 
@@ -84,6 +110,15 @@ class LocationModel {
       photoAttributions: json['photoAttributions'] != null
           ? List<String>.from(json['photoAttributions'])
           : null,
+      placeId: json['placeId'] as String?,
+      originalName: json['originalName'] as String?,
+      googleOpeningHours: (json['googleOpeningHours'] as List?)
+          ?.map((e) => OpeningPeriod.fromJson(Map<String, dynamic>.from(e)))
+          .toList(),
+      userClosingMinuteOverride: json['userClosingMinuteOverride'] as int?,
+      hoursLastRefreshedAt: json['hoursLastRefreshedAt'] != null
+          ? DateTime.parse(json['hoursLastRefreshedAt'])
+          : null,
     );
   }
 
@@ -102,6 +137,11 @@ class LocationModel {
     String? photoReference,
     List<String>? photoReferences,
     List<String>? photoAttributions,
+    String? placeId,
+    String? originalName,
+    List<OpeningPeriod>? googleOpeningHours,
+    int? userClosingMinuteOverride,
+    DateTime? hoursLastRefreshedAt,
   }) {
     return LocationModel(
       id: id ?? this.id,
@@ -118,6 +158,50 @@ class LocationModel {
       photoReference: photoReference ?? this.photoReference,
       photoReferences: photoReferences ?? this.photoReferences,
       photoAttributions: photoAttributions ?? this.photoAttributions,
+      placeId: placeId ?? this.placeId,
+      originalName: originalName ?? this.originalName,
+      googleOpeningHours: googleOpeningHours ?? this.googleOpeningHours,
+      userClosingMinuteOverride:
+          userClosingMinuteOverride ?? this.userClosingMinuteOverride,
+      hoursLastRefreshedAt: hoursLastRefreshedAt ?? this.hoursLastRefreshedAt,
+    );
+  }
+
+  /// Best label to send to external apps (Google Maps, Grab) for handoff.
+  /// Prefers [originalName] (canonical Google label captured at add time)
+  /// over [name] (which the user may have renamed). Falls back to [name]
+  /// for legacy rows that don't have an originalName recorded.
+  String get externalHandoffName =>
+      (originalName != null && originalName!.isNotEmpty)
+          ? originalName!
+          : name;
+}
+
+/// Converts a [SavedLocation] (Hive/Supabase storage type) to an in-memory
+/// [LocationModel]. The optional [address] allows callers to supply a
+/// human-readable address string; defaults to empty for contexts (e.g. the
+/// trip-plan map state) where address is not displayed.
+extension ToLocationModel on SavedLocation {
+  LocationModel toLocationModel({String address = ''}) {
+    final refs = effectivePhotoReferences;
+    return LocationModel(
+      id: id,
+      name: name,
+      address: address,
+      coordinates: LatLng(lat, lng),
+      addedAt: createdAt,
+      stayDuration: Duration(seconds: stayDuration),
+      isSkipped: isSkipped,
+      isDone: isDone,
+      scheduledDate: scheduledDate,
+      photoReference: photoReference,
+      photoReferences: refs.isEmpty ? null : refs,
+      photoAttributions: photoAttributions,
+      placeId: placeId,
+      originalName: originalName,
+      googleOpeningHours: googleOpeningHours,
+      userClosingMinuteOverride: userClosingMinuteOverride,
+      hoursLastRefreshedAt: hoursLastRefreshedAt,
     );
   }
 }

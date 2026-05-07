@@ -6,6 +6,8 @@ import 'package:voyza/providers/map_ui_state_provider.dart';
 import 'package:voyza/providers/trip_listener_provider.dart';
 import 'package:voyza/providers/trip_provider.dart';
 import 'package:voyza/providers/trip_collaborator_provider.dart';
+import 'package:voyza/providers/trip_simulation_provider.dart';
+import 'package:voyza/services/timing_simulation.dart';
 import 'package:voyza/widgets/location_detail_sheet.dart';
 import 'package:voyza/widgets/location_photo_gallery.dart';
 import 'package:voyza/utils/date_picker_utils.dart';
@@ -269,7 +271,71 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
           const SizedBox(height: 8),
           _buildTravelChips(context),
         ],
+        _buildWarningBadge(context),
       ],
+    );
+  }
+
+  /// Reads the latest closing-time-aware simulation result for this stop and
+  /// renders a single most-severe warning chip when present. Hidden when the
+  /// simulation hasn't run, this stop is feasible, or the location is
+  /// skipped/done (warnings would be misleading on a stop the user already
+  /// decided not to visit).
+  Widget _buildWarningBadge(BuildContext context) {
+    if (location.isSkipped || location.isDone) return const SizedBox.shrink();
+    final warnings = ref.watch(stopWarningsProvider
+        .select((m) => m[location.id] ?? const <TimingWarning>[]));
+    if (warnings.isEmpty) return const SizedBox.shrink();
+
+    final w = warnings
+        .reduce((a, b) => a.kind.index >= b.kind.index ? a : b);
+    final theme = Theme.of(context);
+    Color fg;
+    IconData icon;
+    switch (w.kind) {
+      case WarningKind.willOverrunClose:
+        fg = Colors.orange.shade700;
+        icon = Icons.timer_outlined;
+        break;
+      case WarningKind.notOpenYet:
+        fg = Colors.blue.shade700;
+        icon = Icons.schedule_outlined;
+        break;
+      case WarningKind.closedOnArrival:
+      case WarningKind.closedAllDay:
+        fg = theme.colorScheme.error;
+        icon = Icons.do_not_disturb_on_outlined;
+        break;
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 6),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(
+          color: fg.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 12, color: fg),
+            const SizedBox(width: 4),
+            Flexible(
+              child: Text(
+                w.message,
+                style: TextStyle(
+                  color: fg,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -370,6 +436,11 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
   Widget _buildPopupMenu(BuildContext context, WidgetRef ref) {
     final hasWriteAccessAsync = ref.watch(hasActiveTripWriteAccessProvider);
     final hasWriteAccess = hasWriteAccessAsync.asData?.value ?? false;
+    // "Remove from trip" only makes sense when this location is actually
+    // attached to a trip — i.e. there's an active trip in this view. When
+    // there isn't (loose locations on the map), the option is hidden.
+    final activeTrip = ref.watch(realtimeActiveTripProvider).asData?.value;
+    final canRemoveFromTrip = activeTrip != null && hasWriteAccess;
 
     return PopupMenuButton<String>(
       padding: EdgeInsets.zero,
@@ -385,7 +456,7 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
           );
           return;
         }
-        _handleMenuSelection(context, value, ref);
+        _handleMenuSelection(context, value, ref, activeTrip?.id);
       },
       itemBuilder: (context) {
         final isPastDate = ref.read(selectedDateProvider).isBefore(DateTime(
@@ -444,6 +515,15 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
             child:
                 ListTile(leading: Icon(Icons.copy), title: Text('Copy to...')),
           ),
+          if (canRemoveFromTrip)
+            PopupMenuItem<String>(
+              value: 'remove_from_trip',
+              child: ListTile(
+                leading: Icon(Icons.link_off,
+                    color: Theme.of(context).colorScheme.primary),
+                title: const Text('Remove from trip'),
+              ),
+            ),
           const PopupMenuDivider(),
           PopupMenuItem<String>(
               value: 'delete',
@@ -459,7 +539,8 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
     );
   }
 
-  void _handleMenuSelection(BuildContext context, String value, WidgetRef ref) {
+  void _handleMenuSelection(
+      BuildContext context, String value, WidgetRef ref, String? activeTripId) {
     final selectedIds = {location.id};
 
     if (value == 'delete') {
@@ -476,7 +557,67 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
       ref.read(tripProvider.notifier).markLocationsAsDone({location.id});
     } else if (value == 'undone') {
       ref.read(tripProvider.notifier).unmarkLocationsAsDone({location.id});
+    } else if (value == 'remove_from_trip') {
+      _showRemoveFromTripDialog(context, ref, activeTripId);
     }
+  }
+
+  /// Confirms and detaches this location from its current trip — the
+  /// location itself is preserved, only its `trip_id` is cleared, after
+  /// which it shows up in the "Add Locations to Trip" picker as
+  /// unassigned. The Undo snackbar action re-attaches it to the trip it
+  /// just left.
+  void _showRemoveFromTripDialog(
+      BuildContext context, WidgetRef ref, String? activeTripId) {
+    if (activeTripId == null) return;
+    showDialog(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          backgroundColor: Theme.of(context).cardColor,
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Text('Remove from trip'),
+          content: Text(
+              'Remove "${location.name}" from this trip? The location will '
+              'still be saved — you can add it back from "Add Locations to Trip" later.'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: Text('Cancel',
+                  style: TextStyle(
+                      color: Theme.of(context).textTheme.bodyMedium?.color)),
+            ),
+            FilledButton(
+              onPressed: () async {
+                Navigator.of(dialogContext).pop();
+                await ref
+                    .read(tripProvider.notifier)
+                    .removeLocationsFromTrip([location.id]);
+                if (!context.mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('Removed ${location.name} from trip'),
+                    behavior: SnackBarBehavior.floating,
+                    duration: const Duration(seconds: 2),
+                    action: SnackBarAction(
+                      label: 'Undo',
+                      onPressed: () {
+                        ref.read(tripProvider.notifier).addLocationsToTrip(
+                          [location.id],
+                          activeTripId,
+                        );
+                      },
+                    ),
+                  ),
+                );
+              },
+              child: const Text('Remove'),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   void _showMoveCopyDialog(BuildContext context, WidgetRef ref,
