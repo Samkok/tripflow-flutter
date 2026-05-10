@@ -12,7 +12,6 @@ import 'package:voyza/providers/trip_collaborator_provider.dart';
 import 'package:voyza/models/saved_location.dart';
 import 'package:voyza/services/places_service.dart';
 import 'package:voyza/providers/auth_provider.dart';
-import 'package:voyza/utils/trip_date_validator.dart';
 import 'package:voyza/widgets/collaborators_sheet.dart';
 import 'package:voyza/widgets/google_maps_url_dialog.dart';
 import 'package:voyza/services/location_add_service.dart';

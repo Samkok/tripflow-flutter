@@ -6,6 +6,7 @@ workflows:
         - supabase
         - google_map
         - revenuecat
+        - android_key
       flutter: stable
       android_signing:
         - voyza_key
