@@ -22,7 +22,7 @@ workflows:
           echo "GOOGLE_DIRECTIONS_API_KEY=$GOOGLE_DIRECTIONS_API_KEY" >> .env
           echo "GOOGLE_PLACES_API_KEY=$GOOGLE_PLACES_API_KEY" >> .env
           echo "GOOGLE_MAPS_API_KEY=$GOOGLE_MAPS_API_KEY" >> .env
-          echo "storeFile=android/app/voyza_key.jks" > android/key.properties
+          echo "storeFile=$storeFile" > android/key.properties
           echo "storePassword=$storePassword" >> android/key.properties
           echo "keyAlias=$keyAlias" >> android/key.properties
           echo "keyPassword=$keyPassword" >> android/key.properties
