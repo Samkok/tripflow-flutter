@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:purchases_ui_flutter/purchases_ui_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../providers/subscription_provider.dart';
 import 'paywall_screen.dart';
@@ -368,28 +367,26 @@ class _SubscriptionManagementScreenState
     }
   }
 
+  // Future<void> _showCustomerCenter() async {
+  //   try {
+  //     await RevenueCatUI.presentCustomerCenter();
 
-
-  Future<void> _showCustomerCenter() async {
-    try {
-      await RevenueCatUI.presentCustomerCenter();
-
-      // Refresh subscription state in case user made changes
-      if (mounted) {
-        ref.read(subscriptionProvider.notifier).refresh();
-      }
-    } catch (e) {
-      debugPrint('Error showing customer center: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Unable to open Customer Center. Please try again.'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    }
-  }
+  //     // Refresh subscription state in case user made changes
+  //     if (mounted) {
+  //       ref.read(subscriptionProvider.notifier).refresh();
+  //     }
+  //   } catch (e) {
+  //     debugPrint('Error showing customer center: $e');
+  //     if (mounted) {
+  //       ScaffoldMessenger.of(context).showSnackBar(
+  //         const SnackBar(
+  //           content: Text('Unable to open Customer Center. Please try again.'),
+  //           backgroundColor: Colors.red,
+  //         ),
+  //       );
+  //     }
+  //   }
+  // }
 
   Future<void> _openManagementUrl(String url) async {
     final uri = Uri.parse(url);

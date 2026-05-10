@@ -412,7 +412,7 @@ class _SearchWidgetState extends ConsumerState<SearchWidget> {
       );
 
       if (!mounted) return;
-      final added = await LocationAddService(ref).addLocation(
+      final added = await LocationAddService(ref).beforeAddingLocation(
         context,
         location,
         locationCountryCode: placeDetails.countryCode,
@@ -492,7 +492,7 @@ class _SearchWidgetState extends ConsumerState<SearchWidget> {
         originalName: placeDetails.name,
       );
 
-      final added = await LocationAddService(ref).addLocation(
+      final added = await LocationAddService(ref).beforeAddingLocation(
         context,
         location,
         locationCountryCode: placeDetails.countryCode,

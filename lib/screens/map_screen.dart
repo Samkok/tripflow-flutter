@@ -306,7 +306,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
         hoursLastRefreshedAt:
             details?.openingHours != null ? DateTime.now() : null,
       );
-      final added = await LocationAddService(ref).addLocation(
+      final added = await LocationAddService(ref).beforeAddingLocation(
         context,
         location,
         locationCountryCode: details?.countryCode,

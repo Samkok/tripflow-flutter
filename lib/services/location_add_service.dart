@@ -85,7 +85,7 @@ class LocationAddService {
   /// guard can compare against the active trip's tagged country. Omit it
   /// only when the country is genuinely unknown — passing null disables
   /// the check rather than failing closed.
-  Future<bool> addLocation(
+  Future<bool> beforeAddingLocation(
     BuildContext context,
     LocationModel location, {
     String? locationCountryCode,
