@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'dart:ui';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:intl/intl.dart';
 import 'package:voyza/widgets/add_to_trip_sheet.dart';
 import 'package:voyza/widgets/location_detail_sheet.dart';
 import 'package:uuid/uuid.dart';
@@ -816,6 +817,49 @@ class _MapScreenState extends ConsumerState<MapScreen>
                                           maxLines: 1,
                                           overflow: TextOverflow.ellipsis,
                                         ),
+                                        // Date-range + inclusive day count.
+                                        // Rendered as a small subtitle so
+                                        // the badge stays compact; only
+                                        // shows when the trip actually has
+                                        // both endpoints set.
+                                        if (activeTrip.startDate != null &&
+                                            activeTrip.endDate != null)
+                                          Builder(builder: (context) {
+                                            final s = DateTime(
+                                                activeTrip.startDate!.year,
+                                                activeTrip.startDate!.month,
+                                                activeTrip.startDate!.day);
+                                            final e = DateTime(
+                                                activeTrip.endDate!.year,
+                                                activeTrip.endDate!.month,
+                                                activeTrip.endDate!.day);
+                                            final dayCount =
+                                                e.difference(s).inDays + 1;
+                                            final dateText = activeTrip
+                                                        .startDate ==
+                                                    activeTrip.endDate
+                                                ? DateFormat('MMM d, y')
+                                                    .format(activeTrip
+                                                        .startDate!)
+                                                : '${DateFormat('MMM d').format(activeTrip.startDate!)} - ${DateFormat('MMM d').format(activeTrip.endDate!)}';
+                                            return Padding(
+                                              padding: const EdgeInsets.only(
+                                                  top: 2),
+                                              child: Text(
+                                                '$dateText  ·  $dayCount day${dayCount == 1 ? '' : 's'}',
+                                                style: TextStyle(
+                                                  color: Colors.white
+                                                      .withValues(alpha: 0.85),
+                                                  fontSize: 11,
+                                                  fontWeight: FontWeight.w500,
+                                                  letterSpacing: 0.2,
+                                                ),
+                                                maxLines: 1,
+                                                overflow:
+                                                    TextOverflow.ellipsis,
+                                              ),
+                                            );
+                                          }),
                                       ],
                                     ),
                                   ),

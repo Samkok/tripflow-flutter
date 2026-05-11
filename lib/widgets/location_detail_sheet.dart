@@ -420,8 +420,101 @@ class LocationDetailSheet extends ConsumerWidget {
             ),
           );
         }),
+        // "Remove from trip" — unlinks the location from its trip (sets
+        // trip_id to null) without deleting it. Hidden when the location
+        // isn't currently in a trip. The repository write goes through
+        // directly (mirroring the delete bypass in trip details) so it
+        // works regardless of whether the location's trip is the active
+        // map trip — RLS still enforces real permissions.
+        if (canEdit && updatedLocation.tripId != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                icon: Icon(Icons.link_off_rounded,
+                    size: 18, color: Colors.orange.shade700),
+                label: Text(
+                  'Remove from trip',
+                  style: TextStyle(color: Colors.orange.shade700),
+                ),
+                onPressed: () => _confirmRemoveFromTrip(
+                    context, ref, updatedLocation),
+                style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(
+                      vertical: 10, horizontal: 8),
+                  side: BorderSide(
+                    color: Colors.orange.shade700.withValues(alpha: 0.4),
+                  ),
+                ),
+              ),
+            ),
+          ),
       ],
     );
+  }
+
+  /// Asks for confirmation, then unassigns [loc] from its trip via the
+  /// repository (sets `trip_id` to null). Doesn't delete the location.
+  Future<void> _confirmRemoveFromTrip(
+    BuildContext context,
+    WidgetRef ref,
+    LocationModel loc,
+  ) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Remove from trip?'),
+        content: Text(
+          '"${loc.name}" will be moved out of its trip but stay in your '
+          'saved locations. You can attach it to another trip later.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: FilledButton.styleFrom(
+              backgroundColor: Colors.orange.shade700,
+            ),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    if (!context.mounted) return;
+
+    final messenger = ScaffoldMessenger.of(context);
+    final navigator = Navigator.of(context);
+    try {
+      await ref
+          .read(locationRepositoryProvider)
+          .updateLocation(loc.id, {'trip_id': null});
+      if (!context.mounted) return;
+      // Close the detail sheet — the location no longer belongs to the
+      // trip being viewed, so showing it here would be misleading.
+      if (navigator.canPop()) navigator.pop();
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text('Removed ${loc.name} from trip'),
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    } catch (e) {
+      if (!context.mounted) return;
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text('Could not remove from trip: $e'),
+          backgroundColor: Colors.red,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
   }
 
   /// Opens a small picker listing the other locations on the selected date.

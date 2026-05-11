@@ -238,7 +238,7 @@ class _AddToTripSheetState extends ConsumerState<AddToTripSheet> {
                                         .attachLocationsToTrip(
                                       context,
                                       picks,
-                                      selectedTrip!.id,
+                                      selectedTrip!,
                                     );
                                     if (!added || !mounted) return;
 

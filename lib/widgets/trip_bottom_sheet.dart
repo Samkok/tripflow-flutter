@@ -725,7 +725,13 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
     final selectedRaw = ref.watch(selectedDateProvider);
     final selected = DateTime(
         selectedRaw.year, selectedRaw.month, selectedRaw.day);
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
     final theme = Theme.of(context);
+    // Accent reserved for "this chip is today's date" so it stays visually
+    // distinct from the primary-color "selected" treatment. Green reads as
+    // "live/current" and doesn't collide with the brand primary.
+    final todayAccent = Colors.green.shade600;
 
     return SizedBox(
       height: 34,
@@ -737,7 +743,35 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
         itemBuilder: (context, index) {
           final day = days[index];
           final isSelected = day.isAtSameMomentAs(selected);
+          final isToday = day.isAtSameMomentAs(today);
           final primary = theme.colorScheme.primary;
+
+          // Color resolution: "selected" wins on the fill/border (primary
+          // tint), "today (unselected)" gets its own accent treatment, and
+          // a plain chip is the default. The "TODAY" pill below makes the
+          // current day stand out even when it's also the selected one.
+          final Color fg;
+          final Color bg;
+          final Color borderColor;
+          if (isSelected) {
+            fg = primary;
+            bg = primary.withValues(alpha: 0.12);
+            borderColor = primary.withValues(alpha: 0.6);
+          } else if (isToday) {
+            fg = todayAccent;
+            bg = todayAccent.withValues(alpha: 0.10);
+            borderColor = todayAccent.withValues(alpha: 0.55);
+          } else {
+            fg = theme.textTheme.bodyMedium?.color
+                    ?.withValues(alpha: 0.75) ??
+                theme.colorScheme.onSurface;
+            bg = Colors.transparent;
+            borderColor = theme.dividerColor.withValues(alpha: 0.4);
+          }
+
+          final dateLabel =
+              isToday ? 'Today' : DateFormat('MMM d').format(day);
+
           return TextButton(
             onPressed: () {
               ref.read(selectedDateProvider.notifier).state = day;
@@ -747,26 +781,34 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
               padding:
                   const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
               tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              foregroundColor: isSelected
-                  ? primary
-                  : theme.textTheme.bodyMedium?.color
-                      ?.withValues(alpha: 0.75),
-              backgroundColor: isSelected
-                  ? primary.withValues(alpha: 0.12)
-                  : Colors.transparent,
+              foregroundColor: fg,
+              backgroundColor: bg,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(16),
-                side: BorderSide(
-                  color: isSelected
-                      ? primary.withValues(alpha: 0.6)
-                      : theme.dividerColor.withValues(alpha: 0.4),
-                ),
+                side: BorderSide(color: borderColor),
               ),
               textStyle: theme.textTheme.labelMedium?.copyWith(
-                fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+                fontWeight:
+                    (isSelected || isToday) ? FontWeight.w700 : FontWeight.w500,
               ),
             ),
-            child: Text('${index + 1} · ${DateFormat('MMM d').format(day)}'),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text('${index + 1} · $dateLabel'),
+                if (isToday) ...[
+                  const SizedBox(width: 6),
+                  Container(
+                    width: 6,
+                    height: 6,
+                    decoration: BoxDecoration(
+                      color: todayAccent,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                ],
+              ],
+            ),
           );
         },
       ),

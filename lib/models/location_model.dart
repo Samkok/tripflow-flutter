@@ -37,6 +37,11 @@ class LocationModel {
   /// [scheduledDate]. Null = single-day stop (default). When set, the
   /// location appears on every day in `[scheduledDate..scheduledEndDate]`.
   final DateTime? scheduledEndDate;
+  /// Trip id this location is attached to (null = unassigned). Mirrors
+  /// [SavedLocation.tripId] and propagates through the sync listener so
+  /// UIs (e.g. the "Remove from trip" affordance in LocationDetailSheet)
+  /// can read it without doing their own Hive lookup.
+  final String? tripId;
 
   LocationModel({
     required this.id,
@@ -59,6 +64,7 @@ class LocationModel {
     this.userClosingMinuteOverride,
     this.hoursLastRefreshedAt,
     this.scheduledEndDate,
+    this.tripId,
   }) : photoReferences = photoReferences ??
             (photoReference != null && photoReference.isNotEmpty
                 ? [photoReference]
@@ -88,6 +94,7 @@ class LocationModel {
       'userClosingMinuteOverride': userClosingMinuteOverride,
       'hoursLastRefreshedAt': hoursLastRefreshedAt?.toIso8601String(),
       'scheduledEndDate': scheduledEndDate?.toIso8601String(),
+      'tripId': tripId,
     };
   }
 
@@ -128,6 +135,7 @@ class LocationModel {
       scheduledEndDate: json['scheduledEndDate'] != null
           ? DateTime.parse(json['scheduledEndDate'])
           : null,
+      tripId: json['tripId'] as String?,
     );
   }
 
@@ -156,6 +164,7 @@ class LocationModel {
     int? userClosingMinuteOverride,
     DateTime? hoursLastRefreshedAt,
     Object? scheduledEndDate = _unset,
+    Object? tripId = _unset,
   }) {
     return LocationModel(
       id: id ?? this.id,
@@ -181,6 +190,7 @@ class LocationModel {
       scheduledEndDate: identical(scheduledEndDate, _unset)
           ? this.scheduledEndDate
           : scheduledEndDate as DateTime?,
+      tripId: identical(tripId, _unset) ? this.tripId : tripId as String?,
     );
   }
 
@@ -242,6 +252,7 @@ extension ToLocationModel on SavedLocation {
       userClosingMinuteOverride: userClosingMinuteOverride,
       hoursLastRefreshedAt: hoursLastRefreshedAt,
       scheduledEndDate: scheduledEndDate,
+      tripId: tripId,
     );
   }
 }

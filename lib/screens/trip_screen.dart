@@ -1595,19 +1595,42 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                         ),
                         const SizedBox(width: 8),
                         Expanded(
-                          child: Text(
-                            startDate == endDate
+                          child: Builder(builder: (context) {
+                            // Inclusive day count — Mar 5 → Mar 7 is 3 days,
+                            // not 2. Normalize to midnight before diffing so
+                            // a stored time component doesn't shave a day.
+                            final s = DateTime(startDate.year,
+                                startDate.month, startDate.day);
+                            final e = DateTime(
+                                endDate.year, endDate.month, endDate.day);
+                            final dayCount = e.difference(s).inDays + 1;
+                            final dateText = startDate == endDate
                                 ? DateFormat('MMM d, y').format(startDate)
-                                : '${DateFormat('MMM d').format(startDate)} - ${DateFormat('MMM d, y').format(endDate)}',
-                            style: Theme.of(context)
-                                .textTheme
-                                .bodyMedium
-                                ?.copyWith(
-                                  fontWeight: FontWeight.w500,
-                                ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
+                                : '${DateFormat('MMM d').format(startDate)} - ${DateFormat('MMM d, y').format(endDate)}';
+                            return Text.rich(
+                              TextSpan(
+                                children: [
+                                  TextSpan(text: dateText),
+                                  TextSpan(
+                                    text:
+                                        '  ·  $dayCount day${dayCount == 1 ? '' : 's'}',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.w600,
+                                      color: Theme.of(context)
+                                          .colorScheme
+                                          .primary,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .bodyMedium
+                                  ?.copyWith(fontWeight: FontWeight.w500),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            );
+                          }),
                         ),
                       ],
                     ),

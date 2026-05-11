@@ -707,29 +707,38 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
             ),
             if (widget.trip.startDate != null && widget.trip.endDate != null) ...[
               const SizedBox(height: 10),
-              Row(
-                children: [
-                  Icon(
-                    Icons.calendar_today_rounded,
-                    size: 14,
-                    color: Theme.of(context).colorScheme.primary,
-                  ),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: Text(
-                      widget.trip.startDate == widget.trip.endDate
-                          ? DateFormat('MMM d, y').format(widget.trip.startDate!)
-                          : '${DateFormat('MMM d').format(widget.trip.startDate!)} - ${DateFormat('MMM d, y').format(widget.trip.endDate!)}',
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: Theme.of(context).colorScheme.primary,
-                            fontWeight: FontWeight.w600,
-                          ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
+              Builder(builder: (context) {
+                final s = DateTime(widget.trip.startDate!.year,
+                    widget.trip.startDate!.month, widget.trip.startDate!.day);
+                final e = DateTime(widget.trip.endDate!.year,
+                    widget.trip.endDate!.month, widget.trip.endDate!.day);
+                final dayCount = e.difference(s).inDays + 1;
+                final dateText = widget.trip.startDate == widget.trip.endDate
+                    ? DateFormat('MMM d, y').format(widget.trip.startDate!)
+                    : '${DateFormat('MMM d').format(widget.trip.startDate!)} - ${DateFormat('MMM d, y').format(widget.trip.endDate!)}';
+                return Row(
+                  children: [
+                    Icon(
+                      Icons.calendar_today_rounded,
+                      size: 14,
+                      color: Theme.of(context).colorScheme.primary,
                     ),
-                  ),
-                ],
-              ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        '$dateText  ·  $dayCount day${dayCount == 1 ? '' : 's'}',
+                        style:
+                            Theme.of(context).textTheme.bodySmall?.copyWith(
+                                  color: Theme.of(context).colorScheme.primary,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
+                );
+              }),
             ],
             if (widget.trip.description != null &&
                 widget.trip.description!.isNotEmpty) ...[
@@ -1228,7 +1237,7 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (context) => _ExistingLocationsSheet(tripId: widget.trip.id),
+      builder: (context) => _ExistingLocationsSheet(trip: widget.trip),
     );
   }
 }
@@ -1813,9 +1822,15 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
 }
 
 class _ExistingLocationsSheet extends ConsumerStatefulWidget {
-  final String tripId;
+  /// The viewed trip itself, NOT just its id. The date-range confirmation
+  /// in [LocationAddService.attachExistingLocationToTrip] needs the trip's
+  /// startDate/endDate up front — looking it up via userTripsProvider
+  /// silently fails for collaborator trips (which aren't in that provider)
+  /// and during transient loading states, which is why the date dialog
+  /// wasn't firing before.
+  final Trip trip;
 
-  const _ExistingLocationsSheet({required this.tripId});
+  const _ExistingLocationsSheet({required this.trip});
 
   @override
   ConsumerState<_ExistingLocationsSheet> createState() =>
@@ -2035,28 +2050,32 @@ class _ExistingLocationsSheetState
   Future<void> _assignToTrip(SavedLocation location) async {
     setState(() => _adding.add(location.id));
 
-    final details = await PlacesService.getPlaceDetails(location.placeId ?? '');
+    try {
+      // Best-effort country lookup so the cross-country guard works for
+      // legacy rows without a stored country code.
+      final details =
+          await PlacesService.getPlaceDetails(location.placeId ?? '');
 
-    final added = await LocationAddService(ref).beforeAddingLocation(
+      if (!mounted) return;
+      // Routes through the date-range confirmation dialog: if the
+      // location's scheduledDate falls outside the viewed trip's range,
+      // the user is asked whether to extend the trip dates. The previous
+      // code called beforeAddingLocation (which checks the ACTIVE trip,
+      // not the viewed one), so the dialog never fired for trip-details
+      // attachments and the trip dates were silently left out of sync.
+      final added = await LocationAddService(ref).attachExistingLocationToTrip(
         context,
-        location.toLocationModel(),
+        location,
+        widget.trip,
         locationCountryCode: details?.countryCode,
       );
-
-    if (!added) return;
-
-    try {
-      await ref
-          .read(locationRepositoryProvider)
-          .updateLocation(location.id, {'trip_id': widget.tripId});
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Added ${location.name} to trip'),
-            backgroundColor: Colors.green,
-          ),
-        );
-      }
+      if (!added || !mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Added ${location.name} to trip'),
+          backgroundColor: Colors.green,
+        ),
+      );
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

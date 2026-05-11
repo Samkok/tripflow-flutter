@@ -242,6 +242,7 @@ class TripNotifier extends StateNotifier<TripState> {
             userClosingMinuteOverride: saved.userClosingMinuteOverride,
             hoursLastRefreshedAt: saved.hoursLastRefreshedAt,
             scheduledEndDate: saved.scheduledEndDate,
+            tripId: saved.tripId,
           );
         }).toList();
 

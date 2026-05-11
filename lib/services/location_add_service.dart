@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:intl/intl.dart';
 import '../models/location_model.dart';
 import '../models/saved_location.dart';
 import '../models/trip.dart';
@@ -168,41 +169,230 @@ class LocationAddService {
     return true;
   }
 
+  /// Attaches an already-persisted [location] to [targetTrip]. Used by
+  /// the trip-details "Add existing location" flow, where the user is
+  /// looking at a specific (often non-active) trip and wants to move an
+  /// unassigned location into it.
+  ///
+  /// Takes the [Trip] object directly rather than looking it up by id.
+  /// userTripsProvider only returns trips OWNED by the user (`.eq('user_id'…)`)
+  /// — collaborator trips aren't in it, and even owner trips may be in a
+  /// transient loading state. Either case would cause `_findTripById` to
+  /// return null and silently skip the date check. The caller in
+  /// trip_details_screen already has [widget.trip], so this signature
+  /// removes that footgun entirely.
+  ///
+  /// Behavior on confirmation:
+  ///   - User cancels → returns false, nothing changes.
+  ///   - User confirms with "Add anyway" and the date is out of range →
+  ///     extends the target trip's start/end to fit, then attaches.
+  ///   - In-range or trip has no range → attaches immediately.
+  Future<bool> attachExistingLocationToTrip(
+    BuildContext context,
+    SavedLocation location,
+    Trip targetTrip, {
+    String? locationCountryCode,
+  }) async {
+    final canAdd = await SubscriptionLimitService(_ref).canCreate(context);
+    if (!canAdd) return false;
+
+    if (!context.mounted) return false;
+    final countryOk = await assertLocationInTripCountry(
+      context,
+      targetTrip,
+      locationCountryCode,
+    );
+    if (!countryOk) return false;
+
+    if (!context.mounted) return false;
+    final result = await confirmScheduledDate(
+      context,
+      targetTrip,
+      location.scheduledDate,
+      allowExtension: true,
+    );
+    if (!result.proceed) return false;
+
+    // Attach first — userTripsProvider invalidation from the date extension
+    // would otherwise put the trip in a transient loading state and could
+    // race the repository write.
+    await _ref
+        .read(locationRepositoryProvider)
+        .updateLocation(location.id, {'trip_id': targetTrip.id});
+
+    if (result.didExtend) {
+      await _persistTripDateExtension(targetTrip, result);
+    }
+    return true;
+  }
+
   /// Bulk path used by AddToTripSheet. Resolves each pick's country on the
   /// fly (since SavedLocation doesn't store one), runs the strict country
-  /// guard against [tripId]'s tagged country, then attaches every pick
+  /// guard against [targetTrip]'s tagged country, then attaches every pick
   /// that survived the check via [TripNotifier.addLocationsToTrip].
   ///
-  /// Returns true when at least one location was attached, false when
-  /// nothing survived (and the dialog was shown for the first mismatch)
-  /// or the paywall blocked it.
+  /// Also runs a bulk date-range confirmation: when one or more picks have
+  /// a scheduledDate outside the trip's start/end range, the user is asked
+  /// to confirm extending the trip dates to cover everything. On confirm,
+  /// trip.startDate / trip.endDate are widened to min/max of the affected
+  /// dates before the attach lands.
+  ///
+  /// Takes [targetTrip] as a [Trip] object rather than an id — same reason
+  /// as [attachExistingLocationToTrip]: userTripsProvider doesn't include
+  /// collaborator trips, so an id-based lookup silently skipped both the
+  /// country and date checks for shared trips.
+  ///
+  /// Returns true when at least one location was attached, false when the
+  /// paywall blocked it, the country check refused it, or the user
+  /// cancelled the date-extension dialog.
   Future<bool> attachLocationsToTrip(
     BuildContext context,
     List<SavedLocation> picks,
-    String tripId,
+    Trip targetTrip,
   ) async {
     if (picks.isEmpty) return false;
 
     final canAdd = await SubscriptionLimitService(_ref).canCreate(context);
     if (!canAdd) return false;
 
-    final trip = _findTripById(tripId);
-
-    final tripCode = trip?.countryCode;
+    final tripCode = targetTrip.countryCode;
     if (tripCode != null) {
       final codes = await Future.wait(picks.map(_resolveCountryCodeForSaved));
       final mismatchIdx = codes.indexWhere(
           (c) => c != null && c.toUpperCase() != tripCode.toUpperCase());
       if (mismatchIdx != -1) {
         if (!context.mounted) return false;
-        await assertLocationInTripCountry(context, trip, codes[mismatchIdx]);
+        await assertLocationInTripCountry(
+            context, targetTrip, codes[mismatchIdx]);
         return false;
       }
     }
 
+    if (!context.mounted) return false;
+    final dateConfirm = await _confirmBulkDateRange(context, targetTrip, picks);
+    if (!dateConfirm.proceed) return false;
+
     await _ref
         .read(tripProvider.notifier)
-        .addLocationsToTrip(picks.map((p) => p.id).toList(), tripId);
+        .addLocationsToTrip(picks.map((p) => p.id).toList(), targetTrip.id);
+
+    if (dateConfirm.didExtend) {
+      await _persistTripDateExtension(targetTrip, dateConfirm);
+    }
+
     return true;
+  }
+
+  /// Inspects every pick's scheduledDate against [trip]'s range and, when
+  /// any fall outside, asks the user whether to widen the trip dates to
+  /// cover them. The dialog wording mirrors [confirmScheduledDate]'s
+  /// "Outside trip dates" message but speaks in plural / range terms since
+  /// multiple picks can extend the trip in either direction at once.
+  ///
+  /// Returns:
+  ///   - [TripDateConfirmResult.allowed] when there's nothing to flag
+  ///     (trip has no range, no picks have dates, or all are in range).
+  ///   - [TripDateConfirmResult.cancelled] when the user cancels.
+  ///   - A `proceed: true` result with `extendedStart`/`extendedEnd` set
+  ///     to the min/max out-of-range dates when the user confirms.
+  Future<TripDateConfirmResult> _confirmBulkDateRange(
+    BuildContext context,
+    Trip trip,
+    List<SavedLocation> picks,
+  ) async {
+    final start = trip.startDate;
+    final end = trip.endDate;
+    if (start == null && end == null) return TripDateConfirmResult.allowed;
+
+    DateTime atMidnight(DateTime d) => DateTime(d.year, d.month, d.day);
+
+    final tripStart = start != null ? atMidnight(start) : null;
+    final tripEnd = end != null ? atMidnight(end) : null;
+
+    DateTime? earliestOutside;
+    DateTime? latestOutside;
+    int outsideCount = 0;
+    for (final p in picks) {
+      final d = p.scheduledDate;
+      if (d == null) continue;
+      final day = atMidnight(d);
+      final before = tripStart != null && day.isBefore(tripStart);
+      final after = tripEnd != null && day.isAfter(tripEnd);
+      if (!before && !after) continue;
+      outsideCount++;
+      if (earliestOutside == null || day.isBefore(earliestOutside)) {
+        earliestOutside = day;
+      }
+      if (latestOutside == null || day.isAfter(latestOutside)) {
+        latestOutside = day;
+      }
+    }
+
+    if (outsideCount == 0) return TripDateConfirmResult.allowed;
+
+    // Compute the proposed extended range.
+    final newStart =
+        (tripStart == null || earliestOutside!.isBefore(tripStart))
+            ? earliestOutside
+            : tripStart;
+    final newEnd =
+        (tripEnd == null || latestOutside!.isAfter(tripEnd))
+            ? latestOutside
+            : tripEnd;
+
+    final fmt = DateFormat('MMM d, y');
+    final currentRange = (tripStart != null && tripEnd != null)
+        ? '${fmt.format(tripStart)} – ${fmt.format(tripEnd)}'
+        : (tripStart != null
+            ? 'starting ${fmt.format(tripStart)}'
+            : 'ending ${fmt.format(tripEnd!)}');
+    final newRange = (newStart != null && newEnd != null)
+        ? '${fmt.format(newStart)} – ${fmt.format(newEnd)}'
+        : (newStart != null
+            ? 'starting ${fmt.format(newStart)}'
+            : 'ending ${fmt.format(newEnd!)}');
+
+    if (!context.mounted) return TripDateConfirmResult.cancelled;
+    final proceed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Row(
+          children: [
+            Icon(Icons.event_busy_rounded, color: Colors.orange),
+            SizedBox(width: 12),
+            Expanded(child: Text('Outside trip dates')),
+          ],
+        ),
+        content: Text(
+          '$outsideCount location${outsideCount == 1 ? '' : 's'} '
+          '${outsideCount == 1 ? 'falls' : 'fall'} outside "${trip.name}" '
+          '($currentRange).\n\n'
+          'If you continue, the trip dates will update to $newRange.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Add anyway'),
+          ),
+        ],
+      ),
+    );
+    if (proceed != true) return TripDateConfirmResult.cancelled;
+
+    return TripDateConfirmResult(
+      proceed: true,
+      // Only mark the side as extended when it actually moved.
+      extendedStart: (tripStart == null || earliestOutside!.isBefore(tripStart))
+          ? earliestOutside
+          : null,
+      extendedEnd: (tripEnd == null || latestOutside!.isAfter(tripEnd))
+          ? latestOutside
+          : null,
+    );
   }
 }
