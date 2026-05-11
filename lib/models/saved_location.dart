@@ -141,6 +141,14 @@ class SavedLocation extends HiveObject {
   @HiveField(22)
   final DateTime? hoursLastRefreshedAt;
 
+  /// Last day this location is "active" on the trip — inclusive, paired with
+  /// [scheduledDate] as the start. Lets the user mark a hotel/accommodation
+  /// as spanning multiple days so it appears on every day in `[start..end]`.
+  /// Null means single-day (legacy behavior). When non-null, must be
+  /// on-or-after [scheduledDate].
+  @HiveField(23)
+  final DateTime? scheduledEndDate;
+
   SavedLocation({
     required this.id,
     required this.userId,
@@ -165,6 +173,7 @@ class SavedLocation extends HiveObject {
     this.googleOpeningHours,
     this.userClosingMinuteOverride,
     this.hoursLastRefreshedAt,
+    this.scheduledEndDate,
   });
 
   /// Effective gallery list: prefers [photoReferences]; falls back to a
@@ -208,6 +217,7 @@ class SavedLocation extends HiveObject {
     List<OpeningPeriod>? googleOpeningHours,
     Object? userClosingMinuteOverride = _unset,
     DateTime? hoursLastRefreshedAt,
+    Object? scheduledEndDate = _unset,
   }) {
     return SavedLocation(
       id: id ?? this.id,
@@ -235,6 +245,9 @@ class SavedLocation extends HiveObject {
           ? this.userClosingMinuteOverride
           : userClosingMinuteOverride as int?,
       hoursLastRefreshedAt: hoursLastRefreshedAt ?? this.hoursLastRefreshedAt,
+      scheduledEndDate: identical(scheduledEndDate, _unset)
+          ? this.scheduledEndDate
+          : scheduledEndDate as DateTime?,
     );
   }
 
@@ -270,6 +283,9 @@ class SavedLocation extends HiveObject {
       hoursLastRefreshedAt: json['hours_last_refreshed_at'] != null
           ? DateTime.parse(json['hours_last_refreshed_at'])
           : null,
+      scheduledEndDate: json['scheduled_end_date'] != null
+          ? DateTime.parse(json['scheduled_end_date'])
+          : null,
     );
   }
 
@@ -299,6 +315,30 @@ class SavedLocation extends HiveObject {
           googleOpeningHours?.map((p) => p.toJson()).toList(),
       'user_closing_minute_override': userClosingMinuteOverride,
       'hours_last_refreshed_at': hoursLastRefreshedAt?.toIso8601String(),
+      'scheduled_end_date': scheduledEndDate?.toIso8601String(),
     };
+  }
+
+  /// True when [day] falls within this location's active range, inclusive
+  /// on both ends. For single-day rows (no [scheduledEndDate]) returns true
+  /// only on the matching day; for legacy rows with no [scheduledDate] at
+  /// all, falls back to [createdAt] so they still appear somewhere.
+  bool isActiveOnDate(DateTime day) {
+    final startRaw = scheduledDate ?? createdAt;
+    final start = DateTime(startRaw.year, startRaw.month, startRaw.day);
+    final endRaw = scheduledEndDate ?? startRaw;
+    final end = DateTime(endRaw.year, endRaw.month, endRaw.day);
+    final target = DateTime(day.year, day.month, day.day);
+    return !target.isBefore(start) && !target.isAfter(end);
+  }
+
+  /// True iff the location explicitly spans more than one day.
+  bool get isMultiDay {
+    if (scheduledEndDate == null || scheduledDate == null) return false;
+    final s = DateTime(scheduledDate!.year, scheduledDate!.month,
+        scheduledDate!.day);
+    final e = DateTime(scheduledEndDate!.year, scheduledEndDate!.month,
+        scheduledEndDate!.day);
+    return e.isAfter(s);
   }
 }

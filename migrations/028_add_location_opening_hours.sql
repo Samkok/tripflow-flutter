@@ -13,9 +13,11 @@
 --
 --   user_closing_minute_override  int    -- user-supplied "treat as closing
 --                                           at this time" (minutes since
---                                           midnight, 0–1439). When non-null,
---                                           the timing simulation prefers this
---                                           over Google's hours.
+--                                           midnight, 0–1439), or 1440 as a
+--                                           sentinel for "never closes" (e.g.
+--                                           accommodation). When non-null, the
+--                                           timing simulation prefers this over
+--                                           Google's hours.
 --
 --   hours_last_refreshed_at       timestamptz  -- when google_opening_hours was
 --                                                last fetched. Drives the
@@ -31,5 +33,5 @@ ALTER TABLE public.locations
   ADD COLUMN IF NOT EXISTS user_closing_minute_override int
     CHECK (user_closing_minute_override IS NULL
        OR (user_closing_minute_override >= 0
-       AND user_closing_minute_override <= 1439)),
+       AND user_closing_minute_override <= 1440)),
   ADD COLUMN IF NOT EXISTS hours_last_refreshed_at timestamptz;

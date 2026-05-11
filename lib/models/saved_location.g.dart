@@ -40,13 +40,14 @@ class SavedLocationAdapter extends TypeAdapter<SavedLocation> {
       googleOpeningHours: (fields[20] as List?)?.cast<OpeningPeriod>(),
       userClosingMinuteOverride: fields[21] as int?,
       hoursLastRefreshedAt: fields[22] as DateTime?,
+      scheduledEndDate: fields[23] as DateTime?,
     );
   }
 
   @override
   void write(BinaryWriter writer, SavedLocation obj) {
     writer
-      ..writeByte(23)
+      ..writeByte(24)
       ..writeByte(0)
       ..write(obj.id)
       ..writeByte(1)
@@ -92,7 +93,9 @@ class SavedLocationAdapter extends TypeAdapter<SavedLocation> {
       ..writeByte(21)
       ..write(obj.userClosingMinuteOverride)
       ..writeByte(22)
-      ..write(obj.hoursLastRefreshedAt);
+      ..write(obj.hoursLastRefreshedAt)
+      ..writeByte(23)
+      ..write(obj.scheduledEndDate);
   }
 
   @override

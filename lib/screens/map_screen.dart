@@ -17,6 +17,7 @@ import '../providers/map_ui_state_provider.dart';
 import '../providers/debounced_settings_provider.dart';
 import '../providers/trip_collaborator_provider.dart';
 import '../providers/trip_listener_provider.dart';
+import '../providers/local_active_trip_provider.dart';
 import '../providers/auth_provider.dart';
 import '../services/location_service.dart';
 import '../services/places_service.dart';
@@ -41,6 +42,11 @@ class _MapScreenState extends ConsumerState<MapScreen>
   DraggableScrollableController? _sheetController;
   bool _isTrackingLocation = false;
   int? _highlightedLocationIndex;
+  /// Set when [localActiveTripIdProvider] changes (activate / switch /
+  /// deactivate). The actual camera move waits until [pinnedLocations]
+  /// next emits, so we operate on the locations of the new trip rather
+  /// than the old one (the sync listener that swaps locations is async).
+  bool _pendingTripCameraMove = false;
   final FocusNode _searchFocusNode = FocusNode();
   // ValueNotifier instead of a setState-driven bool so focus changes don't
   // rebuild the entire MapScreen subtree (which includes BackdropFilter
@@ -660,6 +666,38 @@ class _MapScreenState extends ConsumerState<MapScreen>
       }
     });
 
+    // Auto-frame the map when the user changes the selected date: zoom to
+    // fit the day's stops, or fall back to the device location when the
+    // day is empty. Date changes are synchronous, so a post-frame callback
+    // is enough — pinnedLocations is already correct.
+    ref.listen<DateTime>(selectedDateProvider, (previous, next) {
+      if (previous == null || previous == next) return;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _updateCameraForCurrentDate();
+      });
+    });
+
+    // Trip activation / switch / deactivation. The locations list refreshes
+    // asynchronously via _initSyncListener, so we mark a pending camera
+    // move here and execute it once pinnedLocations next emits below —
+    // that way we always frame the *new* trip's locations, never the old
+    // ones.
+    ref.listen<String?>(localActiveTripIdProvider, (previous, next) {
+      if (previous == next) return;
+      _pendingTripCameraMove = true;
+    });
+
+    ref.listen<List<LocationModel>>(
+      tripProvider.select((s) => s.pinnedLocations),
+      (previous, next) {
+        if (!_pendingTripCameraMove) return;
+        _pendingTripCameraMove = false;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _updateCameraForCurrentDate();
+        });
+      },
+    );
+
     // Listen for theme or label visibility changes to update the map style instantly.
     ref.listen<bool>(showPlaceNamesProvider, (_, showLabels) async {
       if (_mapController != null) {
@@ -1158,6 +1196,32 @@ class _MapScreenState extends ConsumerState<MapScreen>
         ),
       );
     }
+  }
+
+  /// Automatic camera reframe called when the selected date changes or the
+  /// active trip is swapped/deactivated. Picks the natural framing for the
+  /// new context:
+  ///   • Day has stops → [_zoomToFitTrip] (also honors the
+  ///     "include current location in fit" setting).
+  ///   • Day is empty → recenter on the device's known [currentLocation].
+  ///
+  /// Stays silent if the map isn't ready or the device location is unknown:
+  /// this is a background camera move, so it must never pop a permission
+  /// dialog or snackbar the way the manual "My location" FAB does.
+  void _updateCameraForCurrentDate() {
+    if (_mapController == null) return;
+    final locations = ref.read(locationsForSelectedDateProvider);
+    if (locations.isNotEmpty) {
+      _zoomToFitTrip();
+      return;
+    }
+    final current = ref.read(tripProvider).currentLocation;
+    if (current == null) return;
+    _mapController!.animateCamera(
+      CameraUpdate.newCameraPosition(
+        CameraPosition(target: current, zoom: 16.0),
+      ),
+    );
   }
 
   void _zoomToFitTrip() {

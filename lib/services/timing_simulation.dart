@@ -3,6 +3,12 @@ import 'package:flutter/foundation.dart';
 import '../models/location_model.dart';
 import '../models/saved_location.dart' show OpeningPeriod;
 
+/// Sentinel for [LocationModel.userClosingMinuteOverride] meaning "never
+/// closes — treat this stop as 24/7 regardless of Google hours." Stored as
+/// 1440 (one past the last valid minute of a day) so it round-trips through
+/// the int? column without a separate nullable flag.
+const kNeverCloses = 1440;
+
 /// Per-stop timing produced by [simulateTrip].
 @immutable
 class StopTiming {
@@ -240,6 +246,8 @@ List<_Interval>? _buildIntervalsForDate(
   final dateOnly = DateTime(arrival.year, arrival.month, arrival.day);
 
   if (override != null) {
+    if (override == kNeverCloses) return null; // "Never closes" — no constraint.
+
     // User says "treat closing as this time on the planned day". Open from
     // the first Google opening for the day if available, else from 00:00 —
     // this matches the UX of an override meaning "I want to be done by X",

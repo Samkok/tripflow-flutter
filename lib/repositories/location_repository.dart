@@ -216,6 +216,16 @@ class LocationRepository {
             updatedLocation.copyWith(hoursLastRefreshedAt: dt);
       }
     }
+    if (updates.containsKey('scheduled_end_date')) {
+      // Sentinel-aware in copyWith — passing null clears the range
+      // (revert to single-day stay).
+      final raw = updates['scheduled_end_date'];
+      final parsed = raw is String
+          ? DateTime.parse(raw)
+          : raw as DateTime?;
+      updatedLocation =
+          updatedLocation.copyWith(scheduledEndDate: parsed);
+    }
 
     // Mark as not synced since we made local changes
     updatedLocation = updatedLocation.copyWith(isSynced: false);
@@ -301,6 +311,7 @@ class LocationRepository {
             isSkipped: localLoc.isSkipped,
             stayDuration: localLoc.stayDuration,
             scheduledDate: localLoc.scheduledDate,
+            scheduledEndDate: localLoc.scheduledEndDate,
             isSynced: false,
           );
           await _box!.put(remoteVersion.id, mergedLocation);
@@ -391,13 +402,31 @@ class LocationRepository {
       // Batch-write all locations in a single putAll call instead of N individual
       // put() calls. Each individual put fires its own Hive watch event, so N puts
       // would trigger N stream emissions → N marker redraws → N map blinks.
+      //
+      // Preserve local rows that still have pending changes (isSynced == false).
+      // Without this guard a refresh runs right after a local edit can overwrite
+      // the edit with the older remote version — e.g. when an upsert is still
+      // in-flight, or when a new column hasn't been migrated yet so the upsert
+      // failed silently. syncUnsyncedLocations() retries the push later.
       if (data.isNotEmpty) {
         final Map<String, SavedLocation> batch = {};
+        int skipped = 0;
         for (final item in data) {
           final remoteLoc = SavedLocation.fromJson(item);
+          final existing = _box!.get(remoteLoc.id);
+          if (existing != null && !existing.isSynced) {
+            skipped++;
+            continue;
+          }
           batch[remoteLoc.id] = remoteLoc;
         }
-        await _box!.putAll(batch);
+        if (batch.isNotEmpty) {
+          await _box!.putAll(batch);
+        }
+        if (skipped > 0) {
+          debugPrint(
+              'fetchRemoteLocations: skipped $skipped local rows with pending changes');
+        }
       }
     } catch (e) {
       debugPrint('Error fetching remote locations: $e');

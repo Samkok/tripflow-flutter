@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:intl/intl.dart';
 import 'package:voyza/models/location_model.dart';
 import 'package:voyza/providers/map_ui_state_provider.dart';
 import 'package:voyza/providers/trip_listener_provider.dart';
@@ -249,15 +250,27 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          location.name,
-          style: theme.textTheme.titleMedium?.copyWith(
-            fontWeight: FontWeight.w700,
-            decoration: location.isSkipped ? TextDecoration.lineThrough : null,
-            color: location.isSkipped ? mutedColor : null,
-          ),
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: Text(
+                location.name,
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w700,
+                  decoration:
+                      location.isSkipped ? TextDecoration.lineThrough : null,
+                  color: location.isSkipped ? mutedColor : null,
+                ),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            if (location.isMultiDay) ...[
+              const SizedBox(width: 6),
+              _buildStayChip(context),
+            ],
+          ],
         ),
         const SizedBox(height: 4),
         Text(
@@ -273,6 +286,42 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
         ],
         _buildWarningBadge(context),
       ],
+    );
+  }
+
+  /// Compact hotel chip surfaced next to the title when this location is a
+  /// multi-day stay. Reads `scheduledDate`/`scheduledEndDate` directly —
+  /// guarded by [LocationModel.isMultiDay] at the call site, so both are
+  /// non-null here.
+  Widget _buildStayChip(BuildContext context) {
+    final theme = Theme.of(context);
+    final df = DateFormat('MMM d');
+    final start = location.scheduledDate!;
+    final end = location.scheduledEndDate!;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.primary.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+          color: theme.colorScheme.primary.withValues(alpha: 0.35),
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.hotel_rounded,
+              size: 12, color: theme.colorScheme.primary),
+          const SizedBox(width: 4),
+          Text(
+            '${df.format(start)} – ${df.format(end)}',
+            style: theme.textTheme.labelSmall?.copyWith(
+              color: theme.colorScheme.primary,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
     );
   }
 

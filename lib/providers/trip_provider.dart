@@ -12,6 +12,7 @@ import '../models/trip_model.dart';
 import '../models/trip.dart';
 import '../services/google_maps_service.dart';
 import '../services/places_service.dart';
+import '../services/review_prompt_service.dart';
 import '../services/storage_service.dart';
 import '../providers/debounced_settings_provider.dart';
 import '../utils/zone_utils.dart';
@@ -240,6 +241,7 @@ class TripNotifier extends StateNotifier<TripState> {
             googleOpeningHours: saved.googleOpeningHours,
             userClosingMinuteOverride: saved.userClosingMinuteOverride,
             hoursLastRefreshedAt: saved.hoursLastRefreshedAt,
+            scheduledEndDate: saved.scheduledEndDate,
           );
         }).toList();
 
@@ -311,6 +313,7 @@ class TripNotifier extends StateNotifier<TripState> {
         googleOpeningHours: locationWithDate.googleOpeningHours,
         userClosingMinuteOverride: locationWithDate.userClosingMinuteOverride,
         hoursLastRefreshedAt: locationWithDate.hoursLastRefreshedAt,
+        scheduledEndDate: locationWithDate.scheduledEndDate,
       );
 
       debugPrint('addLocation: Adding location "${savedLoc.name}" with tripId=${savedLoc.tripId ?? "null (no trip)"}');
@@ -504,6 +507,18 @@ class TripNotifier extends StateNotifier<TripState> {
       return;
     }
 
+    // Snapshot pre-mark state so we can detect "the user just finished
+    // every stop on a planned day" — our delight moment for the review
+    // prompt. Computed from current state and treats locationIds as
+    // about-to-be-done so we don't race the sync listener.
+    final affectedDates = <DateTime>{};
+    for (final loc in state.pinnedLocations) {
+      if (locationIds.contains(loc.id) && loc.scheduledDate != null) {
+        final d = loc.scheduledDate!;
+        affectedDates.add(DateTime(d.year, d.month, d.day));
+      }
+    }
+
     state = state.copyWith(
       optimizedRoute: [],
       optimizedLocationsForSelectedDate: [],
@@ -520,6 +535,35 @@ class TripNotifier extends StateNotifier<TripState> {
         await repository.updateLocation(id, {'is_done': true});
       } catch (e) {
         log('Error marking location as done for id $id: $e');
+      }
+    }
+
+    _maybePromptForReviewAfterDayCompletion(affectedDates, locationIds);
+  }
+
+  /// Fires the in-app review request when the user just finished the last
+  /// remaining stop on a day that had a real plan (≥2 stops). Gating in
+  /// [ReviewPromptService] handles cooldown / lifetime caps, so it's safe to
+  /// call eagerly.
+  void _maybePromptForReviewAfterDayCompletion(
+      Set<DateTime> affectedDates, Set<String> justMarkedIds) {
+    for (final date in affectedDates) {
+      final onDate = state.pinnedLocations.where((l) {
+        final d = l.scheduledDate;
+        if (d == null) return false;
+        return d.year == date.year &&
+            d.month == date.month &&
+            d.day == date.day;
+      }).toList();
+
+      if (onDate.length < 2) continue;
+
+      final allDone = onDate
+          .every((l) => l.isDone || justMarkedIds.contains(l.id));
+      if (allDone) {
+        // Fire-and-forget: never block the mark-as-done UX on this.
+        unawaited(ReviewPromptService.instance.maybeRequestReview());
+        return;
       }
     }
   }
@@ -676,6 +720,51 @@ class TripNotifier extends StateNotifier<TripState> {
     }
   }
 
+  /// Sets a location's stay range. Pass [end] = null (default) to clear the
+  /// range and revert to single-day. When [end] equals [start] (same day),
+  /// also clears the range — there's no point storing a redundant end.
+  /// Otherwise the location appears on every day in `[start..end]` across
+  /// the trip details screen and the per-day plan filter.
+  Future<void> setLocationDateRange(
+      String locationId, DateTime start, DateTime? end) async {
+    final hasAccess = await _hasWriteAccess();
+    if (!hasAccess) {
+      debugPrint('setLocationDateRange: Permission denied');
+      return;
+    }
+
+    final startKey = DateTime(start.year, start.month, start.day);
+    DateTime? endKey;
+    if (end != null) {
+      final candidate = DateTime(end.year, end.month, end.day);
+      if (candidate.isAfter(startKey)) {
+        endKey = candidate;
+      }
+    }
+
+    // Optimistic local update.
+    final updatedLocations = state.pinnedLocations.map((loc) {
+      if (loc.id != locationId) return loc;
+      return loc.copyWith(
+        scheduledDate: startKey,
+        scheduledEndDate: endKey,
+      );
+    }).toList();
+    state = state.copyWith(pinnedLocations: updatedLocations);
+
+    try {
+      await _ref.read(locationRepositoryProvider).updateLocation(
+        locationId,
+        {
+          'scheduled_date': startKey.toIso8601String(),
+          'scheduled_end_date': endKey?.toIso8601String(),
+        },
+      );
+    } catch (e) {
+      log('Error setting location date range in repository: $e');
+    }
+  }
+
   /// Sets (or clears) the user-supplied closing-time override for a single
   /// location. Pass [minutes] = `null` to clear (the simulation will then
   /// fall back to Google's hours).
@@ -812,6 +901,9 @@ class TripNotifier extends StateNotifier<TripState> {
             googleOpeningHours: loc.googleOpeningHours,
             userClosingMinuteOverride: loc.userClosingMinuteOverride,
             hoursLastRefreshedAt: loc.hoursLastRefreshedAt,
+            // Copies start fresh as a single-day stop — copying a multi-day
+            // range to a new anchor would be ambiguous; user can re-set
+            // the range on the new copy explicitly.
           );
           debugPrint('copyMultipleLocationsToDate: Copying "${savedLoc.name}" with tripId=${savedLoc.tripId ?? "null (no trip)"}');
           await repository.addLocation(savedLoc);
@@ -862,28 +954,13 @@ class TripNotifier extends StateNotifier<TripState> {
     String? startLocationId,
     required DateTime selectedDate,
   }) async {
-    // Filter locations to only include those for the selected date.
+    // Filter locations to only include those active on the selected date.
+    // Multi-day stays (e.g. an accommodation set to span the whole trip)
+    // appear on every day in their `[scheduledDate..scheduledEndDate]` range.
     final allLocations = state.pinnedLocations;
-    
-    // OPTIMIZATION: Cache the date comparison value
-    final selectedYear = selectedDate.year;
-    final selectedMonth = selectedDate.month;
-    final selectedDay = selectedDate.day;
-    
     final locationsForDate = allLocations.where((loc) {
-      if (loc.isSkipped || loc.isDone) {
-        return false;
-      }
-      if (loc.scheduledDate == null) {
-        final addedAt = loc.addedAt;
-        return selectedYear == addedAt.year &&
-            selectedMonth == addedAt.month &&
-            selectedDay == addedAt.day;
-      }
-      final locDate = loc.scheduledDate!;
-      return selectedYear == locDate.year &&
-          selectedMonth == locDate.month &&
-          selectedDay == locDate.day;
+      if (loc.isSkipped || loc.isDone) return false;
+      return loc.isActiveOnDate(selectedDate);
     }).toList();
 
     if (locationsForDate.isEmpty) return;
@@ -902,16 +979,22 @@ class TripNotifier extends StateNotifier<TripState> {
         effectiveStartLocationId = 'current_location';
       } else if (startLocationId != null &&
           startLocationId != 'current_location') {
-        // Find the start location. If it doesn't exist in the current day's list, this will be null.
-        final startLocation = locationsForDate.firstWhere(
+        // Look up the start location in pinnedLocations (not just
+        // locationsForDate). This lets the user anchor the route to a
+        // skipped or done stop — those are filtered out of the optimize
+        // list but their coordinates are still a useful start point
+        // (e.g. "we're done with the museum, plan the rest from here").
+        final startLocation = state.pinnedLocations.firstWhere(
           (loc) => loc.id == startLocationId,
-          orElse: () =>
-              locationsForDate.first, // This was the source of the crash.
+          orElse: () => locationsForDate.first,
         );
 
         startPoint = startLocation.coordinates;
         effectiveStartLocationId = startLocation.id;
-        // Ensure we only remove the location if it was the intended start, not a fallback.
+        // If the anchor IS one of the day's optimizable stops, remove it
+        // from the list so the optimizer doesn't visit it twice. Skipped/
+        // done anchors aren't in locationsToOptimize to begin with, so
+        // removeWhere is a no-op for them — exactly what we want.
         locationsToOptimize
             .removeWhere((loc) => loc.id == effectiveStartLocationId);
       } else {
@@ -1073,51 +1156,24 @@ class TripNotifier extends StateNotifier<TripState> {
         );
       }
 
-      // OPTIMIZATION: Cache date calculation instead of recalculating for each location
-      final otherDateLocations = state.pinnedLocations.where((loc) {
-        if (loc.scheduledDate == null) {
-          final addedAt = loc.addedAt;
-          return !(selectedYear == addedAt.year &&
-              selectedMonth == addedAt.month &&
-              selectedDay == addedAt.day);
-        }
-        final locDate = loc.scheduledDate!;
-        return !(selectedYear == locDate.year &&
-            selectedMonth == locDate.month &&
-            selectedDay == locDate.day);
-      }).toList();
+      // Multi-day aware partitioning: a stop is "for this date" if its
+      // active range covers selectedDate (single-day rows match only their
+      // own day; range rows match every day in `[start..end]`).
+      final otherDateLocations = state.pinnedLocations
+          .where((loc) => !loc.isActiveOnDate(selectedDate))
+          .toList();
 
       final updatedLocationsForDate = finalOptimizedLocationsForDate
           .map((loc) => locationsById[loc.id] ?? loc)
           .toList();
 
-      final skippedLocationsForDate = allLocations.where((loc) {
-        if (!loc.isSkipped) return false;
-        if (loc.scheduledDate == null) {
-          final addedAt = loc.addedAt;
-          return selectedYear == addedAt.year &&
-              selectedMonth == addedAt.month &&
-              selectedDay == addedAt.day;
-        }
-        final locDate = loc.scheduledDate!;
-        return selectedYear == locDate.year &&
-            selectedMonth == locDate.month &&
-            selectedDay == locDate.day;
-      }).toList();
+      final skippedLocationsForDate = allLocations
+          .where((loc) => loc.isSkipped && loc.isActiveOnDate(selectedDate))
+          .toList();
 
-      final doneLocationsForDate = allLocations.where((loc) {
-        if (!loc.isDone) return false;
-        if (loc.scheduledDate == null) {
-          final addedAt = loc.addedAt;
-          return selectedYear == addedAt.year &&
-              selectedMonth == addedAt.month &&
-              selectedDay == addedAt.day;
-        }
-        final locDate = loc.scheduledDate!;
-        return selectedYear == locDate.year &&
-            selectedMonth == locDate.month &&
-            selectedDay == locDate.day;
-      }).toList();
+      final doneLocationsForDate = allLocations
+          .where((loc) => loc.isDone && loc.isActiveOnDate(selectedDate))
+          .toList();
 
       final updatedPinnedLocations = [
         ...otherDateLocations,
@@ -1142,6 +1198,12 @@ class TripNotifier extends StateNotifier<TripState> {
       );
 
       _ref.read(zoomToFitRouteTrigger.notifier).update((state) => state + 1);
+
+      // Delight-moment trigger #2: successful optimization. Counter lives in
+      // ReviewPromptService; only triggers at the 10th run (then never again
+      // via this path) so it can't race or compete with the trip-completion
+      // trigger in [markLocationsAsDone].
+      unawaited(ReviewPromptService.instance.recordSuccessfulOptimize());
     } catch (e) {
       log('Error generating route: $e');
     } finally {
@@ -1380,54 +1442,39 @@ final locationsForSelectedDateProvider = Provider<List<LocationModel>>((ref) {
       // OPTIMIZATION: Use a Set for O(1) lookup instead of searching the list multiple times
       final optimizedIds = {for (var loc in optimizedLocations) loc.id};
 
-      // Get skipped locations for the selected date, handling null scheduledDate
+      // Skipped/done locations active on this date, minus anything already
+      // present in the optimized list. Multi-day stays match via the range
+      // check, so a "done" hotel still shows on every day it covers.
       final skippedForDate = pinnedLocations.where((loc) {
-        // Skip if already in optimized list
         if (optimizedIds.contains(loc.id)) return false;
         if (!loc.isSkipped && !loc.isDone) return false;
-
-        if (loc.scheduledDate == null) {
-          final addedAt = loc.addedAt;
-          return selectedYear == addedAt.year &&
-              selectedMonth == addedAt.month &&
-              selectedDay == addedAt.day;
-        }
-        final locDate = loc.scheduledDate!;
-        return selectedYear == locDate.year &&
-            selectedMonth == locDate.month &&
-            selectedDay == locDate.day;
+        return loc.isActiveOnDate(selectedDate);
       }).toList();
       // Return the optimized locations first, followed by the skipped ones.
       return [...optimizedLocations, ...skippedForDate];
     }
   }
 
-  // Fallback: filter from pinnedLocations if no optimized route or for a different date
-  return pinnedLocations.where((loc) {
-    if (loc.scheduledDate == null) {
-      // If a location somehow has a null date, associate it with the date it was added.
-      // This prevents it from incorrectly showing up on the current day in the future.
-      final addedAt = loc.addedAt;
-      return selectedYear == addedAt.year &&
-          selectedMonth == addedAt.month &&
-          selectedDay == addedAt.day;
-    }
-    final locDate = loc.scheduledDate!;
-    return selectedYear == locDate.year &&
-        selectedMonth == locDate.month &&
-        selectedDay == locDate.day;
-  }).toList();
+  // Fallback: every location active on this date (single-day rows match
+  // only their day; range rows match every day in their `[start..end]`).
+  return pinnedLocations.where((loc) => loc.isActiveOnDate(selectedDate))
+      .toList();
 });
 
-// Provider to get a set of all dates that have locations scheduled.
+/// Every date covered by any location's active range. Multi-day stays
+/// contribute every day in their `[scheduledDate..scheduledEndDate]` so the
+/// date picker's "has locations" dots show up on every covered day.
 final datesWithLocationsProvider = Provider<Set<DateTime>>((ref) {
   final allLocations = ref.watch(tripProvider.select((s) => s.pinnedLocations));
   final Set<DateTime> dates = {};
   for (final loc in allLocations) {
-    if (loc.scheduledDate != null) {
-      final dateOnly = DateTime(loc.scheduledDate!.year,
-          loc.scheduledDate!.month, loc.scheduledDate!.day);
-      dates.add(dateOnly);
+    if (loc.scheduledDate == null) continue;
+    final start = DateTime(loc.scheduledDate!.year, loc.scheduledDate!.month,
+        loc.scheduledDate!.day);
+    final endRaw = loc.scheduledEndDate ?? loc.scheduledDate!;
+    final end = DateTime(endRaw.year, endRaw.month, endRaw.day);
+    for (var d = start; !d.isAfter(end); d = d.add(const Duration(days: 1))) {
+      dates.add(d);
     }
   }
   return dates;

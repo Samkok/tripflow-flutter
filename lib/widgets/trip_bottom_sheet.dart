@@ -198,6 +198,11 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                     // Date Selector - Always visible to allow date switching
                     _buildDatePicker(context, ref),
 
+                    // Per-day quick-jump chips for the active trip's date
+                    // range. Renders nothing when there is no active trip
+                    // or the trip has no start/end date set.
+                    _buildTripDayChips(context, ref),
+
                     // Tabs: Selected Date vs. All (grouped by date)
                     if (hasPinnedLocations) _buildLocationsTabBar(context),
 
@@ -419,12 +424,6 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
     final selectedCount =
         ref.watch(selectedLocationsProvider.select((s) => s.length));
 
-    // FIX: Use only the locations for the selected date to determine the total count and which IDs to select.
-    final locationsForDate = ref.watch(locationsForSelectedDateProvider);
-    final totalCountForDate = locationsForDate.length;
-    final allSelectedOnDate =
-        selectedCount == totalCountForDate && totalCountForDate > 0;
-
     // Determine if we are on a past date to disable editing actions.
     final selectedDate = ref.watch(selectedDateProvider);
     final now = DateTime.now();
@@ -461,27 +460,67 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
         ),
         Row(
           children: [
-            // Select All / Deselect All Button
-            if (totalCountForDate > 0) ...[
-              Text(allSelectedOnDate ? 'Deselect All' : 'Select All',
-                  style: Theme.of(context).textTheme.bodyMedium),
-              Checkbox(
-                value: allSelectedOnDate,
-                onChanged: (bool? value) {
-                  final selectedNotifier =
-                      ref.read(selectedLocationsProvider.notifier);
-                  if (value == true) {
-                    // Select all for the current date
-                    final idsForDate =
-                        locationsForDate.map((l) => l.id).toSet();
-                    selectedNotifier.state = idsForDate;
-                  } else {
-                    // Deselect all
-                    selectedNotifier.state = {};
-                  }
-                },
-              ),
-            ],
+            // Select All / Deselect All — scope depends on the active tab:
+            //   • Selected Date tab (index 0) → only that date's locations.
+            //   • All tab (index ≠ 0) → every pinned location across all
+            //     dates. The list of IDs and the all-selected check both
+            //     come from the same source so the checkbox tracks the
+            //     visible list, not a snapshot from another tab.
+            ListenableBuilder(
+              listenable: _tabController,
+              builder: (context, _) {
+                final isAllTab = _tabController.index != 0;
+                final scopedLocations = isAllTab
+                    ? ref.watch(tripProvider
+                        .select((s) => s.pinnedLocations))
+                    : ref.watch(locationsForSelectedDateProvider);
+                final total = scopedLocations.length;
+                if (total == 0) return const SizedBox.shrink();
+
+                // "All selected" means every scoped id is present in the
+                // selection set (extra ids selected from another tab don't
+                // break this — they're just preserved).
+                final selection = ref.watch(selectedLocationsProvider);
+                final allSelected =
+                    scopedLocations.every((l) => selection.contains(l.id));
+
+                return Row(
+                  children: [
+                    Text(
+                      allSelected
+                          ? (isAllTab ? 'Deselect All' : 'Deselect All')
+                          : (isAllTab ? 'Select All' : 'Select All'),
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                    Checkbox(
+                      value: allSelected,
+                      onChanged: (bool? value) {
+                        final notifier =
+                            ref.read(selectedLocationsProvider.notifier);
+                        if (value == true) {
+                          // Add scoped ids to the existing selection so
+                          // the user doesn't lose picks made on another
+                          // tab. On the Selected Date tab this still
+                          // selects only that date.
+                          notifier.state = {
+                            ...notifier.state,
+                            for (final l in scopedLocations) l.id,
+                          };
+                        } else {
+                          // Deselect just the scoped ids — preserves
+                          // selections made elsewhere.
+                          final scopedIds =
+                              scopedLocations.map((l) => l.id).toSet();
+                          notifier.state = notifier.state
+                              .where((id) => !scopedIds.contains(id))
+                              .toSet();
+                        }
+                      },
+                    ),
+                  ],
+                );
+              },
+            ),
             if (selectedCount > 0) ...[
               PopupMenuButton<String>(
                 onSelected: (value) {
@@ -658,6 +697,80 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
         ],
       );
     });
+  }
+
+  /// Horizontal strip of per-day quick-jump chips covering the active trip's
+  /// `startDate..endDate` range. Each chip shows "N · MMM d" (N is 1-based
+  /// day index) and sets [selectedDateProvider] when tapped. Returns an
+  /// empty widget when there's no active trip or no date range — the
+  /// caller renders it unconditionally and lets this method decide.
+  Widget _buildTripDayChips(BuildContext context, WidgetRef ref) {
+    final activeTripAsync = ref.watch(realtimeActiveTripProvider);
+    final trip = activeTripAsync.asData?.value;
+    final startDate = trip?.startDate;
+    final endDate = trip?.endDate;
+    if (trip == null || startDate == null || endDate == null) {
+      return const SizedBox.shrink();
+    }
+
+    final start = DateTime(startDate.year, startDate.month, startDate.day);
+    final end = DateTime(endDate.year, endDate.month, endDate.day);
+    if (end.isBefore(start)) return const SizedBox.shrink();
+
+    final days = <DateTime>[];
+    for (var d = start; !d.isAfter(end); d = d.add(const Duration(days: 1))) {
+      days.add(d);
+    }
+
+    final selectedRaw = ref.watch(selectedDateProvider);
+    final selected = DateTime(
+        selectedRaw.year, selectedRaw.month, selectedRaw.day);
+    final theme = Theme.of(context);
+
+    return SizedBox(
+      height: 34,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        itemCount: days.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 6),
+        itemBuilder: (context, index) {
+          final day = days[index];
+          final isSelected = day.isAtSameMomentAs(selected);
+          final primary = theme.colorScheme.primary;
+          return TextButton(
+            onPressed: () {
+              ref.read(selectedDateProvider.notifier).state = day;
+            },
+            style: TextButton.styleFrom(
+              minimumSize: Size.zero,
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              foregroundColor: isSelected
+                  ? primary
+                  : theme.textTheme.bodyMedium?.color
+                      ?.withValues(alpha: 0.75),
+              backgroundColor: isSelected
+                  ? primary.withValues(alpha: 0.12)
+                  : Colors.transparent,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+                side: BorderSide(
+                  color: isSelected
+                      ? primary.withValues(alpha: 0.6)
+                      : theme.dividerColor.withValues(alpha: 0.4),
+                ),
+              ),
+              textStyle: theme.textTheme.labelMedium?.copyWith(
+                fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+              ),
+            ),
+            child: Text('${index + 1} · ${DateFormat('MMM d').format(day)}'),
+          );
+        },
+      ),
+    );
   }
 
   Widget _buildHistoryBanner(BuildContext context) {
@@ -1398,99 +1511,11 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
 
   void _showChooseStartPointDialog(BuildContext context, WidgetRef ref,
       {required bool isReoptimizing}) {
-    final tripState = ref.read(tripProvider);
-    // Always read the latest, most correct list of locations for the date from the provider.
-    final locationsForDate = ref.read(locationsForSelectedDateProvider);
-
-    String? selectedStartId = tripState.currentLocation != null
-        ? 'current_location'
-        : (locationsForDate.isNotEmpty ? locationsForDate.first.id : null);
-
-    showDialog(
+    showModalBottomSheet<void>(
       context: context,
-      builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setDialogState) {
-            return AlertDialog(
-              // Uses theme colors
-              backgroundColor: Theme.of(context).cardColor,
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16)),
-              title: const Text('Choose Starting Point'),
-              content: SizedBox(
-                // Uses theme colors
-                width: double.maxFinite,
-                child: ListView(
-                  shrinkWrap: true,
-                  children: [
-                    // "Start at" — wall-clock the simulation should treat as
-                    // arrival time at the first stop. Defaults to now (today)
-                    // / 09:00 (future); user can override here. The picker
-                    // writes to tripStartTimeOverrideProvider so the
-                    // simulation provider sees the new value before it runs.
-                    _StartAtRow(
-                      onChanged: () => setDialogState(() {}),
-                    ),
-                    const Divider(height: 16),
-                    if (tripState.currentLocation != null)
-                      RadioListTile<String>(
-                        title: const Text('My Current Location'),
-                        value: 'current_location',
-                        groupValue: selectedStartId,
-                        onChanged: (value) =>
-                            setDialogState(() => selectedStartId = value),
-                        activeColor: Theme.of(context).colorScheme.primary,
-                      ),
-                    ...locationsForDate.map((location) {
-                      return RadioListTile<String>(
-                        title: Text(location.name,
-                            overflow: TextOverflow.ellipsis),
-                        subtitle: Text(location.address,
-                            overflow: TextOverflow.ellipsis, maxLines: 1),
-                        value: location.id,
-                        groupValue: selectedStartId,
-                        onChanged: (value) =>
-                            setDialogState(() => selectedStartId = value),
-                        activeColor: Theme.of(context).colorScheme.primary,
-                      );
-                    }),
-                  ],
-                ),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(context).pop(),
-                  child: Text('Cancel',
-                      style: TextStyle(
-                          color:
-                              Theme.of(context).textTheme.bodyMedium?.color)),
-                ),
-                ElevatedButton(
-                  onPressed: () {
-                    if (selectedStartId != null) {
-                      final selectedDate = ref.read(selectedDateProvider);
-                      ref.read(tripProvider.notifier).generateOptimizedRoute(
-                          startLocationId: selectedStartId,
-                          selectedDate: selectedDate);
-                    }
-                    Navigator.of(context).pop();
-                  },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Theme.of(context).colorScheme.primary,
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12)),
-                  ),
-                  child: Text(
-                    isReoptimizing ? 'Re-optimize' : 'Optimize',
-                    style: const TextStyle(
-                        color: Colors.black, fontWeight: FontWeight.bold),
-                  ),
-                ),
-              ],
-            );
-          },
-        );
-      },
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _StartPointSheet(isReoptimizing: isReoptimizing),
     );
   }
 
@@ -1740,36 +1765,276 @@ class _PulsingGlowState extends State<_PulsingGlow>
   }
 }
 
-/// "Start at" row inside the choose-starting-point dialog. Reads the
-/// effective start time (override-or-default) from
-/// [effectiveTripStartTimeProvider] and writes user picks to
-/// [tripStartTimeOverrideProvider]. The dialog passes [onChanged] so its
-/// outer StatefulBuilder can repaint with the new label after the user
-/// picks a time.
-class _StartAtRow extends ConsumerWidget {
-  final VoidCallback onChanged;
-  const _StartAtRow({required this.onChanged});
+/// Bottom-sheet "Choose starting point" UI. Replaces the previous cramped
+/// AlertDialog. Lays out:
+///   - A prominent "Start at" card sourced from [effectiveTripStartTimeProvider].
+///   - "My Location" (when device location is known).
+///   - "Active stops" — the day's stops eligible for optimization.
+///   - "Skipped & done" — usable as a route anchor but excluded from the
+///     optimizer. Lets users start the next leg from a place they already
+///     visited (or one they decided to skip) without re-adding it to the
+///     plan.
+class _StartPointSheet extends ConsumerStatefulWidget {
+  final bool isReoptimizing;
+  const _StartPointSheet({required this.isReoptimizing});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_StartPointSheet> createState() => _StartPointSheetState();
+}
+
+class _StartPointSheetState extends ConsumerState<_StartPointSheet> {
+  String? _selectedStartId;
+  bool _initialized = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final tripState = ref.watch(tripProvider);
+    final selectedDate = ref.watch(selectedDateProvider);
+
+    // Day's stops — including skipped/done, since those can serve as
+    // anchors even though they won't be visited by the optimizer.
+    final dayStops = tripState.pinnedLocations
+        .where((loc) => loc.isActiveOnDate(selectedDate))
+        .toList();
+    final activeStops =
+        dayStops.where((l) => !l.isSkipped && !l.isDone).toList();
+    final inactiveStops =
+        dayStops.where((l) => l.isSkipped || l.isDone).toList();
+    final hasCurrentLocation = tripState.currentLocation != null;
+
+    // Default selection on first build — runs once.
+    if (!_initialized) {
+      _initialized = true;
+      _selectedStartId = hasCurrentLocation
+          ? 'current_location'
+          : (activeStops.isNotEmpty
+              ? activeStops.first.id
+              : (inactiveStops.isNotEmpty ? inactiveStops.first.id : null));
+    }
+
+    return DraggableScrollableSheet(
+      initialChildSize: 0.7,
+      minChildSize: 0.4,
+      maxChildSize: 0.95,
+      expand: false,
+      builder: (context, scrollController) {
+        return Container(
+          decoration: BoxDecoration(
+            color: theme.scaffoldBackgroundColor,
+            borderRadius:
+                const BorderRadius.vertical(top: Radius.circular(20)),
+          ),
+          child: Column(
+            children: [
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  margin: const EdgeInsets.only(top: 12, bottom: 8),
+                  decoration: BoxDecoration(
+                    color: theme.dividerColor,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 4, 12, 8),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            widget.isReoptimizing
+                                ? 'Re-optimize from'
+                                : 'Choose starting point',
+                            style: theme.textTheme.titleLarge?.copyWith(
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            'Pick where today\'s route should begin.',
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close),
+                      onPressed: () => Navigator.of(context).pop(),
+                      tooltip: 'Cancel',
+                    ),
+                  ],
+                ),
+              ),
+              Expanded(
+                child: ListView(
+                  controller: scrollController,
+                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+                  children: [
+                    _buildStartAtCard(context),
+                    const SizedBox(height: 16),
+                    if (hasCurrentLocation) ...[
+                      _sectionLabel(context, 'My location'),
+                      _StartPointTile(
+                        leading: Icon(Icons.my_location,
+                            color: theme.colorScheme.primary),
+                        title: 'My current location',
+                        subtitle: 'Use device GPS as the start anchor',
+                        value: 'current_location',
+                        groupValue: _selectedStartId,
+                        onChanged: (v) =>
+                            setState(() => _selectedStartId = v),
+                      ),
+                      const SizedBox(height: 16),
+                    ],
+                    _sectionLabel(
+                      context,
+                      'Active stops',
+                      trailing: activeStops.isEmpty
+                          ? null
+                          : '${activeStops.length}',
+                    ),
+                    if (activeStops.isEmpty)
+                      _emptyHint(context,
+                          'No active stops on this day to start from.')
+                    else
+                      ...activeStops.map((loc) => _StartPointTile(
+                            leading: Icon(Icons.place_outlined,
+                                color: theme.colorScheme.primary),
+                            title: loc.name,
+                            subtitle: loc.address.isNotEmpty
+                                ? loc.address
+                                : null,
+                            value: loc.id,
+                            groupValue: _selectedStartId,
+                            onChanged: (v) =>
+                                setState(() => _selectedStartId = v),
+                          )),
+                    if (inactiveStops.isNotEmpty) ...[
+                      const SizedBox(height: 16),
+                      _sectionLabel(
+                        context,
+                        'Skipped & done',
+                        trailing: '${inactiveStops.length}',
+                      ),
+                      Padding(
+                        padding:
+                            const EdgeInsets.only(bottom: 8, left: 4, right: 4),
+                        child: Text(
+                          'Selectable as anchor only — these aren\'t '
+                          'included in the optimized route.',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ),
+                      ...inactiveStops.map((loc) => _StartPointTile(
+                            leading: Icon(
+                              loc.isDone
+                                  ? Icons.check_circle_outline
+                                  : Icons.remove_circle_outline,
+                              color: loc.isDone
+                                  ? Colors.green.shade600
+                                  : theme.colorScheme.onSurfaceVariant,
+                            ),
+                            title: loc.name,
+                            subtitle: loc.address.isNotEmpty
+                                ? loc.address
+                                : null,
+                            value: loc.id,
+                            groupValue: _selectedStartId,
+                            onChanged: (v) =>
+                                setState(() => _selectedStartId = v),
+                            statusChip: _StatusChip(
+                              label: loc.isDone ? 'Done' : 'Skipped',
+                              color: loc.isDone
+                                  ? Colors.green.shade600
+                                  : theme.colorScheme.onSurfaceVariant,
+                            ),
+                            mutedTitle: true,
+                          )),
+                    ],
+                  ],
+                ),
+              ),
+              SafeArea(
+                top: false,
+                child: Padding(
+                  padding:
+                      const EdgeInsets.fromLTRB(16, 8, 16, 12),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: () => Navigator.of(context).pop(),
+                          style: OutlinedButton.styleFrom(
+                            padding:
+                                const EdgeInsets.symmetric(vertical: 14),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12)),
+                          ),
+                          child: const Text('Cancel'),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        flex: 2,
+                        child: FilledButton(
+                          onPressed: _selectedStartId == null
+                              ? null
+                              : () {
+                                  final id = _selectedStartId!;
+                                  Navigator.of(context).pop();
+                                  ref
+                                      .read(tripProvider.notifier)
+                                      .generateOptimizedRoute(
+                                          startLocationId: id,
+                                          selectedDate: selectedDate);
+                                },
+                          style: FilledButton.styleFrom(
+                            backgroundColor: theme.colorScheme.primary,
+                            foregroundColor: Colors.black,
+                            padding:
+                                const EdgeInsets.symmetric(vertical: 14),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12)),
+                          ),
+                          child: Text(
+                            widget.isReoptimizing
+                                ? 'Re-optimize'
+                                : 'Optimize',
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildStartAtCard(BuildContext context) {
     final theme = Theme.of(context);
     final start = ref.watch(effectiveTripStartTimeProvider);
-    final label =
+    final timeLabel =
         '${start.hour.toString().padLeft(2, '0')}:${start.minute.toString().padLeft(2, '0')}';
 
-    return ListTile(
-      contentPadding: EdgeInsets.zero,
-      leading: Icon(Icons.schedule_rounded,
-          color: theme.colorScheme.primary, size: 22),
-      title: const Text('Start at'),
-      subtitle: Text(
-        label,
-        style: theme.textTheme.bodyMedium?.copyWith(
-          color: theme.colorScheme.primary,
-          fontWeight: FontWeight.w600,
-        ),
-      ),
-      trailing: const Icon(Icons.edit_outlined, size: 18),
+    return InkWell(
+      borderRadius: BorderRadius.circular(14),
       onTap: () async {
         final picked = await showTimePicker(
           context: context,
@@ -1778,8 +2043,259 @@ class _StartAtRow extends ConsumerWidget {
         );
         if (picked == null) return;
         ref.read(tripStartTimeOverrideProvider.notifier).state = picked;
-        onChanged();
+        if (mounted) setState(() {});
       },
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+        decoration: BoxDecoration(
+          color: theme.colorScheme.primary.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: theme.colorScheme.primary.withValues(alpha: 0.35),
+          ),
+        ),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: theme.colorScheme.primary.withValues(alpha: 0.18),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Icon(Icons.schedule_rounded,
+                  color: theme.colorScheme.primary, size: 22),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Start at',
+                    style: theme.textTheme.labelMedium?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                      letterSpacing: 0.4,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    timeLabel,
+                    style: theme.textTheme.headlineSmall?.copyWith(
+                      color: theme.colorScheme.primary,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Icon(Icons.edit_outlined,
+                size: 18,
+                color: theme.colorScheme.primary.withValues(alpha: 0.8)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _sectionLabel(BuildContext context, String text, {String? trailing}) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(4, 4, 4, 8),
+      child: Row(
+        children: [
+          Text(
+            text.toUpperCase(),
+            style: theme.textTheme.labelSmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 1,
+            ),
+          ),
+          if (trailing != null) ...[
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: theme.colorScheme.primary.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                trailing,
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: theme.colorScheme.primary,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _emptyHint(BuildContext context, String text) {
+    final theme = Theme.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+      decoration: BoxDecoration(
+        color: theme.cardColor,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+          color: theme.dividerColor.withValues(alpha: 0.4),
+        ),
+      ),
+      child: Text(
+        text,
+        style: theme.textTheme.bodySmall?.copyWith(
+          color: theme.colorScheme.onSurfaceVariant,
+        ),
+      ),
+    );
+  }
+}
+
+/// Card-style "radio" row used inside [_StartPointSheet]. Larger tap target
+/// than RadioListTile and shows an optional status chip for skipped/done
+/// stops.
+class _StartPointTile extends StatelessWidget {
+  final Widget leading;
+  final String title;
+  final String? subtitle;
+  final String value;
+  final String? groupValue;
+  final ValueChanged<String?> onChanged;
+  final Widget? statusChip;
+  final bool mutedTitle;
+
+  const _StartPointTile({
+    required this.leading,
+    required this.title,
+    this.subtitle,
+    required this.value,
+    required this.groupValue,
+    required this.onChanged,
+    this.statusChip,
+    this.mutedTitle = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isSelected = value == groupValue;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Material(
+        color: isSelected
+            ? theme.colorScheme.primary.withValues(alpha: 0.08)
+            : theme.cardColor,
+        borderRadius: BorderRadius.circular(12),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: () => onChanged(value),
+          child: Container(
+            padding:
+                const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: isSelected
+                    ? theme.colorScheme.primary.withValues(alpha: 0.6)
+                    : theme.dividerColor.withValues(alpha: 0.3),
+                width: isSelected ? 1.5 : 1,
+              ),
+            ),
+            child: Row(
+              children: [
+                leading,
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          Expanded(
+                            child: Text(
+                              title,
+                              style: theme.textTheme.titleSmall?.copyWith(
+                                fontWeight: FontWeight.w600,
+                                color: mutedTitle
+                                    ? theme.textTheme.bodyMedium?.color
+                                        ?.withValues(alpha: 0.75)
+                                    : null,
+                                decoration: mutedTitle
+                                    ? TextDecoration.lineThrough
+                                    : null,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          if (statusChip != null) ...[
+                            const SizedBox(width: 8),
+                            statusChip!,
+                          ],
+                        ],
+                      ),
+                      if (subtitle != null && subtitle!.isNotEmpty) ...[
+                        const SizedBox(height: 2),
+                        Text(
+                          subtitle!,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Icon(
+                  isSelected
+                      ? Icons.radio_button_checked
+                      : Icons.radio_button_off,
+                  size: 22,
+                  color: isSelected
+                      ? theme.colorScheme.primary
+                      : theme.colorScheme.onSurfaceVariant
+                          .withValues(alpha: 0.6),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Small pill rendered next to a start-point title to indicate skipped/done.
+class _StatusChip extends StatelessWidget {
+  final String label;
+  final Color color;
+
+  const _StatusChip({required this.label, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withValues(alpha: 0.4)),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          color: color,
+          fontWeight: FontWeight.w600,
+          fontSize: 11,
+        ),
+      ),
     );
   }
 }

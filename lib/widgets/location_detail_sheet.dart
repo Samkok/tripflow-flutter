@@ -1,8 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:intl/intl.dart';
 import 'package:voyza/models/location_model.dart';
 import 'package:voyza/models/saved_location.dart' show OpeningPeriod;
+import 'package:voyza/models/trip.dart';
+import 'package:voyza/providers/user_trip_provider.dart';
+import 'package:voyza/services/timing_simulation.dart' show kNeverCloses;
 import 'package:voyza/providers/location_provider.dart';
 import 'package:voyza/providers/map_ui_state_provider.dart';
 import 'package:voyza/providers/trip_listener_provider.dart';
@@ -24,6 +28,11 @@ class LocationDetailSheet extends ConsumerWidget {
   /// details screen), pass the sibling locations for the same date here so
   /// the From/To picker shows the correct list instead of the active-trip list.
   final List<LocationModel>? locationsForDate;
+  /// When opened from trip details for a non-active trip, pass the trip ID
+  /// so the multi-day stay section's permission check and write path target
+  /// the right trip (instead of the active-map trip). Null = use the active
+  /// trip's permissions (default for the map sheet).
+  final String? tripId;
 
   const LocationDetailSheet({
     super.key,
@@ -33,6 +42,7 @@ class LocationDetailSheet extends ConsumerWidget {
     this.parentSheetController,
     this.onLocationTap,
     this.locationsForDate,
+    this.tripId,
   });
 
   @override
@@ -82,6 +92,13 @@ class LocationDetailSheet extends ConsumerWidget {
             const Divider(height: 32),
             _buildHoursSection(context, ref, updatedLocation, isPastDate),
           ],
+
+          // Multi-day stay section — lets the user mark this location as an
+          // accommodation that spans multiple days, with quick actions for
+          // single-day / pick-range / entire-trip. Shown for any editable
+          // stop (no extra gating; useful for hotels, residencies, etc.).
+          const Divider(height: 32),
+          _buildMultiDaySection(context, ref, updatedLocation, isPastDate),
 
           // Travel info (if available)
           if (updatedLocation.travelTimeFromPrevious != null &&
@@ -625,7 +642,11 @@ class LocationDetailSheet extends ConsumerWidget {
                   size: 16,
                   color: canEdit ? theme.colorScheme.primary : Colors.grey),
               label: Text(
-                overrideMin != null ? _formatMinutes(overrideMin) : 'Set',
+                overrideMin == null
+                    ? 'Set'
+                    : overrideMin == kNeverCloses
+                        ? 'Never'
+                        : _formatMinutes(overrideMin),
               ),
               onPressed: canEdit
                   ? () => _editClosingOverride(context, ref, loc, defaultClose)
@@ -663,7 +684,47 @@ class LocationDetailSheet extends ConsumerWidget {
     LocationModel loc,
     int defaultMinutes,
   ) async {
-    final initial = loc.userClosingMinuteOverride ?? defaultMinutes;
+    // Let the user choose between a specific time or "never closes."
+    final action = await showDialog<_OverrideAction>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Close by'),
+        content: const Text(
+          'When should the optimizer treat this place as closed?\n\n'
+          '"Never" is useful for accommodations or stops with no closing time.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () =>
+                Navigator.of(ctx).pop(_OverrideAction.never),
+            child: const Text('Never closes'),
+          ),
+          FilledButton(
+            onPressed: () =>
+                Navigator.of(ctx).pop(_OverrideAction.pickTime),
+            child: const Text('Pick a time'),
+          ),
+        ],
+      ),
+    );
+    if (action == null) return;
+
+    if (action == _OverrideAction.never) {
+      await ref
+          .read(tripProvider.notifier)
+          .setUserClosingMinuteOverride(loc.id, kNeverCloses);
+      return;
+    }
+
+    if (!context.mounted) return;
+    final current = loc.userClosingMinuteOverride;
+    final initial = (current != null && current != kNeverCloses)
+        ? current
+        : defaultMinutes;
     final picked = await showTimePicker(
       context: context,
       initialTime: TimeOfDay(hour: initial ~/ 60, minute: initial % 60),
@@ -706,6 +767,314 @@ class LocationDetailSheet extends ConsumerWidget {
         duration: const Duration(seconds: 2),
       ),
     );
+  }
+
+  // ──────────────────────────────────────────────────────────────────────
+  // Multi-day stay section
+  // ──────────────────────────────────────────────────────────────────────
+
+  Widget _buildMultiDaySection(
+    BuildContext context,
+    WidgetRef ref,
+    LocationModel loc,
+    bool isPastDate,
+  ) {
+    final theme = Theme.of(context);
+    // When the sheet was opened with an explicit [tripId] (trip details
+    // screen for a non-active trip), check write access against THAT trip
+    // — otherwise the gate uses the active-trip permission and the button
+    // gets disabled for any non-active trip even when the user owns it.
+    final hasWriteAccessAsync = tripId != null
+        ? ref.watch(hasWriteAccessProvider(tripId!))
+        : ref.watch(hasActiveTripWriteAccessProvider);
+    final hasWriteAccess =
+        hasWriteAccessAsync.whenOrNull(data: (v) => v) ?? false;
+    final canEdit = !isPastDate && hasWriteAccess;
+
+    final start = loc.scheduledDate;
+    final end = loc.scheduledEndDate;
+    final isMultiDay = loc.isMultiDay;
+
+    // Resolve trip date range for the picker bounds and the "Entire trip"
+    // quick-set affordance. Prefer the explicit [tripId]'s trip when set;
+    // otherwise fall back to the active trip.
+    Trip? scopedTrip;
+    if (tripId != null) {
+      final all = ref.watch(userTripsProvider).asData?.value ?? const <Trip>[];
+      for (final t in all) {
+        if (t.id == tripId) {
+          scopedTrip = t;
+          break;
+        }
+      }
+    }
+    scopedTrip ??= ref.watch(realtimeActiveTripProvider).asData?.value;
+    final tripStart = scopedTrip?.startDate;
+    final tripEnd = scopedTrip?.endDate;
+    final tripHasRange = tripStart != null && tripEnd != null;
+
+    String statusLabel;
+    if (isMultiDay && start != null && end != null) {
+      final df = DateFormat('MMM d');
+      statusLabel = '${df.format(start)} – ${df.format(end)}'
+          ' · ${_daysBetween(start, end)} days';
+    } else if (start != null) {
+      statusLabel = 'Single day · ${DateFormat('MMM d, y').format(start)}';
+    } else {
+      statusLabel = 'Not scheduled';
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(
+              isMultiDay
+                  ? Icons.hotel_outlined
+                  : Icons.event_available_outlined,
+              size: 18,
+              color: theme.colorScheme.primary,
+            ),
+            const SizedBox(width: 8),
+            Text(
+              'Multi-day stay',
+              style: theme.textTheme.titleMedium?.copyWith(
+                color: theme.colorScheme.primary,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        Text(statusLabel, style: theme.textTheme.bodyMedium),
+        if (isMultiDay) ...[
+          const SizedBox(height: 2),
+          Text(
+            'Appears on every day in this range — useful for hotels and '
+            'places you keep coming back to.',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.textTheme.bodyMedium?.color?.withValues(alpha: 0.6),
+            ),
+          ),
+        ],
+        const SizedBox(height: 10),
+        Wrap(
+          spacing: 8,
+          runSpacing: 6,
+          children: [
+            OutlinedButton.icon(
+              icon: const Icon(Icons.date_range_outlined, size: 16),
+              label: Text(isMultiDay ? 'Edit dates' : 'Set range'),
+              onPressed: canEdit ? () => _pickStayRange(context, ref, loc) : null,
+              style: OutlinedButton.styleFrom(
+                visualDensity: VisualDensity.compact,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                side: BorderSide(
+                  color: canEdit
+                      ? theme.colorScheme.primary.withValues(alpha: 0.4)
+                      : Colors.grey.withValues(alpha: 0.3),
+                ),
+              ),
+            ),
+            if (tripHasRange)
+              OutlinedButton.icon(
+                icon: const Icon(Icons.all_inclusive, size: 16),
+                label: const Text('Entire trip'),
+                onPressed: canEdit
+                    ? () => _applyEntireTripRange(
+                        context, ref, loc, tripStart, tripEnd)
+                    : null,
+                style: OutlinedButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  side: BorderSide(
+                    color: canEdit
+                        ? theme.colorScheme.primary.withValues(alpha: 0.4)
+                        : Colors.grey.withValues(alpha: 0.3),
+                  ),
+                ),
+              ),
+            if (isMultiDay && canEdit)
+              TextButton.icon(
+                icon: const Icon(Icons.close, size: 16),
+                label: const Text('Clear'),
+                style: TextButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                ),
+                onPressed: () => _clearStayRange(context, ref, loc),
+              ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  int _daysBetween(DateTime a, DateTime b) {
+    final s = DateTime(a.year, a.month, a.day);
+    final e = DateTime(b.year, b.month, b.day);
+    return e.difference(s).inDays + 1;
+  }
+
+  DateTime _dayKey(DateTime d) => DateTime(d.year, d.month, d.day);
+
+  /// Resolves the trip whose date range frames the picker. Mirrors the
+  /// logic in [_buildMultiDaySection] so the picker bounds and the section
+  /// agree on which trip is in scope.
+  Trip? _scopedTrip(WidgetRef ref) {
+    if (tripId != null) {
+      final all = ref.read(userTripsProvider).asData?.value ?? const <Trip>[];
+      for (final t in all) {
+        if (t.id == tripId) return t;
+      }
+    }
+    return ref.read(realtimeActiveTripProvider).asData?.value;
+  }
+
+  /// Pushes the new range to storage. Goes through the [tripProvider]
+  /// notifier (which threads through optimistic local state) when no
+  /// explicit [tripId] is set — that path's permission check is tied to
+  /// the active trip, which is correct in that context. When [tripId] is
+  /// set (trip details screen for a non-active trip), call the repository
+  /// directly — Supabase RLS still enforces access, but we don't fail
+  /// silently against the wrong trip's permission gate.
+  Future<void> _writeDateRange(
+    WidgetRef ref,
+    String locationId,
+    DateTime start,
+    DateTime? end,
+  ) async {
+    if (tripId == null) {
+      await ref
+          .read(tripProvider.notifier)
+          .setLocationDateRange(locationId, start, end);
+      return;
+    }
+    final startKey = _dayKey(start);
+    DateTime? endKey;
+    if (end != null) {
+      final candidate = _dayKey(end);
+      if (candidate.isAfter(startKey)) endKey = candidate;
+    }
+    await ref.read(locationRepositoryProvider).updateLocation(
+      locationId,
+      {
+        'scheduled_date': startKey.toIso8601String(),
+        'scheduled_end_date': endKey?.toIso8601String(),
+      },
+    );
+  }
+
+  Future<void> _pickStayRange(
+    BuildContext context,
+    WidgetRef ref,
+    LocationModel loc,
+  ) async {
+    final scopedTrip = _scopedTrip(ref);
+    final today = _dayKey(DateTime.now());
+    final initialStart = _dayKey(loc.scheduledDate ?? today);
+    final initialEnd = _dayKey(loc.scheduledEndDate ?? loc.scheduledDate ?? today);
+
+    // Bounds must always include the existing range — otherwise the picker
+    // throws when the location was already scheduled outside the trip's
+    // dates. Take the min/max across trip range, current range, and a
+    // wide fallback window so the picker always opens.
+    final fallbackFirst = today.subtract(const Duration(days: 365));
+    final fallbackLast = today.add(const Duration(days: 365 * 5));
+    final firstCandidates = <DateTime>[
+      if (scopedTrip?.startDate != null) _dayKey(scopedTrip!.startDate!),
+      initialStart,
+      fallbackFirst,
+    ];
+    final lastCandidates = <DateTime>[
+      if (scopedTrip?.endDate != null) _dayKey(scopedTrip!.endDate!),
+      initialEnd,
+      fallbackLast,
+    ];
+    final firstDate =
+        firstCandidates.reduce((a, b) => a.isBefore(b) ? a : b);
+    final lastDate =
+        lastCandidates.reduce((a, b) => a.isAfter(b) ? a : b);
+
+    final messenger = ScaffoldMessenger.of(context);
+    final picked = await showDateRangePicker(
+      context: context,
+      firstDate: firstDate,
+      lastDate: lastDate,
+      initialDateRange: DateTimeRange(start: initialStart, end: initialEnd),
+      helpText: 'Stay range',
+      saveText: 'Set',
+    );
+    if (picked == null) return;
+    try {
+      await _writeDateRange(ref, loc.id, picked.start, picked.end);
+    } catch (e) {
+      if (!context.mounted) return;
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text('Could not save range: $e'),
+          backgroundColor: Colors.red,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+  }
+
+  Future<void> _applyEntireTripRange(
+    BuildContext context,
+    WidgetRef ref,
+    LocationModel loc,
+    DateTime tripStart,
+    DateTime tripEnd,
+  ) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await _writeDateRange(ref, loc.id, tripStart, tripEnd);
+      if (!context.mounted) return;
+      final df = DateFormat('MMM d');
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            'Set to entire trip · ${df.format(tripStart)} – ${df.format(tripEnd)}',
+          ),
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    } catch (e) {
+      if (!context.mounted) return;
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text('Could not apply range: $e'),
+          backgroundColor: Colors.red,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+  }
+
+  Future<void> _clearStayRange(
+    BuildContext context,
+    WidgetRef ref,
+    LocationModel loc,
+  ) async {
+    final start = loc.scheduledDate ?? DateTime.now();
+    try {
+      await _writeDateRange(ref, loc.id, start, null);
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not clear range: $e'),
+          backgroundColor: Colors.red,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
   }
 
   // ──────────────────────────────────────────────────────────────────────
@@ -856,7 +1225,7 @@ class LocationDetailSheet extends ConsumerWidget {
               ),
               focusedBorder: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
-                borderSide: BorderSide(color: AppTheme.primaryColor, width: 2),
+                borderSide: const BorderSide(color: AppTheme.primaryColor, width: 2),
               ),
             ),
             onSubmitted: (newName) {
@@ -1224,6 +1593,8 @@ class LocationDetailSheet extends ConsumerWidget {
 /// Whether the picked stop should be used as the route's start ("from") or
 /// end ("to"). The detail sheet's anchor location takes the opposite role.
 enum _RouteEndpoint { from, to }
+
+enum _OverrideAction { pickTime, never }
 
 class _RouteEndpointPicker extends StatelessWidget {
   final String title;

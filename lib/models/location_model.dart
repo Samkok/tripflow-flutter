@@ -33,6 +33,10 @@ class LocationModel {
   final int? userClosingMinuteOverride;
   /// When [googleOpeningHours] was last fetched.
   final DateTime? hoursLastRefreshedAt;
+  /// Last day this location is active on the trip — inclusive, paired with
+  /// [scheduledDate]. Null = single-day stop (default). When set, the
+  /// location appears on every day in `[scheduledDate..scheduledEndDate]`.
+  final DateTime? scheduledEndDate;
 
   LocationModel({
     required this.id,
@@ -54,6 +58,7 @@ class LocationModel {
     this.googleOpeningHours,
     this.userClosingMinuteOverride,
     this.hoursLastRefreshedAt,
+    this.scheduledEndDate,
   }) : photoReferences = photoReferences ??
             (photoReference != null && photoReference.isNotEmpty
                 ? [photoReference]
@@ -82,6 +87,7 @@ class LocationModel {
           googleOpeningHours?.map((p) => p.toJson()).toList(),
       'userClosingMinuteOverride': userClosingMinuteOverride,
       'hoursLastRefreshedAt': hoursLastRefreshedAt?.toIso8601String(),
+      'scheduledEndDate': scheduledEndDate?.toIso8601String(),
     };
   }
 
@@ -119,8 +125,15 @@ class LocationModel {
       hoursLastRefreshedAt: json['hoursLastRefreshedAt'] != null
           ? DateTime.parse(json['hoursLastRefreshedAt'])
           : null,
+      scheduledEndDate: json['scheduledEndDate'] != null
+          ? DateTime.parse(json['scheduledEndDate'])
+          : null,
     );
   }
+
+  // Sentinel used to distinguish "caller passed null" from "caller omitted
+  // the param" for nullable fields where clearing is meaningful.
+  static const _unset = Object();
 
   LocationModel copyWith({
     String? id,
@@ -142,6 +155,7 @@ class LocationModel {
     List<OpeningPeriod>? googleOpeningHours,
     int? userClosingMinuteOverride,
     DateTime? hoursLastRefreshedAt,
+    Object? scheduledEndDate = _unset,
   }) {
     return LocationModel(
       id: id ?? this.id,
@@ -164,7 +178,32 @@ class LocationModel {
       userClosingMinuteOverride:
           userClosingMinuteOverride ?? this.userClosingMinuteOverride,
       hoursLastRefreshedAt: hoursLastRefreshedAt ?? this.hoursLastRefreshedAt,
+      scheduledEndDate: identical(scheduledEndDate, _unset)
+          ? this.scheduledEndDate
+          : scheduledEndDate as DateTime?,
     );
+  }
+
+  /// True iff this location is "active" on [day] — i.e. [day] is within
+  /// `[scheduledDate..scheduledEndDate]` inclusive. Falls back to [addedAt]
+  /// when [scheduledDate] is missing so legacy rows still appear somewhere.
+  bool isActiveOnDate(DateTime day) {
+    final startRaw = scheduledDate ?? addedAt;
+    final start = DateTime(startRaw.year, startRaw.month, startRaw.day);
+    final endRaw = scheduledEndDate ?? startRaw;
+    final end = DateTime(endRaw.year, endRaw.month, endRaw.day);
+    final target = DateTime(day.year, day.month, day.day);
+    return !target.isBefore(start) && !target.isAfter(end);
+  }
+
+  /// True iff this location explicitly spans more than one day.
+  bool get isMultiDay {
+    if (scheduledEndDate == null || scheduledDate == null) return false;
+    final s = DateTime(scheduledDate!.year, scheduledDate!.month,
+        scheduledDate!.day);
+    final e = DateTime(scheduledEndDate!.year, scheduledEndDate!.month,
+        scheduledEndDate!.day);
+    return e.isAfter(s);
   }
 
   /// Best label to send to external apps (Google Maps, Grab) for handoff.
@@ -202,6 +241,7 @@ extension ToLocationModel on SavedLocation {
       googleOpeningHours: googleOpeningHours,
       userClosingMinuteOverride: userClosingMinuteOverride,
       hoursLastRefreshedAt: hoursLastRefreshedAt,
+      scheduledEndDate: scheduledEndDate,
     );
   }
 }

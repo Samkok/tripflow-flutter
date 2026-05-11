@@ -4,9 +4,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:permission_handler/permission_handler.dart' as ph;
+import 'package:url_launcher/url_launcher.dart';
 import 'package:voyza/core/theme.dart';
 import 'package:voyza/providers/theme_provider.dart';
 import 'package:voyza/screens/terms_screen.dart';
+import 'package:voyza/services/review_prompt_service.dart';
 
 import '../providers/auth_provider.dart';
 import '../providers/nearby_radius_provider.dart';
@@ -91,6 +93,10 @@ class SettingsScreen extends ConsumerWidget {
           // About Section
           _buildSectionHeader(context, 'About'),
           _buildTermsTile(context),
+          const SizedBox(height: 12),
+          _buildRateTile(context),
+          const SizedBox(height: 12),
+          _buildFeedbackTile(context),
           const SizedBox(height: 24),
 
           // Danger Zone - only show for authenticated users
@@ -438,6 +444,129 @@ class SettingsScreen extends ConsumerWidget {
           ),
         ),
         title: const Text('Terms & Conditions'),
+        trailing: const Icon(Icons.arrow_forward_ios, size: 16),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildRateTile(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Theme.of(context).cardColor,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: ListTile(
+        onTap: () async {
+          final messenger = ScaffoldMessenger.of(context);
+          final shown =
+              await ReviewPromptService.instance.requestReviewManually();
+          if (!shown && context.mounted) {
+            // The OS may silently no-op (e.g. Apple annual cap, Simulator,
+            // sideloaded build). Surface a small hint so the tap doesn't
+            // look broken.
+            messenger.showSnackBar(
+              const SnackBar(
+                content: Text(
+                  'Thanks! The rating prompt is unavailable right now — '
+                  'please try again later.',
+                ),
+                behavior: SnackBarBehavior.floating,
+              ),
+            );
+          }
+        },
+        leading: Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Icon(
+            Icons.star_outline_rounded,
+            color: Theme.of(context).colorScheme.primary,
+          ),
+        ),
+        title: const Text('Rate VoyZa'),
+        subtitle: const Text('Enjoying the app? Leave a quick review'),
+        trailing: const Icon(Icons.arrow_forward_ios, size: 16),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFeedbackTile(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Theme.of(context).cardColor,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: ListTile(
+        onTap: () async {
+          final messenger = ScaffoldMessenger.of(context);
+          final uri = Uri(
+            scheme: 'mailto',
+            path: 'hengsamkok76@gmail.com',
+            queryParameters: {'subject': 'VoyZa Feedback'},
+          );
+          try {
+            final ok = await launchUrl(uri);
+            if (!ok && context.mounted) {
+              messenger.showSnackBar(
+                const SnackBar(
+                  content: Text(
+                    'No mail app available. Email us at '
+                    'hengsamkok76@gmail.com',
+                  ),
+                  behavior: SnackBarBehavior.floating,
+                ),
+              );
+            }
+          } catch (_) {
+            if (context.mounted) {
+              messenger.showSnackBar(
+                const SnackBar(
+                  content: Text(
+                    'Could not open mail. Email us at '
+                    'hengsamkok76@gmail.com',
+                  ),
+                  behavior: SnackBarBehavior.floating,
+                ),
+              );
+            }
+          }
+        },
+        leading: Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Icon(
+            Icons.mail_outline_rounded,
+            color: Theme.of(context).colorScheme.primary,
+          ),
+        ),
+        title: const Text('Send Feedback'),
+        subtitle: const Text('Report a bug or suggest a feature'),
         trailing: const Icon(Icons.arrow_forward_ios, size: 16),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(20),

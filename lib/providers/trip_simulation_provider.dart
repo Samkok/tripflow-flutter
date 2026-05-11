@@ -15,30 +15,21 @@ import 'trip_provider.dart';
 final tripStartTimeOverrideProvider = StateProvider<TimeOfDay?>((ref) => null);
 
 /// Wall-clock start time for the simulation. Combines the selected date
-/// with either the user override or a sensible default:
-///   - selected date is today → now, rounded down to the nearest 15 min,
-///     so the picker label shows a clean value the user can recognize.
-///   - selected date is in the future → 09:00.
-///   - selected date is in the past → 09:00 (the optimizer is hidden in
-///     that case anyway, so this is just a safe fallback).
+/// with either the user override or — by default — the device's current
+/// time of day, rounded down to the nearest 15 min. The "Start at" picker
+/// matches what's on the user's clock the moment they open the modal,
+/// regardless of which day is selected. If they want a different anchor
+/// they pick one explicitly (writes [tripStartTimeOverrideProvider]).
 final effectiveTripStartTimeProvider = Provider<DateTime>((ref) {
   final selectedDate = ref.watch(selectedDateProvider);
   final override = ref.watch(tripStartTimeOverrideProvider);
 
-  TimeOfDay resolved;
+  final TimeOfDay resolved;
   if (override != null) {
     resolved = override;
   } else {
     final now = DateTime.now();
-    final isToday = selectedDate.year == now.year &&
-        selectedDate.month == now.month &&
-        selectedDate.day == now.day;
-    if (isToday) {
-      resolved =
-          TimeOfDay(hour: now.hour, minute: (now.minute ~/ 15) * 15);
-    } else {
-      resolved = const TimeOfDay(hour: 9, minute: 0);
-    }
+    resolved = TimeOfDay(hour: now.hour, minute: (now.minute ~/ 15) * 15);
   }
 
   return DateTime(

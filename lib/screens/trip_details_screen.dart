@@ -126,6 +126,10 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
         number: indexInList + 1,
         parentScrollController: scrollController,
         locationsForDate: dateGroupModels,
+        // Pass the viewed trip ID so the Multi-day stay section's
+        // permission gate and write path target this trip rather than
+        // whichever trip is currently active on the map.
+        tripId: widget.trip.id,
       ),
     ).whenComplete(scrollController.dispose);
   }
@@ -309,8 +313,15 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
           children: [
             // Search bar
             _buildSearchBar(),
-            // Locations list
-            Expanded(child: _buildLocationStreamBody()),
+            // Locations list. Pass write-access down so drag-to-move handles
+            // and drop targets are only enabled for users who can edit.
+            Expanded(
+              child: _buildLocationStreamBody(
+                hasWriteAccess: hasWriteAccessAsync
+                        .whenOrNull(data: (v) => v) ??
+                    false,
+              ),
+            ),
           ],
         ),
       ),
@@ -410,7 +421,7 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
     );
   }
 
-  Widget _buildLocationStreamBody() {
+  Widget _buildLocationStreamBody({required bool hasWriteAccess}) {
     return StreamBuilder<List<SavedLocation>>(
       stream: _locationsStream,
       initialData: const [],
@@ -471,63 +482,105 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
           });
         }
 
-        return _buildLocationsList(tripLocations);
+        return _buildLocationsList(tripLocations, hasWriteAccess: hasWriteAccess);
       },
     );
   }
 
-  Widget _buildLocationsList(List<SavedLocation> locations) {
-    if (locations.isEmpty) {
+  /// Normalizes a [DateTime] to midnight local time so two timestamps from
+  /// the same calendar day compare equal.
+  DateTime _dayKey(DateTime d) => DateTime(d.year, d.month, d.day);
+
+  /// Builds the full list of dates to display: every day in the trip's
+  /// start..end range plus any other dates that already host locations
+  /// (e.g. legacy rows scheduled outside the range, or `createdAt`
+  /// fallbacks). Sorted chronologically.
+  List<DateTime> _buildAllDates(List<SavedLocation> locations) {
+    final dates = <DateTime>{};
+
+    final startDate = widget.trip.startDate;
+    final endDate = widget.trip.endDate;
+    if (startDate != null && endDate != null) {
+      var d = _dayKey(startDate);
+      final end = _dayKey(endDate);
+      while (!d.isAfter(end)) {
+        dates.add(d);
+        d = d.add(const Duration(days: 1));
+      }
+    }
+
+    for (final loc in locations) {
+      // Every day in the location's stay range contributes to the displayed
+      // date list — that way a hotel set for the entire trip shows up on
+      // each day even if there are no other stops scheduled that day.
+      final start = _dayKey(loc.scheduledDate ?? loc.createdAt);
+      final endRaw = loc.scheduledEndDate ?? loc.scheduledDate ?? loc.createdAt;
+      final end = _dayKey(endRaw);
+      for (var d = start; !d.isAfter(end); d = d.add(const Duration(days: 1))) {
+        dates.add(d);
+      }
+    }
+
+    final sorted = dates.toList()..sort((a, b) => a.compareTo(b));
+    return sorted;
+  }
+
+  Widget _buildLocationsList(
+    List<SavedLocation> locations, {
+    required bool hasWriteAccess,
+  }) {
+    // Group locations by every day they cover. Multi-day stays show up on
+    // each day in their `[scheduledDate..scheduledEndDate]` range — same
+    // SavedLocation instance reused across day groups so edits/drag still
+    // work via id.
+    final groupedByDay = <DateTime, List<SavedLocation>>{};
+    for (final location in locations) {
+      final startRaw = location.scheduledDate ?? location.createdAt;
+      final start = _dayKey(startRaw);
+      final endRaw = location.scheduledEndDate ?? startRaw;
+      final end = _dayKey(endRaw);
+      for (var d = start; !d.isAfter(end); d = d.add(const Duration(days: 1))) {
+        groupedByDay.putIfAbsent(d, () => []).add(location);
+      }
+    }
+
+    final allDates = _buildAllDates(locations);
+
+    // If the trip has no date range AND no locations, fall back to the
+    // standard empty state below the trip info card.
+    if (allDates.isEmpty) {
       return Column(
-        children: [_buildTripInfoSection(), Expanded(child: _buildEmptyState(false))],
+        children: [
+          _buildTripInfoSection(),
+          Expanded(child: _buildEmptyState(false)),
+        ],
       );
     }
 
-    // Group locations by scheduledDate (or createdAt if scheduledDate is null
-
-    final groupedByDate = <String, List<SavedLocation>>{};
-
-    for (final location in locations) {
-      // Use scheduledDate if available, otherwise fall back to createdAt
-      final dateToUse = location.scheduledDate ?? location.createdAt;
-      final dateKey = DateFormat('MMMM dd, yyyy').format(dateToUse);
-
-      debugPrint('Location ${location.name} belong to trip: ${location.tripId} for date: ${location.scheduledDate}');
-
-      if (!groupedByDate.containsKey(dateKey)) {
-        groupedByDate[dateKey] = [];
-      }
-      groupedByDate[dateKey]!.add(location);
-    }
-
-    // Sort dates in ascending order (earliest first)
-    final sortedDates = groupedByDate.keys.toList()
-      ..sort((a, b) {
-        final dateA = DateFormat('MMMM dd, yyyy').parse(a);
-        final dateB = DateFormat('MMMM dd, yyyy').parse(b);
-        return dateA.compareTo(dateB);
-      });
-
     return CustomScrollView(
       slivers: [
-        // Trip info section
         SliverToBoxAdapter(
           child: _buildTripInfoSection(),
         ),
-
-        // Locations by date
         SliverList(
           delegate: SliverChildBuilderDelegate(
             (context, index) {
-              final date = sortedDates[index];
-              final dateGroup = groupedByDate[date] ?? [];
-              return _buildDateSection(date, dateGroup);
+              final day = allDates[index];
+              final dateGroup = groupedByDay[day] ?? const <SavedLocation>[];
+              return _buildDateSection(
+                day,
+                dateGroup,
+                hasWriteAccess: hasWriteAccess,
+              );
             },
-            childCount: sortedDates.length,
+            childCount: allDates.length,
           ),
         ),
-
-        const SliverPadding(padding: EdgeInsets.symmetric(vertical: 50)),
+        // Bottom padding sized to clear the two stacked extended FABs
+        // (~56pt each + 12pt gap + 16pt scaffold margin + SafeArea bottom).
+        // Without this the last expanded photo card disappears behind the
+        // floating buttons.
+        const SliverPadding(padding: EdgeInsets.only(bottom: 200)),
       ],
     );
   }
@@ -698,50 +751,229 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
     );
   }
 
-  Widget _buildDateSection(String date, List<SavedLocation> locations) {
+  Widget _buildDateSection(
+    DateTime day,
+    List<SavedLocation> locations, {
+    required bool hasWriteAccess,
+  }) {
+    final dateLabel = DateFormat('MMMM dd, yyyy').format(day);
+    final theme = Theme.of(context);
+
     return Padding(
       padding: const EdgeInsets.only(top: 16, left: 16, right: 16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Date header
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      // DragTarget around the whole day so users can drop on either the
+      // header or anywhere inside the section (including the empty
+      // placeholder for a day with no locations yet).
+      child: DragTarget<SavedLocation>(
+        onWillAcceptWithDetails: (details) {
+          if (!hasWriteAccess) return false;
+          // Reject re-drops onto the same day to keep highlight feedback
+          // honest and avoid a no-op write.
+          final src = details.data.scheduledDate ?? details.data.createdAt;
+          return _dayKey(src) != day;
+        },
+        onAcceptWithDetails: (details) =>
+            _moveLocationToDate(details.data, day),
+        builder: (context, candidate, rejected) {
+          final highlighted = candidate.isNotEmpty;
+          return AnimatedContainer(
+            duration: const Duration(milliseconds: 150),
+            padding: const EdgeInsets.all(6),
             decoration: BoxDecoration(
-              color: Theme.of(context).colorScheme.primary.withOpacity(0.15),
-              borderRadius: BorderRadius.circular(8),
+              color: highlighted
+                  ? theme.colorScheme.primary.withValues(alpha: 0.06)
+                  : Colors.transparent,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: highlighted
+                    ? theme.colorScheme.primary.withValues(alpha: 0.6)
+                    : Colors.transparent,
+                width: 1.5,
+              ),
             ),
-            child: Text(
-              date,
-              style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                    color: Theme.of(context).colorScheme.primary,
-                    fontWeight: FontWeight.w600,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.primary.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(8),
                   ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        dateLabel,
+                        style: theme.textTheme.labelLarge?.copyWith(
+                          color: theme.colorScheme.primary,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      if (locations.isNotEmpty) ...[
+                        const SizedBox(width: 8),
+                        Text(
+                          '${locations.length}',
+                          style: theme.textTheme.labelSmall?.copyWith(
+                            color:
+                                theme.colorScheme.primary.withValues(alpha: 0.7),
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+                if (locations.isEmpty)
+                  _buildEmptyDayPlaceholder(highlighted: highlighted)
+                else
+                  ListView.separated(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    itemCount: locations.length,
+                    separatorBuilder: (context, index) =>
+                        const SizedBox(height: 8),
+                    itemBuilder: (context, index) => _buildLocationCard(
+                      locations[index],
+                      index,
+                      locations,
+                      hasWriteAccess: hasWriteAccess,
+                    ),
+                  ),
+              ],
             ),
-          ),
-          const SizedBox(height: 12),
+          );
+        },
+      ),
+    );
+  }
 
-          // Locations for this date
-          ListView.separated(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            itemCount: locations.length,
-            separatorBuilder: (context, index) =>
-                const SizedBox(height: 8),
-            itemBuilder: (context, index) =>
-                _buildLocationCard(locations[index], index, locations),
+  Widget _buildEmptyDayPlaceholder({required bool highlighted}) {
+    final theme = Theme.of(context);
+    final color = highlighted
+        ? theme.colorScheme.primary
+        : theme.dividerColor.withValues(alpha: 0.4);
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color, width: 1.2),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.add_road_outlined, size: 18, color: color),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              highlighted
+                  ? 'Release to move here'
+                  : 'No locations · drag a card here',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.textTheme.bodyMedium?.color?.withValues(alpha: 0.7),
+              ),
+            ),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildLocationCard(SavedLocation location, int index, List<SavedLocation> dateGroup) {
+  /// Small floating chip rendered under the user's finger while dragging a
+  /// location card. Lighter than re-rendering the whole card — keeps the
+  /// drop targets visible underneath.
+  Widget _buildDragFeedback(SavedLocation location) {
+    final theme = Theme.of(context);
+    return Material(
+      color: Colors.transparent,
+      child: Transform.translate(
+        offset: const Offset(12, 12),
+        child: Container(
+          constraints: const BoxConstraints(maxWidth: 240),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            color: theme.colorScheme.primary,
+            borderRadius: BorderRadius.circular(10),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.25),
+                blurRadius: 12,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.location_on_rounded,
+                  color: Colors.black, size: 18),
+              const SizedBox(width: 8),
+              Flexible(
+                child: Text(
+                  location.name,
+                  style: const TextStyle(
+                    color: Colors.black,
+                    fontWeight: FontWeight.w600,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Reassigns [location] to [newDay]. Uses the repository directly (mirrors
+  /// the bypass pattern in [_deleteSelected]) so the trip-details screen can
+  /// edit any trip the user has write access to, not just the active one.
+  /// Backend RLS still enforces auth.
+  Future<void> _moveLocationToDate(
+      SavedLocation location, DateTime newDay) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await ref.read(locationRepositoryProvider).updateLocation(
+        location.id,
+        {'scheduled_date': newDay.toIso8601String()},
+      );
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            'Moved ${location.name} to ${DateFormat('MMM d').format(newDay)}',
+          ),
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text('Could not move location: $e'),
+          backgroundColor: Colors.red,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+  }
+
+  Widget _buildLocationCard(
+    SavedLocation location,
+    int index,
+    List<SavedLocation> dateGroup, {
+    required bool hasWriteAccess,
+  }) {
     final timeString = DateFormat('HH:mm').format(location.createdAt);
     final isSelected = _selectedIds.contains(location.id);
     final photoRefs = location.effectivePhotoReferences;
     final hasPhotos = photoRefs.isNotEmpty;
     final isExpanded = _photoExpandedIds.contains(location.id);
+    final showDragHandle = hasWriteAccess && !_selectionMode;
 
     void togglePhotos() {
       setState(() {
@@ -812,7 +1044,9 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
                               borderRadius: BorderRadius.circular(8),
                             ),
                             child: Icon(
-                              Icons.location_on_rounded,
+                              location.isMultiDay
+                                  ? Icons.hotel_rounded
+                                  : Icons.location_on_rounded,
                               size: 18,
                               color: Theme.of(context).colorScheme.primary,
                             ),
@@ -833,6 +1067,25 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
                           overflow: TextOverflow.ellipsis,
                         ),
                         const SizedBox(height: 4),
+                        if (location.isMultiDay)
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 2),
+                            child: Text(
+                              '${DateFormat('MMM d').format(location.scheduledDate!)} → '
+                              '${DateFormat('MMM d').format(location.scheduledEndDate!)}',
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .labelSmall
+                                  ?.copyWith(
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .primary,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
                         Text(
                           '${location.lat.toStringAsFixed(4)}, ${location.lng.toStringAsFixed(4)}',
                           style:
@@ -893,6 +1146,48 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
                         child: const Icon(Icons.expand_more),
                       ),
                       onPressed: togglePhotos,
+                    ),
+                  ],
+                  // Dedicated drag handle — using a handle (vs. wrapping the
+                  // whole card in LongPressDraggable) avoids fighting the
+                  // existing long-press → enter selection mode gesture.
+                  if (showDragHandle) ...[
+                    const SizedBox(width: 2),
+                    Draggable<SavedLocation>(
+                      data: location,
+                      dragAnchorStrategy: pointerDragAnchorStrategy,
+                      feedback: _buildDragFeedback(location),
+                      childWhenDragging: Opacity(
+                        opacity: 0.35,
+                        child: Icon(
+                          Icons.drag_indicator,
+                          size: 22,
+                          color: Theme.of(context)
+                              .textTheme
+                              .bodyMedium
+                              ?.color
+                              ?.withValues(alpha: 0.5),
+                        ),
+                      ),
+                      child: Tooltip(
+                        message: 'Drag to another day',
+                        child: MouseRegion(
+                          cursor: SystemMouseCursors.grab,
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 2, vertical: 4),
+                            child: Icon(
+                              Icons.drag_indicator,
+                              size: 22,
+                              color: Theme.of(context)
+                                  .textTheme
+                                  .bodyMedium
+                                  ?.color
+                                  ?.withValues(alpha: 0.5),
+                            ),
+                          ),
+                        ),
+                      ),
                     ),
                   ],
                 ],
