@@ -25,16 +25,17 @@ class ZoneUtils {
     // Group locations into clusters based on proximity
     final clusters = clusterLocations(locations, proximityThreshold);
 
-    // Generate circles for clusters with 1 or more locations
+    // Generate circles only for clusters with 2+ locations. A lone pin
+    // doesn't represent a "zone" — drawing a circle around a single pin
+    // is visual noise and obscures the pin itself.
     final Set<Circle> circles = {};
 
     for (int i = 0; i < clusters.length; i++) {
       final cluster = clusters[i];
-      if (cluster.isNotEmpty) {
-        final circle = _createZoneCircle(cluster, i);
-        if (circle != null) {
-          circles.add(circle);
-        }
+      if (cluster.length < 2) continue;
+      final circle = _createZoneCircle(cluster, i);
+      if (circle != null) {
+        circles.add(circle);
       }
     }
 

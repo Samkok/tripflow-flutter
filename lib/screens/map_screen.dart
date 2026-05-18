@@ -6,6 +6,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'dart:ui';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:intl/intl.dart';
+import 'package:voyza/core/theme.dart';
+import 'package:voyza/screens/location_search_screen.dart';
 import 'package:voyza/widgets/add_to_trip_sheet.dart';
 import 'package:voyza/widgets/location_detail_sheet.dart';
 import 'package:uuid/uuid.dart';
@@ -27,7 +29,6 @@ import '../providers/nearby_radius_provider.dart';
 import '../providers/zoom_fit_settings_provider.dart';
 import '../widgets/map_widget.dart';
 import '../widgets/nearby_places_picker_sheet.dart';
-import '../widgets/search_widget.dart';
 import '../widgets/trip_bottom_sheet.dart';
 
 class MapScreen extends ConsumerStatefulWidget {
@@ -48,14 +49,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
   /// next emits, so we operate on the locations of the new trip rather
   /// than the old one (the sync listener that swaps locations is async).
   bool _pendingTripCameraMove = false;
-  final FocusNode _searchFocusNode = FocusNode();
-  // ValueNotifier instead of a setState-driven bool so focus changes don't
-  // rebuild the entire MapScreen subtree (which includes BackdropFilter
-  // blurs and the GoogleMap). Only the consumers that actually depend on
-  // focus — the search bar's animated chrome and the FAB layout — listen
-  // to it. This is what eliminates the visible jank when the keyboard
-  // animates in.
-  final ValueNotifier<bool> _isSearchFocused = ValueNotifier(false);
+
   StreamSubscription<LatLng>?
       _locationSubscription; // PERFORMANCE: Track subscription for cleanup
 
@@ -69,7 +63,6 @@ class _MapScreenState extends ConsumerState<MapScreen>
     WidgetsBinding.instance.addObserver(this);
     _sheetController = DraggableScrollableController();
     _initializeLocation();
-    _searchFocusNode.addListener(_onSearchFocusChange);
   }
 
   // OPTIMIZATION: Handle app lifecycle to pause heavy operations when app is backgrounded
@@ -85,22 +78,12 @@ class _MapScreenState extends ConsumerState<MapScreen>
     }
   }
 
-  void _onSearchFocusChange() {
-    final hasFocus = _searchFocusNode.hasFocus;
-    if (_isSearchFocused.value != hasFocus) {
-      _isSearchFocused.value = hasFocus;
-    }
-  }
-
   @override
   void dispose() {
     // OPTIMIZATION: Remove lifecycle observer
     WidgetsBinding.instance.removeObserver(this);
-    
+
     _sheetController?.dispose();
-    _searchFocusNode.removeListener(_onSearchFocusChange);
-    _searchFocusNode.dispose();
-    _isSearchFocused.dispose();
 
     // PERFORMANCE: Cancel location stream to prevent memory leaks and battery drain
     _locationSubscription?.cancel();
@@ -691,11 +674,42 @@ class _MapScreenState extends ConsumerState<MapScreen>
     ref.listen<List<LocationModel>>(
       tripProvider.select((s) => s.pinnedLocations),
       (previous, next) {
-        if (!_pendingTripCameraMove) return;
-        _pendingTripCameraMove = false;
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          _updateCameraForCurrentDate();
-        });
+        // Trip activation / switch / deactivation: gated by the flag
+        // set in the localActiveTripIdProvider listener above.
+        if (_pendingTripCameraMove) {
+          _pendingTripCameraMove = false;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            _updateCameraForCurrentDate();
+          });
+          return;
+        }
+
+        // Reframe whenever the set of locations active on the selected
+        // date changes — covers:
+        //   • Adding a location via the search-bar / long-press flow.
+        //   • Deleting a location.
+        //   • Collaborator-driven adds/deletes arriving through the
+        //     sync listener (locations show up after a remote fetch).
+        // Comparing ID sets (not lengths) catches the same-count
+        // "deleted A, added B in the same tick" case too. Edits that
+        // don't change membership (rename, stayDuration, etc.) leave
+        // the set unchanged and don't trigger reframes.
+        final selectedDate = ref.read(selectedDateProvider);
+        final prevIds = (previous ?? const <LocationModel>[])
+            .where((l) => l.isActiveOnDate(selectedDate))
+            .map((l) => l.id)
+            .toSet();
+        final nextIds = next
+            .where((l) => l.isActiveOnDate(selectedDate))
+            .map((l) => l.id)
+            .toSet();
+        final membershipChanged = prevIds.length != nextIds.length ||
+            !prevIds.containsAll(nextIds);
+        if (membershipChanged) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            _updateCameraForCurrentDate();
+          });
+        }
       },
     );
 
@@ -723,11 +737,25 @@ class _MapScreenState extends ConsumerState<MapScreen>
       resizeToAvoidBottomInset: false,
       body: Stack(
         children: [
-          // Map
-          MapWidget(
-            onMapCreated: _onMapCreated,
-            onMapLongPress: _onMapLongPress,
-            onMarkerTap: _onMarkerTapped,
+          // Map — wrapped in a MediaQuery that zeroes viewInsets and
+          // viewPadding for THIS subtree only. The google_maps_flutter
+          // platform view (GMSMapView/MKMapView on iOS) reads inherited
+          // MediaQuery values and shifts its native frame downward when
+          // the keyboard opens, which exposes the scaffold background
+          // strip at the top of the screen on focus. Other widgets in
+          // the Stack (search bar, banners, FAB, bottom sheet) keep the
+          // original MediaQuery — the wrap is scoped to just the map so
+          // it can't break their own keyboard handling.
+          MediaQuery(
+            data: MediaQuery.of(context).copyWith(
+              viewInsets: EdgeInsets.zero,
+              viewPadding: MediaQuery.of(context).padding,
+            ),
+            child: MapWidget(
+              onMapCreated: _onMapCreated,
+              onMapLongPress: _onMapLongPress,
+              onMarkerTap: _onMarkerTapped,
+            ),
           ),
 
           // Trip Name Overlay - Beautiful header showing active trip
@@ -880,46 +908,95 @@ class _MapScreenState extends ConsumerState<MapScreen>
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Search bar
+                  // Fake search bar — pushes [LocationSearchScreen]
+                  // instead of focusing an inline TextField. This
+                  // sidesteps every keyboard-driven layout shift that
+                  // an inline TextField caused on this screen (the map
+                  // getting "pulled down" on focus). The chrome
+                  // (rounded, translucent, blurred, with a search icon
+                  // and hint text) is preserved so it still reads as a
+                  // search bar at a glance.
                   Expanded(
                     child: ClipRRect(
                       borderRadius: BorderRadius.circular(30),
                       child: BackdropFilter(
                         filter: ImageFilter.blur(sigmaX: 10.0, sigmaY: 10.0),
-                        child: ValueListenableBuilder<bool>(
-                          valueListenable: _isSearchFocused,
-                          builder: (context, focused, child) {
-                            return AnimatedContainer(
-                              duration: const Duration(milliseconds: 300),
+                        child: Material(
+                          color: Colors.transparent,
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(30),
+                            onTap: () {
+                              // Zero-duration page transition: the new
+                              // screen appears instantly instead of
+                              // sliding in. The standard slide-in left
+                              // a window (~300ms on iOS) during which
+                              // the map screen was still visible — any
+                              // MediaQuery / keyboard event from the
+                              // mounting screen propagated back to the
+                              // map and visibly shifted it before the
+                              // transition finished. With Duration.zero,
+                              // the new screen fully covers the map
+                              // before the next frame paints.
+                              Navigator.of(context).push(
+                                PageRouteBuilder(
+                                  pageBuilder: (context, _, __) =>
+                                      const LocationSearchScreen(),
+                                  transitionDuration: Duration.zero,
+                                  reverseTransitionDuration:
+                                      Duration.zero,
+                                  opaque: true,
+                                ),
+                              );
+                            },
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 16, vertical: 14),
                               decoration: BoxDecoration(
-                                color: focused
-                                    ? Theme.of(context).colorScheme.surface
-                                    : Theme.of(context)
-                                        .colorScheme
-                                        .surface
-                                        .withValues(alpha: 0.92),
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .surface
+                                    .withValues(alpha: 0.92),
                                 borderRadius: BorderRadius.circular(30),
                                 border: Border.all(
-                                  color: focused
-                                      ? Theme.of(context).colorScheme.primary
-                                      : Theme.of(context)
-                                          .dividerColor
-                                          .withValues(alpha: 0.2),
+                                  color: Theme.of(context)
+                                      .dividerColor
+                                      .withValues(alpha: 0.2),
                                   width: 1.5,
                                 ),
                                 boxShadow: [
                                   BoxShadow(
-                                    color:
-                                        Colors.black.withValues(alpha: 0.15),
+                                    color: Colors.black.withValues(alpha: 0.15),
                                     blurRadius: 20,
                                     offset: const Offset(0, 5),
                                   ),
                                 ],
                               ),
-                              child: child,
-                            );
-                          },
-                          child: SearchWidget(focusNode: _searchFocusNode),
+                              child: Row(
+                                children: [
+                                  const Icon(
+                                    Icons.search,
+                                    color: AppTheme.primaryColor,
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: Text(
+                                      'Search for places...',
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .titleMedium
+                                          ?.copyWith(
+                                            color: Theme.of(context)
+                                                .colorScheme
+                                                .onSurfaceVariant,
+                                          ),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
                         ),
                       ),
                     ),
@@ -934,14 +1011,31 @@ class _MapScreenState extends ConsumerState<MapScreen>
           // crowd the search results column. Direction is driven by the
           // focus ValueNotifier (so only this subtree rebuilds), and the
           // bounding-box change is smoothed with AnimatedSize.
-          Positioned(
-            bottom: MediaQuery.of(context).size.height * 0.23 +
-                16, // Position above collapsed sheet
-            right: 16,
-            child: ValueListenableBuilder<bool>(
-              valueListenable: _isSearchFocused,
-              builder: (context, focused, _) {
-                return AnimatedSize(
+          //
+          // Positioned is INSIDE the ValueListenableBuilder so both the
+          // bottom offset and the FAB axis can react to focus together:
+          //   • Vertical (default): 16px gap above the collapsed sheet.
+          //   • Horizontal (focused): the row drops well below the sheet
+          //     top so it visibly hugs the sheet rather than floating
+          //     high above it.
+          //
+          // Position is anchored against `View.physicalSize` — the OS-
+          // reported screen size in logical pixels — instead of
+          // `MediaQuery.size.height` so the FAB doesn't shift with
+          // keyboard events. The search bar pushes a separate screen
+          // now, so there is no inline keyboard event on this screen
+          // to begin with — but anchoring against physicalSize keeps
+          // the position correct even if something else (Android
+          // adjustResize, system UI change) ever does shrink the
+          // logical screen height.
+          Builder(builder: (context) {
+            final view = View.of(context);
+            final screenH =
+                view.physicalSize.height / view.devicePixelRatio;
+            return Positioned(
+              bottom: screenH * 0.23 + 16,
+              right: 16,
+              child: AnimatedSize(
                   duration: const Duration(milliseconds: 250),
                   curve: Curves.easeInOut,
                   alignment: Alignment.bottomRight,
@@ -1027,48 +1121,40 @@ class _MapScreenState extends ConsumerState<MapScreen>
                         ),
                       ];
 
-                      // Build axis-aware separators between visible FABs.
-                      final gap = focused
-                          ? const SizedBox(width: 12)
-                          : const SizedBox(height: 12);
+                      // Always vertical now — the inline search bar
+                      // (which previously flipped this to horizontal on
+                      // focus) is gone, replaced by a button that pushes
+                      // a separate screen.
+                      const gap = SizedBox(height: 12);
                       final children = <Widget>[];
                       for (var i = 0; i < fabs.length; i++) {
                         if (i > 0) children.add(gap);
                         children.add(fabs[i]);
                       }
 
-                      return Flex(
-                        direction:
-                            focused ? Axis.horizontal : Axis.vertical,
+                      return Column(
                         mainAxisSize: MainAxisSize.min,
                         crossAxisAlignment: CrossAxisAlignment.center,
                         children: children,
                       );
                     },
                   ),
-                );
-              },
-            ),
+                ),
+              );
+            },
           ),
 
-          // Trip bottom sheet — wrapped in a Listener so any pointer-down
-          // inside the sheet also dismisses the search keyboard. Listener
-          // observes pointer events without competing for gesture
-          // recognition, so the sheet's own drag/tap handlers still work.
-          Listener(
-            onPointerDown: (_) {
-              if (_searchFocusNode.hasFocus) {
-                _searchFocusNode.unfocus();
-              }
-            },
-            child: TripBottomSheet(
-              sheetController: _sheetController,
-              onLocationTap: _zoomToLocation,
-              // onGoToCurrentLocation is now handled by the FAB
-              onShowZoneSettings: _showProximitySliderBottomSheet,
-              // onZoomToFitTrip is now handled by the FAB
-              highlightedLocationIndex: _highlightedLocationIndex,
-            ),
+          // Trip bottom sheet. (The Listener that previously wrapped
+          // this sheet to dismiss the inline search keyboard is gone —
+          // search now lives on its own pushed screen, so there's no
+          // FocusNode on this screen to unfocus.)
+          TripBottomSheet(
+            sheetController: _sheetController,
+            onLocationTap: _zoomToLocation,
+            // onGoToCurrentLocation is now handled by the FAB
+            onShowZoneSettings: _showProximitySliderBottomSheet,
+            // onZoomToFitTrip is now handled by the FAB
+            highlightedLocationIndex: _highlightedLocationIndex,
           ),
 
           // Loading overlay — covers the map during the initial data sync so
@@ -1321,10 +1407,10 @@ class _MapScreenState extends ConsumerState<MapScreen>
     // - Active Trip Banner (if shown): ~72px
     // - Spacing after banner: ~12px
     // - Search bar container: ~60px
-    final topMargin = 50.0;
+    const topMargin = 50.0;
     final activeTripBannerHeight = hasActiveTrip ? 72.0 : 0.0;
     final spacingAfterBanner = hasActiveTrip ? 12.0 : 0.0;
-    final searchBarHeight = 60.0;
+    const searchBarHeight = 60.0;
 
     final topUIHeight = topSafePadding +
                        topMargin +

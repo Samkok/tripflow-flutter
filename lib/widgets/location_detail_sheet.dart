@@ -131,29 +131,44 @@ class LocationDetailSheet extends ConsumerWidget {
             CircleAvatar(
               backgroundColor: updatedLocation.isDone
                   ? Colors.green.shade500
-                  : Theme.of(context).colorScheme.primary,
+                  : updatedLocation.isSkipped
+                      ? Colors.grey.shade600
+                      : Theme.of(context).colorScheme.primary,
               radius: 24,
               child: updatedLocation.isDone
                   ? const Icon(Icons.check, color: Colors.white, size: 24)
-                  : Text(
-                      '$number',
-                      style: const TextStyle(
-                        color: Colors.black,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 20,
-                      ),
-                    ),
+                  : updatedLocation.isSkipped
+                      // Skipped stops drop out of the optimized route, so
+                      // the index number is meaningless — replace it with
+                      // a minus glyph and let the label below say just
+                      // "Stop" (no number).
+                      ? const Icon(Icons.remove,
+                          color: Colors.white, size: 24)
+                      : Text(
+                          '$number',
+                          style: const TextStyle(
+                            color: Colors.black,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 20,
+                          ),
+                        ),
             ),
             const SizedBox(width: 16),
             Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  updatedLocation.isDone ? 'Done' : 'Stop $number',
+                  updatedLocation.isDone
+                      ? 'Done'
+                      : updatedLocation.isSkipped
+                          ? 'Stop'
+                          : 'Stop $number',
                   style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                         color: updatedLocation.isDone
                             ? Colors.green.shade500
-                            : Theme.of(context).colorScheme.primary,
+                            : updatedLocation.isSkipped
+                                ? Colors.grey.shade600
+                                : Theme.of(context).colorScheme.primary,
                         fontWeight: FontWeight.w600,
                       ),
                 ),
@@ -179,6 +194,47 @@ class LocationDetailSheet extends ConsumerWidget {
                   color: hasWriteAccess ? Colors.red[600] : Colors.grey[400],
                 ),
                 child: const Icon(Icons.delete_outline, color: Colors.white, size: 22),
+              ),
+            ),
+            const SizedBox(width: 8),
+            // Skip / Unskip button — when skipped, the location stays
+            // pinned but the route optimizer excludes it. Lets the user
+            // temporarily pull a stop out of the plan without losing
+            // it. Toggle reflects the current state.
+            Tooltip(
+              message: updatedLocation.isSkipped ? 'Unskip' : 'Skip',
+              child: GestureDetector(
+                onTap: hasWriteAccess
+                    ? () {
+                        final notifier = ref.read(tripProvider.notifier);
+                        if (updatedLocation.isSkipped) {
+                          notifier
+                              .unskipMultipleLocations({updatedLocation.id});
+                        } else {
+                          notifier
+                              .skipMultipleLocations({updatedLocation.id});
+                        }
+                      }
+                    : null,
+                child: Container(
+                  width: 44,
+                  height: 44,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: !hasWriteAccess
+                        ? Colors.grey[400]
+                        : updatedLocation.isSkipped
+                            ? Colors.grey[700]
+                            : Colors.orange[700],
+                  ),
+                  child: Icon(
+                    updatedLocation.isSkipped
+                        ? Icons.refresh_rounded
+                        : Icons.remove_circle_outline,
+                    color: Colors.white,
+                    size: 22,
+                  ),
+                ),
               ),
             ),
             const SizedBox(width: 8),

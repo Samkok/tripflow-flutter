@@ -3,15 +3,23 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
 import '../models/location_model.dart';
+import '../providers/map_ui_state_provider.dart';
 import '../providers/trip_provider.dart';
 import '../providers/trip_simulation_provider.dart';
 import '../services/timing_simulation.dart';
 
 /// Modal sheet shown after the user taps Optimize when the timing simulation
-/// flags one or more stops. Lists each problem stop with the most severe
-/// warning + quick actions (Skip · Move to next day · Dismiss). The plan
-/// itself is unchanged on the map until the user acts on a row.
-class TimingWarningsSheet extends ConsumerWidget {
+/// flags one or more stops. The user picks Skip or Move-to-next-day per
+/// flagged stop, those choices are STAGED locally (the live route isn't
+/// touched yet), and a single Cancel / Confirm bar at the bottom applies
+/// everything at once and re-runs the optimizer. Confirm stays disabled
+/// until every flagged stop has a staged choice.
+///
+/// Captured snapshot model: at open time we freeze the list of problems
+/// from [tripSimulationProvider]. The provider isn't watched, so live
+/// state changes (e.g. the sim re-running mid-staging) can't shift rows
+/// out from under the user.
+class TimingWarningsSheet extends ConsumerStatefulWidget {
   const TimingWarningsSheet({super.key});
 
   /// Convenience opener so callers don't repeat the showModalBottomSheet
@@ -26,29 +34,139 @@ class TimingWarningsSheet extends ConsumerWidget {
   }
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final theme = Theme.of(context);
-    final result = ref.watch(tripSimulationProvider);
+  ConsumerState<TimingWarningsSheet> createState() =>
+      _TimingWarningsSheetState();
+}
 
-    // The sheet is always opened in response to warnings existing, but the
-    // simulation can shift while it's open (user accepts a suggestion → sim
-    // re-runs). When the last warning is gone, dismiss automatically.
-    if (result == null || result.fullyFeasible) {
+enum _ActionKind { skip, moveNextDay }
+
+class _ProblemEntry {
+  final StopTiming stop;
+  final LocationModel location;
+  const _ProblemEntry({required this.stop, required this.location});
+}
+
+class _TimingWarningsSheetState extends ConsumerState<TimingWarningsSheet> {
+  /// Snapshot at open time. Not reactive — staging choices below don't
+  /// re-run the simulator, so we don't need a live view.
+  late final List<_ProblemEntry> _problems;
+
+  /// Per-location staged choice. Missing key = not yet decided.
+  final Map<String, _ActionKind> _staged = {};
+
+  bool _applying = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final result = ref.read(tripSimulationProvider);
+    final ordered =
+        ref.read(tripProvider).optimizedLocationsForSelectedDate;
+    final byId = {for (final l in ordered) l.id: l};
+
+    _problems = result == null
+        ? const []
+        : result.stops
+            .where((s) => s.warnings.isNotEmpty)
+            .map((s) {
+              final loc = byId[s.locationId];
+              if (loc == null) return null;
+              return _ProblemEntry(stop: s, location: loc);
+            })
+            .whereType<_ProblemEntry>()
+            .toList();
+  }
+
+  bool get _allResolved =>
+      _problems.isNotEmpty &&
+      _problems.every((p) => _staged.containsKey(p.location.id));
+
+  void _stage(String locationId, _ActionKind action) {
+    setState(() {
+      // Toggle: tapping the same choice again clears it (lets users
+      // change their mind back to "undecided").
+      if (_staged[locationId] == action) {
+        _staged.remove(locationId);
+      } else {
+        _staged[locationId] = action;
+      }
+    });
+  }
+
+  Future<void> _confirm() async {
+    if (!_allResolved || _applying) return;
+    setState(() => _applying = true);
+
+    final messenger = ScaffoldMessenger.of(context);
+    final navigator = Navigator.of(context);
+    final notifier = ref.read(tripProvider.notifier);
+
+    // Group actions to minimize repository writes.
+    final toSkip = <String>{};
+    final movesByDate = <DateTime, Set<String>>{};
+    for (final p in _problems) {
+      final action = _staged[p.location.id]!;
+      switch (action) {
+        case _ActionKind.skip:
+          toSkip.add(p.location.id);
+        case _ActionKind.moveNextDay:
+          final cur = p.location.scheduledDate ?? DateTime.now();
+          final next = DateTime(cur.year, cur.month, cur.day)
+              .add(const Duration(days: 1));
+          movesByDate.putIfAbsent(next, () => {}).add(p.location.id);
+      }
+    }
+
+    try {
+      if (toSkip.isNotEmpty) {
+        await notifier.skipMultipleLocations(toSkip);
+      }
+      for (final entry in movesByDate.entries) {
+        await notifier.updateMultipleLocationsScheduledDate(
+            entry.value, entry.key);
+      }
+
+      // Re-run the optimizer now that the day's stops have settled.
+      final selectedDate = ref.read(selectedDateProvider);
+      await notifier.generateOptimizedRoute(selectedDate: selectedDate);
+
+      if (mounted) navigator.pop();
+    } catch (e) {
+      if (mounted) {
+        setState(() => _applying = false);
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text('Could not apply changes: $e'),
+            backgroundColor: Colors.red,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    if (_problems.isEmpty) {
+      // Nothing to resolve — close immediately. Shouldn't happen since
+      // the sheet is opened in response to warnings existing, but kept
+      // defensive in case the sim cleared between trigger and mount.
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (context.mounted && Navigator.of(context).canPop()) {
+        if (mounted && Navigator.of(context).canPop()) {
           Navigator.of(context).pop();
         }
       });
       return const SizedBox.shrink();
     }
 
-    final problems = result.stops.where((s) => s.warnings.isNotEmpty).toList();
-    final ordered = ref.read(tripProvider).optimizedLocationsForSelectedDate;
-    final byId = {for (final l in ordered) l.id: l};
+    final resolvedCount = _staged.length;
+    final totalCount = _problems.length;
 
     return DraggableScrollableSheet(
-      initialChildSize: 0.55,
-      minChildSize: 0.3,
+      initialChildSize: 0.6,
+      minChildSize: 0.35,
       maxChildSize: 0.9,
       expand: false,
       builder: (context, scrollController) {
@@ -72,7 +190,7 @@ class TimingWarningsSheet extends ConsumerWidget {
                 ),
               ),
               Padding(
-                padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
+                padding: const EdgeInsets.fromLTRB(20, 4, 12, 8),
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -84,18 +202,31 @@ class TimingWarningsSheet extends ConsumerWidget {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            problems.length == 1
+                            totalCount == 1
                                 ? '1 stop has a timing issue'
-                                : '${problems.length} stops have timing issues',
+                                : '$totalCount stops have timing issues',
                             style: theme.textTheme.titleLarge?.copyWith(
                                 fontWeight: FontWeight.bold),
                           ),
                           const SizedBox(height: 2),
                           Text(
-                            'Review and adjust — the route on the map is '
-                            'unchanged until you act.',
+                            'Pick an action for each. Nothing changes '
+                            'until you tap Apply.',
                             style: theme.textTheme.bodySmall?.copyWith(
                               color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          // Progress line — gives the user a clear sense
+                          // of how many are left, since Apply is locked
+                          // until everything's resolved.
+                          Text(
+                            '$resolvedCount of $totalCount resolved',
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: resolvedCount == totalCount
+                                  ? Colors.green.shade700
+                                  : theme.colorScheme.onSurfaceVariant,
+                              fontWeight: FontWeight.w600,
                             ),
                           ),
                         ],
@@ -103,8 +234,9 @@ class TimingWarningsSheet extends ConsumerWidget {
                     ),
                     IconButton(
                       icon: const Icon(Icons.close),
-                      onPressed: () => Navigator.of(context).pop(),
-                      tooltip: 'Dismiss',
+                      onPressed:
+                          _applying ? null : () => Navigator.of(context).pop(),
+                      tooltip: 'Cancel',
                     ),
                   ],
                 ),
@@ -113,16 +245,81 @@ class TimingWarningsSheet extends ConsumerWidget {
               Expanded(
                 child: ListView.separated(
                   controller: scrollController,
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  itemCount: problems.length,
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 12, vertical: 8),
+                  itemCount: _problems.length,
                   separatorBuilder: (_, __) => const SizedBox(height: 4),
                   itemBuilder: (context, i) {
-                    final stop = problems[i];
-                    final loc = byId[stop.locationId];
-                    if (loc == null) return const SizedBox.shrink();
-                    return _WarningRow(stop: stop, location: loc);
+                    final entry = _problems[i];
+                    return _WarningRow(
+                      stop: entry.stop,
+                      location: entry.location,
+                      staged: _staged[entry.location.id],
+                      onStage: _applying
+                          ? null
+                          : (action) =>
+                              _stage(entry.location.id, action),
+                    );
                   },
+                ),
+              ),
+              const Divider(height: 1),
+              SafeArea(
+                top: false,
+                child: Padding(
+                  padding:
+                      const EdgeInsets.fromLTRB(16, 12, 16, 12),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: _applying
+                              ? null
+                              : () => Navigator.of(context).pop(),
+                          style: OutlinedButton.styleFrom(
+                            padding:
+                                const EdgeInsets.symmetric(vertical: 14),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                          child: const Text('Cancel'),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        flex: 2,
+                        child: FilledButton(
+                          onPressed:
+                              _allResolved && !_applying ? _confirm : null,
+                          style: FilledButton.styleFrom(
+                            backgroundColor: theme.colorScheme.primary,
+                            foregroundColor: Colors.black,
+                            padding:
+                                const EdgeInsets.symmetric(vertical: 14),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                          child: _applying
+                              ? const SizedBox(
+                                  height: 20,
+                                  width: 20,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Colors.black,
+                                  ),
+                                )
+                              : const Text(
+                                  'Apply & re-optimize',
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ],
@@ -133,113 +330,126 @@ class TimingWarningsSheet extends ConsumerWidget {
   }
 }
 
-class _WarningRow extends ConsumerWidget {
+class _WarningRow extends StatelessWidget {
   final StopTiming stop;
   final LocationModel location;
+  final _ActionKind? staged;
 
-  const _WarningRow({required this.stop, required this.location});
+  /// Null when the sheet is mid-apply — disables row-level toggling so
+  /// the staged set can't change while [TimingWarningsSheet._confirm]
+  /// is iterating it.
+  final void Function(_ActionKind)? onStage;
+
+  const _WarningRow({
+    required this.stop,
+    required this.location,
+    required this.staged,
+    required this.onStage,
+  });
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     final theme = Theme.of(context);
     // The simulation guarantees at least one warning per row in this sheet —
     // pick the most severe (highest enum index per WarningKind ordering).
-    final warning = stop.warnings.reduce(
-        (a, b) => a.kind.index >= b.kind.index ? a : b);
+    final warning = stop.warnings
+        .reduce((a, b) => a.kind.index >= b.kind.index ? a : b);
 
     final tone = _toneFor(warning.kind, theme);
+    final resolved = staged != null;
 
     return Material(
-      color: theme.cardColor,
+      color: resolved
+          ? theme.colorScheme.primary.withValues(alpha: 0.06)
+          : theme.cardColor,
       borderRadius: BorderRadius.circular(12),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(6),
-                  decoration: BoxDecoration(
-                    color: tone.background,
-                    borderRadius: BorderRadius.circular(8),
+      child: Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: resolved
+                ? theme.colorScheme.primary.withValues(alpha: 0.4)
+                : theme.dividerColor.withValues(alpha: 0.3),
+            width: resolved ? 1.5 : 1,
+          ),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(6),
+                    decoration: BoxDecoration(
+                      color: tone.background,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Icon(tone.icon,
+                        color: tone.foreground, size: 18),
                   ),
-                  child: Icon(tone.icon, color: tone.foreground, size: 18),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        location.name,
-                        style: theme.textTheme.titleSmall?.copyWith(
-                            fontWeight: FontWeight.w600),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        warning.message,
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: tone.foreground,
-                          fontWeight: FontWeight.w500,
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          location.name,
+                          style: theme.textTheme.titleSmall
+                              ?.copyWith(fontWeight: FontWeight.w600),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                         ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        'Arrives at ${_fmtTime(stop.arrival)} · '
-                        'leaves at ${_fmtTime(stop.departure)}',
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: theme.colorScheme.onSurfaceVariant,
+                        const SizedBox(height: 2),
+                        Text(
+                          warning.message,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: tone.foreground,
+                            fontWeight: FontWeight.w500,
+                          ),
                         ),
-                      ),
-                    ],
+                        const SizedBox(height: 4),
+                        Text(
+                          'Arrives at ${_fmtTime(stop.arrival)} · '
+                          'leaves at ${_fmtTime(stop.departure)}',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                TextButton.icon(
-                  icon: const Icon(Icons.remove_circle_outline, size: 16),
-                  label: const Text('Skip'),
-                  style: TextButton.styleFrom(
-                    visualDensity: VisualDensity.compact,
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  if (resolved)
+                    Icon(Icons.check_circle,
+                        color: theme.colorScheme.primary, size: 22),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  _ChoiceButton(
+                    icon: Icons.remove_circle_outline,
+                    label: 'Skip',
+                    selected: staged == _ActionKind.skip,
+                    onTap: onStage == null
+                        ? null
+                        : () => onStage!(_ActionKind.skip),
                   ),
-                  onPressed: () {
-                    ref
-                        .read(tripProvider.notifier)
-                        .skipMultipleLocations({location.id});
-                  },
-                ),
-                TextButton.icon(
-                  icon: const Icon(Icons.calendar_today_outlined, size: 16),
-                  label: const Text('Next day'),
-                  style: TextButton.styleFrom(
-                    visualDensity: VisualDensity.compact,
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  const SizedBox(width: 8),
+                  _ChoiceButton(
+                    icon: Icons.calendar_today_outlined,
+                    label: 'Next day',
+                    selected: staged == _ActionKind.moveNextDay,
+                    onTap: onStage == null
+                        ? null
+                        : () => onStage!(_ActionKind.moveNextDay),
                   ),
-                  onPressed: () {
-                    final current = location.scheduledDate ?? DateTime.now();
-                    final next = DateTime(current.year, current.month,
-                            current.day)
-                        .add(const Duration(days: 1));
-                    ref
-                        .read(tripProvider.notifier)
-                        .updateMultipleLocationsScheduledDate(
-                            {location.id}, next);
-                  },
-                ),
-              ],
-            ),
-          ],
+                ],
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -269,6 +479,55 @@ class _WarningRow extends ConsumerWidget {
           background: theme.colorScheme.error.withValues(alpha: 0.10),
         );
     }
+  }
+}
+
+/// A toggleable per-row choice chip. Filled when [selected]; outlined
+/// otherwise. Both Skip and Next-day use the same component so the user
+/// reads them as a binary picker.
+class _ChoiceButton extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final bool selected;
+  final VoidCallback? onTap;
+
+  const _ChoiceButton({
+    required this.icon,
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final primary = theme.colorScheme.primary;
+
+    if (selected) {
+      return FilledButton.icon(
+        icon: Icon(icon, size: 16),
+        label: Text(label),
+        onPressed: onTap,
+        style: FilledButton.styleFrom(
+          backgroundColor: primary,
+          foregroundColor: Colors.black,
+          visualDensity: VisualDensity.compact,
+          padding:
+              const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+        ),
+      );
+    }
+    return OutlinedButton.icon(
+      icon: Icon(icon, size: 16),
+      label: Text(label),
+      onPressed: onTap,
+      style: OutlinedButton.styleFrom(
+        visualDensity: VisualDensity.compact,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+        side: BorderSide(color: primary.withValues(alpha: 0.4)),
+        foregroundColor: primary,
+      ),
+    );
   }
 }
 
