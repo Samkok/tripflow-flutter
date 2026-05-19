@@ -14,8 +14,10 @@ import 'timing_warnings_sheet.dart';
 import '../utils/external_app_links.dart';
 import '../utils/trip_date_validator.dart';
 import '../core/theme.dart';
+import 'app_toast.dart';
 import 'optimized_location_card.dart';
 import '../services/csv_service.dart';
+import '../services/places_service.dart';
 
 class TripBottomSheet extends ConsumerStatefulWidget {
   final DraggableScrollableController? sheetController;
@@ -155,7 +157,17 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!context.mounted) return;
         final sim = ref.read(tripSimulationProvider);
-        if (sim != null && !sim.fullyFeasible) {
+        if (sim == null || sim.fullyFeasible) return;
+        // Filter out warnings the user has already accepted via
+        // "Go anyway" in a previous run of the sheet — otherwise the
+        // re-optimize that the sheet's _confirm fires would land with
+        // the same warnings still present and the sheet would re-open
+        // immediately, recursively. We only re-open when at least one
+        // UNACKNOWLEDGED warning is on the new route.
+        final acked = ref.read(acknowledgedTimingWarningsProvider);
+        final hasUnacked = sim.stops.any((s) =>
+            s.warnings.isNotEmpty && !acked.contains(s.locationId));
+        if (hasUnacked) {
           TimingWarningsSheet.show(context);
         }
       });
@@ -703,11 +715,9 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                 onSelected: (value) {
                   // Check write access for all write operations
                   if (!hasWriteAccess && value != 'copy') {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('You don\'t have permission to modify locations in this trip.'),
-                        backgroundColor: Colors.orange,
-                      ),
+                    AppToast.warning(
+                      context,
+                      'You don\'t have permission to modify locations in this trip.',
                     );
                     return;
                   }
@@ -1283,11 +1293,9 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
 
       if (locations.length < 2) {
         if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Need at least 2 locations to open directions'),
-              backgroundColor: Colors.orange,
-            ),
+          AppToast.warning(
+            context,
+            'Need at least 2 locations to open directions',
           );
         }
         return;
@@ -1303,12 +1311,7 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
     } catch (e) {
       debugPrint('Error opening Google Maps: $e');
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to open Google Maps: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
+        AppToast.error(context, 'Failed to open Google Maps: $e');
       }
     }
   }
@@ -1789,22 +1792,16 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                     await csvService.generateAndShareTripCsv(locations);
                   } on MissingPluginException {
                     if (context.mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text(
-                              'Please restart the app to enable CSV download.'),
-                          backgroundColor: Colors.orange,
-                        ),
+                      AppToast.warning(
+                        context,
+                        'Please restart the app to enable CSV download.',
                       );
                     }
                   } catch (e) {
                     if (context.mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text(
-                              'Failed to download CSV. Please restart the app.'),
-                          backgroundColor: Colors.red,
-                        ),
+                      AppToast.error(
+                        context,
+                        'Failed to download CSV. Please restart the app.',
                       );
                     }
                   }
@@ -2099,11 +2096,49 @@ class _StartPointSheetState extends ConsumerState<_StartPointSheet> {
   String? _selectedStartId;
   bool _initialized = false;
 
+  // Country-mismatch gate for the "My current location" anchor.
+  //
+  // Trip has a tagged country and the device is sitting in a different one
+  // (e.g. user planning a Tokyo trip from home in NYC). Anchoring the
+  // optimizer to the device GPS would silently route a leg across the
+  // ocean. We disable the option in that case and tell the user to pick a
+  // stop inside the trip's country.
+  //
+  // Resolution is a single reverse-geocode kicked off the first time the
+  // sheet builds with the data it needs; cached in [_currentCountryCode]
+  // afterward.
+  bool _countryCheckStarted = false;
+  bool _countryCheckInFlight = false;
+  String? _currentCountryCode; // ISO-2 of the device GPS, once resolved.
+
+  Future<void> _resolveCurrentCountry(LatLng coords) async {
+    if (_countryCheckStarted) return;
+    _countryCheckStarted = true;
+    setState(() => _countryCheckInFlight = true);
+    try {
+      final details = await PlacesService.getPlaceFromCoordinates(coords);
+      if (!mounted) return;
+      setState(() {
+        _currentCountryCode = details?.countryCode?.toUpperCase();
+        _countryCheckInFlight = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      // On failure, leave _currentCountryCode null so we don't block the
+      // option — the strict country guard at add time still has the user's
+      // back if the chosen anchor is actually wrong.
+      setState(() => _countryCheckInFlight = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final tripState = ref.watch(tripProvider);
     final selectedDate = ref.watch(selectedDateProvider);
+    final activeTrip =
+        ref.watch(realtimeActiveTripProvider).asData?.value;
+    final tripCountry = activeTrip?.countryCode?.toUpperCase();
 
     // Day's stops — including skipped/done, since those can serve as
     // anchors even though they won't be visited by the optimizer.
@@ -2116,14 +2151,41 @@ class _StartPointSheetState extends ConsumerState<_StartPointSheet> {
         dayStops.where((l) => l.isSkipped || l.isDone).toList();
     final hasCurrentLocation = tripState.currentLocation != null;
 
-    // Default selection on first build — runs once.
+    // Kick off a one-shot reverse geocode the moment we know the trip has
+    // a tagged country and the device has a fix. Cheap to call repeatedly
+    // — _resolveCurrentCountry guards itself via [_countryCheckStarted].
+    if (tripCountry != null && tripState.currentLocation != null) {
+      _resolveCurrentCountry(tripState.currentLocation!);
+    }
+
+    // True only once we've confirmed the device is in a DIFFERENT country
+    // than the trip. Null country code (lookup pending or failed) is not
+    // a mismatch — we don't want a flaky geocode to lock out the option.
+    final currentLocationMismatch = tripCountry != null &&
+        _currentCountryCode != null &&
+        _currentCountryCode != tripCountry;
+    final currentLocationDisabled =
+        hasCurrentLocation && currentLocationMismatch;
+
+    // Default selection on first build — runs once. Don't preselect the
+    // device GPS if we already know it's in the wrong country.
     if (!_initialized) {
       _initialized = true;
-      _selectedStartId = hasCurrentLocation
+      final canPreselectCurrent =
+          hasCurrentLocation && !currentLocationDisabled;
+      _selectedStartId = canPreselectCurrent
           ? 'current_location'
           : (activeStops.isNotEmpty
               ? activeStops.first.id
               : (inactiveStops.isNotEmpty ? inactiveStops.first.id : null));
+    } else if (currentLocationDisabled &&
+        _selectedStartId == 'current_location') {
+      // The country lookup landed AFTER the first build and invalidated
+      // the device-GPS preselection — swap to the first usable stop so
+      // the Optimize button doesn't fire with a now-disabled anchor.
+      _selectedStartId = activeStops.isNotEmpty
+          ? activeStops.first.id
+          : (inactiveStops.isNotEmpty ? inactiveStops.first.id : null);
     }
 
     return DraggableScrollableSheet(
@@ -2197,13 +2259,21 @@ class _StartPointSheetState extends ConsumerState<_StartPointSheet> {
                       _sectionLabel(context, 'My location'),
                       _StartPointTile(
                         leading: Icon(Icons.my_location,
-                            color: theme.colorScheme.primary),
+                            color: currentLocationDisabled
+                                ? theme.colorScheme.onSurfaceVariant
+                                    .withValues(alpha: 0.5)
+                                : theme.colorScheme.primary),
                         title: 'My current location',
-                        subtitle: 'Use device GPS as the start anchor',
+                        subtitle: currentLocationDisabled
+                            ? 'You\'re outside this trip\'s country — pick a stop within ${activeTrip?.countryCode ?? 'the trip\'s region'} to start from instead.'
+                            : (_countryCheckInFlight && tripCountry != null
+                                ? 'Checking whether you\'re in the trip\'s country…'
+                                : 'Use device GPS as the start anchor'),
                         value: 'current_location',
                         groupValue: _selectedStartId,
                         onChanged: (v) =>
                             setState(() => _selectedStartId = v),
+                        disabled: currentLocationDisabled,
                       ),
                       const SizedBox(height: 16),
                     ],
@@ -2305,6 +2375,15 @@ class _StartPointSheetState extends ConsumerState<_StartPointSheet> {
                               : () {
                                   final id = _selectedStartId!;
                                   Navigator.of(context).pop();
+                                  // Fresh user-initiated optimize:
+                                  // clear any "Go anyway" acknowledgements
+                                  // from a previous planning attempt so
+                                  // warnings re-surface from scratch.
+                                  ref
+                                      .read(
+                                          acknowledgedTimingWarningsProvider
+                                              .notifier)
+                                      .state = const {};
                                   ref
                                       .read(tripProvider.notifier)
                                       .generateOptimizedRoute(
@@ -2479,6 +2558,7 @@ class _StartPointTile extends StatelessWidget {
   final ValueChanged<String?> onChanged;
   final Widget? statusChip;
   final bool mutedTitle;
+  final bool disabled;
 
   const _StartPointTile({
     required this.leading,
@@ -2489,94 +2569,116 @@ class _StartPointTile extends StatelessWidget {
     required this.onChanged,
     this.statusChip,
     this.mutedTitle = false,
+    this.disabled = false,
   });
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final isSelected = value == groupValue;
+    final isSelected = !disabled && value == groupValue;
+    final fadedTitleColor =
+        theme.textTheme.bodyMedium?.color?.withValues(alpha: 0.45);
+    final fadedSubtitleColor =
+        theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.7);
+    final borderColor = disabled
+        ? theme.dividerColor.withValues(alpha: 0.25)
+        : (isSelected
+            ? theme.colorScheme.primary.withValues(alpha: 0.6)
+            : theme.dividerColor.withValues(alpha: 0.3));
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
-      child: Material(
-        color: isSelected
-            ? theme.colorScheme.primary.withValues(alpha: 0.08)
-            : theme.cardColor,
-        borderRadius: BorderRadius.circular(12),
-        child: InkWell(
+      child: Opacity(
+        opacity: disabled ? 0.6 : 1.0,
+        child: Material(
+          color: disabled
+              ? theme.cardColor.withValues(alpha: 0.6)
+              : (isSelected
+                  ? theme.colorScheme.primary.withValues(alpha: 0.08)
+                  : theme.cardColor),
           borderRadius: BorderRadius.circular(12),
-          onTap: () => onChanged(value),
-          child: Container(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(
-                color: isSelected
-                    ? theme.colorScheme.primary.withValues(alpha: 0.6)
-                    : theme.dividerColor.withValues(alpha: 0.3),
-                width: isSelected ? 1.5 : 1,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(12),
+            onTap: disabled ? null : () => onChanged(value),
+            child: Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: borderColor,
+                  width: isSelected ? 1.5 : 1,
+                ),
               ),
-            ),
-            child: Row(
-              children: [
-                leading,
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.center,
-                        children: [
-                          Expanded(
-                            child: Text(
-                              title,
-                              style: theme.textTheme.titleSmall?.copyWith(
-                                fontWeight: FontWeight.w600,
-                                color: mutedTitle
-                                    ? theme.textTheme.bodyMedium?.color
-                                        ?.withValues(alpha: 0.75)
-                                    : null,
-                                decoration: mutedTitle
-                                    ? TextDecoration.lineThrough
-                                    : null,
+              child: Row(
+                children: [
+                  leading,
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.center,
+                          children: [
+                            Expanded(
+                              child: Text(
+                                title,
+                                style: theme.textTheme.titleSmall?.copyWith(
+                                  fontWeight: FontWeight.w600,
+                                  color: disabled
+                                      ? fadedTitleColor
+                                      : (mutedTitle
+                                          ? theme.textTheme.bodyMedium?.color
+                                              ?.withValues(alpha: 0.75)
+                                          : null),
+                                  decoration: mutedTitle
+                                      ? TextDecoration.lineThrough
+                                      : null,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
                               ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
                             ),
-                          ),
-                          if (statusChip != null) ...[
-                            const SizedBox(width: 8),
-                            statusChip!,
+                            if (statusChip != null) ...[
+                              const SizedBox(width: 8),
+                              statusChip!,
+                            ],
                           ],
-                        ],
-                      ),
-                      if (subtitle != null && subtitle!.isNotEmpty) ...[
-                        const SizedBox(height: 2),
-                        Text(
-                          subtitle!,
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: theme.colorScheme.onSurfaceVariant,
-                          ),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
                         ),
+                        if (subtitle != null && subtitle!.isNotEmpty) ...[
+                          const SizedBox(height: 2),
+                          Text(
+                            subtitle!,
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: disabled
+                                  ? fadedSubtitleColor
+                                  : theme.colorScheme.onSurfaceVariant,
+                            ),
+                            maxLines: 3,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
                       ],
-                    ],
+                    ),
                   ),
-                ),
-                const SizedBox(width: 8),
-                Icon(
-                  isSelected
-                      ? Icons.radio_button_checked
-                      : Icons.radio_button_off,
-                  size: 22,
-                  color: isSelected
-                      ? theme.colorScheme.primary
-                      : theme.colorScheme.onSurfaceVariant
-                          .withValues(alpha: 0.6),
-                ),
-              ],
+                  const SizedBox(width: 8),
+                  Icon(
+                    disabled
+                        ? Icons.block
+                        : (isSelected
+                            ? Icons.radio_button_checked
+                            : Icons.radio_button_off),
+                    size: 22,
+                    color: disabled
+                        ? theme.colorScheme.onSurfaceVariant
+                            .withValues(alpha: 0.5)
+                        : (isSelected
+                            ? theme.colorScheme.primary
+                            : theme.colorScheme.onSurfaceVariant
+                                .withValues(alpha: 0.6)),
+                  ),
+                ],
+              ),
             ),
           ),
         ),

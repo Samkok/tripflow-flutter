@@ -193,6 +193,7 @@ class TripCollaboratorRepository {
               user_id,
               name,
               description,
+              country_code,
               status,
               is_active,
               start_date,

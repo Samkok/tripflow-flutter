@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/trip_collaborator.dart';
 import '../providers/trip_collaborator_provider.dart';
+import 'app_toast.dart';
 
 class CollaboratorsSheet extends ConsumerStatefulWidget {
   final String tripId;
@@ -34,12 +35,8 @@ class _CollaboratorsSheetState extends ConsumerState<CollaboratorsSheet> {
     // Only owner can add collaborators - check at function level
     final isOwner = await ref.read(isTripOwnerProvider(widget.tripId).future);
     if (!isOwner) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Only the trip owner can add team members.'),
-          backgroundColor: Colors.orange,
-        ),
-      );
+      if (!mounted) return;
+      AppToast.warning(context, 'Only the trip owner can add team members.');
       return;
     }
 
@@ -80,12 +77,7 @@ class _CollaboratorsSheetState extends ConsumerState<CollaboratorsSheet> {
       ref.invalidate(hasWriteAccessProvider(widget.tripId));
       ref.invalidate(userTripPermissionProvider(widget.tripId));
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Added $email as collaborator'),
-          backgroundColor: Colors.green,
-        ),
-      );
+      AppToast.success(context, 'Added $email as collaborator');
     } else {
       setState(() => _errorMessage = result.error);
     }
@@ -96,12 +88,8 @@ class _CollaboratorsSheetState extends ConsumerState<CollaboratorsSheet> {
     // Only owner can update permissions - check at function level
     final isOwner = await ref.read(isTripOwnerProvider(widget.tripId).future);
     if (!isOwner) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Only the trip owner can change permissions.'),
-          backgroundColor: Colors.orange,
-        ),
-      );
+      if (!mounted) return;
+      AppToast.warning(context, 'Only the trip owner can change permissions.');
       return;
     }
 
@@ -119,11 +107,9 @@ class _CollaboratorsSheetState extends ConsumerState<CollaboratorsSheet> {
       ref.invalidate(userTripPermissionProvider(widget.tripId));
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Updated ${collaborator.email} permission to $newPermission'),
-            backgroundColor: Colors.green,
-          ),
+        AppToast.success(
+          context,
+          'Updated ${collaborator.email} permission to $newPermission',
         );
       }
     }
@@ -133,12 +119,8 @@ class _CollaboratorsSheetState extends ConsumerState<CollaboratorsSheet> {
     // Only owner can remove collaborators - check at function level
     final isOwner = await ref.read(isTripOwnerProvider(widget.tripId).future);
     if (!isOwner) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Only the trip owner can remove team members.'),
-          backgroundColor: Colors.orange,
-        ),
-      );
+      if (!mounted) return;
+      AppToast.warning(context, 'Only the trip owner can remove team members.');
       return;
     }
 
@@ -181,12 +163,7 @@ class _CollaboratorsSheetState extends ConsumerState<CollaboratorsSheet> {
       ref.invalidate(userTripPermissionProvider(widget.tripId));
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Removed ${collaborator.email} from trip'),
-            backgroundColor: Colors.orange,
-          ),
-        );
+        AppToast.warning(context, 'Removed ${collaborator.email} from trip');
       }
     }
   }

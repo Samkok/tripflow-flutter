@@ -7,6 +7,7 @@ import '../providers/map_ui_state_provider.dart';
 import '../providers/trip_provider.dart';
 import '../providers/trip_simulation_provider.dart';
 import '../services/timing_simulation.dart';
+import 'app_toast.dart';
 
 /// Modal sheet shown after the user taps Optimize when the timing simulation
 /// flags one or more stops. The user picks Skip or Move-to-next-day per
@@ -38,7 +39,13 @@ class TimingWarningsSheet extends ConsumerStatefulWidget {
       _TimingWarningsSheetState();
 }
 
-enum _ActionKind { skip, moveNextDay }
+/// What the user has decided to do about a flagged stop.
+///   • [skip] — drop from the route via `skipMultipleLocations`.
+///   • [moveNextDay] — push to the next day via
+///     `updateMultipleLocationsScheduledDate`.
+///   • [goAnyway] — acknowledge the warning but keep the stop in the
+///     route as-is; no repository write happens for this choice.
+enum _ActionKind { skip, moveNextDay, goAnyway }
 
 class _ProblemEntry {
   final StopTiming stop;
@@ -97,13 +104,18 @@ class _TimingWarningsSheetState extends ConsumerState<TimingWarningsSheet> {
     if (!_allResolved || _applying) return;
     setState(() => _applying = true);
 
-    final messenger = ScaffoldMessenger.of(context);
     final navigator = Navigator.of(context);
     final notifier = ref.read(tripProvider.notifier);
+    // Capture the user's chosen starting anchor BEFORE the awaits so the
+    // re-optimize below preserves it. Without this, generateOptimizedRoute
+    // falls back to the device GPS and the route silently re-anchors away
+    // from whatever the user picked in the Optimize sheet.
+    final currentStartId = ref.read(tripProvider).startLocationId;
 
     // Group actions to minimize repository writes.
     final toSkip = <String>{};
     final movesByDate = <DateTime, Set<String>>{};
+    final goAnyway = <String>{};
     for (final p in _problems) {
       final action = _staged[p.location.id]!;
       switch (action) {
@@ -114,7 +126,23 @@ class _TimingWarningsSheetState extends ConsumerState<TimingWarningsSheet> {
           final next = DateTime(cur.year, cur.month, cur.day)
               .add(const Duration(days: 1));
           movesByDate.putIfAbsent(next, () => {}).add(p.location.id);
+        case _ActionKind.goAnyway:
+          // User accepted the warning — keep the stop in the route
+          // exactly as-is. No repository write needed.
+          goAnyway.add(p.location.id);
       }
+    }
+
+    // Mark Go-anyway stops as acknowledged BEFORE the re-optimize call
+    // below fires zoomToFitRouteTrigger. The listener in trip_bottom_sheet
+    // reads this set to decide whether to re-open the sheet — without
+    // this, the same warnings would resurface and we'd loop. Acked ids
+    // are unioned (not replaced) so prior acknowledgements persist
+    // across multiple confirm cycles in the same session.
+    if (goAnyway.isNotEmpty) {
+      final notifier =
+          ref.read(acknowledgedTimingWarningsProvider.notifier);
+      notifier.state = {...notifier.state, ...goAnyway};
     }
 
     try {
@@ -128,19 +156,16 @@ class _TimingWarningsSheetState extends ConsumerState<TimingWarningsSheet> {
 
       // Re-run the optimizer now that the day's stops have settled.
       final selectedDate = ref.read(selectedDateProvider);
-      await notifier.generateOptimizedRoute(selectedDate: selectedDate);
+      await notifier.generateOptimizedRoute(
+        selectedDate: selectedDate,
+        startLocationId: currentStartId.isEmpty ? null : currentStartId,
+      );
 
       if (mounted) navigator.pop();
     } catch (e) {
       if (mounted) {
         setState(() => _applying = false);
-        messenger.showSnackBar(
-          SnackBar(
-            content: Text('Could not apply changes: $e'),
-            backgroundColor: Colors.red,
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
+        AppToast.error(context, 'Could not apply changes: $e');
       }
     }
   }
@@ -427,7 +452,9 @@ class _WarningRow extends StatelessWidget {
                 ],
               ),
               const SizedBox(height: 10),
-              Row(
+              Wrap(
+                spacing: 8,
+                runSpacing: 6,
                 children: [
                   _ChoiceButton(
                     icon: Icons.remove_circle_outline,
@@ -437,7 +464,6 @@ class _WarningRow extends StatelessWidget {
                         ? null
                         : () => onStage!(_ActionKind.skip),
                   ),
-                  const SizedBox(width: 8),
                   _ChoiceButton(
                     icon: Icons.calendar_today_outlined,
                     label: 'Next day',
@@ -445,6 +471,14 @@ class _WarningRow extends StatelessWidget {
                     onTap: onStage == null
                         ? null
                         : () => onStage!(_ActionKind.moveNextDay),
+                  ),
+                  _ChoiceButton(
+                    icon: Icons.arrow_forward_rounded,
+                    label: 'Go anyway',
+                    selected: staged == _ActionKind.goAnyway,
+                    onTap: onStage == null
+                        ? null
+                        : () => onStage!(_ActionKind.goAnyway),
                   ),
                 ],
               ),

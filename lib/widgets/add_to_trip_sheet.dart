@@ -6,6 +6,7 @@ import '../providers/local_active_trip_provider.dart';
 import '../providers/user_trip_provider.dart';
 import '../providers/trip_collaborator_provider.dart';
 import '../services/location_add_service.dart';
+import 'app_toast.dart';
 
 class AddToTripSheet extends ConsumerStatefulWidget {
   final List<SavedLocation> availableLocations;
@@ -211,14 +212,10 @@ class _AddToTripSheetState extends ConsumerState<AddToTripSheet> {
                                             .future);
 
                                     if (!hasWriteAccess) {
-                                      if (mounted) {
-                                        ScaffoldMessenger.of(context)
-                                            .showSnackBar(
-                                          const SnackBar(
-                                            content: Text(
-                                                'You don\'t have permission to add locations to this trip.'),
-                                            backgroundColor: Colors.orange,
-                                          ),
+                                      if (context.mounted) {
+                                        AppToast.warning(
+                                          context,
+                                          'You don\'t have permission to add locations to this trip.',
                                         );
                                       }
                                       return;
@@ -245,15 +242,12 @@ class _AddToTripSheetState extends ConsumerState<AddToTripSheet> {
                                     Navigator.pop(context);
                                     widget.onSuccess?.call();
 
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      SnackBar(
-                                        content: Text(
-                                          '${picks.length} location${picks.length != 1 ? 's' : ''} added to ${selectedTrip!.name}',
-                                        ),
-                                        duration:
-                                            const Duration(seconds: 2),
-                                      ),
-                                    );
+                                    if (context.mounted) {
+                                      AppToast.success(
+                                        context,
+                                        '${picks.length} location${picks.length != 1 ? 's' : ''} added to ${selectedTrip!.name}',
+                                      );
+                                    }
                                   },
                         child: const Text('Add to Trip'),
                       ),

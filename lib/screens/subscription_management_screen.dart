@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../providers/subscription_provider.dart';
+import '../widgets/app_toast.dart';
 import 'paywall_screen.dart';
 
 /// Screen for managing subscription and accessing customer center
@@ -354,16 +355,11 @@ class _SubscriptionManagementScreenState
     setState(() => _isLoading = false);
 
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            success
-                ? 'Purchases restored successfully!'
-                : 'No purchases found to restore.',
-          ),
-          backgroundColor: success ? Colors.green : Colors.orange,
-        ),
-      );
+      if (success) {
+        AppToast.success(context, 'Purchases restored successfully!');
+      } else {
+        AppToast.warning(context, 'No purchases found to restore.');
+      }
     }
   }
 

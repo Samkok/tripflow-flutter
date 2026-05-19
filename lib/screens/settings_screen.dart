@@ -9,6 +9,7 @@ import 'package:voyza/core/theme.dart';
 import 'package:voyza/providers/theme_provider.dart';
 import 'package:voyza/screens/terms_screen.dart';
 import 'package:voyza/services/review_prompt_service.dart';
+import 'package:voyza/widgets/app_toast.dart';
 
 import '../providers/auth_provider.dart';
 import '../providers/nearby_radius_provider.dart';
@@ -467,21 +468,16 @@ class SettingsScreen extends ConsumerWidget {
       ),
       child: ListTile(
         onTap: () async {
-          final messenger = ScaffoldMessenger.of(context);
           final shown =
               await ReviewPromptService.instance.requestReviewManually();
           if (!shown && context.mounted) {
             // The OS may silently no-op (e.g. Apple annual cap, Simulator,
             // sideloaded build). Surface a small hint so the tap doesn't
             // look broken.
-            messenger.showSnackBar(
-              const SnackBar(
-                content: Text(
-                  'Thanks! The rating prompt is unavailable right now — '
-                  'please try again later.',
-                ),
-                behavior: SnackBarBehavior.floating,
-              ),
+            AppToast.info(
+              context,
+              'Thanks! The rating prompt is unavailable right now — '
+              'please try again later.',
             );
           }
         },
@@ -521,7 +517,6 @@ class SettingsScreen extends ConsumerWidget {
       ),
       child: ListTile(
         onTap: () async {
-          final messenger = ScaffoldMessenger.of(context);
           final uri = Uri(
             scheme: 'mailto',
             path: 'hengsamkok76@gmail.com',
@@ -530,26 +525,16 @@ class SettingsScreen extends ConsumerWidget {
           try {
             final ok = await launchUrl(uri);
             if (!ok && context.mounted) {
-              messenger.showSnackBar(
-                const SnackBar(
-                  content: Text(
-                    'No mail app available. Email us at '
-                    'hengsamkok76@gmail.com',
-                  ),
-                  behavior: SnackBarBehavior.floating,
-                ),
+              AppToast.warning(
+                context,
+                'No mail app available. Email us at hengsamkok76@gmail.com',
               );
             }
           } catch (_) {
             if (context.mounted) {
-              messenger.showSnackBar(
-                const SnackBar(
-                  content: Text(
-                    'Could not open mail. Email us at '
-                    'hengsamkok76@gmail.com',
-                  ),
-                  behavior: SnackBarBehavior.floating,
-                ),
+              AppToast.error(
+                context,
+                'Could not open mail. Email us at hengsamkok76@gmail.com',
               );
             }
           }
@@ -686,14 +671,7 @@ class SettingsScreen extends ConsumerWidget {
     } catch (e) {
       if (context.mounted) {
         Navigator.of(context).pop(); // Close loading dialog
-
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to delete account: ${e.toString()}'),
-            backgroundColor: Colors.red,
-            duration: const Duration(seconds: 5),
-          ),
-        );
+        AppToast.error(context, 'Failed to delete account: ${e.toString()}');
       }
     }
   }
@@ -769,10 +747,9 @@ class _LocationTileState extends State<_LocationTile> with WidgetsBindingObserve
         } else {
           // User tapped Deny on the dialog
           if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('Location permission denied. Enable it in System Settings.'),
-              ),
+            AppToast.warning(
+              context,
+              'Location permission denied. Enable it in System Settings.',
             );
             setState(() { _enabled = false; _loading = false; });
           }
@@ -882,12 +859,9 @@ class _NotificationTileState extends State<_NotificationTile> with WidgetsBindin
       if (value) {
         final granted = await NotificationService().enableNotifications();
         if (!granted && mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text(
-                'Permission denied. Enable notifications in System Settings.',
-              ),
-            ),
+          AppToast.warning(
+            context,
+            'Permission denied. Enable notifications in System Settings.',
           );
         }
         if (mounted) setState(() { _enabled = granted; _loading = false; });

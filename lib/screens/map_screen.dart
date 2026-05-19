@@ -27,6 +27,7 @@ import '../services/places_service.dart';
 import '../services/location_add_service.dart';
 import '../providers/nearby_radius_provider.dart';
 import '../providers/zoom_fit_settings_provider.dart';
+import '../widgets/app_toast.dart';
 import '../widgets/map_widget.dart';
 import '../widgets/nearby_places_picker_sheet.dart';
 import '../widgets/trip_bottom_sheet.dart';
@@ -116,12 +117,9 @@ class _MapScreenState extends ConsumerState<MapScreen>
     } catch (e) {
       debugPrint("Failed to get location: $e");
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content:
-                Text('Location permissions denied. Showing default map area.'),
-            backgroundColor: Colors.orange,
-          ),
+        AppToast.warning(
+          context,
+          'Location permissions denied. Showing default map area.',
         );
       }
       // Move camera to a default location if getting current location fails
@@ -178,13 +176,12 @@ class _MapScreenState extends ConsumerState<MapScreen>
   Future<void> _onMapLongPress(LatLng coordinates) async {
     // Check if user has write access to the active trip
     final hasWriteAccess = await ref.read(hasActiveTripWriteAccessProvider.future);
+    if (!mounted) return;
 
     if (!hasWriteAccess) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('You don\'t have permission to add locations to this trip.'),
-          backgroundColor: Colors.orange,
-        ),
+      AppToast.warning(
+        context,
+        'You don\'t have permission to add locations to this trip.',
       );
       return;
     }
@@ -194,32 +191,16 @@ class _MapScreenState extends ConsumerState<MapScreen>
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
     if (selectedDate.isBefore(today)) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Cannot add locations to a past date.'),
-          backgroundColor: Colors.orange,
-        ),
-      );
+      AppToast.warning(context, 'Cannot add locations to a past date.');
       return;
     }
     try {
       final radius = ref.read(nearbyRadiusProvider).round();
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Row(
-            children: [
-              const SizedBox(
-                height: 16,
-                width: 16,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              ),
-              const SizedBox(width: 16),
-              Text('Looking up places within ${_formatRadius(radius)}...'),
-            ],
-          ),
-          duration: const Duration(seconds: 3),
-        ),
+      AppToast.info(
+        context,
+        'Looking up places within ${_formatRadius(radius)}...',
+        duration: const Duration(seconds: 3),
       );
 
       final nearby = await PlacesService.searchNearbyPlaces(
@@ -227,7 +208,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
         radiusMeters: radius,
       );
       if (!mounted) return;
-      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      AppToast.dismiss();
 
       final picked = await showNearbyPlacesPicker(
         context,
@@ -240,13 +221,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
     } catch (e) {
       debugPrint('Error adding location from map: $e');
       if (mounted) {
-        ScaffoldMessenger.of(context).hideCurrentSnackBar();
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Failed to add location. Please try again.'),
-            backgroundColor: Colors.red,
-          ),
-        );
+        AppToast.error(context, 'Failed to add location. Please try again.');
       }
     }
   }
@@ -308,26 +283,11 @@ class _MapScreenState extends ConsumerState<MapScreen>
     if (!mounted || addedLocations.isEmpty) return;
 
     final count = addedLocations.length;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          count == 1
-              ? 'Added ${addedLocations.first.name} to your trip'
-              : 'Added $count locations to your trip',
-          style: TextStyle(color: Theme.of(context).colorScheme.onPrimary),
-        ),
-        backgroundColor: Theme.of(context).colorScheme.primary,
-        behavior: SnackBarBehavior.floating,
-        action: SnackBarAction(
-          textColor: Theme.of(context).colorScheme.onPrimary,
-          label: 'Undo',
-          onPressed: () {
-            for (final l in addedLocations) {
-              ref.read(tripProvider.notifier).removeLocation(l.id);
-            }
-          },
-        ),
-      ),
+    AppToast.success(
+      context,
+      count == 1
+          ? 'Added ${addedLocations.first.name} to your trip'
+          : 'Added $count locations to your trip',
     );
 
     setState(() {
@@ -1277,23 +1237,16 @@ class _MapScreenState extends ConsumerState<MapScreen>
         } else {
           // Location service returned null (likely permission denied)
           if (!mounted) return;
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Location permission denied. Please enable it to use this feature.'),
-              backgroundColor: Colors.orange,
-            ),
+          AppToast.warning(
+            context,
+            'Location permission denied. Please enable it to use this feature.',
           );
           return;
         }
       } catch (e) {
         debugPrint("Failed to get current location on demand: $e");
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Failed to get your location. Please try again.'),
-            backgroundColor: Colors.red,
-          ),
-        );
+        AppToast.error(context, 'Failed to get your location. Please try again.');
         return;
       }
     }
@@ -1317,13 +1270,9 @@ class _MapScreenState extends ConsumerState<MapScreen>
       });
       ref.read(mapUIStateProvider.notifier).clearHighlights();
     } else if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-              'Current location is not available. Please enable location services.'), // Uses theme colors
-          backgroundColor: Colors.orange,
-          behavior: SnackBarBehavior.floating,
-        ),
+      AppToast.warning(
+        context,
+        'Current location is not available. Please enable location services.',
       );
     }
   }

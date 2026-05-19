@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:voyza/screens/terms_screen.dart';
 import '../providers/auth_provider.dart';
+import '../widgets/app_toast.dart';
 
 class SignupScreen extends ConsumerStatefulWidget {
   const SignupScreen({super.key});
@@ -30,9 +31,8 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
             _passwordController.text,
           );
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Success! Please check your email to verify.')),
-        );
+        AppToast.success(
+            context, 'Success! Please check your email to verify.');
         // Pop back to the login screen after successful sign-up
         if (Navigator.canPop(context)) {
           Navigator.of(context).pop();
@@ -40,17 +40,11 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
       }
     } on AuthException catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(e.message), backgroundColor: Colors.red),
-        );
+        AppToast.error(context, e.message);
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-              content: Text('Unexpected error occurred'),
-              backgroundColor: Colors.red),
-        );
+        AppToast.error(context, 'Unexpected error occurred');
       }
     } finally {
       if (mounted) setState(() => _isLoading = false);

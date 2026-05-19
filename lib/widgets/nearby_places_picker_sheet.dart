@@ -26,11 +26,37 @@ class NearbyPlacesPickerSheet extends StatefulWidget {
 
 class _NearbyPlacesPickerSheetState extends State<NearbyPlacesPickerSheet> {
   final Set<String> _selected = {};
+  final TextEditingController _searchController = TextEditingController();
+  String _query = '';
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  /// Case-insensitive substring match on name, vicinity, and humanized
+  /// primary type — same fields that feed the tile's title/subtitle so
+  /// the user can filter by what they actually see on screen.
+  List<NearbyPlace> _filtered(List<NearbyPlace> source) {
+    if (_query.isEmpty) return source;
+    final q = _query.toLowerCase();
+    return source.where((p) {
+      if (p.name.toLowerCase().contains(q)) return true;
+      if (p.vicinity.toLowerCase().contains(q)) return true;
+      final type = p.primaryType;
+      if (type != null && _humanizeType(type).toLowerCase().contains(q)) {
+        return true;
+      }
+      return false;
+    }).toList();
+  }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final places = widget.places;
+    final visible = _filtered(places);
     return DraggableScrollableSheet(
       initialChildSize: 0.6,
       minChildSize: 0.4,
@@ -87,25 +113,89 @@ class _NearbyPlacesPickerSheetState extends State<NearbyPlacesPickerSheet> {
                 ],
               ),
             ),
+            if (places.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
+                child: TextField(
+                  controller: _searchController,
+                  onChanged: (v) => setState(() => _query = v.trim()),
+                  decoration: InputDecoration(
+                    isDense: true,
+                    hintText: 'Search this list…',
+                    prefixIcon: const Icon(Icons.search, size: 20),
+                    suffixIcon: _query.isEmpty
+                        ? null
+                        : IconButton(
+                            tooltip: 'Clear',
+                            icon: const Icon(Icons.clear, size: 18),
+                            onPressed: () {
+                              _searchController.clear();
+                              setState(() => _query = '');
+                            },
+                          ),
+                    contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 10),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: BorderSide(
+                        color: theme.dividerColor.withValues(alpha: 0.4),
+                      ),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: BorderSide(
+                        color: theme.dividerColor.withValues(alpha: 0.4),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
             const Divider(height: 1),
             Expanded(
               child: places.isEmpty
                   ? _buildEmpty(context)
-                  : ListView.separated(
-                      controller: scrollController,
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 8),
-                      itemCount: places.length,
-                      separatorBuilder: (_, __) => const SizedBox(height: 4),
-                      itemBuilder: (context, i) =>
-                          _buildPlaceTile(context, places[i]),
-                    ),
+                  : visible.isEmpty
+                      ? _buildNoMatches(context)
+                      : ListView.separated(
+                          controller: scrollController,
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 8),
+                          itemCount: visible.length,
+                          separatorBuilder: (_, __) =>
+                              const SizedBox(height: 4),
+                          itemBuilder: (context, i) =>
+                              _buildPlaceTile(context, visible[i]),
+                        ),
             ),
             if (places.isNotEmpty)
               _buildBottomBar(context, scrollController),
           ],
         );
       },
+    );
+  }
+
+  Widget _buildNoMatches(BuildContext context) {
+    final theme = Theme.of(context);
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.search_off,
+                size: 40, color: theme.colorScheme.onSurfaceVariant),
+            const SizedBox(height: 12),
+            Text(
+              'No places match "$_query".',
+              textAlign: TextAlign.center,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 

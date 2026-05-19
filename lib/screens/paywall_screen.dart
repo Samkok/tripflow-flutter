@@ -6,6 +6,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../providers/subscription_provider.dart';
 import '../services/revenuecat_service.dart';
 import '../services/supabase_service.dart';
+import '../widgets/app_toast.dart';
 
 /// Reasons the paywall might be shown — drives the headline copy.
 enum PaywallTrigger {
@@ -673,12 +674,7 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
       Navigator.of(context).pop(true);
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Welcome to VoyZa Pro!'),
-            backgroundColor: Colors.green,
-          ),
-        );
+        AppToast.success(context, 'Welcome to VoyZa Pro!');
       }
     }
   }
@@ -692,19 +688,11 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
     setState(() => _isLoading = false);
 
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            success
-                ? 'Purchases restored successfully!'
-                : 'No purchases found to restore.',
-          ),
-          backgroundColor: success ? Colors.green : Colors.orange,
-        ),
-      );
-
       if (success) {
+        AppToast.success(context, 'Purchases restored successfully!');
         Navigator.of(context).pop(true);
+      } else {
+        AppToast.warning(context, 'No purchases found to restore.');
       }
     }
   }

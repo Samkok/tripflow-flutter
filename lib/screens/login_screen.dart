@@ -6,6 +6,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../providers/auth_provider.dart';
 import '../providers/subscription_provider.dart';
 import '../services/auth_service.dart';
+import '../widgets/app_toast.dart';
 import '../widgets/sync_confirmation_dialog.dart';
 
 class LoginScreen extends ConsumerStatefulWidget {
@@ -67,11 +68,9 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
         if (shouldSync == true) {
           await ref.read(authServiceProvider).syncLocalLocations();
           if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('Successfully synced $localLocationCount location${localLocationCount != 1 ? 's' : ''}!'),
-                backgroundColor: Colors.green,
-              ),
+            AppToast.success(
+              context,
+              'Successfully synced $localLocationCount location${localLocationCount != 1 ? 's' : ''}!',
             );
           }
         } else {
@@ -99,17 +98,11 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
       }
     } on AuthException catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(e.message), backgroundColor: Colors.red),
-        );
+        AppToast.error(context, e.message);
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-              content: Text('Unexpected error occurred'),
-              backgroundColor: Colors.red),
-        );
+        AppToast.error(context, 'Unexpected error occurred');
       }
     } finally {
       if (mounted) setState(() => _isLoading = false);

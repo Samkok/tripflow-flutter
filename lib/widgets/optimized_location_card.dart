@@ -13,6 +13,7 @@ import 'package:voyza/widgets/location_detail_sheet.dart';
 import 'package:voyza/widgets/location_photo_gallery.dart';
 import 'package:voyza/utils/date_picker_utils.dart';
 import 'package:voyza/utils/trip_date_validator.dart';
+import 'package:voyza/widgets/app_toast.dart';
 
 /// Location card displayed inside the trip-plan bottom sheet.
 ///
@@ -496,12 +497,9 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
       icon: const Icon(Icons.more_vert, size: 22),
       onSelected: (value) {
         if (!hasWriteAccess && value != 'copy') {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text(
-                  'You don\'t have permission to modify locations in this trip.'),
-              backgroundColor: Colors.orange,
-            ),
+          AppToast.warning(
+            context,
+            'You don\'t have permission to modify locations in this trip.',
           );
           return;
         }
@@ -644,22 +642,7 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
                     .read(tripProvider.notifier)
                     .removeLocationsFromTrip([location.id]);
                 if (!context.mounted) return;
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text('Removed ${location.name} from trip'),
-                    behavior: SnackBarBehavior.floating,
-                    duration: const Duration(seconds: 2),
-                    action: SnackBarAction(
-                      label: 'Undo',
-                      onPressed: () {
-                        ref.read(tripProvider.notifier).addLocationsToTrip(
-                          [location.id],
-                          activeTripId,
-                        );
-                      },
-                    ),
-                  ),
-                );
+                AppToast.success(context, 'Removed ${location.name} from trip');
               },
               child: const Text('Remove'),
             ),
@@ -731,13 +714,7 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
               onPressed: () {
                 Navigator.of(dialogContext).pop();
                 ref.read(tripProvider.notifier).removeLocation(location.id);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text('Deleted ${location.name}'),
-                    backgroundColor: Theme.of(context).colorScheme.error,
-                    behavior: SnackBarBehavior.floating,
-                  ),
-                );
+                AppToast.error(context, 'Deleted ${location.name}');
               },
               style: ElevatedButton.styleFrom(
                 backgroundColor: Theme.of(context).colorScheme.error,

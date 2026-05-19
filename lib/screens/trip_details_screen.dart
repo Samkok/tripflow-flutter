@@ -12,6 +12,7 @@ import 'package:voyza/providers/trip_collaborator_provider.dart';
 import 'package:voyza/models/saved_location.dart';
 import 'package:voyza/services/places_service.dart';
 import 'package:voyza/providers/auth_provider.dart';
+import 'package:voyza/widgets/app_toast.dart';
 import 'package:voyza/widgets/collaborators_sheet.dart';
 import 'package:voyza/widgets/google_maps_url_dialog.dart';
 import 'package:voyza/services/location_add_service.dart';
@@ -45,8 +46,12 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
   final Set<String> _selectedIds = {};
   List<SavedLocation> _currentTripLocations = [];
 
-  // Per-location expand state for the photo dropdown.
-  final Set<String> _photoExpandedIds = {};
+  // Per-location COLLAPSE state for the photo dropdown. Tracks the
+  // ids of cards the user has explicitly collapsed; everything else is
+  // expanded by default. (Previously this tracked expanded ids, so the
+  // default was collapsed — flipping the polarity here is the whole
+  // change needed to show photos out of the box.)
+  final Set<String> _photoCollapsedIds = {};
 
   void _enterSelectionMode(String id) {
     setState(() {
@@ -162,15 +167,11 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
       ref.read(tripProvider.notifier).clearTrip();
       await ref.read(localActiveTripIdProvider.notifier).setActiveTrip(widget.trip.id);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('${widget.trip.name} is now active')),
-        );
+        AppToast.success(context, '${widget.trip.name} is now active');
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Could not activate trip. Please try again.')),
-        );
+        AppToast.error(context, 'Could not activate trip. Please try again.');
       }
     }
   }
@@ -179,15 +180,11 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
     try {
       await ref.read(localActiveTripIdProvider.notifier).deactivateTrip();
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Trip deactivated')),
-        );
+        AppToast.info(context, 'Trip deactivated');
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Could not deactivate trip. Please try again.')),
-        );
+        AppToast.error(context, 'Could not deactivate trip. Please try again.');
       }
     }
   }
@@ -943,31 +940,19 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
   /// Backend RLS still enforces auth.
   Future<void> _moveLocationToDate(
       SavedLocation location, DateTime newDay) async {
-    final messenger = ScaffoldMessenger.of(context);
     try {
       await ref.read(locationRepositoryProvider).updateLocation(
         location.id,
         {'scheduled_date': newDay.toIso8601String()},
       );
       if (!mounted) return;
-      messenger.showSnackBar(
-        SnackBar(
-          content: Text(
-            'Moved ${location.name} to ${DateFormat('MMM d').format(newDay)}',
-          ),
-          behavior: SnackBarBehavior.floating,
-          duration: const Duration(seconds: 2),
-        ),
+      AppToast.success(
+        context,
+        'Moved ${location.name} to ${DateFormat('MMM d').format(newDay)}',
       );
     } catch (e) {
       if (!mounted) return;
-      messenger.showSnackBar(
-        SnackBar(
-          content: Text('Could not move location: $e'),
-          backgroundColor: Colors.red,
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
+      AppToast.error(context, 'Could not move location: $e');
     }
   }
 
@@ -981,15 +966,17 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
     final isSelected = _selectedIds.contains(location.id);
     final photoRefs = location.effectivePhotoReferences;
     final hasPhotos = photoRefs.isNotEmpty;
-    final isExpanded = _photoExpandedIds.contains(location.id);
+    // Expanded by default — collapse only if the user explicitly
+    // hides the gallery (their id ends up in [_photoCollapsedIds]).
+    final isExpanded = !_photoCollapsedIds.contains(location.id);
     final showDragHandle = hasWriteAccess && !_selectionMode;
 
     void togglePhotos() {
       setState(() {
         if (isExpanded) {
-          _photoExpandedIds.remove(location.id);
+          _photoCollapsedIds.add(location.id);
         } else {
-          _photoExpandedIds.add(location.id);
+          _photoCollapsedIds.remove(location.id);
         }
       });
     }
@@ -1557,12 +1544,7 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
 
     if (!GoogleMapsUrlExtractor.isValidGoogleMapsUrl(text)) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Not a valid Google Maps link'),
-            backgroundColor: Colors.orange,
-          ),
-        );
+        AppToast.warning(context, 'Not a valid Google Maps link');
       }
       return;
     }
@@ -1624,12 +1606,7 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
       if (placeDetails == null) {
         closeLoading();
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Could not decode location from URL'),
-              backgroundColor: Colors.red,
-            ),
-          );
+          AppToast.error(context, 'Could not decode location from URL');
         }
         return;
       }
@@ -1640,12 +1617,9 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
       if (!hasWriteAccess) {
         closeLoading();
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text(
-                  'You don\'t have permission to add locations to this trip.'),
-              backgroundColor: Colors.orange,
-            ),
+          AppToast.warning(
+            context,
+            'You don\'t have permission to add locations to this trip.',
           );
         }
         return;
@@ -1687,22 +1661,12 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
       if (!mounted) return;
       if (!added) return;
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Added ${placeDetails.name} to trip'),
-          backgroundColor: Colors.green,
-        ),
-      );
+      AppToast.success(context, 'Added ${placeDetails.name} to trip');
       Navigator.pop(context); // Close search sheet
     } catch (e) {
       closeLoading();
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to decode URL: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
+        AppToast.error(context, 'Failed to decode URL: $e');
       }
     } finally {
       if (mounted) setState(() => _isPastingUrl = false);
@@ -1714,11 +1678,9 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
     final hasWriteAccess = await ref.read(hasWriteAccessProvider(widget.tripId).future);
     if (!hasWriteAccess) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('You don\'t have permission to add locations to this trip.'),
-            backgroundColor: Colors.orange,
-          ),
+        AppToast.warning(
+          context,
+          'You don\'t have permission to add locations to this trip.',
         );
       }
       return;
@@ -1753,12 +1715,7 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
       if (placeDetails == null) {
         closeLoading();
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Failed to get location details'),
-              backgroundColor: Colors.red,
-            ),
-          );
+          AppToast.error(context, 'Failed to get location details');
         }
         return;
       }
@@ -1800,22 +1757,12 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
       if (!mounted) return;
       if (!added) return;
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Added ${placeDetails.name} to trip'),
-          backgroundColor: Colors.green,
-        ),
-      );
+      AppToast.success(context, 'Added ${placeDetails.name} to trip');
       Navigator.pop(context); // Close search sheet
     } catch (e) {
       closeLoading();
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
+        AppToast.error(context, 'Error: $e');
       }
     }
   }
@@ -2070,20 +2017,10 @@ class _ExistingLocationsSheetState
         locationCountryCode: details?.countryCode,
       );
       if (!added || !mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Added ${location.name} to trip'),
-          backgroundColor: Colors.green,
-        ),
-      );
+      AppToast.success(context, 'Added ${location.name} to trip');
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to add location: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
+        AppToast.error(context, 'Failed to add location: $e');
       }
     } finally {
       if (mounted) setState(() => _adding.remove(location.id));

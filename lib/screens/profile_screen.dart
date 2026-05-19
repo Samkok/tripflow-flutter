@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:voyza/core/theme.dart';
 import 'package:voyza/models/user_profile.dart';
 import 'package:voyza/providers/auth_provider.dart';
+import 'package:voyza/widgets/app_toast.dart';
 
 // Provider to fetch and cache the current user's profile
 final userProfileProvider = FutureProvider.autoDispose<UserProfile?>((ref) async {
@@ -72,18 +73,12 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
 
       if (mounted) {
         setState(() => _hasChanges = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Profile updated successfully')),
-        );
+        AppToast.success(context, 'Profile updated successfully');
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Failed to update profile. Please try again.'),
-            backgroundColor: Colors.red,
-          ),
-        );
+        AppToast.error(
+            context, 'Failed to update profile. Please try again.');
       }
     } finally {
       if (mounted) setState(() => _isSaving = false);

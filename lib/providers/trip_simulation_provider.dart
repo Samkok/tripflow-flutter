@@ -49,6 +49,16 @@ final effectiveTripStartTimeProvider = Provider<DateTime>((ref) {
 /// already excludes them from the route, so the leg-vs-stop indices stay
 /// aligned with [TripState.legDetails].
 final tripSimulationProvider = Provider<TimingSimulationResult?>((ref) {
+  // Past dates are read-only and the day's hours no longer matter.
+  // Skip the simulation entirely so warnings/badges/sheets don't appear
+  // for trips the user is just reviewing.
+  final selectedDate = ref.watch(selectedDateProvider);
+  final now = DateTime.now();
+  final today = DateTime(now.year, now.month, now.day);
+  final selectedDay =
+      DateTime(selectedDate.year, selectedDate.month, selectedDate.day);
+  if (selectedDay.isBefore(today)) return null;
+
   final ordered = ref.watch(
       tripProvider.select((s) => s.optimizedLocationsForSelectedDate));
   if (ordered.isEmpty) return null;
@@ -65,6 +75,17 @@ final tripSimulationProvider = Provider<TimingSimulationResult?>((ref) {
     legDetails: legDetails,
   );
 });
+
+/// Stop IDs whose timing warning the user has explicitly accepted via
+/// "Go anyway" in [TimingWarningsSheet]. The sheet-trigger listener
+/// filters these out before deciding whether to re-open the sheet —
+/// without this filter the re-optimize call inside `_confirm` would
+/// land with the same warnings still present and the sheet would
+/// re-open immediately, looping. Cleared when the user manually taps
+/// the Optimize button (a fresh planning attempt should start with no
+/// prior acknowledgements).
+final acknowledgedTimingWarningsProvider =
+    StateProvider<Set<String>>((ref) => const {});
 
 /// Per-stop warnings indexed by `locationId` for cheap O(1) lookup from
 /// [OptimizedLocationCard]'s badge. Empty map when no simulation has run

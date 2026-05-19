@@ -12,6 +12,7 @@ import '../providers/trip_collaborator_provider.dart';
 import '../services/places_service.dart';
 import '../services/location_add_service.dart';
 import '../core/theme.dart';
+import 'app_toast.dart';
 import 'google_maps_url_dialog.dart';
 
 final searchQueryProvider = StateProvider.autoDispose<String>((ref) => '');
@@ -308,12 +309,7 @@ class _SearchWidgetState extends ConsumerState<SearchWidget> {
 
     if (!GoogleMapsUrlExtractor.isValidGoogleMapsUrl(text)) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Not a valid Google Maps link'),
-            backgroundColor: Colors.orange,
-          ),
-        );
+        AppToast.warning(context, 'Not a valid Google Maps link');
       }
       return;
     }
@@ -353,12 +349,7 @@ class _SearchWidgetState extends ConsumerState<SearchWidget> {
 
       if (placeDetails == null || !mounted) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Could not decode location from URL'),
-              backgroundColor: Colors.red,
-            ),
-          );
+          AppToast.error(context, 'Could not decode location from URL');
         }
         return;
       }
@@ -368,12 +359,9 @@ class _SearchWidgetState extends ConsumerState<SearchWidget> {
           await ref.read(hasActiveTripWriteAccessProvider.future);
       if (!hasWriteAccess) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text(
-                  'You don\'t have permission to add locations to this trip.'),
-              backgroundColor: Colors.orange,
-            ),
+          AppToast.warning(
+            context,
+            'You don\'t have permission to add locations to this trip.',
           );
         }
         return;
@@ -384,12 +372,7 @@ class _SearchWidgetState extends ConsumerState<SearchWidget> {
       final today = DateTime(now.year, now.month, now.day);
       if (selectedDate.isBefore(today)) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Cannot add locations to a past date.'),
-              backgroundColor: Colors.orange,
-            ),
-          );
+          AppToast.warning(context, 'Cannot add locations to a past date.');
         }
         return;
       }
@@ -422,22 +405,11 @@ class _SearchWidgetState extends ConsumerState<SearchWidget> {
       widget.focusNode?.unfocus();
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Added ${location.name} to your trip'),
-            backgroundColor: AppTheme.primaryColor,
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
+        AppToast.success(context, 'Added ${location.name} to your trip');
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to decode URL: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
+        AppToast.error(context, 'Failed to decode URL: $e');
       }
     } finally {
       if (mounted) setState(() => _isPastingUrl = false);
@@ -449,11 +421,10 @@ class _SearchWidgetState extends ConsumerState<SearchWidget> {
     final hasWriteAccess = await ref.read(hasActiveTripWriteAccessProvider.future);
 
     if (!hasWriteAccess) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('You don\'t have permission to add locations to this trip.'),
-          backgroundColor: Colors.orange,
-        ),
+      if (!mounted) return;
+      AppToast.warning(
+        context,
+        'You don\'t have permission to add locations to this trip.',
       );
       return;
     }
@@ -463,12 +434,8 @@ class _SearchWidgetState extends ConsumerState<SearchWidget> {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
     if (selectedDate.isBefore(today)) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Cannot add locations to a past date.'),
-          backgroundColor: Colors.orange,
-        ),
-      );
+      if (!mounted) return;
+      AppToast.warning(context, 'Cannot add locations to a past date.');
       return;
     }
 
@@ -506,15 +473,9 @@ class _SearchWidgetState extends ConsumerState<SearchWidget> {
       // Dismiss the keyboard
       widget.focusNode?.unfocus();
 
-      // Show snackbar
+      // Show toast
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Added ${location.name} to your trip'),
-            backgroundColor: AppTheme.primaryColor,
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
+        AppToast.success(context, 'Added ${location.name} to your trip');
       }
     }
   }

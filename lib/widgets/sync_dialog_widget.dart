@@ -4,6 +4,7 @@ import '../providers/sync_provider.dart';
 import '../providers/anonymous_locations_provider.dart';
 import '../providers/location_provider.dart';
 import '../services/storage_service.dart';
+import 'app_toast.dart';
 
 /// Modal dialog shown to anonymous users when they log in
 class SyncAnonymousLocationsDialog extends ConsumerStatefulWidget {
@@ -123,17 +124,13 @@ class _SyncAnonymousLocationsDialogState
       ref.read(userSyncChoiceProvider.notifier).state = true;
       ref.read(syncDecisionProvider.notifier).state = true;
 
-      if (mounted) {
+      if (context.mounted) {
+        AppToast.success(
+          context,
+          'Synced ${result.uploadedCount} location(s). Skipped ${result.skippedCount} duplicate(s).',
+        );
         Navigator.of(context).pop();
         widget.onSyncComplete();
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'Synced ${result.uploadedCount} location(s). Skipped ${result.skippedCount} duplicate(s).',
-            ),
-            backgroundColor: Colors.green,
-          ),
-        );
       }
     } catch (e) {
       ref.read(syncErrorProvider.notifier).state =

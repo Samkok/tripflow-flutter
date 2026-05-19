@@ -17,6 +17,7 @@ import 'package:voyza/utils/external_app_links.dart';
 import 'package:voyza/utils/trip_date_validator.dart';
 
 import '../core/theme.dart';
+import 'app_toast.dart';
 
 class LocationDetailSheet extends ConsumerWidget {
   final LocationModel location;
@@ -544,7 +545,6 @@ class LocationDetailSheet extends ConsumerWidget {
     if (confirmed != true) return;
     if (!context.mounted) return;
 
-    final messenger = ScaffoldMessenger.of(context);
     final navigator = Navigator.of(context);
     try {
       await ref
@@ -554,22 +554,12 @@ class LocationDetailSheet extends ConsumerWidget {
       // Close the detail sheet — the location no longer belongs to the
       // trip being viewed, so showing it here would be misleading.
       if (navigator.canPop()) navigator.pop();
-      messenger.showSnackBar(
-        SnackBar(
-          content: Text('Removed ${loc.name} from trip'),
-          behavior: SnackBarBehavior.floating,
-          duration: const Duration(seconds: 2),
-        ),
-      );
+      if (context.mounted) {
+        AppToast.success(context, 'Removed ${loc.name} from trip');
+      }
     } catch (e) {
       if (!context.mounted) return;
-      messenger.showSnackBar(
-        SnackBar(
-          content: Text('Could not remove from trip: $e'),
-          backgroundColor: Colors.red,
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
+      AppToast.error(context, 'Could not remove from trip: $e');
     }
   }
 
@@ -842,20 +832,48 @@ class LocationDetailSheet extends ConsumerWidget {
           'When should the optimizer treat this place as closed?\n\n'
           '"Never" is useful for accommodations or stops with no closing time.',
         ),
+        // Default `actions:` go through OverflowBar, which lays children at
+        // their intrinsic width and wraps to a column when they don't fit —
+        // with three labels here that always happens. We instead hand back a
+        // single Row with Expanded children so the three buttons share the
+        // dialog width evenly. FittedBox scales any label down if a
+        // longer translation would still bust the constraint.
+        actionsPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () =>
-                Navigator.of(ctx).pop(_OverrideAction.never),
-            child: const Text('Never closes'),
-          ),
-          FilledButton(
-            onPressed: () =>
-                Navigator.of(ctx).pop(_OverrideAction.pickTime),
-            child: const Text('Pick a time'),
+          Row(
+            children: [
+              Expanded(
+                child: TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(),
+                  child: const FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Text('Cancel'),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: TextButton(
+                  onPressed: () =>
+                      Navigator.of(ctx).pop(_OverrideAction.never),
+                  child: const FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Text('Never closes'),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: FilledButton(
+                  onPressed: () =>
+                      Navigator.of(ctx).pop(_OverrideAction.pickTime),
+                  child: const FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Text('Pick a time'),
+                  ),
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -894,28 +912,20 @@ class LocationDetailSheet extends ConsumerWidget {
     final placeId = loc.placeId;
     if (placeId == null || placeId.isEmpty) return;
 
-    final messenger = ScaffoldMessenger.of(context);
-    messenger.showSnackBar(
-      const SnackBar(
-        content: Text('Refreshing hours…'),
-        duration: Duration(seconds: 1),
-        behavior: SnackBarBehavior.floating,
-      ),
+    AppToast.info(
+      context,
+      'Refreshing hours…',
+      duration: const Duration(seconds: 1),
     );
     final ok = await ref
         .read(tripProvider.notifier)
         .refreshLocationHours(loc.id, placeId);
     if (!context.mounted) return;
-    messenger.hideCurrentSnackBar();
-    messenger.showSnackBar(
-      SnackBar(
-        content: Text(ok
-            ? 'Hours updated'
-            : 'Could not refresh hours — try again later'),
-        behavior: SnackBarBehavior.floating,
-        duration: const Duration(seconds: 2),
-      ),
-    );
+    if (ok) {
+      AppToast.success(context, 'Hours updated');
+    } else {
+      AppToast.error(context, 'Could not refresh hours — try again later');
+    }
   }
 
   // ──────────────────────────────────────────────────────────────────────
@@ -1149,7 +1159,6 @@ class LocationDetailSheet extends ConsumerWidget {
     final lastDate =
         lastCandidates.reduce((a, b) => a.isAfter(b) ? a : b);
 
-    final messenger = ScaffoldMessenger.of(context);
     final picked = await showDateRangePicker(
       context: context,
       firstDate: firstDate,
@@ -1163,13 +1172,7 @@ class LocationDetailSheet extends ConsumerWidget {
       await _writeDateRange(ref, loc.id, picked.start, picked.end);
     } catch (e) {
       if (!context.mounted) return;
-      messenger.showSnackBar(
-        SnackBar(
-          content: Text('Could not save range: $e'),
-          backgroundColor: Colors.red,
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
+      AppToast.error(context, 'Could not save range: $e');
     }
   }
 
@@ -1180,29 +1183,17 @@ class LocationDetailSheet extends ConsumerWidget {
     DateTime tripStart,
     DateTime tripEnd,
   ) async {
-    final messenger = ScaffoldMessenger.of(context);
     try {
       await _writeDateRange(ref, loc.id, tripStart, tripEnd);
       if (!context.mounted) return;
       final df = DateFormat('MMM d');
-      messenger.showSnackBar(
-        SnackBar(
-          content: Text(
-            'Set to entire trip · ${df.format(tripStart)} – ${df.format(tripEnd)}',
-          ),
-          behavior: SnackBarBehavior.floating,
-          duration: const Duration(seconds: 2),
-        ),
+      AppToast.success(
+        context,
+        'Set to entire trip · ${df.format(tripStart)} – ${df.format(tripEnd)}',
       );
     } catch (e) {
       if (!context.mounted) return;
-      messenger.showSnackBar(
-        SnackBar(
-          content: Text('Could not apply range: $e'),
-          backgroundColor: Colors.red,
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
+      AppToast.error(context, 'Could not apply range: $e');
     }
   }
 
@@ -1216,13 +1207,7 @@ class LocationDetailSheet extends ConsumerWidget {
       await _writeDateRange(ref, loc.id, start, null);
     } catch (e) {
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Could not clear range: $e'),
-          backgroundColor: Colors.red,
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
+      AppToast.error(context, 'Could not clear range: $e');
     }
   }
 
@@ -1662,14 +1647,9 @@ class LocationDetailSheet extends ConsumerWidget {
                 // trip, not the trip being viewed in trip details).
                 ref.read(locationRepositoryProvider).deleteLocation(location.id);
 
-                // Show a confirmation snackbar
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text('Deleted ${location.name}'),
-                    backgroundColor: Theme.of(context).colorScheme.error,
-                    behavior: SnackBarBehavior.floating,
-                  ),
-                );
+                if (context.mounted) {
+                  AppToast.error(context, 'Deleted ${location.name}');
+                }
               },
               style: ElevatedButton.styleFrom(
                 backgroundColor: Theme.of(context).colorScheme.error,

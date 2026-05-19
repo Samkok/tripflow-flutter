@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:voyza/providers/auth_provider.dart';
 import 'package:voyza/services/supabase_service.dart';
+import 'package:voyza/widgets/app_toast.dart';
 
 class SecurityScreen extends ConsumerStatefulWidget {
   const SecurityScreen({super.key});
@@ -144,34 +145,21 @@ class _SecurityScreenState extends ConsumerState<SecurityScreen> {
 
       if (!mounted) return;
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            signOutOthers == true
-                ? 'Password changed and other devices signed out.'
-                : 'Password changed successfully.',
-          ),
-          backgroundColor: Colors.green,
-        ),
+      AppToast.success(
+        context,
+        signOutOthers == true
+            ? 'Password changed and other devices signed out.'
+            : 'Password changed successfully.',
       );
       Navigator.of(context).pop();
     } on AuthException catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(_friendlyAuthError(e)),
-            backgroundColor: Colors.red,
-          ),
-        );
+        AppToast.error(context, _friendlyAuthError(e));
       }
     } catch (_) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Failed to change password. Please try again.'),
-            backgroundColor: Colors.red,
-          ),
-        );
+        AppToast.error(
+            context, 'Failed to change password. Please try again.');
       }
     } finally {
       if (mounted) setState(() => _step2Loading = false);

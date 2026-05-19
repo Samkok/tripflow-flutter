@@ -13,6 +13,7 @@ import 'package:voyza/screens/trip_details_screen.dart';
 import 'package:voyza/services/subscription_limit_service.dart';
 import 'package:voyza/utils/countries.dart';
 import 'package:voyza/utils/trip_date_validator.dart';
+import 'package:voyza/widgets/app_toast.dart';
 import 'package:voyza/widgets/country_picker_sheet.dart';
 import 'package:voyza/widgets/trip_skeleton.dart';
 
@@ -190,9 +191,7 @@ class _TripScreenState extends ConsumerState<TripScreen> {
 
   Future<void> _createTrip() async {
     if (_nameController.text.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please enter a trip name')),
-      );
+      AppToast.warning(context, 'Please enter a trip name');
       return;
     }
 
@@ -239,8 +238,9 @@ class _TripScreenState extends ConsumerState<TripScreen> {
     } catch (e) {
       debugPrint('Error creating trip: $e');
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Could not create trip. Please check your connection and try again.')),
+        AppToast.error(
+          context,
+          'Could not create trip. Please check your connection and try again.',
         );
       }
     }
@@ -255,16 +255,12 @@ class _TripScreenState extends ConsumerState<TripScreen> {
       await ref.read(localActiveTripIdProvider.notifier).setActiveTrip(trip.id);
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('${trip.name} is now active')),
-        );
+        AppToast.success(context, '${trip.name} is now active');
       }
     } catch (e) {
       debugPrint('Error setting active trip: $e');
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Could not activate trip. Please try again.')),
-        );
+        AppToast.error(context, 'Could not activate trip. Please try again.');
       }
     }
   }
@@ -285,21 +281,19 @@ class _TripScreenState extends ConsumerState<TripScreen> {
       ref.invalidate(userTripsProvider);
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              deleteLocations
-                  ? 'Trip and its locations deleted'
-                  : 'Trip deleted. Locations kept.',
-            ),
-          ),
+        AppToast.success(
+          context,
+          deleteLocations
+              ? 'Trip and its locations deleted'
+              : 'Trip deleted. Locations kept.',
         );
       }
     } catch (e) {
       debugPrint('Error deleting trip: $e');
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Could not delete trip. Please check your connection and try again.')),
+        AppToast.error(
+          context,
+          'Could not delete trip. Please check your connection and try again.',
         );
       }
     }
@@ -673,7 +667,17 @@ class _TripScreenState extends ConsumerState<TripScreen> {
             error: (_, __) => const SliverToBoxAdapter(child: SizedBox.shrink()),
           ),
 
-          const SliverPadding(padding: EdgeInsets.symmetric(vertical: 50)),
+          // Clear the floating bottom tab bar (~70px + safe-area inset)
+          // — MainScreen sets `extendBody: true`, so the list scrolls
+          // behind the bar and the last card otherwise tucks under it.
+          // The previous 50px wasn't enough once the safe-area inset
+          // was included, especially on iOS devices with a home
+          // indicator.
+          SliverPadding(
+            padding: EdgeInsets.only(
+              bottom: 90 + MediaQuery.of(context).padding.bottom,
+            ),
+          ),
         ],
         ),
       ),
@@ -1068,6 +1072,27 @@ class _TripScreenState extends ConsumerState<TripScreen> {
     final localActiveTripId = ref.watch(localActiveTripIdProvider);
     final isActive = localActiveTripId == trip.id;
 
+    // Derive locationCount + an effective date range the same way the
+    // owner card does so shared trips read with the same metadata.
+    // Prefer the trip's explicit start/end; fall back to the earliest /
+    // latest scheduled date among the trip's locations when null.
+    final locationsAsync = ref.watch(savedLocationsProvider);
+    final tripLocations = locationsAsync.maybeWhen(
+      data: (all) => all.where((l) => l.tripId == trip.id).toList(),
+      orElse: () => const [],
+    );
+    final locationCount = tripLocations.length;
+    DateTime? startDate = trip.startDate;
+    DateTime? endDate = trip.endDate;
+    if (startDate == null && endDate == null && tripLocations.isNotEmpty) {
+      final dates = tripLocations
+          .map((loc) => loc.scheduledDate ?? loc.createdAt)
+          .toList()
+        ..sort();
+      startDate = dates.first;
+      endDate = dates.last;
+    }
+
     return GestureDetector(
       onTap: () {
         Navigator.push(
@@ -1194,6 +1219,80 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                             overflow: TextOverflow.ellipsis,
                           ),
                         ],
+
+                        // Location count + date range — same chrome as
+                        // the owner card so shared trips read with
+                        // identical metadata.
+                        const SizedBox(height: 8),
+                        Row(
+                          children: [
+                            Icon(
+                              Icons.location_on,
+                              size: 14,
+                              color: Theme.of(context).colorScheme.primary,
+                            ),
+                            const SizedBox(width: 6),
+                            Text(
+                              '$locationCount ${locationCount == 1 ? 'location' : 'locations'}',
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .bodySmall
+                                  ?.copyWith(fontWeight: FontWeight.w500),
+                            ),
+                          ],
+                        ),
+                        if (startDate != null && endDate != null) ...[
+                          const SizedBox(height: 4),
+                          Row(
+                            children: [
+                              Icon(
+                                Icons.calendar_today,
+                                size: 14,
+                                color: Theme.of(context).colorScheme.primary,
+                              ),
+                              const SizedBox(width: 6),
+                              Expanded(
+                                child: Builder(builder: (context) {
+                                  final s = DateTime(startDate!.year,
+                                      startDate.month, startDate.day);
+                                  final e = DateTime(endDate!.year,
+                                      endDate.month, endDate.day);
+                                  final dayCount =
+                                      e.difference(s).inDays + 1;
+                                  final dateText = startDate == endDate
+                                      ? DateFormat('MMM d, y')
+                                          .format(startDate)
+                                      : '${DateFormat('MMM d').format(startDate)} - ${DateFormat('MMM d, y').format(endDate)}';
+                                  return Text.rich(
+                                    TextSpan(
+                                      children: [
+                                        TextSpan(text: dateText),
+                                        TextSpan(
+                                          text:
+                                              '  ·  $dayCount day${dayCount == 1 ? '' : 's'}',
+                                          style: TextStyle(
+                                            fontWeight: FontWeight.w600,
+                                            color: Theme.of(context)
+                                                .colorScheme
+                                                .primary,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .bodySmall
+                                        ?.copyWith(
+                                            fontWeight: FontWeight.w500),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  );
+                                }),
+                              ),
+                            ],
+                          ),
+                        ],
+
                         const SizedBox(height: 8),
                         // Activate/Deactivate button for shared trips
                         SizedBox(
@@ -1350,28 +1449,19 @@ class _TripScreenState extends ConsumerState<TripScreen> {
       if (success) {
         ref.invalidate(sharedTripsProvider);
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('You left "${trip.name}"'),
-              backgroundColor: Colors.orange,
-            ),
-          );
+          AppToast.warning(context, 'You left "${trip.name}"');
         }
       } else {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Failed to leave trip'),
-              backgroundColor: Colors.red,
-            ),
-          );
+          AppToast.error(context, 'Failed to leave trip');
         }
       }
     } catch (e) {
       debugPrint('Error leaving trip: $e');
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Could not leave trip. Please check your connection and try again.')),
+        AppToast.error(
+          context,
+          'Could not leave trip. Please check your connection and try again.',
         );
       }
     }
@@ -1767,16 +1857,12 @@ class _TripScreenState extends ConsumerState<TripScreen> {
       await ref.read(localActiveTripIdProvider.notifier).deactivateTrip();
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Trip deactivated')),
-        );
+        AppToast.info(context, 'Trip deactivated');
       }
     } catch (e) {
       debugPrint('Error deactivating trip: $e');
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Could not deactivate trip. Please try again.')),
-        );
+        AppToast.error(context, 'Could not deactivate trip. Please try again.');
       }
     }
   }
@@ -1963,9 +2049,7 @@ class _TripScreenState extends ConsumerState<TripScreen> {
     required bool clearDates,
   }) async {
     if (newName.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Trip name cannot be empty')),
-      );
+      AppToast.warning(context, 'Trip name cannot be empty');
       return;
     }
 
@@ -2019,15 +2103,14 @@ class _TripScreenState extends ConsumerState<TripScreen> {
       ref.invalidate(userTripsProvider);
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Trip updated')),
-        );
+        AppToast.success(context, 'Trip updated');
       }
     } catch (e) {
       debugPrint('Error updating trip: $e');
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Could not update trip. Please check your connection and try again.')),
+        AppToast.error(
+          context,
+          'Could not update trip. Please check your connection and try again.',
         );
       }
     }
@@ -2202,23 +2285,19 @@ class _TripScreenState extends ConsumerState<TripScreen> {
 
       if (mounted) {
         final count = trips.length;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              deleteLocations
-                  ? '$count ${count == 1 ? 'trip' : 'trips'} and their locations deleted'
-                  : '$count ${count == 1 ? 'trip' : 'trips'} deleted. Locations kept.',
-            ),
-          ),
+        AppToast.success(
+          context,
+          deleteLocations
+              ? '$count ${count == 1 ? 'trip' : 'trips'} and their locations deleted'
+              : '$count ${count == 1 ? 'trip' : 'trips'} deleted. Locations kept.',
         );
       }
     } catch (e) {
       debugPrint('Error bulk deleting trips: $e');
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Could not delete all trips. Please check your connection and try again.'),
-          ),
+        AppToast.error(
+          context,
+          'Could not delete all trips. Please check your connection and try again.',
         );
       }
     }
