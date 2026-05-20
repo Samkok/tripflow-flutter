@@ -74,6 +74,10 @@ workflows:
       - name: Install Flutter dependencies
         script: flutter pub get
 
+      - name: Build iOS App
+        script: |
+          flutter build ios
+
       - name: Install CocoaPods dependencies
         script: |
           cd ios

@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../services/auth_service.dart';
 import '../services/revenuecat_service.dart';
+import '../models/user_profile.dart';
 import '../repositories/user_profile_repository.dart';
 import 'location_provider.dart';
 
@@ -42,6 +43,20 @@ final currentUserProvider = Provider<User?>((ref) {
 final currentUserIdProvider = Provider<String?>((ref) {
   final authState = ref.watch(authStateProvider);
   return authState.asData?.value.session?.user.id;
+});
+
+/// Profile lookup keyed by user_id. Used by surfaces that need to render
+/// somebody OTHER than the signed-in user — chiefly the shared-trip badge
+/// on the map screen, which shows the trip's owner. Riverpod caches the
+/// per-userId result so flipping back to the same trip doesn't re-query.
+///
+/// Routes through the `get_public_user_profile` RPC because user_profiles
+/// is RLS-locked to the row's own user; a direct SELECT from a
+/// collaborator's session silently returns empty.
+final userProfileByIdProvider =
+    FutureProvider.family<UserProfile?, String>((ref, userId) async {
+  final repo = ref.read(userProfileRepositoryProvider);
+  return repo.getPublicUserProfile(userId);
 });
 
 /// Provider that listens to auth state changes and links RevenueCat user ID

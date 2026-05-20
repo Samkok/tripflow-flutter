@@ -94,14 +94,34 @@ final localActiveTripProvider = FutureProvider<Trip?>((ref) async {
     }
   }
 
-  // Try to find in shared trips
+  // Try to find in shared trips.
+  //
+  // The shared-trips list embeds a SUBSET of trip columns via the
+  // collaborator → trips PostgREST join. To guarantee every column is
+  // populated (start_date, end_date, country_code, etc. — the badge and
+  // country guard depend on these), we use the embed only to confirm the
+  // active trip is one the user can see, then re-fetch the canonical row
+  // from the trips table by id.
   final sharedTripsData = sharedTripsAsync.asData?.value ?? [];
 
   for (final sharedTripData in sharedTripsData) {
     final trip = sharedTripData['trips'] as Map<String, dynamic>?;
     if (trip != null && trip['id'] == activeTripId) {
+      try {
+        final repo = ref.read(tripRepositoryProvider);
+        final fresh = await repo.getTripById(activeTripId);
+        if (fresh != null) {
+          debugPrint('LocalActiveTripProvider: ✅ Found trip in shared trips: ${fresh.name}');
+          return fresh;
+        }
+      } catch (e) {
+        debugPrint('LocalActiveTripProvider: ⚠️ getTripById failed, '
+            'falling back to embedded shape: $e');
+      }
+      // Embed-only fallback if the direct fetch fails (network / RLS) —
+      // at least the user keeps a usable active trip object.
       final tripObj = Trip.fromJson(trip);
-      debugPrint('LocalActiveTripProvider: ✅ Found trip in shared trips: ${tripObj.name}');
+      debugPrint('LocalActiveTripProvider: ✅ Found trip in shared trips (embed fallback): ${tripObj.name}');
       return tripObj;
     }
   }

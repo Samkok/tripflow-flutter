@@ -12,6 +12,7 @@ import 'package:voyza/widgets/add_to_trip_sheet.dart';
 import 'package:voyza/widgets/location_detail_sheet.dart';
 import 'package:uuid/uuid.dart';
 import '../models/location_model.dart';
+import '../models/user_profile.dart';
 import '../providers/location_provider.dart';
 import '../providers/optimized_map_overlay_provider.dart';
 import '../providers/trip_provider.dart';
@@ -726,10 +727,18 @@ class _MapScreenState extends ConsumerState<MapScreen>
             child: Consumer(
               builder: (context, ref, child) {
                 final activeTripAsync = ref.watch(realtimeActiveTripProvider);
+                final currentUserId = ref.watch(currentUserIdProvider);
 
                 return activeTripAsync.when(
                   data: (activeTrip) {
                     if (activeTrip == null) return child!;
+
+                    // True when the signed-in user is NOT the trip owner —
+                    // i.e. this is a collaborator viewing someone else's
+                    // trip. Drives both the "owner" pill on the right of
+                    // the badge and which profile we look up.
+                    final isSharedTrip = currentUserId != null &&
+                        activeTrip.userId != currentUserId;
 
                     return Column(
                       children: [
@@ -851,6 +860,10 @@ class _MapScreenState extends ConsumerState<MapScreen>
                                       ],
                                     ),
                                   ),
+                                  if (isSharedTrip) ...[
+                                    const SizedBox(width: 10),
+                                    _OwnerPill(ownerUserId: activeTrip.userId),
+                                  ],
                                 ],
                               ),
                             ),
@@ -1516,5 +1529,109 @@ class _MapScreenState extends ConsumerState<MapScreen>
       final kilometers = distanceInMeters / 1000;
       return '${kilometers.toStringAsFixed(1)}km';
     }
+  }
+}
+
+/// Compact pill rendered on the right edge of the active-trip badge when
+/// the signed-in user is viewing a trip OWNED by someone else. Shows the
+/// owner's avatar (initials fallback) and short name so a collaborator can
+/// tell at a glance whose trip they're planning in.
+///
+/// Profile is loaded via [userProfileByIdProvider], which caches per-userId
+/// — switching back to the same shared trip won't re-fetch.
+class _OwnerPill extends ConsumerWidget {
+  final String ownerUserId;
+
+  const _OwnerPill({required this.ownerUserId});
+
+  String _shortLabel(UserProfile? profile) {
+    if (profile == null) return 'Owner';
+    final first = (profile.firstName ?? '').trim();
+    if (first.isNotEmpty) return first;
+    final last = (profile.lastName ?? '').trim();
+    if (last.isNotEmpty) return last;
+    // Fall back to the part of the email before the @ so we always show
+    // *something* useful while the user's profile is still bare.
+    final email = profile.email;
+    final at = email.indexOf('@');
+    return at > 0 ? email.substring(0, at) : email;
+  }
+
+  String _initials(UserProfile? profile) {
+    if (profile == null) return '?';
+    final f = (profile.firstName ?? '').trim();
+    final l = (profile.lastName ?? '').trim();
+    if (f.isNotEmpty && l.isNotEmpty) {
+      return '${f[0]}${l[0]}'.toUpperCase();
+    }
+    if (f.isNotEmpty) return f[0].toUpperCase();
+    if (l.isNotEmpty) return l[0].toUpperCase();
+    final email = profile.email;
+    return email.isNotEmpty ? email[0].toUpperCase() : '?';
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final ownerAsync = ref.watch(userProfileByIdProvider(ownerUserId));
+    final profile = ownerAsync.asData?.value;
+
+    final initials = _initials(profile);
+    final name = profile == null ? '…' : _shortLabel(profile);
+    // While the lookup is in flight OR if it returned null (RPC missing,
+    // RLS denied), show a person glyph instead of bogus initials so the
+    // pill never looks like a broken state.
+    final hasProfile = profile != null;
+
+    return ConstrainedBox(
+      // Cap the pill width so a long owner name can't push the trip title
+      // into ellipsis territory on narrow phones.
+      constraints: const BoxConstraints(maxWidth: 96),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Container(
+            width: 30,
+            height: 30,
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.22),
+              shape: BoxShape.circle,
+              border: Border.all(
+                color: Colors.white.withValues(alpha: 0.6),
+                width: 1.2,
+              ),
+            ),
+            alignment: Alignment.center,
+            child: hasProfile
+                ? Text(
+                    initials,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 0.2,
+                    ),
+                  )
+                : const Icon(
+                    Icons.person_rounded,
+                    size: 16,
+                    color: Colors.white,
+                  ),
+          ),
+          const SizedBox(height: 3),
+          Text(
+            name,
+            style: TextStyle(
+              color: Colors.white.withValues(alpha: 0.95),
+              fontSize: 10,
+              fontWeight: FontWeight.w600,
+              letterSpacing: 0.2,
+            ),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ],
+      ),
+    );
   }
 }

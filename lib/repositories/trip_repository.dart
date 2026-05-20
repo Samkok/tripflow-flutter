@@ -57,6 +57,25 @@ class TripRepository {
     }
   }
 
+  /// Fetch a single trip by id. Used when we have the trip id from
+  /// somewhere other than [getUserTrips] (e.g. a collaborator looking up
+  /// their currently active shared trip) and need the canonical row with
+  /// every column, instead of whatever subset an embedded join projected.
+  Future<Trip?> getTripById(String tripId) async {
+    try {
+      final response = await _supabase
+          .from(_tableName)
+          .select()
+          .eq('id', tripId)
+          .maybeSingle();
+
+      if (response == null) return null;
+      return Trip.fromJson(response);
+    } catch (e) {
+      rethrow;
+    }
+  }
+
   /// Get active trip for a user
   Future<Trip?> getActiveTrip(String userId) async {
     try {
