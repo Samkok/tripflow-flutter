@@ -1246,11 +1246,14 @@ class _LocationSearchSheet extends ConsumerStatefulWidget {
 
 class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
   final TextEditingController _searchController = TextEditingController();
+  final FocusNode _searchFocusNode = FocusNode();
   Timer? _debounceTimer;
+  bool _isAddingPlace = false;
 
   @override
   void dispose() {
     _searchController.dispose();
+    _searchFocusNode.dispose();
     _debounceTimer?.cancel();
     // Clear search state when sheet is closed
     Future.microtask(() {
@@ -1274,6 +1277,32 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
     setState(() {}); // Update clear button visibility
   }
 
+  /// True iff [placeId] is already attached to THIS trip (the sheet is
+  /// scoped to widget.trip, so we filter by trip_id rather than using a
+  /// global pinned list — the trip being viewed in trip-details is often
+  /// not the user's active trip).
+  bool _isAlreadyInTrip(String? placeId) {
+    if (placeId == null || placeId.isEmpty) return false;
+    final saved =
+        ref.read(savedLocationsProvider).asData?.value ?? const [];
+    return saved.any(
+        (l) => l.tripId == widget.tripId && l.placeId == placeId);
+  }
+
+  /// Reset the sheet back to its "ready for the next search" state after
+  /// a successful add or a duplicate hit. Keeps the sheet open so the
+  /// user can chain adds without re-opening it each time, and refocuses
+  /// the TextField so the keyboard stays up.
+  void _resetSearchForNextAdd() {
+    _debounceTimer?.cancel();
+    _searchController.clear();
+    ref.read(tripDetailSearchProvider.notifier).clear();
+    if (mounted) {
+      setState(() {}); // Update suffix-icon visibility
+      _searchFocusNode.requestFocus();
+    }
+  }
+
   void _onScroll(ScrollController scrollController) {
     if (scrollController.position.pixels >=
         scrollController.position.maxScrollExtent * 0.8) {
@@ -1295,8 +1324,13 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
             color: Theme.of(context).scaffoldBackgroundColor,
             borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
           ),
-          child: Column(
+          // Stack so the busy overlay can cover the whole sheet (close
+          // button, drag handle, results) while a request is in flight —
+          // prevents the user from queuing a second tap mid-add.
+          child: Stack(
             children: [
+              Column(
+                children: [
               // Drag handle
               Container(
                 margin: const EdgeInsets.only(top: 12, bottom: 8),
@@ -1334,6 +1368,7 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                 child: TextField(
                   controller: _searchController,
+                  focusNode: _searchFocusNode,
                   autofocus: true,
                   decoration: InputDecoration(
                     hintText: 'Search for a place...',
@@ -1373,6 +1408,58 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
               Expanded(
                 child: _buildSearchResults(scrollController),
               ),
+                ],
+              ),
+              // Busy overlay shown during either add path. AbsorbPointer
+              // blocks taps so a second _addLocationToTrip can't queue
+              // up before the first round trip finishes — and gives the
+              // user clear "the tap took" feedback.
+              if (_isAddingPlace || _isPastingUrl)
+                Positioned.fill(
+                  child: AbsorbPointer(
+                    child: ColoredBox(
+                      color: Colors.black.withValues(alpha: 0.25),
+                      child: Center(
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 24, vertical: 20),
+                          decoration: BoxDecoration(
+                            color: Theme.of(context).colorScheme.surface,
+                            borderRadius: BorderRadius.circular(16),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withValues(alpha: 0.2),
+                                blurRadius: 16,
+                                offset: const Offset(0, 4),
+                              ),
+                            ],
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const SizedBox(
+                                width: 22,
+                                height: 22,
+                                child: CircularProgressIndicator(
+                                    strokeWidth: 2.4),
+                              ),
+                              const SizedBox(width: 14),
+                              Text(
+                                _isPastingUrl
+                                    ? 'Decoding link…'
+                                    : 'Adding location…',
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .bodyMedium
+                                    ?.copyWith(fontWeight: FontWeight.w600),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
             ],
           ),
         );
@@ -1540,7 +1627,7 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
   }
 
   Future<void> _processGoogleMapsUrl(String text) async {
-    if (_isPastingUrl) return;
+    if (_isPastingUrl || _isAddingPlace) return;
 
     if (!GoogleMapsUrlExtractor.isValidGoogleMapsUrl(text)) {
       if (mounted) {
@@ -1551,26 +1638,10 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
 
     if (!mounted) return;
 
+    // Inline overlay (see Stack in build()) handles the busy visual, so
+    // no modal-dialog spinner is needed here. This also keeps the sheet
+    // open so consecutive adds chain naturally.
     setState(() => _isPastingUrl = true);
-
-    // Show loading dialog. Tracked via [loadingShown] so we always pop it
-    // exactly once even when an error or early return happens at any point.
-    bool loadingShown = false;
-    void closeLoading() {
-      if (loadingShown && mounted) {
-        Navigator.pop(context);
-        loadingShown = false;
-      }
-    }
-
-    if (mounted) {
-      showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (context) => const Center(child: CircularProgressIndicator()),
-      );
-      loadingShown = true;
-    }
 
     try {
       PlaceDetails? placeDetails;
@@ -1604,7 +1675,6 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
       }
 
       if (placeDetails == null) {
-        closeLoading();
         if (mounted) {
           AppToast.error(context, 'Could not decode location from URL');
         }
@@ -1615,7 +1685,6 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
       final hasWriteAccess =
           await ref.read(hasWriteAccessProvider(widget.tripId).future);
       if (!hasWriteAccess) {
-        closeLoading();
         if (mounted) {
           AppToast.warning(
             context,
@@ -1625,9 +1694,18 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
         return;
       }
 
-      // Close the spinner before any confirm modal so they don't stack.
-      closeLoading();
       if (!mounted) return;
+
+      // Reject the paste if the decoded place is already on this trip —
+      // mirrors the tap-to-add path so both entry points behave the same.
+      if (_isAlreadyInTrip(placeDetails.placeId)) {
+        AppToast.warning(
+          context,
+          '"${placeDetails.name}" is already in this trip',
+        );
+        _resetSearchForNextAdd();
+        return;
+      }
 
       final newLocation = SavedLocation(
         id: const Uuid().v4(),
@@ -1661,10 +1739,11 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
       if (!mounted) return;
       if (!added) return;
 
+      // Stay on the sheet so the user can paste another link / search
+      // for the next place without re-opening it.
       AppToast.success(context, 'Added ${placeDetails.name} to trip');
-      Navigator.pop(context); // Close search sheet
+      _resetSearchForNextAdd();
     } catch (e) {
-      closeLoading();
       if (mounted) {
         AppToast.error(context, 'Failed to decode URL: $e');
       }
@@ -1674,57 +1753,60 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
   }
 
   Future<void> _addLocationToTrip(PlacePrediction prediction) async {
+    // Defensive — overlay should block a second tap, but guard the
+    // race during its mount frame.
+    if (_isAddingPlace || _isPastingUrl) return;
+
     // Permission check at function level
-    final hasWriteAccess = await ref.read(hasWriteAccessProvider(widget.tripId).future);
+    final hasWriteAccess =
+        await ref.read(hasWriteAccessProvider(widget.tripId).future);
+    if (!mounted) return;
     if (!hasWriteAccess) {
-      if (mounted) {
-        AppToast.warning(
-          context,
-          'You don\'t have permission to add locations to this trip.',
-        );
-      }
+      AppToast.warning(
+        context,
+        'You don\'t have permission to add locations to this trip.',
+      );
       return;
     }
 
-    if (!mounted) return;
-
-    // Show loading indicator. Tracked so we always pop it exactly once.
-    bool loadingShown = false;
-    void closeLoading() {
-      if (loadingShown && mounted) {
-        Navigator.pop(context);
-        loadingShown = false;
-      }
-    }
-
-    if (mounted) {
-      showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (context) => const Center(
-          child: CircularProgressIndicator(),
-        ),
+    // Cheap duplicate check using the prediction's place_id — saves the
+    // round-trip cost of Place Details when the pick is already in the
+    // trip. Notify the user, reset the search, and bail.
+    if (_isAlreadyInTrip(prediction.placeId)) {
+      AppToast.warning(
+        context,
+        '"${prediction.mainText}" is already in this trip',
       );
-      loadingShown = true;
+      _resetSearchForNextAdd();
+      return;
     }
 
+    setState(() => _isAddingPlace = true);
     try {
-      // Get place details
-      final placeDetails = await PlacesService.getPlaceDetails(prediction.placeId);
+      final placeDetails =
+          await PlacesService.getPlaceDetails(prediction.placeId);
 
       if (placeDetails == null) {
-        closeLoading();
         if (mounted) {
           AppToast.error(context, 'Failed to get location details');
         }
         return;
       }
-
-      // Close the spinner before any confirm modal so they don't stack.
-      closeLoading();
       if (!mounted) return;
 
-      // Create SavedLocation
+      // Place Details may return a canonical place_id that differs from
+      // the autocomplete prediction's id (CID vs ChIJ, region variants).
+      // Re-check duplicates against the canonical id before committing.
+      final canonicalPlaceId = placeDetails.placeId ?? prediction.placeId;
+      if (_isAlreadyInTrip(canonicalPlaceId)) {
+        AppToast.warning(
+          context,
+          '"${placeDetails.name}" is already in this trip',
+        );
+        _resetSearchForNextAdd();
+        return;
+      }
+
       final newLocation = SavedLocation(
         id: const Uuid().v4(),
         userId: '', // Will be set by repository
@@ -1742,7 +1824,7 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
             ? null
             : placeDetails.photoReferences,
         photoAttributions: placeDetails.photoAttributions,
-        placeId: placeDetails.placeId,
+        placeId: canonicalPlaceId,
         originalName: placeDetails.name,
         googleOpeningHours: placeDetails.openingHours,
         hoursLastRefreshedAt:
@@ -1757,13 +1839,16 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
       if (!mounted) return;
       if (!added) return;
 
+      // Stay on the sheet so the user can immediately pick the next
+      // place — clears input, drops predictions, refocuses the field.
       AppToast.success(context, 'Added ${placeDetails.name} to trip');
-      Navigator.pop(context); // Close search sheet
+      _resetSearchForNextAdd();
     } catch (e) {
-      closeLoading();
       if (mounted) {
         AppToast.error(context, 'Error: $e');
       }
+    } finally {
+      if (mounted) setState(() => _isAddingPlace = false);
     }
   }
 }

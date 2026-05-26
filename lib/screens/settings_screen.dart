@@ -255,20 +255,24 @@ class SettingsScreen extends ConsumerWidget {
                 );
 
                 if (shouldLogout == true) {
-                  // Clear cached data before signing out
+                  // Clear cached data BEFORE signing out so the brief
+                  // window between auth tear-down and navigator swap
+                  // doesn't re-render stale trip/location data.
                   ref.invalidate(sharedTripsProvider);
                   ref.invalidate(userTripsProvider);
                   ref.invalidate(activeTripsProvider);
                   ref.invalidate(tripProvider);
 
-                  // Sign out
-                  await ref.read(authServiceProvider).signOut();
-
-                  // Reinitialize subscription so the device's restored
-                  // entitlements (re-attributed to the new anonymous
-                  // RevenueCat user) are reflected in app state without
-                  // requiring a manual Restore Purchases tap.
+                  // Kick off subscription reinit in parallel — it
+                  // doesn't gate navigation, so awaiting it just adds
+                  // perceived sign-out latency.
                   ref.read(subscriptionProvider.notifier).reinitialize();
+
+                  // signOut now finishes in ~100–300 ms (local clears
+                  // only; network cleanups fire-and-forget). The
+                  // `signedOut` event triggers main.dart's listener
+                  // which swaps to LoginScreen.
+                  await ref.read(authServiceProvider).signOut();
                 }
               },
               icon: const Icon(Icons.logout),

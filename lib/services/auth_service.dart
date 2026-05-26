@@ -10,6 +10,22 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import '../models/saved_location.dart';
 
+/// Raised by [AuthService.signUp] when the email is already in use by an
+/// existing confirmed account. Supabase intentionally suppresses an
+/// explicit "duplicate" error from `auth.signUp` to prevent email
+/// enumeration — instead it returns a stub `User` with an empty
+/// `identities` list. We detect that pattern and convert it into this
+/// typed exception so the UI can surface a clear message and offer the
+/// password-reset flow.
+class EmailAlreadyRegisteredException implements Exception {
+  final String email;
+  const EmailAlreadyRegisteredException(this.email);
+
+  @override
+  String toString() =>
+      'EmailAlreadyRegisteredException: $email is already registered';
+}
+
 class AuthService {
   final SupabaseClient _supabase = SupabaseService.instance.client;
   final LocationRepository _locationRepository;
@@ -18,6 +34,16 @@ class AuthService {
   static const String _syncChoiceKey = 'sync_anonymous_locations_choice';
   static const String _rememberMeKey = 'remember_me';
   static const String _savedEmailKey = 'saved_email';
+
+  /// SharedPreferences key holding the lowercase emails for which the
+  /// user has already been prompted to save their password to the
+  /// device's password manager. We can't ask the OS "is this credential
+  /// already in Keychain / Google Password Manager?" from Flutter, so
+  /// instead we remember per-email whether we've already shown our
+  /// in-app save prompt — that way users don't get nagged on every
+  /// sign-in.
+  static const String _passwordSavePromptedEmailsKey =
+      'password_save_prompted_emails';
 
   AuthService(this._locationRepository, [UserProfileRepository? userProfileRepository])
       : _userProfileRepository = userProfileRepository ?? UserProfileRepository();
@@ -126,6 +152,34 @@ class AuthService {
     await prefs.remove(_savedEmailKey);
   }
 
+  /// Returns true when the user has already responded (Save or Not now)
+  /// to the "save password to device" prompt for [email] — keeps the
+  /// login screen from re-asking every time they sign in with a known
+  /// account. Email comparison is case-insensitive.
+  static Future<bool> hasPromptedSavePassword(String email) async {
+    if (email.isEmpty) return true;
+    final prefs = await SharedPreferences.getInstance();
+    final list =
+        prefs.getStringList(_passwordSavePromptedEmailsKey) ?? const [];
+    return list.contains(email.trim().toLowerCase());
+  }
+
+  /// Records that the user has been asked about saving [email]'s
+  /// password — appended whether they said Save or Not now, so we
+  /// never nag again for the same address.
+  static Future<void> markPromptedSavePassword(String email) async {
+    if (email.isEmpty) return;
+    final normalized = email.trim().toLowerCase();
+    final prefs = await SharedPreferences.getInstance();
+    final list =
+        prefs.getStringList(_passwordSavePromptedEmailsKey) ?? const [];
+    if (list.contains(normalized)) return;
+    await prefs.setStringList(
+      _passwordSavePromptedEmailsKey,
+      [...list, normalized],
+    );
+  }
+
   Future<void> signUp(
     String email,
     String password, {
@@ -139,6 +193,32 @@ class AuthService {
         email: email,
         password: password,
       );
+
+      // Anti-enumeration guard.
+      //
+      // Supabase's behavior for a re-signup with an existing email
+      // varies by project config and gotrue version, but every shape
+      // we've seen falls into one of these:
+      //
+      //   a) Returns a "stub" User with an empty `identities` list
+      //      (anti-enumeration on, the default in recent versions).
+      //   b) Returns response.user == null with no thrown error
+      //      (older configurations).
+      //   c) Throws an `AuthException` directly with a "User already
+      //      registered" / "already exists" / "user_already_exists"
+      //      message — handled by the screen's `on AuthException`
+      //      arm.
+      //
+      // (a) and (b) are both caught here. (c) bubbles up as
+      // AuthException.
+      final user = response.user;
+      final identities = user?.identities;
+      final looksLikeDuplicate = user == null ||
+          identities == null ||
+          identities.isEmpty;
+      if (looksLikeDuplicate) {
+        throw EmailAlreadyRegisteredException(email);
+      }
 
       if (response.user != null) {
         // Link RevenueCat user identity with Supabase user
@@ -158,15 +238,38 @@ class AuthService {
           // Don't fail the whole signup if RevenueCat fails
         }
 
-        // Create user profile in user_profiles table
-        await _userProfileRepository.createUserProfile(
-          userId: response.user!.id,
-          email: email,
-          firstName: firstName,
-          lastName: lastName,
-          phoneNumber: phoneNumber,
-        );
-
+        // Create user profile in user_profiles table.
+        //
+        // Defensive duplicate-email backstop: if (a) and (b) above
+        // both missed (e.g. an unusual Supabase config that returns a
+        // re-confirmed identity for an existing account), the INSERT
+        // here will fail with a Postgres unique violation because the
+        // user_profiles row for this user_id already exists. We
+        // translate that into the same typed exception so the UI
+        // surfaces the same "account exists" dialog instead of an
+        // opaque "Unexpected error".
+        try {
+          await _userProfileRepository.createUserProfile(
+            userId: response.user!.id,
+            email: email,
+            firstName: firstName,
+            lastName: lastName,
+            phoneNumber: phoneNumber,
+          );
+        } on PostgrestException catch (e) {
+          // 23505 = unique_violation. The only path to that on a
+          // fresh user_id is if the row already existed — i.e. this
+          // email/account already had a profile, which means the
+          // sign-up was actually a duplicate that the earlier checks
+          // missed.
+          final isDuplicate = e.code == '23505' ||
+              e.message.toLowerCase().contains('duplicate') ||
+              e.message.toLowerCase().contains('unique');
+          if (isDuplicate) {
+            throw EmailAlreadyRegisteredException(email);
+          }
+          rethrow;
+        }
       }
     } catch (e) {
       debugPrint('e during sign up: $e');
@@ -195,35 +298,60 @@ class AuthService {
 
   /// Performs the actual sign-out operation.
   /// UI concerns like showing dialogs should be handled by the caller.
+  ///
+  /// Ordering matters for UX: the previous implementation awaited two
+  /// network round trips (FCM token deregister + RevenueCat logout) and
+  /// a Hive wipe BEFORE calling Supabase's signOut. That left the user
+  /// staring at the settings screen for several seconds before the
+  /// onAuthStateChange listener in main.dart could swap to LoginScreen.
+  ///
+  /// New order:
+  ///   1. Fast local cleanups in parallel (Hive wipe, prefs).
+  ///   2. Fire-and-forget the network cleanups. Both use the still-valid
+  ///      JWT — the request goes out before Supabase's signOut tears
+  ///      down the client session, and the access token remains valid
+  ///      server-side until expiry, so the in-flight request still
+  ///      succeeds. Worst case it fails silently — a stale token row
+  ///      is harmless (it's not used for anything until the next login).
+  ///   3. Supabase signOut — this fires the `signedOut` event that the
+  ///      navigator listener in main.dart watches for. UI flips
+  ///      immediately.
   Future<void> signOut() async {
-    // Deregister device token so this device stops receiving pushes for this user
+    // 1. Fast local cleanups — these never block on the network.
+    await Future.wait([
+      clearSyncChoice(),
+      clearRememberMe(),
+      _locationRepository.clearUserData().catchError((e) {
+        debugPrint('AuthService: clearUserData failed: $e');
+        return null;
+      }),
+    ]);
+
+    // 2. Network cleanups — kick off, don't block. Wrapped in
+    // safe-helpers that swallow their own errors so a failure here
+    // can't surface to the caller after we've already torn things down.
+    unawaited(_deregisterPushTokenSafely());
+    unawaited(_logoutRevenueCatSafely());
+
+    // 3. Tear down the Supabase session — fires signedOut, listener
+    // navigates the user to LoginScreen.
+    await _supabase.auth.signOut();
+  }
+
+  Future<void> _deregisterPushTokenSafely() async {
     try {
       await NotificationService().deregisterToken();
     } catch (e) {
       debugPrint('AuthService: Failed to deregister push token: $e');
     }
+  }
 
-    // Logout from RevenueCat (creates new anonymous user)
+  Future<void> _logoutRevenueCatSafely() async {
     try {
       await RevenueCatService().logout();
     } catch (e) {
-      debugPrint('Failed to logout from RevenueCat: $e');
-      // Don't fail the whole logout if RevenueCat fails
+      debugPrint('AuthService: Failed to logout from RevenueCat: $e');
     }
-
-    // Clear sync choice and remember-me data on logout
-    await clearSyncChoice();
-    await clearRememberMe();
-
-    // Clear local Hive cache so the next user who logs in on the same device
-    // cannot see the previous user's locations.
-    try {
-      await _locationRepository.clearUserData();
-    } catch (e) {
-      debugPrint('AuthService: Failed to clear location cache on logout: $e');
-    }
-
-    await _supabase.auth.signOut();
   }
 
   /// Permanently delete the current user's account and all associated data

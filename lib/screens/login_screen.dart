@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:voyza/screens/signup_screen.dart';
@@ -7,6 +9,7 @@ import '../providers/auth_provider.dart';
 import '../providers/subscription_provider.dart';
 import '../services/auth_service.dart';
 import '../widgets/app_toast.dart';
+import '../widgets/save_password_prompt.dart';
 import '../widgets/sync_confirmation_dialog.dart';
 
 class LoginScreen extends ConsumerStatefulWidget {
@@ -52,6 +55,14 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
             _passwordController.text,
           );
 
+      if (!mounted) return;
+
+      // Ask the user (once per email) whether to save the credential
+      // to the device's password manager, then commit the autofill
+      // context with their answer. Logic lives in the shared helper
+      // so signup and signin behave identically.
+      await promptSavePasswordIfNeeded(
+          context, _emailController.text.trim());
       if (!mounted) return;
 
       // If there are local locations, ask user if they want to sync
@@ -140,7 +151,13 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                 padding: const EdgeInsets.all(24.0),
                 child: Form(
                   key: _formKey,
-                  child: Column(
+                  // AutofillGroup pairs the email + password fields as
+                  // one credential, so the platform autofill picker
+                  // (iOS Passwords AutoFill / Android Google Password
+                  // Manager / etc.) fills both at once when the user
+                  // picks a saved login.
+                  child: AutofillGroup(
+                    child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
@@ -168,6 +185,16 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                       TextFormField(
                         controller: _emailController,
                         keyboardType: TextInputType.emailAddress,
+                        // username + email pair maximises coverage: iOS
+                        // matches saved logins by `username`, Android
+                        // by `email`. The Passwords / yellow-key bar
+                        // above the keyboard appears once the field
+                        // focuses.
+                        autofillHints: const [
+                          AutofillHints.username,
+                          AutofillHints.email,
+                        ],
+                        textInputAction: TextInputAction.next,
                         decoration: const InputDecoration(
                           labelText: 'Email',
                           prefixIcon: Icon(Icons.email_outlined),
@@ -185,6 +212,11 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                       TextFormField(
                         controller: _passwordController,
                         obscureText: !_isPasswordVisible,
+                        autofillHints: const [AutofillHints.password],
+                        textInputAction: TextInputAction.done,
+                        onFieldSubmitted: (_) {
+                          if (!_isLoading) _signIn();
+                        },
                         decoration: InputDecoration(
                           labelText: 'Password',
                           prefixIcon: const Icon(Icons.lock_outline),
@@ -253,6 +285,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                         ),
                       ],
                     ],
+                  ),
                   ),
                 ),
               ),

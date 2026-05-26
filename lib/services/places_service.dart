@@ -688,33 +688,111 @@ class PlacesService {
     }
   }
 
-  /// Returns up to 20 POIs (Google Places Nearby Search caps a single page
-   /// at 20) within [radiusMeters] of [center]. Each result carries a
-   /// `distanceMeters` derived from the haversine distance to [center] so
-   /// callers can sort/display proximity without an extra round trip.
-   ///
-   /// We deliberately do NOT call `getPlaceDetails` per-result here — that
-   /// would be 20× the cost of the single Nearby Search call. Photo refs
-   /// returned by Nearby Search work directly with the Photos endpoint, so
-   /// the picker UI can render thumbnails without follow-up requests; the
-   /// per-place enrichment (full address, more photos, country code) only
-   /// happens when the user actually selects a POI to add.
+  /// Returns POIs within [radiusMeters] of [center]. Each result carries a
+  /// `distanceMeters` derived from the haversine distance to [center] so
+  /// callers can sort/display proximity without an extra round trip.
+  ///
+  /// Coverage strategy. Google's Nearby Search caps any single response at
+  /// 20 results, ranked by prominence — in dense areas this silently drops
+  /// most cafes / shops / small attractions even when they sit closer to
+  /// the press point than the 20 winners. To work around the cap we do an
+  /// initial unfiltered query and, IF that page hits the 20-result limit
+  /// (a reliable "dense area" signal), fan out across a small set of
+  /// `type=` filters in parallel. Each typed call returns its own 20-row
+  /// page, so 8 filters surface up to ~160 distinct POIs once we dedupe
+  /// by place_id. Sparse / rural press points cost a single call as
+  /// before.
+  ///
+  /// We deliberately do NOT call `getPlaceDetails` per-result here — that
+  /// would be 20×+ the cost of the Nearby Search calls. Photo refs from
+  /// Nearby Search work directly with the Photos endpoint, so the picker
+  /// can render thumbnails without follow-ups; per-place enrichment (full
+  /// address, more photos, country code) only happens when the user
+  /// actually selects a POI to add.
   static Future<List<NearbyPlace>> searchNearbyPlaces(
     LatLng center, {
     required int radiusMeters,
   }) async {
-    try {
-      final url =
-          'https://maps.googleapis.com/maps/api/place/nearbysearch/json'
-          '?location=${center.latitude},${center.longitude}'
-          '&radius=$radiusMeters'
-          '&key=${ApiService.googlePlacesApiKey}';
+    final initial = await _nearbySearchPage(center, radiusMeters, null);
 
-      final response = await ApiService.dio.get(url);
+    // Sparse area — the single page returned everything Google had. No
+    // need to spend more API calls.
+    if (initial.length < 20) {
+      return _dedupeAndSortNearby(initial, center, radiusMeters);
+    }
+
+    // Dense area. Fan out across the categories most relevant to a trip
+    // planner; each filter returns its own 20-row page from a different
+    // prominence pool, so the union covers the area far more thoroughly
+    // than the default ranking alone. Ordering matters only for tie-break
+    // dedupe (first occurrence wins) — keep "tourist_attraction" early so
+    // landmarks keep their richer metadata if they appear in two pages.
+    const supplementaryTypes = <String>[
+      'tourist_attraction',
+      'restaurant',
+      'cafe',
+      'bar',
+      'lodging',
+      'shopping_mall',
+      'store',
+      'museum',
+      'park',
+    ];
+
+    final extraPages = await Future.wait(
+      supplementaryTypes
+          .map((t) => _nearbySearchPage(center, radiusMeters, t)),
+    );
+
+    final all = <NearbyPlace>[...initial];
+    for (final page in extraPages) {
+      all.addAll(page);
+    }
+    return _dedupeAndSortNearby(all, center, radiusMeters);
+  }
+
+  /// Dedupes by place_id (first occurrence wins), drops anything outside
+  /// the requested radius — Nearby Search occasionally returns places a
+  /// few meters past the circle — and sorts by ascending distance.
+  static List<NearbyPlace> _dedupeAndSortNearby(
+    List<NearbyPlace> raw,
+    LatLng center,
+    int radiusMeters,
+  ) {
+    final seen = <String, NearbyPlace>{};
+    for (final p in raw) {
+      if (p.placeId.isEmpty) continue;
+      if (p.distanceMeters > radiusMeters) continue;
+      seen.putIfAbsent(p.placeId, () => p);
+    }
+    final out = seen.values.toList()
+      ..sort((a, b) => a.distanceMeters.compareTo(b.distanceMeters));
+    return out;
+  }
+
+  /// One Nearby Search request — optionally narrowed by `type`. Returns
+  /// an empty list on any failure / non-OK status so callers can `addAll`
+  /// without guarding for nulls.
+  static Future<List<NearbyPlace>> _nearbySearchPage(
+    LatLng center,
+    int radiusMeters,
+    String? type,
+  ) async {
+    try {
+      final buf = StringBuffer(
+        'https://maps.googleapis.com/maps/api/place/nearbysearch/json'
+        '?location=${center.latitude},${center.longitude}'
+        '&radius=$radiusMeters'
+        '&key=${ApiService.googlePlacesApiKey}',
+      );
+      if (type != null && type.isNotEmpty) buf.write('&type=$type');
+
+      final response = await ApiService.dio.get(buf.toString());
       final data = response.data;
       final status = data['status'];
       if (status != 'OK' && status != 'ZERO_RESULTS') {
-        debugPrint('searchNearbyPlaces: non-OK status $status');
+        debugPrint(
+            'searchNearbyPlaces: non-OK status $status (type=${type ?? "*"})');
         return const [];
       }
       final results = data['results'] as List? ?? const [];
@@ -727,10 +805,9 @@ class PlacesService {
         );
         if (place != null) out.add(place);
       }
-      out.sort((a, b) => a.distanceMeters.compareTo(b.distanceMeters));
       return out;
     } catch (e) {
-      debugPrint('searchNearbyPlaces failed: $e');
+      debugPrint('searchNearbyPlaces failed (type=${type ?? "*"}): $e');
       return const [];
     }
   }
