@@ -568,27 +568,39 @@ serve(async (req) => {
       );
     }
 
-    // Skip anonymous users - we can't store subscriptions for users without Supabase accounts
-    if (isRevenueCatAnonymousId(appUserId)) {
-      console.log('Skipping webhook for anonymous RevenueCat user:', appUserId);
+    // Anonymous RevenueCat users have no Supabase account yet, so there is no UUID
+    // to key a row in user_subscriptions (user_id is `uuid` + FK to auth.users —
+    // passing "$RCAnonymousID:…" throws `invalid input syntax for type uuid`).
+    //
+    // We intentionally do NOT write to the DB here. RevenueCat is the source of
+    // truth for the entitlement while the user is anonymous, and the app reads it
+    // straight from the RC SDK. When the user signs up the app calls
+    // Purchases.logIn(supabaseUserId), which fires a TRANSFER event; the handler
+    // above then fetches the subscription from the RC REST API and writes the row
+    // keyed by the real Supabase UUID. The client-side syncTrialSubscription()
+    // fallback (run right after signup) covers any TRANSFER webhook delay.
+    //
+    // We return 200 so RevenueCat treats the event as delivered and stops retrying.
+    const isAnonymousUser = isRevenueCatAnonymousId(appUserId);
+
+    if (isAnonymousUser) {
+      console.log('Anonymous RevenueCat user — acknowledging without DB write:', appUserId);
+      console.log('  event_type:', event.type);
+      console.log('  → Entitlement stays in RevenueCat until signup; TRANSFER will sync it.');
       return new Response(
         JSON.stringify({
-          message: 'Webhook received but skipped for anonymous user',
+          message: 'Anonymous user event acknowledged (no DB write; syncs on signup via TRANSFER)',
           event_type: event.type,
           app_user_id: appUserId,
-          note: 'Anonymous users must sign in/sign up before subscriptions can be tracked. Once they log in with RevenueCat.login(userId), future webhooks will work.',
         }),
-        {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        }
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
       );
     }
 
     const userId = appUserId;
 
-    // For TEST events, check if user exists first
-    if (event.type === 'TEST') {
+    // For TEST events, check if user exists first (only for non-anonymous UUIDs)
+    if (event.type === 'TEST' && !isAnonymousUser) {
       const { data: userExists } = await supabase
         .from('auth.users')
         .select('id')
@@ -619,6 +631,7 @@ serve(async (req) => {
       entitlement,
       productId,
       expiresAt,
+      isAnonymousUser,
     });
 
     const { error } = await supabase.rpc('upsert_subscription_status', {
@@ -658,13 +671,39 @@ serve(async (req) => {
       expiresAt,
     });
 
-    // 8. Return success response
+    // 8. Update trial_start_at in user_profile.
+    // Anonymous users already returned above, so userId is always a real Supabase
+    // UUID here. trial_devices logging happens in the app (paywall_screen.dart),
+    // not here, because only the app knows the device ID. The webhook just records
+    // the server-verified trial date.
+    if (periodType === 'TRIAL' && event.type === 'INITIAL_PURCHASE') {
+      console.log('Recording trial start date for user:', userId);
+
+      const { error: profileError } = await supabase
+        .from('user_profiles')
+        .update({
+          trial_start_at: purchaseDate,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('user_id', userId)
+        .single();
+
+      if (profileError) {
+        console.error('Error updating user profile trial_start_at:', profileError);
+        // Non-fatal — continue processing
+      } else {
+        console.log('✅ Trial start date recorded in user_profiles');
+      }
+    }
+
+    // 9. Return success response
     return new Response(
       JSON.stringify({
         message: 'Webhook processed successfully',
         event_type: event.type,
         user_id: userId,
         status,
+        isAnonymousUser,
       }),
       {
         status: 200,

@@ -1,7 +1,7 @@
 name: voyza
 description: A mobile app for optimizing trip routes with Google Maps integration
 publish_to: 'none'
-version: 1.0.4+2
+version: 1.0.5+1
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
@@ -54,11 +54,17 @@ dependencies:
   purchases_ui_flutter: ^9.10.3
   google_maps_url_extractor: ^2.0.1
   in_app_review: ^2.0.10
+  device_info_plus: ^12.4.0
 
   # Push Notifications (Firebase Cloud Messaging)
   firebase_core: ^3.0.0
   firebase_messaging: ^15.0.0
   flutter_local_notifications: ^18.0.0
+
+  # Performance monitoring — auto-traces cold start, slow frames, and
+  # frozen frames so we can quantify the ANR reduction release-over-release.
+  # Shares the existing Firebase project, no new auth/DSN needed.
+  firebase_performance: ^0.10.0
 
 dev_dependencies:
   flutter_test:

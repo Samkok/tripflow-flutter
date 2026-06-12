@@ -16,6 +16,7 @@ class UserProfile {
   final DateTime createdAt;
   final DateTime updatedAt;
   final int locationsAddedCount;
+  final DateTime? trialStartAt;
 
   UserProfile({
     required this.id,
@@ -35,6 +36,7 @@ class UserProfile {
     required this.createdAt,
     required this.updatedAt,
     this.locationsAddedCount = 0,
+    this.trialStartAt,
   });
 
   factory UserProfile.fromJson(Map<String, dynamic> json) {
@@ -56,6 +58,7 @@ class UserProfile {
       createdAt: DateTime.parse(json['created_at'] as String),
       updatedAt: DateTime.parse(json['updated_at'] as String),
       locationsAddedCount: json['locations_added_count'] as int? ?? 0,
+      trialStartAt: json['trial_start_at'] != null ? DateTime.parse(json['trial_start_at'] as String) : null,
     );
   }
 
@@ -78,6 +81,7 @@ class UserProfile {
       'created_at': createdAt.toIso8601String(),
       'updated_at': updatedAt.toIso8601String(),
       'locations_added_count': locationsAddedCount,
+      'trial_start_at': trialStartAt?.toIso8601String(),
     };
   }
 
@@ -137,6 +141,7 @@ class UserProfile {
     DateTime? createdAt,
     DateTime? updatedAt,
     int? locationsAddedCount,
+    DateTime? trialStartAt,
   }) {
     return UserProfile(
       id: id ?? this.id,
@@ -156,6 +161,7 @@ class UserProfile {
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
       locationsAddedCount: locationsAddedCount ?? this.locationsAddedCount,
+      trialStartAt: trialStartAt ?? this.trialStartAt,
     );
   }
 }

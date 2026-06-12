@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -22,21 +23,63 @@ import 'services/revenuecat_service.dart';
 import 'services/auth_service.dart';
 import 'services/notification_service.dart';
 import 'repositories/location_repository.dart';
-import 'providers/location_provider.dart' show initialSyncCompleteProvider;
 
+import 'package:firebase_core/firebase_core.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'models/saved_location.dart';
 import 'dart:async';
 
 /// PERFORMANCE: Global SharedPreferences cache to avoid repeated getInstance() calls
-/// Pre-initialized in main() before any provider accesses it
+/// Populated by [_bootstrap] before [SplashScreen] navigates away.
 class SharedPrefsCache {
   static SharedPreferences? _instance;
   static SharedPreferences get instance {
-    assert(_instance != null, 'SharedPrefsCache not initialized. Call main() first.');
+    assert(_instance != null,
+        'SharedPrefsCache not initialized. Wait on Bootstrap.future first.');
     return _instance!;
   }
+}
+
+/// ANR-driven startup model.
+///
+/// Before this refactor, `main()` awaited dotenv / SharedPreferences / Hive
+/// init / Hive box open BEFORE calling runApp(), then `_initializeHeavyServices`
+/// fired Supabase / RevenueCat / Firebase 100 ms after first paint. On a slow
+/// device or first cold start the pre-runApp file-I/O could exceed Android's
+/// 5 s "Input dispatching timed out (No focused window)" budget, and the 100 ms
+/// post-runApp delay still landed RevenueCat's billing handshake on the
+/// critical first-frames thread.
+///
+/// New model:
+///   1. `main()` only ensures the binding and calls runApp() — the Android
+///      Activity gets a focused window in the very first frame, before any
+///      file I/O. SplashScreen renders immediately.
+///   2. [_bootstrap] fires as fire-and-forget right after runApp and does
+///      all the heavy startup work, completing [Bootstrap.future] when done.
+///   3. [SplashScreen] awaits [Bootstrap.future] before navigating into the
+///      app, so dependent surfaces (Supabase auth, Hive-backed providers)
+///      see a ready system.
+///   4. RevenueCat — whose `Purchases.configure` call binds to Google Play
+///      Billing and is the reported ANR source — is scheduled past the FIRST
+///      painted frame at idle priority via [_scheduleAfterFirstFrame], not
+///      a fixed delay.
+///   5. NotificationService no longer initialises at app start; AuthService
+///      lazy-inits it on first sign-in via `NotificationService().registerToken`.
+class Bootstrap {
+  Bootstrap._();
+
+  static final Completer<void> _completer = Completer<void>();
+  static bool _hasCachedLocations = false;
+
+  /// Resolves when Hive, SharedPreferences, Supabase, and LocationRepository
+  /// are all ready. SplashScreen awaits this before navigating into the app.
+  static Future<void> get future => _completer.future;
+
+  /// True when the Hive `locations` box already had cached rows at startup —
+  /// lets SplashScreen / MainScreen mark the sync overlay complete without
+  /// re-fetching.
+  static bool get hasCachedLocations => _hasCachedLocations;
 }
 
 Future<void> main() async {
@@ -47,83 +90,155 @@ Future<void> main() async {
   imageCache.maximumSize = 50; // Limit to 50 images in cache
   imageCache.maximumSizeBytes = 100 * 1024 * 1024; // 100MB image cache limit
 
-  await dotenv.load(fileName: ".env");
+  runApp(const ProviderScope(child: MyApp()));
 
-  // PERFORMANCE: Pre-initialize SharedPreferences once for all providers
-  // This prevents multiple blocking getInstance() calls during startup
-  final prefs = await SharedPreferences.getInstance();
-  SharedPrefsCache._instance = prefs;
-
-  // OPTIMIZATION: Initialize Hive first (fast)
-  await Hive.initFlutter();
-  // OpeningPeriod must register before SavedLocation: SavedLocation rows
-  // reference OpeningPeriod values, and Hive throws on unknown typeIds while
-  // decoding nested fields.
-  Hive.registerAdapter(OpeningPeriodAdapter());
-  Hive.registerAdapter(SavedLocationAdapter());
-
-  // Check Hive cache BEFORE runApp so the map overlay can be skipped on
-  // restarts where locations are already cached.  Opening the box here is
-  // safe — _ensureInitialized() detects an already-open box via
-  // Hive.isBoxOpen() and simply retrieves the existing reference.
-  bool hasCachedLocations = false;
-  try {
-    final box = await Hive.openBox<SavedLocation>('locations');
-    hasCachedLocations = box.isNotEmpty;
-  } catch (_) {
-    // Corrupted box — _ensureInitialized() will handle recovery later.
-  }
-
-  runApp(ProviderScope(
-    overrides: [
-      // Start the overlay provider as already-complete when Hive has data,
-      // so returning users never see the loading screen on restart.
-      initialSyncCompleteProvider.overrideWith((ref) => hasCachedLocations),
-    ],
-    child: const MyApp(),
-  ));
-
-  // OPTIMIZATION: Initialize heavy services in the background after app render
-  _initializeHeavyServices();
+  // Fire-and-forget heavy bootstrap. SplashScreen waits on its completer.
+  _bootstrap();
 }
 
-/// Initialize heavy services after the app has rendered
-/// This prevents blocking the UI during startup
-void _initializeHeavyServices() {
-  Future.delayed(const Duration(milliseconds: 100), () async {
+/// Heavy startup. Runs after [runApp] so the Android activity already has
+/// a focused window — preventing the input-dispatcher ANR cluster reported
+/// from Play Store.
+Future<void> _bootstrap() async {
+  try {
+    // Parallelise the independent file-I/O awaits. dotenv reads from
+    // bundled assets, SharedPreferences hits NSUserDefaults / Android prefs,
+    // and Hive.initFlutter sets up its native channel — none of these
+    // depend on each other, so running them concurrently typically
+    // halves cold-start file-I/O wall time.
+    await Future.wait([
+      dotenv.load(fileName: '.env'),
+      _initSharedPrefs(),
+      Hive.initFlutter().then((_) {
+        // OpeningPeriod must register before SavedLocation: SavedLocation
+        // rows reference OpeningPeriod values, and Hive throws on unknown
+        // typeIds while decoding nested fields.
+        Hive.registerAdapter(OpeningPeriodAdapter());
+        Hive.registerAdapter(SavedLocationAdapter());
+      }),
+    ]);
+
+    // Open the locations box AFTER Hive.initFlutter + registerAdapter. This
+    // exposes [Bootstrap.hasCachedLocations] for the splash skip-delay
+    // optimisation. A corrupted box doesn't fail bootstrap — the repository's
+    // own recovery path will reopen it later.
     try {
-      debugPrint('Main: Initializing Supabase...');
-      await SupabaseService.initialize();
-      debugPrint('Main: Supabase initialized');
-
-      // If the user opted out of "Remember Me", sign them out even if Supabase
-      // restored a session from native storage.
-      final rememberMe = await AuthService.getRememberMe();
-      if (!rememberMe) {
-        final client = SupabaseService.instance.client;
-        if (client.auth.currentUser != null) {
-          await client.auth.signOut();
-          debugPrint('Main: Remember Me is OFF — signed out restored session');
-        }
-      }
-
-      debugPrint('Main: Initializing LocationRepository...');
-      await LocationRepository().init();
-      debugPrint('Main: LocationRepository initialized');
-
-      // Initialize RevenueCat for subscription management
-      debugPrint('Main: Initializing RevenueCat...');
-      await RevenueCatService.initialize();
-      debugPrint('Main: RevenueCat initialized');
-
-      // Initialize push notification service (requires Firebase)
-      // Note: GoogleService-Info.plist (iOS) and google-services.json (Android) must be present
-      debugPrint('Main: Initializing NotificationService...');
-      await NotificationService().initialize();
-      debugPrint('Main: NotificationService initialized');
-    } catch (e) {
-      debugPrint('Main: Error initializing heavy services: $e');
+      final box = await Hive.openBox<SavedLocation>('locations');
+      Bootstrap._hasCachedLocations = box.isNotEmpty;
+    } catch (_) {
+      // Corrupted box — LocationRepository._ensureInitialized handles recovery.
     }
+
+    debugPrint('Main: Initializing Supabase...');
+    await SupabaseService.initialize();
+    debugPrint('Main: Supabase initialized');
+
+    // If the user opted out of "Remember Me", sign them out even if Supabase
+    // restored a session from native storage.
+    final rememberMe = await AuthService.getRememberMe();
+    if (!rememberMe) {
+      final client = SupabaseService.instance.client;
+      if (client.auth.currentUser != null) {
+        await client.auth.signOut();
+        debugPrint('Main: Remember Me is OFF — signed out restored session');
+      }
+    }
+
+    debugPrint('Main: Initializing LocationRepository...');
+    await LocationRepository().init();
+    debugPrint('Main: LocationRepository initialized');
+
+    if (!Bootstrap._completer.isCompleted) {
+      Bootstrap._completer.complete();
+    }
+    debugPrint('Main: Bootstrap complete — splash can navigate');
+
+    // Initialise Firebase core only — separate from NotificationService.
+    //
+    // Reason: Firebase Performance Monitoring (added in pubspec for ANR /
+    // cold-start telemetry) auto-instruments as soon as Firebase is up.
+    // If we kept Firebase init fully lazy until first sign-in, anonymous
+    // sessions wouldn't be measured — and most of the Play Store ANR
+    // reports were on unauthenticated cold starts. We pay the small Firebase
+    // SDK init cost at idle (post-frame) to unlock the monitoring without
+    // pulling in FirebaseMessaging or fetching the FCM token here. That
+    // heavy work still happens lazily inside NotificationService.initialize
+    // when the user actually signs in (or via the restored-session branch
+    // scheduled below).
+    //
+    // Firebase.initializeApp is idempotent — NotificationService.initialize
+    // can call it again later without issue.
+    _scheduleAfterFirstFrame(() async {
+      try {
+        debugPrint('Main: Initializing Firebase core (post-frame idle)...');
+        await Firebase.initializeApp();
+        debugPrint('Main: Firebase core initialized');
+      } catch (e) {
+        debugPrint('Main: Firebase core init failed (non-fatal): $e');
+      }
+    });
+
+    // Defer RevenueCat past the first painted frame at idle priority. The
+    // `Purchases.configure` call inside the SDK synchronously triggers
+    // `BillingWrapper.buildClient` on Android, which binds to Google Play
+    // Services — historically a multi-second hang on cold launch. By waiting
+    // for the first frame AND the scheduler to be idle, we keep that work
+    // off the critical-startup frames entirely.
+    //
+    // Consumers that need RevenueCat (paywall, subscription provider) call
+    // `await RevenueCatService.waitForInitialization()` and so will simply
+    // suspend until this completes — no API change required.
+    _scheduleAfterFirstFrame(() async {
+      try {
+        debugPrint('Main: Initializing RevenueCat (post-frame idle)...');
+        await RevenueCatService.initialize();
+        debugPrint('Main: RevenueCat initialized');
+      } catch (e) {
+        debugPrint('Main: RevenueCat init failed (non-fatal): $e');
+      }
+    });
+
+    // NotificationService is intentionally NOT initialised here. Push only
+    // matters for signed-in users, and lazily initialising it inside
+    // `AuthService.signIn` removed the Firebase/FCM startup hop from the
+    // Play Store ANR cluster.
+    //
+    // For RESTORED sessions (user already signed in from a previous
+    // launch), we still need to re-register the FCM token so collab
+    // pushes keep landing. Schedule it past the first painted frame at
+    // idle so Firebase init doesn't compete with the first-frame work.
+    // registerToken() is idempotent and itself lazy-inits Firebase, so
+    // the cold-start hop is fully off the critical thread.
+    _scheduleAfterFirstFrame(() async {
+      final client = SupabaseService.instance.client;
+      if (client.auth.currentUser == null) return;
+      try {
+        debugPrint('Main: Registering FCM for restored session (idle)...');
+        await NotificationService().registerToken();
+        debugPrint('Main: Restored-session FCM registration done');
+      } catch (e) {
+        debugPrint('Main: Restored-session FCM registration failed: $e');
+      }
+    });
+  } catch (e, st) {
+    debugPrint('Main: bootstrap failed: $e\n$st');
+    if (!Bootstrap._completer.isCompleted) {
+      Bootstrap._completer.completeError(e, st);
+    }
+  }
+}
+
+Future<void> _initSharedPrefs() async {
+  final prefs = await SharedPreferences.getInstance();
+  SharedPrefsCache._instance = prefs;
+}
+
+/// Schedules [work] to run AFTER the first frame has painted, at idle
+/// scheduler priority. Use for any expensive init that doesn't need to be
+/// ready by the time the user first sees the app.
+void _scheduleAfterFirstFrame(FutureOr<void> Function() work) {
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    SchedulerBinding.instance.scheduleTask<void>(work, Priority.idle);
   });
 }
 

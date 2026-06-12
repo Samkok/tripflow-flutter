@@ -233,6 +233,32 @@ class AuthService {
                 : firstName ?? lastName,
             phoneNumber: phoneNumber,
           );
+
+          // Safety: If user had an active subscription as anonymous,
+          // ensure it's recorded in the database. This is a fallback
+          // for webhook delays — the webhook will eventually create
+          // the proper record, but this ensures data consistency immediately.
+          try {
+            final revenuecat = RevenueCatService();
+            final customerInfo = await revenuecat.getCustomerInfo();
+            final entitlement =
+                customerInfo.entitlements.active['premium'];
+            if (entitlement != null) {
+              await _userProfileRepository.syncTrialSubscription(
+                userId: response.user!.id,
+                productIdentifier: entitlement.productIdentifier,
+                trialExpiresAt: entitlement.expirationDate != null
+                    ? DateTime.tryParse(entitlement.expirationDate!)
+                    : null,
+              );
+              debugPrint(
+                  'AuthService: ✅ Synced transferred subscription for new user');
+            }
+          } catch (e) {
+            debugPrint(
+                'AuthService: ⚠️ Failed to sync transferred subscription (non-fatal): $e');
+            // Non-fatal — webhook will eventually create the record
+          }
         } catch (e) {
           debugPrint('Failed to link RevenueCat user: $e');
           // Don't fail the whole signup if RevenueCat fails

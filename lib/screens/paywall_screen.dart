@@ -3,10 +3,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:purchases_flutter/purchases_flutter.dart';
 import 'package:purchases_ui_flutter/purchases_ui_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:device_info_plus/device_info_plus.dart';
+import 'dart:io';
 import '../providers/subscription_provider.dart';
 import '../services/revenuecat_service.dart';
 import '../services/supabase_service.dart';
 import '../widgets/app_toast.dart';
+import '../repositories/user_profile_repository.dart';
 
 /// Reasons the paywall might be shown — drives the headline copy.
 enum PaywallTrigger {
@@ -655,6 +658,45 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
           debugPrint('PaywallScreen: Stored email to RevenueCat after purchase');
         } catch (e) {
           debugPrint('PaywallScreen: Failed to store email to RevenueCat: $e');
+        }
+      }
+
+      // Log trial start if this is a trial offer (app-side logging, not webhook)
+      // Only authenticated users can start trials (webhook skips anonymous for this)
+      if (_packageHasEligibleTrial(_selectedPackage) && user != null) {
+        try {
+          final repo = UserProfileRepository();
+          final deviceInfo = DeviceInfoPlugin();
+          String deviceId;
+          if (Platform.isAndroid) {
+            final android = await deviceInfo.androidInfo;
+            deviceId = android.id;
+          } else if (Platform.isIOS) {
+            final ios = await deviceInfo.iosInfo;
+            deviceId = ios.identifierForVendor ?? user.id;
+          } else {
+            deviceId = user.id;
+          }
+          final productId = _selectedPackage!.storeProduct.identifier;
+
+          await repo.logTrialStart(
+            userId: user.id,
+            deviceId: deviceId,
+            productIdentifier: productId,
+          );
+          debugPrint('PaywallScreen: ✅ Trial logged to trial_devices table');
+
+          // Sync trial subscription record as fallback for webhook delays
+          final trialExpiryStr = entAfter?.expirationDate;
+          final trialExpiry = trialExpiryStr != null ? DateTime.tryParse(trialExpiryStr) : null;
+          await repo.syncTrialSubscription(
+            userId: user.id,
+            productIdentifier: productId,
+            trialExpiresAt: trialExpiry,
+          );
+          debugPrint('PaywallScreen: ✅ Trial subscription synced for user ${user.id}');
+        } catch (e) {
+          debugPrint('PaywallScreen: ⚠️ Failed to log trial start: $e');
         }
       }
 

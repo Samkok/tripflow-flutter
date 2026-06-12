@@ -6,14 +6,28 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:voyza/services/supabase_service.dart';
 
-// Top-level function required by Firebase for background message handling
+// Top-level function required by Firebase for background message handling.
+//
+// Runs in a SEPARATE background isolate spawned by the platform — not the
+// foreground engine. Any exception escaping this function gets surfaced to
+// Crashlytics as `DartMessenger$Reply.reply IllegalStateException` because
+// the FCM plugin's underlying MethodChannel reply pipe can be torn down
+// before this handler returns. Wrap everything in try/catch so the plugin
+// channel reply path stays clean.
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  // Firebase must be initialized in the background isolate
-  await Firebase.initializeApp();
-  debugPrint('NotificationService: Background message received: ${message.messageId}');
-  // flutter_local_notifications handles display automatically on Android
-  // iOS displays the system notification natively in background
+  try {
+    // Firebase must be initialized in the background isolate
+    await Firebase.initializeApp();
+    debugPrint(
+        'NotificationService: Background message received: ${message.messageId}');
+    // flutter_local_notifications handles display automatically on Android
+    // iOS displays the system notification natively in background
+  } catch (e) {
+    // Swallow to prevent the FCM channel from reporting an IllegalStateException
+    // on reply. Foreground init will recover on next app launch.
+    debugPrint('NotificationService: Background handler error: $e');
+  }
 }
 
 /// Service for managing push notifications via Firebase Cloud Messaging (FCM).
@@ -131,10 +145,20 @@ class NotificationService {
 
       await _upsertToken(userId: userId, token: token);
 
-      // Keep the token current — FCM rotates tokens occasionally
-      FirebaseMessaging.instance.onTokenRefresh.listen((newToken) {
-        debugPrint('NotificationService: FCM token refreshed');
-        _upsertToken(userId: userId, token: newToken);
+      // Keep the token current — FCM rotates tokens occasionally.
+      // Guarded with try/catch because this listener fires for the lifetime
+      // of the app, including during engine teardown (e.g. hot restart on
+      // dev, OS-driven activity recreation). Without the guard, an
+      // _upsertToken throw during teardown surfaces as
+      // DartMessenger$Reply.reply IllegalStateException in Crashlytics.
+      FirebaseMessaging.instance.onTokenRefresh.listen((newToken) async {
+        try {
+          debugPrint('NotificationService: FCM token refreshed');
+          await _upsertToken(userId: userId, token: newToken);
+        } catch (e) {
+          debugPrint(
+              'NotificationService: onTokenRefresh handler failed: $e');
+        }
       });
 
       debugPrint('NotificationService: Device registered for push notifications');

@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/user_profile.dart';
 import '../services/supabase_service.dart';
@@ -159,6 +160,69 @@ class UserProfileRepository {
       return UserProfile.fromJson(response);
     } catch (e) {
       rethrow;
+    }
+  }
+
+  /// Log a trial start event and update the trial_start_at field
+  Future<void> logTrialStart({
+    required String userId,
+    required String deviceId,
+    required String productIdentifier,
+  }) async {
+    try {
+      // Update user_profile with trial_start_at
+      await _supabase
+          .from(_tableName)
+          .update({
+            'trial_start_at': DateTime.now().toIso8601String(),
+            'updated_at': DateTime.now().toIso8601String(),
+          })
+          .eq('user_id', userId);
+
+      // Log to trial_devices table
+      await _supabase.from('trial_devices').insert({
+        'user_id': userId,
+        'device_id': deviceId,
+        'product_identifier': productIdentifier,
+        'trial_started_at': DateTime.now().toIso8601String(),
+      });
+    } catch (e) {
+      rethrow;
+    }
+  }
+
+  /// Ensure user_subscriptions record exists for an active trial.
+  /// Used as fallback when RevenueCat webhook hasn't fired yet or user is anonymous.
+  /// Assumes the trial is already active in RevenueCat SDK.
+  Future<void> syncTrialSubscription({
+    required String userId,
+    required String productIdentifier,
+    required DateTime? trialExpiresAt,
+  }) async {
+    try {
+      // Try to upsert so existing record isn't overwritten if webhook beat us here
+      final now = DateTime.now().toIso8601String();
+      final expiresAtStr = trialExpiresAt?.toIso8601String() ??
+          DateTime.now().add(const Duration(days: 3)).toIso8601String(); // Default 3-day trial
+
+      await _supabase.from('user_subscriptions').upsert(
+        {
+          'user_id': userId,
+          'entitlement': 'premium',
+          'status': 'active',
+          'product_identifier': productIdentifier,
+          'will_renew': false, // Trial doesn't auto-renew
+          'expires_at': expiresAtStr,
+          'created_at': now,
+          'updated_at': now,
+        },
+        onConflict: 'user_id',
+      );
+
+      debugPrint('UserProfileRepository: ✅ Trial subscription synced for user $userId');
+    } catch (e) {
+      debugPrint('UserProfileRepository: ⚠️ Failed to sync trial subscription: $e');
+      // Non-fatal — webhook will eventually create the record
     }
   }
 }
