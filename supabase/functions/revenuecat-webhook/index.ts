@@ -13,6 +13,8 @@ interface RevenueCatWebhookEvent {
   event: {
     type: string;
     app_user_id?: string;       // Not present in TRANSFER events
+    aliases?: string[];          // All app_user_ids RevenueCat links to this subscriber
+    original_app_user_id?: string; // First app_user_id ever seen for this subscriber
     transferred_from?: string[]; // TRANSFER events only
     transferred_to?: string[];   // TRANSFER events only
     product_id?: string;
@@ -170,6 +172,52 @@ function isRevenueCatAnonymousId(str: string): boolean {
 
 function isValidAppUserId(str: string): boolean {
   return isValidUUID(str) || isRevenueCatAnonymousId(str);
+}
+
+/**
+ * Given an anonymous-keyed event, find the authenticated Supabase account (if any)
+ * that already owns this subscription. Without this, lifecycle events that keep
+ * arriving under the original $RCAnonymousID (e.g. when RevenueCat's transfer
+ * behavior is "keep with original App User ID") would never reach the account that
+ * received the subscription on signup — leaving that account stuck 'active' and
+ * granting free access after the subscription actually ends.
+ *
+ * Resolution order:
+ *   1. Any alias on the event that is a real Supabase UUID → that's the owner.
+ *   2. A user_subscriptions row that recorded this anonymous id in
+ *      revenuecat_app_user_id (written by the client syncTrialSubscription on
+ *      signup, or by a previous run of this resolver).
+ *
+ * Returns null when the subscriber is genuinely anonymous (not yet signed up).
+ */
+async function resolveAuthenticatedOwner(
+  anonAppUserId: string,
+  aliases: string[],
+): Promise<string | null> {
+  // 1. Any alias that is a real Supabase UUID is the owner.
+  const aliasUuid = aliases.find(isValidUUID);
+  if (aliasUuid) {
+    console.log(`  resolver: matched authenticated owner via alias ${aliasUuid}`);
+    return aliasUuid;
+  }
+
+  // 2. Our DB may already hold a row that recorded this anonymous id.
+  try {
+    const { data } = await supabase
+      .from('user_subscriptions')
+      .select('user_id')
+      .eq('revenuecat_app_user_id', anonAppUserId)
+      .maybeSingle();
+    if (data?.user_id && isValidUUID(data.user_id)) {
+      console.log(`  resolver: matched authenticated owner via DB row ${data.user_id}`);
+      return data.user_id;
+    }
+  } catch (e) {
+    // Non-fatal: if the column/query fails, fall through to "no owner".
+    console.warn('  resolver: DB lookup by revenuecat_app_user_id failed (non-fatal):', e);
+  }
+
+  return null;
 }
 
 /**
@@ -471,31 +519,52 @@ serve(async (req) => {
         }
       }
 
-      // Expire subscriptions for Supabase users losing the entitlement
-      for (const fromUserId of transferredFrom) {
-        if (isValidUUID(fromUserId)) {
-          console.log(`  TRANSFER: expiring subscription for ${fromUserId}`);
-          const { error: fromError } = await supabase.rpc('upsert_subscription_status', {
-            p_user_id:                       fromUserId,
-            p_revenuecat_app_user_id:        fromUserId,
-            p_status:                        'expired',
-            p_entitlement:                   entitlement,
-            p_product_identifier:            null,
-            p_store:                         store ?? null,
-            p_expires_at:                    null,
-            p_period_type:                   null,
-            p_purchase_date:                 null,
-            p_will_renew:                    false,
-            p_billing_issues_detected_at:    null,
-            p_unsubscribe_detected_at:       null,
-            p_event_type:                    'TRANSFER',
-          });
-          if (fromError) {
-            console.error(`  TRANSFER: failed to expire for ${fromUserId}:`, fromError);
+      // Is the entitlement genuinely moving to another REAL account?
+      //
+      // On LOGOUT the SDK mints a fresh $RCAnonymousID and RevenueCat transfers
+      // the store receipt onto it — so transferred_to is ALL anonymous (no UUID).
+      // The signed-out user still OWNS the underlying store subscription and
+      // reclaims it the moment they sign in again. Expiring their DB row here is
+      // wrong: it left paying users showing 'expired' after a logout→login round
+      // trip (the app still worked because it reads the live RC SDK entitlement,
+      // but the DB disagreed).
+      //
+      // So only expire transferred_from UUIDs when a UUID in transferred_to is
+      // actually receiving the entitlement (a true account→account transfer).
+      const toHasUuid = transferredTo.some(isValidUUID);
+
+      if (toHasUuid) {
+        // Expire subscriptions for Supabase users losing the entitlement to another account
+        for (const fromUserId of transferredFrom) {
+          if (isValidUUID(fromUserId)) {
+            console.log(`  TRANSFER: expiring subscription for ${fromUserId}`);
+            const { error: fromError } = await supabase.rpc('upsert_subscription_status', {
+              p_user_id:                       fromUserId,
+              p_revenuecat_app_user_id:        fromUserId,
+              p_status:                        'expired',
+              p_entitlement:                   entitlement,
+              p_product_identifier:            null,
+              p_store:                         store ?? null,
+              p_expires_at:                    null,
+              p_period_type:                   null,
+              p_purchase_date:                 null,
+              p_will_renew:                    false,
+              p_billing_issues_detected_at:    null,
+              p_unsubscribe_detected_at:       null,
+              p_event_type:                    'TRANSFER',
+            });
+            if (fromError) {
+              console.error(`  TRANSFER: failed to expire for ${fromUserId}:`, fromError);
+            }
+          } else {
+            console.log(`  TRANSFER: skipping non-UUID transferred_from: ${fromUserId}`);
           }
-        } else {
-          console.log(`  TRANSFER: skipping non-UUID transferred_from: ${fromUserId}`);
         }
+      } else {
+        console.log(
+          '  TRANSFER: transferred_to is all-anonymous (logout / device anonymization) — ' +
+          'NOT expiring transferred_from UUIDs; they retain the subscription until they sign in again.',
+        );
       }
 
       // Activate subscriptions for Supabase users gaining the entitlement.
@@ -538,14 +607,16 @@ serve(async (req) => {
         }
       }
 
-      const fromUuids = transferredFrom.filter(isValidUUID);
-      const toUuids   = transferredTo.filter(isValidUUID);
-      console.log(`TRANSFER processed — expired: ${fromUuids.length}, activated: ${toUuids.length}`);
+      // Only report UUIDs we actually expired — on a logout (all-anonymous
+      // transferred_to) we deliberately expire nobody.
+      const expiredUuids = toHasUuid ? transferredFrom.filter(isValidUUID) : [];
+      const toUuids      = transferredTo.filter(isValidUUID);
+      console.log(`TRANSFER processed — expired: ${expiredUuids.length}, activated: ${toUuids.length}`);
 
       return new Response(
         JSON.stringify({
           message: 'TRANSFER event processed',
-          expired_user_ids:  fromUuids,
+          expired_user_ids:  expiredUuids,
           activated_user_ids: toUuids,
         }),
         { status: 200, headers: { 'Content-Type': 'application/json' } }
@@ -568,36 +639,76 @@ serve(async (req) => {
       );
     }
 
-    // Anonymous RevenueCat users have no Supabase account yet, so there is no UUID
-    // to key a row in user_subscriptions (user_id is `uuid` + FK to auth.users —
-    // passing "$RCAnonymousID:…" throws `invalid input syntax for type uuid`).
+    // Resolve which Supabase user_id this event should write to.
     //
-    // We intentionally do NOT write to the DB here. RevenueCat is the source of
-    // truth for the entitlement while the user is anonymous, and the app reads it
-    // straight from the RC SDK. When the user signs up the app calls
-    // Purchases.logIn(supabaseUserId), which fires a TRANSFER event; the handler
-    // above then fetches the subscription from the RC REST API and writes the row
-    // keyed by the real Supabase UUID. The client-side syncTrialSubscription()
-    // fallback (run right after signup) covers any TRANSFER webhook delay.
-    //
-    // We return 200 so RevenueCat treats the event as delivered and stops retrying.
+    // For a normal authenticated event this is just appUserId. But anonymous-keyed
+    // events ($RCAnonymousID:…) need care:
+    //   - A truly anonymous subscriber has no Supabase account yet, and the user_id
+    //     column is `uuid` + FK to auth.users — passing the anon id throws
+    //     `invalid input syntax for type uuid`. We ACK 200 and write nothing; the
+    //     entitlement lives in RevenueCat until signup.
+    //   - BUT if the subscription was already adopted by an authenticated account
+    //     (via TRANSFER or the client syncTrialSubscription on signup) yet
+    //     RevenueCat keeps sending events under the original anon id (transfer
+    //     behavior = "keep with original"), we MUST route the update to that
+    //     account. Otherwise its CANCELLATION/EXPIRATION never land and it stays
+    //     'active' forever → free access. resolveAuthenticatedOwner finds it.
     const isAnonymousUser = isRevenueCatAnonymousId(appUserId);
+    let userId = appUserId;
 
     if (isAnonymousUser) {
-      console.log('Anonymous RevenueCat user — acknowledging without DB write:', appUserId);
-      console.log('  event_type:', event.type);
-      console.log('  → Entitlement stays in RevenueCat until signup; TRANSFER will sync it.');
-      return new Response(
-        JSON.stringify({
-          message: 'Anonymous user event acknowledged (no DB write; syncs on signup via TRANSFER)',
-          event_type: event.type,
-          app_user_id: appUserId,
-        }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } }
-      );
-    }
+      const ownerUserId = await resolveAuthenticatedOwner(appUserId, event.aliases ?? []);
 
-    const userId = appUserId;
+      if (!ownerUserId) {
+        // No authenticated owner yet. We can't touch user_subscriptions (its
+        // user_id is uuid + FK, so the $RCAnonymousID can't be a key), and the
+        // RPC — the normal history writer — is never called on this path. So we
+        // append the audit row to user_subscription_history directly, with
+        // user_id = NULL and the raw id preserved in revenuecat_app_user_id.
+        // This keeps a complete record of anonymous trials/cancellations.
+        // (Requires user_subscription_history.user_id to be nullable.)
+        const { error: historyError } = await supabase
+          .from('user_subscription_history')
+          .insert({
+            user_id: null,
+            event_type: event.type,
+            status,
+            entitlement,
+            revenuecat_app_user_id: appUserId,
+            product_identifier: productId ?? null,
+            store: store ?? null,
+            expires_at: expiresAt,
+            period_type: periodType ?? null,
+            purchase_date: purchaseDate,
+            will_renew: willRenew,
+            billing_issues_detected_at: billingIssuesDetectedAt,
+            unsubscribe_detected_at: unsubscribeDetectedAt,
+          });
+        if (historyError) {
+          // Non-fatal: never fail the webhook over an audit-log write. If this
+          // errors with a NOT NULL violation, the user_id-nullable migration
+          // hasn't been applied yet.
+          console.error('Failed to write anonymous history row (non-fatal):', historyError);
+        } else {
+          console.log('Anonymous event recorded in user_subscription_history (user_id NULL):', appUserId);
+        }
+
+        console.log('Anonymous RevenueCat user with no linked account — no user_subscriptions write:', appUserId);
+        return new Response(
+          JSON.stringify({
+            message: 'Anonymous user event acknowledged (history logged; user_subscriptions syncs on signup)',
+            event_type: event.type,
+            app_user_id: appUserId,
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+
+      console.log(
+        `Anonymous event for ${appUserId} mapped to authenticated owner ${ownerUserId} — applying ${event.type}`,
+      );
+      userId = ownerUserId;
+    }
 
     // For TEST events, check if user exists first (only for non-anonymous UUIDs)
     if (event.type === 'TEST' && !isAnonymousUser) {
@@ -672,10 +783,11 @@ serve(async (req) => {
     });
 
     // 8. Update trial_start_at in user_profile.
-    // Anonymous users already returned above, so userId is always a real Supabase
-    // UUID here. trial_devices logging happens in the app (paywall_screen.dart),
-    // not here, because only the app knows the device ID. The webhook just records
-    // the server-verified trial date.
+    // userId is always a real Supabase UUID here — either an authenticated
+    // app_user_id, or the authenticated owner resolved from an anonymous-keyed
+    // event. Unlinked anonymous subscribers already returned above. trial_devices
+    // logging happens in the app (paywall_screen.dart), not here, because only the
+    // app knows the device ID. The webhook just records the server-verified date.
     if (periodType === 'TRIAL' && event.type === 'INITIAL_PURCHASE') {
       console.log('Recording trial start date for user:', userId);
 

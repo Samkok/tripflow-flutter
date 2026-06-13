@@ -194,10 +194,18 @@ class UserProfileRepository {
   /// Ensure user_subscriptions record exists for an active trial.
   /// Used as fallback when RevenueCat webhook hasn't fired yet or user is anonymous.
   /// Assumes the trial is already active in RevenueCat SDK.
+  ///
+  /// [revenueCatAppUserId] should be the subscriber's ORIGINAL RevenueCat app
+  /// user id (CustomerInfo.originalAppUserId) — typically the $RCAnonymousID the
+  /// trial was bought under before signup. Storing it lets the revenuecat-webhook
+  /// map later anonymous-keyed lifecycle events (CANCELLATION/EXPIRATION) back to
+  /// this row when RevenueCat's transfer behavior keeps the purchase on the
+  /// original id. Without it, this row can get stuck 'active' = free access.
   Future<void> syncTrialSubscription({
     required String userId,
     required String productIdentifier,
     required DateTime? trialExpiresAt,
+    String? revenueCatAppUserId,
   }) async {
     try {
       // Try to upsert so existing record isn't overwritten if webhook beat us here
@@ -213,6 +221,8 @@ class UserProfileRepository {
           'product_identifier': productIdentifier,
           'will_renew': false, // Trial doesn't auto-renew
           'expires_at': expiresAtStr,
+          if (revenueCatAppUserId != null)
+            'revenuecat_app_user_id': revenueCatAppUserId,
           'created_at': now,
           'updated_at': now,
         },

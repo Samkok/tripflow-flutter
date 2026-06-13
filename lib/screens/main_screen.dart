@@ -26,7 +26,15 @@ class _MainScreenState extends ConsumerState<MainScreen> {
     // can hide its loading overlay once marker bitmaps are also ready.
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       final repository = ref.read(locationRepositoryProvider);
-      await performInitialLocationSync(repository);
+      // Cap how long the loading overlay can block: if the fetch is slow, reveal
+      // the map anyway (cached/empty) and let it populate reactively via the
+      // location stream. The fetch keeps running; it just no longer holds the UI.
+      try {
+        await performInitialLocationSync(repository)
+            .timeout(const Duration(seconds: 3));
+      } catch (_) {
+        // Timed out or failed — map is revealed; stream fills it in when ready.
+      }
       if (mounted) {
         ref.read(initialSyncCompleteProvider.notifier).state = true;
       }
@@ -60,7 +68,14 @@ class _MainScreenState extends ConsumerState<MainScreen> {
       if (previous == null && next != null) {
         ref.read(initialSyncCompleteProvider.notifier).state = false;
         final repository = ref.read(locationRepositoryProvider);
-        await performInitialLocationSync(repository);
+        // Same overlay cap as initState: don't let a slow fetch make the map
+        // hang on "Loading…" after sign-in. Reveal it; the stream populates it.
+        try {
+          await performInitialLocationSync(repository)
+              .timeout(const Duration(seconds: 3));
+        } catch (_) {
+          // Timed out or failed — map is revealed; stream fills it in when ready.
+        }
         if (mounted) {
           ref.read(initialSyncCompleteProvider.notifier).state = true;
         }

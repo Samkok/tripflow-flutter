@@ -65,6 +65,30 @@ class AuthService {
           await RevenueCatService().setUserAttributes(
             email: response.user!.email,
           );
+
+          // Safety: an anonymous trial bought on this device gets restored onto
+          // this account by login(). Record it (with the original RC id) so the
+          // row exists immediately AND the webhook can map later anon-keyed
+          // lifecycle events back to it — otherwise it could get stuck 'active'.
+          try {
+            final customerInfo = await RevenueCatService().getCustomerInfo();
+            final entitlement = customerInfo.entitlements.active['premium'];
+            if (entitlement != null) {
+              await _userProfileRepository.syncTrialSubscription(
+                userId: response.user!.id,
+                productIdentifier: entitlement.productIdentifier,
+                trialExpiresAt: entitlement.expirationDate != null
+                    ? DateTime.tryParse(entitlement.expirationDate!)
+                    : null,
+                revenueCatAppUserId: customerInfo.originalAppUserId,
+              );
+              debugPrint(
+                  'AuthService: ✅ Synced subscription on sign-in');
+            }
+          } catch (e) {
+            debugPrint(
+                'AuthService: ⚠️ Failed to sync subscription on sign-in (non-fatal): $e');
+          }
         } catch (e) {
           debugPrint('Failed to link RevenueCat user: $e');
           // Don't fail the whole login if RevenueCat fails
@@ -250,6 +274,10 @@ class AuthService {
                 trialExpiresAt: entitlement.expirationDate != null
                     ? DateTime.tryParse(entitlement.expirationDate!)
                     : null,
+                // The original (usually anonymous) RC id the trial was bought
+                // under. Lets the webhook map later anon-keyed lifecycle events
+                // back to this row so it can't get stuck 'active'.
+                revenueCatAppUserId: customerInfo.originalAppUserId,
               );
               debugPrint(
                   'AuthService: ✅ Synced transferred subscription for new user');

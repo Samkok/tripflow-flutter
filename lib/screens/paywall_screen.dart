@@ -689,9 +689,12 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
           // Sync trial subscription record as fallback for webhook delays
           final trialExpiryStr = entAfter?.expirationDate;
           final trialExpiry = trialExpiryStr != null ? DateTime.tryParse(trialExpiryStr) : null;
+          final rcOriginalId =
+              ref.read(subscriptionProvider).customerInfo?.originalAppUserId;
           await repo.syncTrialSubscription(
             userId: user.id,
             productIdentifier: productId,
+            revenueCatAppUserId: rcOriginalId,
             trialExpiresAt: trialExpiry,
           );
           debugPrint('PaywallScreen: ✅ Trial subscription synced for user ${user.id}');

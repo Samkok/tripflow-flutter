@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../repositories/location_repository.dart';
@@ -126,16 +127,35 @@ final initialSyncCompleteProvider = StateProvider<bool>((ref) => false);
 /// refresh or connectivity change, causing repeated Hive updates that
 /// trigger marker-bitmap regeneration and map blink.
 ///
-/// - Fetches remote locations into the Hive cache (so the map is populated).
-/// - Re-uploads any locally-stored locations that failed to sync previously
-///   (e.g. because migration 016 columns were missing in the DB).
-/// - Optionally merges anonymous locations if the user consented.
+/// The returned future completes as soon as the DISPLAY-CRITICAL step is done —
+/// fetching remote locations into the Hive cache so the map can render. Callers
+/// gate the loading overlay on this future, so it must stay short.
+///
+/// The heavier write-side work — re-uploading unsynced rows and merging
+/// anonymous data — is kicked off in the BACKGROUND. Its results stream into the
+/// map reactively via watchLocations(), so awaiting it here was pure overlay
+/// latency (it never needed to gate the first paint). This is what made the map
+/// linger on "Loading your locations…" after sign-in.
 Future<void> performInitialLocationSync(LocationRepository repository) async {
+  // Display-critical: populates the Hive cache the map renders from.
   await repository.fetchRemoteLocations();
-  await repository.syncUnsyncedLocations();
 
-  final syncChoice = await AuthService.getSyncChoice();
-  if (syncChoice == true) {
-    await repository.syncOnLogin();
+  // Fire-and-forget. Runs AFTER the fetch above (sequential, so no racing Hive
+  // writes) and surfaces through the location stream once done.
+  unawaited(_runBackgroundLocationSync(repository));
+}
+
+/// Background continuation of [performInitialLocationSync]: uploads and the
+/// optional anonymous-data merge. Deliberately not awaited by the overlay.
+Future<void> _runBackgroundLocationSync(LocationRepository repository) async {
+  try {
+    await repository.syncUnsyncedLocations();
+
+    final syncChoice = await AuthService.getSyncChoice();
+    if (syncChoice == true) {
+      await repository.syncOnLogin();
+    }
+  } catch (e) {
+    debugPrint('performInitialLocationSync: background sync failed (non-fatal): $e');
   }
 }
