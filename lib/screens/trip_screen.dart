@@ -14,6 +14,7 @@ import 'package:voyza/services/subscription_limit_service.dart';
 import 'package:voyza/utils/countries.dart';
 import 'package:voyza/utils/trip_date_validator.dart';
 import 'package:voyza/widgets/app_toast.dart';
+import 'package:voyza/widgets/country_flag_icon.dart';
 import 'package:voyza/widgets/country_picker_sheet.dart';
 import 'package:voyza/widgets/trip_skeleton.dart';
 
@@ -69,9 +70,10 @@ class _TripScreenState extends ConsumerState<TripScreen> {
   Future<void> _pickCreateFormDateRange() async {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
-    final initialRange = (_selectedStartDate != null && _selectedEndDate != null)
-        ? DateTimeRange(start: _selectedStartDate!, end: _selectedEndDate!)
-        : null;
+    final initialRange =
+        (_selectedStartDate != null && _selectedEndDate != null)
+            ? DateTimeRange(start: _selectedStartDate!, end: _selectedEndDate!)
+            : null;
     final picked = await showDateRangePicker(
       context: context,
       initialDateRange: initialRange,
@@ -111,7 +113,10 @@ class _TripScreenState extends ConsumerState<TripScreen> {
             Container(
               padding: const EdgeInsets.all(20),
               decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.1),
+                color: Theme.of(context)
+                    .colorScheme
+                    .primary
+                    .withValues(alpha: 0.1),
                 shape: BoxShape.circle,
               ),
               child: Icon(
@@ -198,8 +203,7 @@ class _TripScreenState extends ConsumerState<TripScreen> {
     // Trial / Pro gate. Pro users always pass; trial users pass while their
     // 72-hour window is open; otherwise the paywall is shown and we abort
     // unless the user just subscribed.
-    final canCreate =
-        await SubscriptionLimitService(ref).canCreate(context);
+    final canCreate = await SubscriptionLimitService(ref).canCreate(context);
     if (!canCreate) return;
     if (!mounted) return;
 
@@ -361,8 +365,8 @@ class _TripScreenState extends ConsumerState<TripScreen> {
     final sharedTripsAsync = ref.watch(sharedTripsProvider);
 
     final ownedTrips = tripsAsync.asData?.value ?? [];
-    final allSelected =
-        ownedTrips.isNotEmpty && ownedTrips.every((t) => _selectedTripIds.contains(t.id));
+    final allSelected = ownedTrips.isNotEmpty &&
+        ownedTrips.every((t) => _selectedTripIds.contains(t.id));
 
     // Build the selected trips list for bulk actions
     final selectedTrips =
@@ -381,7 +385,8 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                 color: Theme.of(context).scaffoldBackgroundColor,
                 border: Border(
                   top: BorderSide(
-                    color: Theme.of(context).dividerColor.withValues(alpha: 0.3),
+                    color:
+                        Theme.of(context).dividerColor.withValues(alpha: 0.3),
                   ),
                 ),
                 boxShadow: [
@@ -414,271 +419,277 @@ class _TripScreenState extends ConsumerState<TripScreen> {
         onRefresh: _refreshTrips,
         child: CustomScrollView(
           slivers: [
-          // Header
-          SliverAppBar(
-            floating: true,
-            pinned: true,
-            elevation: 0,
-            backgroundColor: _selectionMode
-                ? Theme.of(context).colorScheme.primaryContainer
-                : Theme.of(context).scaffoldBackgroundColor,
-            leading: _selectionMode
-                ? IconButton(
-                    icon: const Icon(Icons.close_rounded),
-                    onPressed: _exitSelectionMode,
-                  )
-                : null,
-            title: _selectionMode
-                ? Text(
-                    '${_selectedTripIds.length} selected',
-                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                          fontWeight: FontWeight.bold,
-                        ),
-                  )
-                : Text(
-                    'My Trips',
-                    style:
-                        Theme.of(context).textTheme.headlineMedium?.copyWith(
-                              fontWeight: FontWeight.bold,
-                            ),
-                  ),
-            actions: _selectionMode
-                ? [
-                    Padding(
-                      padding: const EdgeInsets.only(right: 8),
-                      child: Tooltip(
-                        message: allSelected ? 'Deselect All' : 'Select All',
-                        child: InkWell(
-                          borderRadius: BorderRadius.circular(8),
-                          onTap: allSelected
-                              ? _deselectAll
-                              : () => _selectAll(ownedTrips),
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 8, vertical: 4),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                SizedBox(
-                                  width: 24,
-                                  height: 24,
-                                  child: Checkbox(
-                                    value: allSelected
-                                        ? true
-                                        : _selectedTripIds.isNotEmpty
-                                            ? null
-                                            : false,
-                                    tristate: true,
-                                    onChanged: (_) => allSelected
-                                        ? _deselectAll()
-                                        : _selectAll(ownedTrips),
-                                    materialTapTargetSize:
-                                        MaterialTapTargetSize.shrinkWrap,
-                                    visualDensity: VisualDensity.compact,
+            // Header
+            SliverAppBar(
+              floating: true,
+              pinned: true,
+              elevation: 0,
+              backgroundColor: _selectionMode
+                  ? Theme.of(context).colorScheme.primaryContainer
+                  : Theme.of(context).scaffoldBackgroundColor,
+              leading: _selectionMode
+                  ? IconButton(
+                      icon: const Icon(Icons.close_rounded),
+                      onPressed: _exitSelectionMode,
+                    )
+                  : null,
+              title: _selectionMode
+                  ? Text(
+                      '${_selectedTripIds.length} selected',
+                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                            fontWeight: FontWeight.bold,
+                          ),
+                    )
+                  : Text(
+                      'My Trips',
+                      style:
+                          Theme.of(context).textTheme.headlineMedium?.copyWith(
+                                fontWeight: FontWeight.bold,
+                              ),
+                    ),
+              actions: _selectionMode
+                  ? [
+                      Padding(
+                        padding: const EdgeInsets.only(right: 8),
+                        child: Tooltip(
+                          message: allSelected ? 'Deselect All' : 'Select All',
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(8),
+                            onTap: allSelected
+                                ? _deselectAll
+                                : () => _selectAll(ownedTrips),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 4),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  SizedBox(
+                                    width: 24,
+                                    height: 24,
+                                    child: Checkbox(
+                                      value: allSelected
+                                          ? true
+                                          : _selectedTripIds.isNotEmpty
+                                              ? null
+                                              : false,
+                                      tristate: true,
+                                      onChanged: (_) => allSelected
+                                          ? _deselectAll()
+                                          : _selectAll(ownedTrips),
+                                      materialTapTargetSize:
+                                          MaterialTapTargetSize.shrinkWrap,
+                                      visualDensity: VisualDensity.compact,
+                                    ),
                                   ),
-                                ),
-                                const SizedBox(width: 6),
-                                Text(
-                                  allSelected ? 'Deselect All' : 'Select All',
-                                  style: Theme.of(context)
-                                      .textTheme
-                                      .bodyMedium
-                                      ?.copyWith(fontWeight: FontWeight.w600),
-                                ),
-                              ],
+                                  const SizedBox(width: 6),
+                                  Text(
+                                    allSelected ? 'Deselect All' : 'Select All',
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .bodyMedium
+                                        ?.copyWith(fontWeight: FontWeight.w600),
+                                  ),
+                                ],
+                              ),
                             ),
                           ),
                         ),
                       ),
-                    ),
-                  ]
-                : null,
-          ),
+                    ]
+                  : null,
+            ),
 
-          // Active Trip Section
-          SliverToBoxAdapter(
-            child: activeTripAsync.when(
-              data: (activeTrip) {
-                if (activeTrip == null) {
+            // Active Trip Section
+            SliverToBoxAdapter(
+              child: activeTripAsync.when(
+                data: (activeTrip) {
+                  if (activeTrip == null) {
+                    return Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: _buildEmptyActiveTrip(context),
+                    );
+                  }
                   return Padding(
                     padding: const EdgeInsets.all(16),
-                    child: _buildEmptyActiveTrip(context),
+                    child: _buildActiveTrip(context, activeTrip),
+                  );
+                },
+                loading: () => const Padding(
+                  padding: EdgeInsets.all(16),
+                  child: ActiveTripSkeleton(),
+                ),
+                error: (_, __) => const SizedBox.shrink(),
+              ),
+            ),
+
+            const SliverPadding(padding: EdgeInsets.symmetric(vertical: 8)),
+
+            // Create Trip Button or Form (hidden during multi-select)
+            if (!_selectionMode)
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: _showCreateForm
+                      ? _buildCreateForm(context)
+                      : ElevatedButton.icon(
+                          onPressed: () {
+                            final userId = ref.read(currentUserIdProvider);
+                            if (userId == null) {
+                              _showLoginRequiredModal(context);
+                            } else {
+                              setState(() => _showCreateForm = true);
+                            }
+                          },
+                          icon: const Icon(Icons.add_rounded),
+                          label: const Text('New Trip'),
+                          style: ElevatedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                          ),
+                        ),
+                ),
+              ),
+
+            const SliverPadding(padding: EdgeInsets.symmetric(vertical: 8)),
+
+            // Trips List
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Text(
+                  'Your Trips',
+                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
+                ),
+              ),
+            ),
+
+            tripsAsync.when(
+              data: (trips) {
+                if (trips.isEmpty) {
+                  return SliverToBoxAdapter(
+                    child: Padding(
+                      padding: const EdgeInsets.all(32),
+                      child: Center(
+                        child: Text(
+                          'No trips yet. Create one to get started!',
+                          textAlign: TextAlign.center,
+                          style:
+                              Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                    color: Theme.of(context)
+                                        .textTheme
+                                        .bodyMedium
+                                        ?.color
+                                        ?.withValues(alpha: 0.6),
+                                  ),
+                        ),
+                      ),
+                    ),
                   );
                 }
-                return Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: _buildActiveTrip(context, activeTrip),
+
+                return SliverPadding(
+                  padding: const EdgeInsets.only(
+                    left: 16,
+                    right: 16,
+                    top: 12,
+                    bottom: 16,
+                  ),
+                  sliver: SliverList(
+                    delegate: SliverChildBuilderDelegate(
+                      (context, index) {
+                        final trip = trips[index];
+                        return Padding(
+                          padding: const EdgeInsets.only(bottom: 12),
+                          child: _buildTripCard(context, trip),
+                        );
+                      },
+                      childCount: trips.length,
+                    ),
+                  ),
                 );
               },
-              loading: () => const Padding(
-                padding: EdgeInsets.all(16),
-                child: ActiveTripSkeleton(),
+              loading: () => const SliverToBoxAdapter(
+                child: TripsListSkeleton(),
               ),
-              error: (_, __) => const SizedBox.shrink(),
-            ),
-          ),
-
-          const SliverPadding(padding: EdgeInsets.symmetric(vertical: 8)),
-
-          // Create Trip Button or Form (hidden during multi-select)
-          if (!_selectionMode)
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: _showCreateForm
-                  ? _buildCreateForm(context)
-                  : ElevatedButton.icon(
-                      onPressed: () {
-                        final userId = ref.read(currentUserIdProvider);
-                        if (userId == null) {
-                          _showLoginRequiredModal(context);
-                        } else {
-                          setState(() => _showCreateForm = true);
-                        }
-                      },
-                      icon: const Icon(Icons.add_rounded),
-                      label: const Text('New Trip'),
-                      style: ElevatedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(vertical: 12),
-                      ),
-                    ),
-            ),
-          ),
-
-          const SliverPadding(padding: EdgeInsets.symmetric(vertical: 8)),
-
-          // Trips List
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Text(
-                'Your Trips',
-                style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                      fontWeight: FontWeight.w600,
-                    ),
+              error: (_, __) => SliverToBoxAdapter(
+                child: _buildConnectionError(context),
               ),
             ),
-          ),
 
-          tripsAsync.when(
-            data: (trips) {
-              if (trips.isEmpty) {
+            // Shared Trips Section
+            sharedTripsAsync.when(
+              data: (sharedTrips) {
+                if (sharedTrips.isEmpty) {
+                  return const SliverToBoxAdapter(child: SizedBox.shrink());
+                }
+
                 return SliverToBoxAdapter(
-                  child: Padding(
-                    padding: const EdgeInsets.all(32),
-                    child: Center(
-                      child: Text(
-                        'No trips yet. Create one to get started!',
-                        textAlign: TextAlign.center,
-                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                              color: Theme.of(context)
-                                  .textTheme
-                                  .bodyMedium
-                                  ?.color
-                                  ?.withValues(alpha: 0.6),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const SizedBox(height: 16),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        child: Row(
+                          children: [
+                            Icon(
+                              Icons.group_outlined,
+                              size: 20,
+                              color: Theme.of(context).colorScheme.primary,
                             ),
+                            const SizedBox(width: 8),
+                            Text(
+                              'Shared With You',
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .titleLarge
+                                  ?.copyWith(
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                            ),
+                          ],
+                        ),
                       ),
-                    ),
+                      const SizedBox(height: 12),
+                      ...sharedTrips.map((data) {
+                        final tripData = data['trips'] as Map<String, dynamic>?;
+                        final permission = data['permission'] as String;
+                        if (tripData == null) return const SizedBox.shrink();
+
+                        final trip = Trip.fromJson(tripData);
+                        return Padding(
+                          padding: const EdgeInsets.only(
+                            left: 16,
+                            right: 16,
+                            bottom: 12,
+                          ),
+                          child:
+                              _buildSharedTripCard(context, trip, permission),
+                        );
+                      }),
+                    ],
                   ),
                 );
-              }
-
-              return SliverPadding(
-                padding: const EdgeInsets.only(
-                  left: 16,
-                  right: 16,
-                  top: 12,
-                  bottom: 16,
-                ),
-                sliver: SliverList(
-                  delegate: SliverChildBuilderDelegate(
-                    (context, index) {
-                      final trip = trips[index];
-                      return Padding(
-                        padding: const EdgeInsets.only(bottom: 12),
-                        child: _buildTripCard(context, trip),
-                      );
-                    },
-                    childCount: trips.length,
-                  ),
-                ),
-              );
-            },
-            loading: () => const SliverToBoxAdapter(
-              child: TripsListSkeleton(),
+              },
+              loading: () => const SliverToBoxAdapter(child: SizedBox.shrink()),
+              error: (_, __) =>
+                  const SliverToBoxAdapter(child: SizedBox.shrink()),
             ),
-            error: (_, __) => SliverToBoxAdapter(
-              child: _buildConnectionError(context),
+
+            // Clear the floating bottom tab bar (~70px + safe-area inset)
+            // — MainScreen sets `extendBody: true`, so the list scrolls
+            // behind the bar and the last card otherwise tucks under it.
+            // The previous 50px wasn't enough once the safe-area inset
+            // was included, especially on iOS devices with a home
+            // indicator.
+            SliverPadding(
+              padding: EdgeInsets.only(
+                bottom: 90 + MediaQuery.of(context).padding.bottom,
+              ),
             ),
-          ),
-
-          // Shared Trips Section
-          sharedTripsAsync.when(
-            data: (sharedTrips) {
-              if (sharedTrips.isEmpty) {
-                return const SliverToBoxAdapter(child: SizedBox.shrink());
-              }
-
-              return SliverToBoxAdapter(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const SizedBox(height: 16),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
-                      child: Row(
-                        children: [
-                          Icon(
-                            Icons.group_outlined,
-                            size: 20,
-                            color: Theme.of(context).colorScheme.primary,
-                          ),
-                          const SizedBox(width: 8),
-                          Text(
-                            'Shared With You',
-                            style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                                  fontWeight: FontWeight.w600,
-                                ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    ...sharedTrips.map((data) {
-                      final tripData = data['trips'] as Map<String, dynamic>?;
-                      final permission = data['permission'] as String;
-                      if (tripData == null) return const SizedBox.shrink();
-
-                      final trip = Trip.fromJson(tripData);
-                      return Padding(
-                        padding: const EdgeInsets.only(
-                          left: 16,
-                          right: 16,
-                          bottom: 12,
-                        ),
-                        child: _buildSharedTripCard(context, trip, permission),
-                      );
-                    }),
-                  ],
-                ),
-              );
-            },
-            loading: () => const SliverToBoxAdapter(child: SizedBox.shrink()),
-            error: (_, __) => const SliverToBoxAdapter(child: SizedBox.shrink()),
-          ),
-
-          // Clear the floating bottom tab bar (~70px + safe-area inset)
-          // — MainScreen sets `extendBody: true`, so the list scrolls
-          // behind the bar and the last card otherwise tucks under it.
-          // The previous 50px wasn't enough once the safe-area inset
-          // was included, especially on iOS devices with a home
-          // indicator.
-          SliverPadding(
-            padding: EdgeInsets.only(
-              bottom: 90 + MediaQuery.of(context).padding.bottom,
-            ),
-          ),
-        ],
+          ],
         ),
       ),
     );
@@ -692,7 +703,8 @@ class _TripScreenState extends ConsumerState<TripScreen> {
           Icon(
             Icons.wifi_off_rounded,
             size: 40,
-            color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.4),
+            color:
+                Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.4),
           ),
           const SizedBox(height: 12),
           Text(
@@ -706,7 +718,10 @@ class _TripScreenState extends ConsumerState<TripScreen> {
             'Could not load your trips. Please check your connection and try refreshing.',
             textAlign: TextAlign.center,
             style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6),
+                  color: Theme.of(context)
+                      .colorScheme
+                      .onSurface
+                      .withValues(alpha: 0.6),
                 ),
           ),
           const SizedBox(height: 16),
@@ -943,14 +958,13 @@ class _TripScreenState extends ConsumerState<TripScreen> {
               : IconButton(
                   icon: const Icon(Icons.clear, size: 20),
                   tooltip: 'Clear country',
-                  onPressed: () =>
-                      setState(() => _selectedCountryCode = null),
+                  onPressed: () => setState(() => _selectedCountryCode = null),
                 ),
         ),
         child: Row(
           children: [
             if (country != null) ...[
-              Text(country.flagEmoji, style: const TextStyle(fontSize: 20)),
+              CountryFlagIcon(country.code, height: 18),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
@@ -976,8 +990,7 @@ class _TripScreenState extends ConsumerState<TripScreen> {
 
   Widget _buildDateRangeField(BuildContext context) {
     final theme = Theme.of(context);
-    final hasRange =
-        _selectedStartDate != null && _selectedEndDate != null;
+    final hasRange = _selectedStartDate != null && _selectedEndDate != null;
     final fmt = DateFormat('MMM d, y');
     return InkWell(
       onTap: _pickCreateFormDateRange,
@@ -1023,9 +1036,14 @@ class _TripScreenState extends ConsumerState<TripScreen> {
     final locationsAsync = ref.watch(savedLocationsProvider);
     final isSelected = _selectedTripIds.contains(trip.id);
 
-    Widget buildContent(int locationCount, DateTime? startDate, DateTime? endDate) {
+    Widget buildContent(
+        int locationCount, DateTime? startDate, DateTime? endDate) {
       return _buildTripCardContent(
-        context, trip, locationCount, startDate, endDate,
+        context,
+        trip,
+        locationCount,
+        startDate,
+        endDate,
         isSelected: isSelected,
       );
     }
@@ -1129,8 +1147,10 @@ class _TripScreenState extends ConsumerState<TripScreen> {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               decoration: BoxDecoration(
-                color:
-                    Theme.of(context).colorScheme.primary.withValues(alpha: 0.05),
+                color: Theme.of(context)
+                    .colorScheme
+                    .primary
+                    .withValues(alpha: 0.05),
                 borderRadius: const BorderRadius.vertical(
                   top: Radius.circular(16),
                 ),
@@ -1257,11 +1277,9 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                                       startDate.month, startDate.day);
                                   final e = DateTime(endDate!.year,
                                       endDate.month, endDate.day);
-                                  final dayCount =
-                                      e.difference(s).inDays + 1;
+                                  final dayCount = e.difference(s).inDays + 1;
                                   final dateText = startDate == endDate
-                                      ? DateFormat('MMM d, y')
-                                          .format(startDate)
+                                      ? DateFormat('MMM d, y').format(startDate)
                                       : '${DateFormat('MMM d').format(startDate)} - ${DateFormat('MMM d, y').format(endDate)}';
                                   return Text.rich(
                                     TextSpan(
@@ -1282,8 +1300,7 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                                     style: Theme.of(context)
                                         .textTheme
                                         .bodySmall
-                                        ?.copyWith(
-                                            fontWeight: FontWeight.w500),
+                                        ?.copyWith(fontWeight: FontWeight.w500),
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
                                   );
@@ -1316,9 +1333,8 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                               style: const TextStyle(fontSize: 12),
                             ),
                             style: ElevatedButton.styleFrom(
-                              backgroundColor: isActive
-                                  ? Colors.orange
-                                  : Colors.green,
+                              backgroundColor:
+                                  isActive ? Colors.orange : Colors.green,
                               foregroundColor: Colors.white,
                               padding: const EdgeInsets.symmetric(
                                 horizontal: 10,
@@ -1526,293 +1542,304 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                 ],
               ),
               child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Header with name, country chip, and action menu
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 16, 8, 0),
-              child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Expanded(
-                    child: Column(
+                  // Header with name, country chip, and action menu
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 16, 8, 0),
+                    child: Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          trip.name,
-                          style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                                fontWeight: FontWeight.bold,
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                trip.name,
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .titleLarge
+                                    ?.copyWith(
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
                               ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        if (trip.countryCode != null) ...[
-                          const SizedBox(height: 6),
-                          Builder(builder: (context) {
-                            final country = findCountryByCode(trip.countryCode);
-                            if (country == null) return const SizedBox.shrink();
-                            return Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Text(
-                                  country.flagEmoji,
-                                  style: const TextStyle(fontSize: 14),
-                                ),
-                                const SizedBox(width: 5),
-                                Text(
-                                  country.name,
-                                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                        color: Theme.of(context).colorScheme.primary,
-                                        fontWeight: FontWeight.w500,
+                              if (trip.countryCode != null) ...[
+                                const SizedBox(height: 6),
+                                Builder(builder: (context) {
+                                  final country =
+                                      findCountryByCode(trip.countryCode);
+                                  if (country == null)
+                                    return const SizedBox.shrink();
+                                  return Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      CountryFlagIcon(country.code, height: 14),
+                                      const SizedBox(width: 5),
+                                      Text(
+                                        country.name,
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .bodySmall
+                                            ?.copyWith(
+                                              color: Theme.of(context)
+                                                  .colorScheme
+                                                  .primary,
+                                              fontWeight: FontWeight.w500,
+                                            ),
                                       ),
-                                ),
+                                    ],
+                                  );
+                                }),
                               ],
-                            );
-                          }),
-                        ],
+                            ],
+                          ),
+                        ),
+                        if (!_selectionMode)
+                          PopupMenuButton<String>(
+                            icon: Icon(
+                              Icons.more_vert_rounded,
+                              color: Theme.of(context)
+                                  .textTheme
+                                  .bodyMedium
+                                  ?.color
+                                  ?.withValues(alpha: 0.6),
+                            ),
+                            itemBuilder: (context) => [
+                              PopupMenuItem<String>(
+                                value: 'rename',
+                                child: Row(
+                                  children: [
+                                    Icon(
+                                      Icons.edit_rounded,
+                                      size: 18,
+                                      color:
+                                          Theme.of(context).colorScheme.primary,
+                                    ),
+                                    const SizedBox(width: 12),
+                                    const Text('Edit'),
+                                  ],
+                                ),
+                              ),
+                              const PopupMenuDivider(),
+                              const PopupMenuItem<String>(
+                                value: 'delete',
+                                child: Row(
+                                  children: [
+                                    Icon(
+                                      Icons.delete_rounded,
+                                      size: 18,
+                                      color: Colors.red,
+                                    ),
+                                    SizedBox(width: 12),
+                                    Text(
+                                      'Delete',
+                                      style: TextStyle(color: Colors.red),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                            onSelected: (value) {
+                              if (value == 'rename') {
+                                _showEditTripDialog(context, trip);
+                              } else if (value == 'delete') {
+                                _showDeleteConfirmation(context, trip);
+                              }
+                            },
+                          ),
                       ],
                     ),
                   ),
-                  if (!_selectionMode)
-                  PopupMenuButton<String>(
-                    icon: Icon(
-                      Icons.more_vert_rounded,
-                      color: Theme.of(context)
-                          .textTheme
-                          .bodyMedium
-                          ?.color
-                          ?.withValues(alpha: 0.6),
-                    ),
-                    itemBuilder: (context) => [
-                      PopupMenuItem<String>(
-                        value: 'rename',
-                        child: Row(
-                          children: [
-                            Icon(
-                              Icons.edit_rounded,
-                              size: 18,
-                              color: Theme.of(context).colorScheme.primary,
-                            ),
-                            const SizedBox(width: 12),
-                            const Text('Edit'),
-                          ],
-                        ),
-                      ),
-                      const PopupMenuDivider(),
-                      const PopupMenuItem<String>(
-                        value: 'delete',
-                        child: Row(
-                          children: [
-                            Icon(
-                              Icons.delete_rounded,
-                              size: 18,
-                              color: Colors.red,
-                            ),
-                            SizedBox(width: 12),
-                            Text(
-                              'Delete',
-                              style: TextStyle(color: Colors.red),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                    onSelected: (value) {
-                      if (value == 'rename') {
-                        _showEditTripDialog(context, trip);
-                      } else if (value == 'delete') {
-                        _showDeleteConfirmation(context, trip);
-                      }
-                    },
-                  ),
-                ],
-              ),
-            ),
 
-            // Trip info
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Location count
-                  Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(6),
-                        decoration: BoxDecoration(
-                          color: Theme.of(context)
-                              .colorScheme
-                              .primary
-                              .withValues(alpha: 0.1),
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        child: Icon(
-                          Icons.location_on,
-                          size: 16,
-                          color: Theme.of(context).colorScheme.primary,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        '$locationCount ${locationCount == 1 ? 'location' : 'locations'}',
-                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                              fontWeight: FontWeight.w500,
-                            ),
-                      ),
-                    ],
-                  ),
-
-                  // Date range
-                  if (startDate != null && endDate != null) ...[
-                    const SizedBox(height: 8),
-                    Row(
+                  // Trip info
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Container(
-                          padding: const EdgeInsets.all(6),
-                          decoration: BoxDecoration(
-                            color: Theme.of(context)
-                                .colorScheme
-                                .primary
-                                .withValues(alpha: 0.1),
-                            borderRadius: BorderRadius.circular(6),
-                          ),
-                          child: Icon(
-                            Icons.calendar_today,
-                            size: 16,
-                            color: Theme.of(context).colorScheme.primary,
-                          ),
+                        // Location count
+                        Row(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.all(6),
+                              decoration: BoxDecoration(
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .primary
+                                    .withValues(alpha: 0.1),
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: Icon(
+                                Icons.location_on,
+                                size: 16,
+                                color: Theme.of(context).colorScheme.primary,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              '$locationCount ${locationCount == 1 ? 'location' : 'locations'}',
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .bodyMedium
+                                  ?.copyWith(
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                            ),
+                          ],
                         ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Builder(builder: (context) {
-                            // Inclusive day count — Mar 5 → Mar 7 is 3 days,
-                            // not 2. Normalize to midnight before diffing so
-                            // a stored time component doesn't shave a day.
-                            final s = DateTime(startDate.year,
-                                startDate.month, startDate.day);
-                            final e = DateTime(
-                                endDate.year, endDate.month, endDate.day);
-                            final dayCount = e.difference(s).inDays + 1;
-                            final dateText = startDate == endDate
-                                ? DateFormat('MMM d, y').format(startDate)
-                                : '${DateFormat('MMM d').format(startDate)} - ${DateFormat('MMM d, y').format(endDate)}';
-                            return Text.rich(
-                              TextSpan(
+
+                        // Date range
+                        if (startDate != null && endDate != null) ...[
+                          const SizedBox(height: 8),
+                          Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.all(6),
+                                decoration: BoxDecoration(
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .primary
+                                      .withValues(alpha: 0.1),
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                child: Icon(
+                                  Icons.calendar_today,
+                                  size: 16,
+                                  color: Theme.of(context).colorScheme.primary,
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Builder(builder: (context) {
+                                  // Inclusive day count — Mar 5 → Mar 7 is 3 days,
+                                  // not 2. Normalize to midnight before diffing so
+                                  // a stored time component doesn't shave a day.
+                                  final s = DateTime(startDate.year,
+                                      startDate.month, startDate.day);
+                                  final e = DateTime(
+                                      endDate.year, endDate.month, endDate.day);
+                                  final dayCount = e.difference(s).inDays + 1;
+                                  final dateText = startDate == endDate
+                                      ? DateFormat('MMM d, y').format(startDate)
+                                      : '${DateFormat('MMM d').format(startDate)} - ${DateFormat('MMM d, y').format(endDate)}';
+                                  return Text.rich(
+                                    TextSpan(
+                                      children: [
+                                        TextSpan(text: dateText),
+                                        TextSpan(
+                                          text:
+                                              '  ·  $dayCount day${dayCount == 1 ? '' : 's'}',
+                                          style: TextStyle(
+                                            fontWeight: FontWeight.w600,
+                                            color: Theme.of(context)
+                                                .colorScheme
+                                                .primary,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .bodyMedium
+                                        ?.copyWith(fontWeight: FontWeight.w500),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  );
+                                }),
+                              ),
+                            ],
+                          ),
+                        ],
+
+                        const SizedBox(height: 12),
+                        const Divider(height: 1),
+                        const SizedBox(height: 12),
+
+                        // Status and activate button
+                        Row(
+                          children: [
+                            // Status indicator
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 10,
+                                vertical: 6,
+                              ),
+                              decoration: BoxDecoration(
+                                color: statusColor.withValues(alpha: 0.15),
+                                borderRadius: BorderRadius.circular(20),
+                                border: Border.all(
+                                  color: statusColor.withValues(alpha: 0.3),
+                                  width: 1,
+                                ),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
                                 children: [
-                                  TextSpan(text: dateText),
-                                  TextSpan(
-                                    text:
-                                        '  ·  $dayCount day${dayCount == 1 ? '' : 's'}',
+                                  Container(
+                                    width: 6,
+                                    height: 6,
+                                    decoration: BoxDecoration(
+                                      color: statusColor,
+                                      shape: BoxShape.circle,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 6),
+                                  Text(
+                                    statusText,
                                     style: TextStyle(
+                                      color: statusColor,
+                                      fontSize: 12,
                                       fontWeight: FontWeight.w600,
-                                      color: Theme.of(context)
-                                          .colorScheme
-                                          .primary,
                                     ),
                                   ),
                                 ],
                               ),
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .bodyMedium
-                                  ?.copyWith(fontWeight: FontWeight.w500),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            );
-                          }),
-                        ),
-                      ],
-                    ),
-                  ],
-
-                  const SizedBox(height: 12),
-                  const Divider(height: 1),
-                  const SizedBox(height: 12),
-
-                  // Status and activate button
-                  Row(
-                    children: [
-                      // Status indicator
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 10,
-                          vertical: 6,
-                        ),
-                        decoration: BoxDecoration(
-                          color: statusColor.withValues(alpha: 0.15),
-                          borderRadius: BorderRadius.circular(20),
-                          border: Border.all(
-                            color: statusColor.withValues(alpha: 0.3),
-                            width: 1,
-                          ),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Container(
-                              width: 6,
-                              height: 6,
-                              decoration: BoxDecoration(
-                                color: statusColor,
-                                shape: BoxShape.circle,
-                              ),
                             ),
-                            const SizedBox(width: 6),
-                            Text(
-                              statusText,
-                              style: TextStyle(
-                                color: statusColor,
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
+
+                            const Spacer(),
+
+                            // Activate/Deactivate button
+                            SizedBox(
+                              height: 32,
+                              child: ElevatedButton.icon(
+                                onPressed: () {
+                                  if (isActive) {
+                                    _deactivateTrip(trip);
+                                  } else {
+                                    _setActiveTrip(trip);
+                                  }
+                                },
+                                icon: Icon(
+                                  isActive
+                                      ? Icons.stop_circle_outlined
+                                      : Icons.play_circle_outline,
+                                  size: 18,
+                                ),
+                                label:
+                                    Text(isActive ? 'Deactivate' : 'Activate'),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor:
+                                      isActive ? Colors.orange : Colors.green,
+                                  foregroundColor: Colors.white,
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 12,
+                                  ),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                ),
                               ),
                             ),
                           ],
                         ),
-                      ),
-
-                      const Spacer(),
-
-                      // Activate/Deactivate button
-                      SizedBox(
-                        height: 32,
-                        child: ElevatedButton.icon(
-                          onPressed: () {
-                            if (isActive) {
-                              _deactivateTrip(trip);
-                            } else {
-                              _setActiveTrip(trip);
-                            }
-                          },
-                          icon: Icon(
-                            isActive
-                                ? Icons.stop_circle_outlined
-                                : Icons.play_circle_outline,
-                            size: 18,
-                          ),
-                          label: Text(isActive ? 'Deactivate' : 'Activate'),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: isActive
-                                ? Colors.orange
-                                : Colors.green,
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 12,
-                            ),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ],
               ),
             ),
-          ],
-        ),
-      ),
             // Checkbox badge — overlays the card in selection mode
             if (_selectionMode)
               Positioned(
@@ -2055,8 +2082,7 @@ class _TripScreenState extends ConsumerState<TripScreen> {
 
     final nameUnchanged = newName == trip.name;
     final countryUnchanged = !clearCountry &&
-        (newCountryCode?.toUpperCase() ?? trip.countryCode) ==
-            trip.countryCode;
+        (newCountryCode?.toUpperCase() ?? trip.countryCode) == trip.countryCode;
     final datesUnchanged = !clearDates &&
         newStartDate == trip.startDate &&
         newEndDate == trip.endDate;
@@ -2067,7 +2093,8 @@ class _TripScreenState extends ConsumerState<TripScreen> {
     // When the user changed the trip's date range to a non-empty range,
     // verify that existing locations still fit; if any fall outside, ask
     // for confirmation before persisting.
-    if (!datesUnchanged && !clearDates &&
+    if (!datesUnchanged &&
+        !clearDates &&
         (newStartDate != null || newEndDate != null)) {
       final allLocations =
           ref.read(savedLocationsProvider).asData?.value ?? const [];
@@ -2304,8 +2331,7 @@ class _TripScreenState extends ConsumerState<TripScreen> {
   }
 }
 
-extension on String {
-}
+extension on String {}
 
 typedef _EditTripSaveCallback = void Function({
   required String newName,
@@ -2436,10 +2462,7 @@ class _EditTripDialogState extends State<_EditTripDialog> {
               child: Row(
                 children: [
                   if (country != null) ...[
-                    Text(
-                      country.flagEmoji,
-                      style: const TextStyle(fontSize: 20),
-                    ),
+                    CountryFlagIcon(country.code, height: 18),
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(

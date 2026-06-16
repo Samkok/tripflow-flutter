@@ -95,6 +95,15 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
   static const double _snapCollapsed = 0.23;
   static const double _snapExpanded = 0.85;
 
+  /// Below this many logical pixels of sheet height, the fixed sticky header
+  /// (drag handle + title + full Route Summary card) no longer fits above the
+  /// scroll region, squeezing the Expanded list to a negative height and
+  /// throwing a transient layout/constraint error during a collapse (most
+  /// visible at tablet proportions). At/under this height we fold the summary
+  /// into its single-row compact form, which always fits the collapsed sheet.
+  /// Chosen with headroom for the full card (~260px) plus a sliver of list.
+  static const double _fullSummaryMinHeight = 360.0;
+
   /// Forwards a vertical drag delta from the sticky region / drag handle
   /// / drag overlay into the sheet controller. Without this, dragging on
   /// those areas wouldn't expand or collapse the sheet — they bypass the
@@ -165,8 +174,8 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
         // immediately, recursively. We only re-open when at least one
         // UNACKNOWLEDGED warning is on the new route.
         final acked = ref.read(acknowledgedTimingWarningsProvider);
-        final hasUnacked = sim.stops.any((s) =>
-            s.warnings.isNotEmpty && !acked.contains(s.locationId));
+        final hasUnacked = sim.stops
+            .any((s) => s.warnings.isNotEmpty && !acked.contains(s.locationId));
         if (hasUnacked) {
           TimingWarningsSheet.show(context);
         }
@@ -241,9 +250,8 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                 onTap: () {
                   if (sheetController != null) {
                     final currentSize = sheetController!.size;
-                    final targetSize = currentSize < 0.5
-                        ? _snapExpanded
-                        : _snapCollapsed;
+                    final targetSize =
+                        currentSize < 0.5 ? _snapExpanded : _snapCollapsed;
                     sheetController!.animateTo(
                       targetSize,
                       duration: const Duration(milliseconds: 300),
@@ -297,8 +305,8 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                 behavior: HitTestBehavior.translucent,
                 onVerticalDragUpdate: (details) =>
                     _dragSheetBy(details.primaryDelta ?? 0),
-                onVerticalDragEnd: (details) => _snapSheet(
-                    details.velocity.pixelsPerSecond.dy),
+                onVerticalDragEnd: (details) =>
+                    _snapSheet(details.velocity.pixelsPerSecond.dy),
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(20, 16, 20, 4),
                   child: Column(
@@ -314,8 +322,7 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                       Consumer(builder: (context, ref, _) {
                         final selectedDate = ref.watch(selectedDateProvider);
                         final now = DateTime.now();
-                        final today =
-                            DateTime(now.year, now.month, now.day);
+                        final today = DateTime(now.year, now.month, now.day);
                         final isPastDate = selectedDate.isBefore(today);
                         if (isPastDate) {
                           return _buildHistoryBanner(context);
@@ -326,18 +333,33 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                         Consumer(builder: (context, ref, _) {
                           final locationsForDate =
                               ref.watch(locationsForSelectedDateProvider);
-                          final totalTravelTime = ref.watch(tripProvider
-                              .select((s) => s.totalTravelTime));
-                          final totalDistance = ref.watch(tripProvider
-                              .select((s) => s.totalDistance));
+                          final totalTravelTime = ref.watch(
+                              tripProvider.select((s) => s.totalTravelTime));
+                          final totalDistance = ref.watch(
+                              tripProvider.select((s) => s.totalDistance));
                           // Cross-fade between the full and compact route
-                          // summary based on the list's scroll position.
-                          // _summaryCompact is flipped by the scroll
-                          // notification listener wrapping the ListView
-                          // below.
-                          return ValueListenableBuilder<bool>(
-                            valueListenable: _summaryCompact,
-                            builder: (context, compact, _) {
+                          // summary. Goes compact when EITHER the list is
+                          // scrolled past the top (_summaryCompact, flipped by
+                          // the scroll notification listener below) OR the
+                          // sheet is too short to fit the full card — the
+                          // latter prevents the fixed sticky header from
+                          // overflowing the collapsed sheet. We listen to the
+                          // sheet controller so the fold tracks the collapse
+                          // animation, not just scrolls.
+                          return ListenableBuilder(
+                            listenable: Listenable.merge(
+                                [_summaryCompact, sheetController]),
+                            builder: (context, _) {
+                              final ctrl = sheetController;
+                              // Until the controller attaches (first frame) the
+                              // sheet sits at its collapsed initialChildSize,
+                              // so assume short until it reports real pixels.
+                              final sheetTooShort = ctrl == null
+                                  ? false
+                                  : (!ctrl.isAttached ||
+                                      ctrl.pixels < _fullSummaryMinHeight);
+                              final compact =
+                                  _summaryCompact.value || sheetTooShort;
                               return AnimatedCrossFade(
                                 duration: const Duration(milliseconds: 200),
                                 sizeCurve: Curves.easeOut,
@@ -385,64 +407,116 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                   // ListView — drags on the list area expand/collapse
                   // the sheet via the built-in DraggableScrollableSheet
                   // coordination.
-                  child: ListView(
-                    controller: scrollController,
-                    shrinkWrap: false,
-                    physics: const AlwaysScrollableScrollPhysics(),
-                    padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
-                    children: [
-                      _buildDatePicker(context, ref),
-                      _buildTripDayChips(context, ref),
-                      if (hasPinnedLocations) _buildLocationsTabBar(context),
-                      ListenableBuilder(
-                        listenable: _tabController,
-                        builder: (context, _) {
-                          if (!hasPinnedLocations ||
-                              _tabController.index == 0) {
-                            return Consumer(builder: (context, ref, _) {
-                              final locationsForDate =
-                                  ref.watch(locationsForSelectedDateProvider);
-                              return Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: _buildLocationsListWidgets(
-                                    context,
-                                    ref,
-                                    locationsForDate,
-                                    scrollController),
-                              );
-                            });
-                          }
-                          return Consumer(builder: (context, ref, _) {
-                            final all = ref.watch(tripProvider
-                                .select((s) => s.pinnedLocations));
-                            return Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: _buildAllLocationsGroupedByDate(
-                                  context, ref, all, scrollController),
-                            );
-                          });
-                        },
-                      ),
-                      ListenableBuilder(
-                        listenable: _tabController,
-                        builder: (context, _) {
-                          if (hasPinnedLocations &&
-                              _tabController.index != 0) {
-                            return const SizedBox.shrink();
-                          }
-                          return Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              _buildOptimizeButton(
-                                  context, ref, scrollController),
-                              const SizedBox(height: 12),
-                              _buildCsvDownloadButton(context, ref),
+                  child: ListenableBuilder(
+                    listenable: _tabController,
+                    builder: (context, _) {
+                      return Consumer(builder: (context, ref, _) {
+                        // On the selected-date tab with no locations for that
+                        // date, render a scroll body whose empty-state fills
+                        // and centers in the remaining viewport. A plain list
+                        // item would otherwise hug the top of the sheet,
+                        // leaving the message stranded high up on tall screens
+                        // (e.g. iPad) instead of centered. .select keeps this
+                        // rebuilding only when emptiness actually flips.
+                        final onSelectedDateTab =
+                            !hasPinnedLocations || _tabController.index == 0;
+                        final selectedDateEmpty = onSelectedDateTab &&
+                            ref.watch(locationsForSelectedDateProvider
+                                .select((l) => l.isEmpty));
+                        if (selectedDateEmpty) {
+                          return CustomScrollView(
+                            controller: scrollController,
+                            physics: const AlwaysScrollableScrollPhysics(),
+                            slivers: [
+                              SliverPadding(
+                                padding:
+                                    const EdgeInsets.fromLTRB(20, 8, 20, 0),
+                                sliver: SliverList(
+                                  delegate: SliverChildListDelegate([
+                                    _buildDatePicker(context, ref),
+                                    _buildTripDayChips(context, ref),
+                                    if (hasPinnedLocations)
+                                      _buildLocationsTabBar(context),
+                                  ]),
+                                ),
+                              ),
+                              SliverFillRemaining(
+                                hasScrollBody: false,
+                                child: Padding(
+                                  padding:
+                                      const EdgeInsets.fromLTRB(32, 8, 32, 32),
+                                  child: Center(
+                                      child: _buildEmptyDateState(context)),
+                                ),
+                              ),
                             ],
                           );
-                        },
-                      ),
-                      const SizedBox(height: 130),
-                    ],
+                        }
+                        return ListView(
+                          controller: scrollController,
+                          shrinkWrap: false,
+                          physics: const AlwaysScrollableScrollPhysics(),
+                          padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+                          children: [
+                            _buildDatePicker(context, ref),
+                            _buildTripDayChips(context, ref),
+                            if (hasPinnedLocations)
+                              _buildLocationsTabBar(context),
+                            ListenableBuilder(
+                              listenable: _tabController,
+                              builder: (context, _) {
+                                if (!hasPinnedLocations ||
+                                    _tabController.index == 0) {
+                                  return Consumer(builder: (context, ref, _) {
+                                    final locationsForDate = ref.watch(
+                                        locationsForSelectedDateProvider);
+                                    return Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: _buildLocationsListWidgets(
+                                          context,
+                                          ref,
+                                          locationsForDate,
+                                          scrollController),
+                                    );
+                                  });
+                                }
+                                return Consumer(builder: (context, ref, _) {
+                                  final all = ref.watch(tripProvider
+                                      .select((s) => s.pinnedLocations));
+                                  return Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: _buildAllLocationsGroupedByDate(
+                                        context, ref, all, scrollController),
+                                  );
+                                });
+                              },
+                            ),
+                            ListenableBuilder(
+                              listenable: _tabController,
+                              builder: (context, _) {
+                                if (hasPinnedLocations &&
+                                    _tabController.index != 0) {
+                                  return const SizedBox.shrink();
+                                }
+                                return Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
+                                  children: [
+                                    _buildOptimizeButton(
+                                        context, ref, scrollController),
+                                    const SizedBox(height: 12),
+                                    _buildCsvDownloadButton(context, ref),
+                                  ],
+                                );
+                              },
+                            ),
+                            const SizedBox(height: 130),
+                          ],
+                        );
+                      });
+                    },
                   ),
                 ),
               ),
@@ -507,9 +581,8 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                     borderRadius: BorderRadius.circular(12),
                     child: InkWell(
                       borderRadius: BorderRadius.circular(12),
-                      onTap: () => ref
-                          .read(tripProvider.notifier)
-                          .clearOptimizedRoute(),
+                      onTap: () =>
+                          ref.read(tripProvider.notifier).clearOptimizedRoute(),
                       child: Padding(
                         padding: const EdgeInsets.symmetric(
                             horizontal: 12, vertical: 10),
@@ -660,8 +733,7 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
               builder: (context, _) {
                 final isAllTab = _tabController.index != 0;
                 final scopedLocations = isAllTab
-                    ? ref.watch(tripProvider
-                        .select((s) => s.pinnedLocations))
+                    ? ref.watch(tripProvider.select((s) => s.pinnedLocations))
                     : ref.watch(locationsForSelectedDateProvider);
                 final total = scopedLocations.length;
                 if (total == 0) return const SizedBox.shrink();
@@ -763,14 +835,15 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                       leading: Icon(Icons.calendar_today_outlined,
                           color: canEdit ? null : Colors.grey),
                       title: Text('Move to...',
-                          style: TextStyle(
-                              color: canEdit ? null : Colors.grey)),
+                          style:
+                              TextStyle(color: canEdit ? null : Colors.grey)),
                     ),
                   ),
                   PopupMenuItem<String>(
                     // Uses theme colors
                     value: 'skip',
-                    enabled: canEdit, // Disable skipping for past dates or read-only
+                    enabled:
+                        canEdit, // Disable skipping for past dates or read-only
                     child: ListTile(
                       leading: Icon(
                         Icons.remove_circle_outline,
@@ -779,8 +852,8 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                             : Colors.grey,
                       ),
                       title: Text('Skip',
-                          style: TextStyle(
-                              color: canEdit ? null : Colors.grey)),
+                          style:
+                              TextStyle(color: canEdit ? null : Colors.grey)),
                     ),
                   ),
                   PopupMenuItem<String>(
@@ -791,7 +864,8 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                           color: hasWriteAccess ? Colors.green : Colors.grey),
                       title: Text('Mark as Done',
                           style: TextStyle(
-                              color: hasWriteAccess ? Colors.green : Colors.grey)),
+                              color:
+                                  hasWriteAccess ? Colors.green : Colors.grey)),
                     ),
                   ),
                   const PopupMenuItem(
@@ -845,9 +919,8 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
             child: TextButton.icon(
               onPressed: () async {
                 // BUGFIX: Ensure initialDate is never before firstDate
-                final initialDateForPicker = selectedDate.isBefore(firstDate)
-                    ? firstDate
-                    : selectedDate;
+                final initialDateForPicker =
+                    selectedDate.isBefore(firstDate) ? firstDate : selectedDate;
 
                 final newDate = await DatePickerUtils.showCustomDatePicker(
                   context: context,
@@ -910,8 +983,8 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
     }
 
     final selectedRaw = ref.watch(selectedDateProvider);
-    final selected = DateTime(
-        selectedRaw.year, selectedRaw.month, selectedRaw.day);
+    final selected =
+        DateTime(selectedRaw.year, selectedRaw.month, selectedRaw.day);
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
     final theme = Theme.of(context);
@@ -949,15 +1022,13 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
             bg = todayAccent.withValues(alpha: 0.10);
             borderColor = todayAccent.withValues(alpha: 0.55);
           } else {
-            fg = theme.textTheme.bodyMedium?.color
-                    ?.withValues(alpha: 0.75) ??
+            fg = theme.textTheme.bodyMedium?.color?.withValues(alpha: 0.75) ??
                 theme.colorScheme.onSurface;
             bg = Colors.transparent;
             borderColor = theme.dividerColor.withValues(alpha: 0.4);
           }
 
-          final dateLabel =
-              isToday ? 'Today' : DateFormat('MMM d').format(day);
+          final dateLabel = isToday ? 'Today' : DateFormat('MMM d').format(day);
 
           return TextButton(
             onPressed: () {
@@ -965,8 +1036,7 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
             },
             style: TextButton.styleFrom(
               minimumSize: Size.zero,
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
               tapTargetSize: MaterialTapTargetSize.shrinkWrap,
               foregroundColor: fg,
               backgroundColor: bg,
@@ -1115,8 +1185,8 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                   tooltip: 'Open in Google Maps',
                   padding: EdgeInsets.zero,
                   style: IconButton.styleFrom(
-                    backgroundColor: theme.colorScheme.primary
-                        .withValues(alpha: 0.15),
+                    backgroundColor:
+                        theme.colorScheme.primary.withValues(alpha: 0.15),
                     foregroundColor: theme.colorScheme.primary,
                   ),
                 ),
@@ -1181,13 +1251,15 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                                 .colorScheme
                                 .primary
                                 .withValues(alpha: 0.15),
-                            foregroundColor: Theme.of(context).colorScheme.primary,
+                            foregroundColor:
+                                Theme.of(context).colorScheme.primary,
                             padding: const EdgeInsets.all(8),
                           ),
                         ),
                         const SizedBox(height: 4),
                         Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 4),
                           decoration: BoxDecoration(
                             color: Theme.of(context)
                                 .colorScheme
@@ -1206,10 +1278,14 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                               const SizedBox(width: 4),
                               Text(
                                 _formatDistance(totalDistance),
-                                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                  color: Theme.of(context).colorScheme.primary,
-                                  fontWeight: FontWeight.w600,
-                                ),
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .bodySmall
+                                    ?.copyWith(
+                                      color:
+                                          Theme.of(context).colorScheme.primary,
+                                      fontWeight: FontWeight.w600,
+                                    ),
                               ),
                             ],
                           ),
@@ -1333,38 +1409,51 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
 
   /// PERFORMANCE: Build location widgets as a flat list to enable lazy loading
   /// Returns List<Widget> instead of nested ListViews for better performance
+  /// Empty-state shown when the selected date has no locations. Sized with
+  /// [MainAxisSize.min] so a [Center]/[SliverFillRemaining] can position it in
+  /// the middle of the remaining viewport (notably on tall iPad sheets).
+  Widget _buildEmptyDateState(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(
+          Icons.map_outlined,
+          size: 64,
+          color: Theme.of(context).textTheme.bodyMedium?.color,
+        ),
+        const SizedBox(height: 16),
+        Text(
+          'No locations for this date',
+          style: Theme.of(context).textTheme.titleMedium,
+          textAlign: TextAlign.center,
+        ),
+        const SizedBox(height: 8),
+        Text(
+          'Select another date or add new locations.',
+          style: Theme.of(context).textTheme.bodyMedium,
+          textAlign: TextAlign.center,
+        ),
+      ],
+    );
+  }
+
   List<Widget> _buildLocationsListWidgets(BuildContext context, WidgetRef ref,
       List<LocationModel> locations, ScrollController scrollController) {
     if (locations.isEmpty) {
+      // Defensive fallback. The selected-date tab routes empty dates through
+      // the centered SliverFillRemaining body in build(), so this path is only
+      // reached if a caller passes an empty list directly.
       return [
-        Container(
+        Padding(
           padding:
               const EdgeInsets.only(left: 32, right: 32, bottom: 32, top: 16),
-          child: Column(
-            children: [
-              Icon(
-                Icons.map_outlined,
-                size: 64,
-                color: Theme.of(context).textTheme.bodyMedium?.color,
-              ),
-              const SizedBox(height: 16),
-              Text(
-                'No locations for this date',
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Select another date or add new locations.',
-                style: Theme.of(context).textTheme.bodyMedium,
-                textAlign: TextAlign.center,
-              ),
-            ],
-          ),
+          child: _buildEmptyDateState(context),
         ),
       ];
     }
 
-    final normalLocations = locations.where((l) => !l.isSkipped && !l.isDone).toList();
+    final normalLocations =
+        locations.where((l) => !l.isSkipped && !l.isDone).toList();
     final skippedLocations = locations.where((l) => l.isSkipped).toList();
     final doneLocations = locations.where((l) => l.isDone).toList();
 
@@ -1535,8 +1624,8 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
     final sortedDates = grouped.keys.toList()..sort();
 
     final selectedDate = ref.watch(selectedDateProvider);
-    final today = DateTime(
-        DateTime.now().year, DateTime.now().month, DateTime.now().day);
+    final today =
+        DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
 
     final widgets = <Widget>[];
     for (final date in sortedDates) {
@@ -1599,17 +1688,14 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
           onTap: onTap,
           borderRadius: BorderRadius.circular(12),
           child: Container(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
             decoration: BoxDecoration(
               color: isSelected
                   ? primary.withValues(alpha: 0.18)
                   : primary.withValues(alpha: 0.06),
               borderRadius: BorderRadius.circular(12),
               border: Border.all(
-                color: isSelected
-                    ? primary
-                    : primary.withValues(alpha: 0.2),
+                color: isSelected ? primary : primary.withValues(alpha: 0.2),
                 width: isSelected ? 1.5 : 1,
               ),
             ),
@@ -1631,8 +1717,8 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                   ),
                 ),
                 Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 8, vertical: 2),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                   decoration: BoxDecoration(
                     color: primary.withValues(alpha: 0.15),
                     borderRadius: BorderRadius.circular(10),
@@ -1659,12 +1745,12 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
   }
 
   /// Build optimize and CSV buttons as separate widgets
-  Widget _buildOptimizeButton(BuildContext context, WidgetRef ref,
-      ScrollController scrollController) {
+  Widget _buildOptimizeButton(
+      BuildContext context, WidgetRef ref, ScrollController scrollController) {
     return Consumer(builder: (context, ref, _) {
       final isGenerating = ref.watch(isGeneratingRouteProvider);
-      final hasRoute = ref
-          .watch(tripProvider.select((s) => s.optimizedRoute.isNotEmpty));
+      final hasRoute =
+          ref.watch(tripProvider.select((s) => s.optimizedRoute.isNotEmpty));
       final selectedDate = ref.watch(selectedDateProvider);
       final locationsForDate = ref.watch(locationsForSelectedDateProvider);
 
@@ -1684,8 +1770,8 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
       } else if (isViewingHistory) {
         buttonText = 'View Route';
         onPressedAction = () {
-          ref.read(TripBottomSheet.viewHistoricalRouteProvider.notifier)
-              .state = true;
+          ref.read(TripBottomSheet.viewHistoricalRouteProvider.notifier).state =
+              true;
           final collapse = sheetController?.animateTo(
             0.12,
             duration: const Duration(milliseconds: 300),
@@ -1699,6 +1785,7 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
           void resetScroll() {
             if (scrollController.hasClients) scrollController.jumpTo(0);
           }
+
           if (collapse != null) {
             collapse.then((_) => resetScroll());
           } else {
@@ -1710,8 +1797,8 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
         onPressedAction = null; // disabled — no locations for this date
       } else {
         buttonText = hasRoute ? 'Re-optimize Route' : 'Optimize Route';
-        onPressedAction = () => _showChooseStartPointDialog(context, ref,
-            isReoptimizing: hasRoute);
+        onPressedAction = () =>
+            _showChooseStartPointDialog(context, ref, isReoptimizing: hasRoute);
       }
 
       final canGlow = onPressedAction != null && !isGenerating;
@@ -1728,9 +1815,8 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                   child: CircularProgressIndicator(
                       strokeWidth: 2, color: Colors.black),
                 )
-              : Icon(isViewingHistory
-                  ? Icons.visibility_outlined
-                  : Icons.route),
+              : Icon(
+                  isViewingHistory ? Icons.visibility_outlined : Icons.route),
           label: Text(buttonText),
           style: ElevatedButton.styleFrom(
             padding: const EdgeInsets.symmetric(vertical: 16),
@@ -1738,8 +1824,9 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
         ),
       );
 
-      final primary =
-          canGlow ? _PulsingGlow(glowColor: primaryColor, child: button) : button;
+      final primary = canGlow
+          ? _PulsingGlow(glowColor: primaryColor, child: button)
+          : button;
 
       // Clear Route is shown whenever there's a live optimized route and
       // locations to anchor it — past, today, and future alike. Suppressed
@@ -1762,10 +1849,8 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
               padding: const EdgeInsets.symmetric(vertical: 14),
               foregroundColor: Theme.of(context).colorScheme.error,
               side: BorderSide(
-                color: Theme.of(context)
-                    .colorScheme
-                    .error
-                    .withValues(alpha: 0.5),
+                color:
+                    Theme.of(context).colorScheme.error.withValues(alpha: 0.5),
               ),
             ),
           ),
@@ -2061,8 +2146,8 @@ class _PulsingGlowState extends State<_PulsingGlow>
           borderRadius: BorderRadius.circular(12),
           boxShadow: [
             BoxShadow(
-              color: widget.glowColor
-                  .withValues(alpha: 0.25 + _glow.value * 0.45),
+              color:
+                  widget.glowColor.withValues(alpha: 0.25 + _glow.value * 0.45),
               blurRadius: 6 + _glow.value * 18,
               spreadRadius: _glow.value * 3,
             ),
@@ -2136,8 +2221,7 @@ class _StartPointSheetState extends ConsumerState<_StartPointSheet> {
     final theme = Theme.of(context);
     final tripState = ref.watch(tripProvider);
     final selectedDate = ref.watch(selectedDateProvider);
-    final activeTrip =
-        ref.watch(realtimeActiveTripProvider).asData?.value;
+    final activeTrip = ref.watch(realtimeActiveTripProvider).asData?.value;
     final tripCountry = activeTrip?.countryCode?.toUpperCase();
 
     // Day's stops — including skipped/done, since those can serve as
@@ -2197,8 +2281,7 @@ class _StartPointSheetState extends ConsumerState<_StartPointSheet> {
         return Container(
           decoration: BoxDecoration(
             color: theme.scaffoldBackgroundColor,
-            borderRadius:
-                const BorderRadius.vertical(top: Radius.circular(20)),
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
           ),
           child: Column(
             children: [
@@ -2271,8 +2354,7 @@ class _StartPointSheetState extends ConsumerState<_StartPointSheet> {
                                 : 'Use device GPS as the start anchor'),
                         value: 'current_location',
                         groupValue: _selectedStartId,
-                        onChanged: (v) =>
-                            setState(() => _selectedStartId = v),
+                        onChanged: (v) => setState(() => _selectedStartId = v),
                         disabled: currentLocationDisabled,
                       ),
                       const SizedBox(height: 16),
@@ -2280,21 +2362,19 @@ class _StartPointSheetState extends ConsumerState<_StartPointSheet> {
                     _sectionLabel(
                       context,
                       'Active stops',
-                      trailing: activeStops.isEmpty
-                          ? null
-                          : '${activeStops.length}',
+                      trailing:
+                          activeStops.isEmpty ? null : '${activeStops.length}',
                     ),
                     if (activeStops.isEmpty)
-                      _emptyHint(context,
-                          'No active stops on this day to start from.')
+                      _emptyHint(
+                          context, 'No active stops on this day to start from.')
                     else
                       ...activeStops.map((loc) => _StartPointTile(
                             leading: Icon(Icons.place_outlined,
                                 color: theme.colorScheme.primary),
                             title: loc.name,
-                            subtitle: loc.address.isNotEmpty
-                                ? loc.address
-                                : null,
+                            subtitle:
+                                loc.address.isNotEmpty ? loc.address : null,
                             value: loc.id,
                             groupValue: _selectedStartId,
                             onChanged: (v) =>
@@ -2328,9 +2408,8 @@ class _StartPointSheetState extends ConsumerState<_StartPointSheet> {
                                   : theme.colorScheme.onSurfaceVariant,
                             ),
                             title: loc.name,
-                            subtitle: loc.address.isNotEmpty
-                                ? loc.address
-                                : null,
+                            subtitle:
+                                loc.address.isNotEmpty ? loc.address : null,
                             value: loc.id,
                             groupValue: _selectedStartId,
                             onChanged: (v) =>
@@ -2350,16 +2429,14 @@ class _StartPointSheetState extends ConsumerState<_StartPointSheet> {
               SafeArea(
                 top: false,
                 child: Padding(
-                  padding:
-                      const EdgeInsets.fromLTRB(16, 8, 16, 12),
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
                   child: Row(
                     children: [
                       Expanded(
                         child: OutlinedButton(
                           onPressed: () => Navigator.of(context).pop(),
                           style: OutlinedButton.styleFrom(
-                            padding:
-                                const EdgeInsets.symmetric(vertical: 14),
+                            padding: const EdgeInsets.symmetric(vertical: 14),
                             shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(12)),
                           ),
@@ -2380,9 +2457,8 @@ class _StartPointSheetState extends ConsumerState<_StartPointSheet> {
                                   // from a previous planning attempt so
                                   // warnings re-surface from scratch.
                                   ref
-                                      .read(
-                                          acknowledgedTimingWarningsProvider
-                                              .notifier)
+                                      .read(acknowledgedTimingWarningsProvider
+                                          .notifier)
                                       .state = const {};
                                   ref
                                       .read(tripProvider.notifier)
@@ -2393,15 +2469,12 @@ class _StartPointSheetState extends ConsumerState<_StartPointSheet> {
                           style: FilledButton.styleFrom(
                             backgroundColor: theme.colorScheme.primary,
                             foregroundColor: Colors.black,
-                            padding:
-                                const EdgeInsets.symmetric(vertical: 14),
+                            padding: const EdgeInsets.symmetric(vertical: 14),
                             shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(12)),
                           ),
                           child: Text(
-                            widget.isReoptimizing
-                                ? 'Re-optimize'
-                                : 'Optimize',
+                            widget.isReoptimizing ? 'Re-optimize' : 'Optimize',
                             style: const TextStyle(
                               fontWeight: FontWeight.w700,
                             ),
@@ -2600,8 +2673,7 @@ class _StartPointTile extends StatelessWidget {
             borderRadius: BorderRadius.circular(12),
             onTap: disabled ? null : () => onChanged(value),
             child: Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(

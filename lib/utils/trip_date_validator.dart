@@ -127,7 +127,8 @@ Future<TripDateConfirmResult> confirmScheduledDate(
 
   return TripDateConfirmResult(
     proceed: true,
-    extendedStart: result == TripDateCheckResult.beforeStart ? scheduledDay : null,
+    extendedStart:
+        result == TripDateCheckResult.beforeStart ? scheduledDay : null,
     extendedEnd: result == TripDateCheckResult.afterEnd ? scheduledDay : null,
   );
 }
@@ -238,12 +239,12 @@ Future<bool> assertLocationInTripCountry(
 
   final tripCountry = findCountryByCode(tripCode);
   final locationCountry = findCountryByCode(locationCountryCode);
-  final tripDisplay = tripCountry != null
-      ? '${tripCountry.flagEmoji} ${tripCountry.name}'
-      : tripCode.toUpperCase();
-  final locationDisplay = locationCountry != null
-      ? '${locationCountry.flagEmoji} ${locationCountry.name}'
-      : locationCountryCode.toUpperCase();
+  // Country name only — no flag emoji. Regional-indicator flag emoji render
+  // as a "?" tofu box on Android, and this is inline body text where a flag
+  // image widget can't be embedded. The name alone reads cleanly everywhere.
+  final tripDisplay = tripCountry?.name ?? tripCode.toUpperCase();
+  final locationDisplay =
+      locationCountry?.name ?? locationCountryCode.toUpperCase();
 
   await showDialog<void>(
     context: context,

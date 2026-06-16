@@ -65,6 +65,7 @@ dependencies:
   # frozen frames so we can quantify the ANR reduction release-over-release.
   # Shares the existing Firebase project, no new auth/DSN needed.
   firebase_performance: ^0.10.0
+  country_flags: ^4.1.2
 
 dev_dependencies:
   flutter_test:

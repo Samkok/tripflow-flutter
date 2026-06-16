@@ -39,6 +39,19 @@ class SharedPrefsCache {
         'SharedPrefsCache not initialized. Wait on Bootstrap.future first.');
     return _instance!;
   }
+
+  /// Non-throwing accessor for the rare caller that can legitimately run
+  /// BEFORE [_bootstrap] has populated the cache — notably [ThemeNotifier],
+  /// which is constructed during the very first frame's [MyApp.build] (a
+  /// `Timer.run` macrotask scheduled by `runApp`) that can win the race
+  /// against the `SharedPreferences.getInstance()` platform-channel round
+  /// trip inside [_initSharedPrefs]. Returns null until the cache is ready;
+  /// callers should fall back to a default and re-read after
+  /// [Bootstrap.future] completes.
+  static SharedPreferences? get maybeInstance => _instance;
+
+  /// True once [_initSharedPrefs] has populated the cache.
+  static bool get isReady => _instance != null;
 }
 
 /// ANR-driven startup model.
@@ -317,10 +330,12 @@ class _MyAppState extends ConsumerState<MyApp> with WidgetsBindingObserver {
       }
 
       // Listen for auth state changes (password recovery deep links + forced sign-outs)
-      _authSubscription = SupabaseService.instance.client.auth.onAuthStateChange.listen(
+      _authSubscription =
+          SupabaseService.instance.client.auth.onAuthStateChange.listen(
         (data) {
           if (data.event == AuthChangeEvent.passwordRecovery) {
-            debugPrint('Main: passwordRecovery event — navigating to ResetPasswordScreen');
+            debugPrint(
+                'Main: passwordRecovery event — navigating to ResetPasswordScreen');
             navigatorKey.currentState?.push(
               MaterialPageRoute(builder: (_) => const ResetPasswordScreen()),
             );
@@ -343,7 +358,9 @@ class _MyAppState extends ConsumerState<MyApp> with WidgetsBindingObserver {
       debugPrint('Main: Deferring collaborator realtime listener...');
       Future.delayed(const Duration(seconds: 2), () {
         if (mounted) {
-          ref.read(collaboratorRealtimeInitProvider.notifier).ensureInitialized();
+          ref
+              .read(collaboratorRealtimeInitProvider.notifier)
+              .ensureInitialized();
           debugPrint('Main: Collaborator realtime listener initialized');
         }
       });
@@ -369,7 +386,8 @@ class _MyAppState extends ConsumerState<MyApp> with WidgetsBindingObserver {
         // Without this, the realtime listener never starts
         if (mounted) {
           ref.read(subscriptionProvider.notifier).ensureInitialized();
-          debugPrint('Main: Subscription realtime listener initialized (fallback after auth sync error)');
+          debugPrint(
+              'Main: Subscription realtime listener initialized (fallback after auth sync error)');
         }
       });
 
@@ -378,7 +396,8 @@ class _MyAppState extends ConsumerState<MyApp> with WidgetsBindingObserver {
       Future.delayed(const Duration(seconds: 10), () {
         if (mounted) {
           ref.read(subscriptionProvider.notifier).ensureInitialized();
-          debugPrint('Main: Subscription realtime listener initialized (timeout fallback)');
+          debugPrint(
+              'Main: Subscription realtime listener initialized (timeout fallback)');
         }
       });
     } catch (e, stack) {

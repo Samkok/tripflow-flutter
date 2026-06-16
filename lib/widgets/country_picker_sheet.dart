@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../utils/countries.dart';
+import 'country_flag_icon.dart';
 
 /// Bottom-sheet country picker. Returns the selected [Country] via
 /// `Navigator.pop`, or `null` if the user cancels. Tapping "Clear" returns
@@ -144,10 +145,7 @@ class _CountryPickerSheetState extends State<_CountryPickerSheet> {
                           final country = _filtered[index];
                           final isSelected = country.code == selected;
                           return ListTile(
-                            leading: Text(
-                              country.flagEmoji,
-                              style: const TextStyle(fontSize: 24),
-                            ),
+                            leading: CountryFlagIcon(country.code, height: 22),
                             title: Text(country.name),
                             subtitle: Text(country.code),
                             trailing: isSelected
