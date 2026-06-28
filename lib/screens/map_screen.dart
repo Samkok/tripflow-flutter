@@ -9,6 +9,7 @@ import 'package:intl/intl.dart';
 import 'package:voyza/core/theme.dart';
 import 'package:voyza/screens/location_search_screen.dart';
 import 'package:voyza/widgets/add_to_trip_sheet.dart';
+import 'package:voyza/widgets/review_sentiment_dialog.dart';
 import 'package:voyza/widgets/location_detail_sheet.dart';
 import 'package:uuid/uuid.dart';
 import '../models/location_model.dart';
@@ -609,6 +610,17 @@ class _MapScreenState extends ConsumerState<MapScreen>
       if (next > (previous ?? 0)) {
         _zoomToFitTrip();
       }
+    });
+
+    // The "aha" moment: a delight event (optimization / day completion) passed
+    // every eligibility gate. Let the user see the optimized route settle for a
+    // beat, then run the sentiment-gated review flow. All caps/cooldown live in
+    // ReviewPromptService; this only ever fires when it's appropriate to ask.
+    ref.listen<int>(reviewPromptTriggerProvider, (previous, next) {
+      if (next <= (previous ?? 0)) return;
+      Future.delayed(const Duration(milliseconds: 1400), () {
+        if (mounted) showReviewSentimentFlow(context);
+      });
     });
 
     // Auto-frame the map when the user changes the selected date: zoom to
@@ -1389,9 +1401,9 @@ class _MapScreenState extends ConsumerState<MapScreen>
     // - Right margin: 16px
     // Total width from right edge: 40px (FAB) + 16px (margin) = 56px
     // Add extra buffer for marker visibility
-    final fabWidth = 40.0;
-    final fabRightMargin = 16.0;
-    final rightUIWidth = fabWidth + fabRightMargin;
+    const fabWidth = 40.0;
+    const fabRightMargin = 16.0;
+    const rightUIWidth = fabWidth + fabRightMargin;
 
     // Left UI: minimal margin
     const leftMargin = 16.0;
@@ -1403,8 +1415,8 @@ class _MapScreenState extends ConsumerState<MapScreen>
     // Calculate edge-specific padding
     final topPadding = topUIHeight + bufferPadding;
     final bottomPadding = bottomSheetCollapsedHeight + bufferPadding;
-    final rightPadding = rightUIWidth + rightBufferPadding; // Use larger buffer for right
-    final leftPadding = leftMargin + bufferPadding;
+    const rightPadding = rightUIWidth + rightBufferPadding; // Use larger buffer for right
+    const leftPadding = leftMargin + bufferPadding;
 
     // Create expanded bounds that account for asymmetric padding
     // We need to expand the bounds to ensure all markers fit within the visible area

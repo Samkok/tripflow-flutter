@@ -543,9 +543,9 @@ class TripNotifier extends StateNotifier<TripState> {
   }
 
   /// Fires the in-app review request when the user just finished the last
-  /// remaining stop on a day that had a real plan (≥2 stops). Gating in
-  /// [ReviewPromptService] handles cooldown / lifetime caps, so it's safe to
-  /// call eagerly.
+  /// remaining stop on a day that had a real plan (≥2 stops). Routes through
+  /// the sentiment-gated flow via [_maybeSignalReviewPrompt] — the OS prompt is
+  /// never shown directly, only after the user confirms they're happy.
   void _maybePromptForReviewAfterDayCompletion(
       Set<DateTime> affectedDates, Set<String> justMarkedIds) {
     for (final date in affectedDates) {
@@ -563,9 +563,27 @@ class TripNotifier extends StateNotifier<TripState> {
           .every((l) => l.isDone || justMarkedIds.contains(l.id));
       if (allDone) {
         // Fire-and-forget: never block the mark-as-done UX on this.
-        unawaited(ReviewPromptService.instance.maybeRequestReview());
+        unawaited(_maybeSignalReviewPrompt());
         return;
       }
+    }
+  }
+
+  /// Shared review-prompt gate for delight moments. Checks every non-UI
+  /// eligibility rule (sessions, optimizes, saved-places, cooldown, lifetime
+  /// caps, OS availability) and, only if eligible, bumps
+  /// [reviewPromptTriggerProvider] so the map screen can show the sentiment
+  /// dialog. Never throws; never shows the OS prompt directly.
+  Future<void> _maybeSignalReviewPrompt() async {
+    try {
+      final eligible = await ReviewPromptService.instance.isEligibleForPrompt(
+        savedPlacesCount: state.pinnedLocations.length,
+      );
+      if (eligible) {
+        _ref.read(reviewPromptTriggerProvider.notifier).update((s) => s + 1);
+      }
+    } catch (_) {
+      // Best-effort: a review prompt is never worth surfacing an error for.
     }
   }
 
@@ -1200,11 +1218,14 @@ class TripNotifier extends StateNotifier<TripState> {
 
       _ref.read(zoomToFitRouteTrigger.notifier).update((state) => state + 1);
 
-      // Delight-moment trigger #2: successful optimization. Counter lives in
-      // ReviewPromptService; only triggers at the 10th run (then never again
-      // via this path) so it can't race or compete with the trip-completion
-      // trigger in [markLocationsAsDone].
-      unawaited(ReviewPromptService.instance.recordSuccessfulOptimize());
+      // Delight moment: a successful optimization. Record the signal, then
+      // (if all engagement/cooldown gates pass) signal the UI to run the
+      // sentiment-gated review flow. The OS prompt is only ever reached after
+      // the user confirms they're happy.
+      unawaited(() async {
+        await ReviewPromptService.instance.recordSuccessfulOptimize();
+        await _maybeSignalReviewPrompt();
+      }());
     } catch (e) {
       log('Error generating route: $e');
     } finally {
@@ -1378,6 +1399,11 @@ final isGeneratingRouteProvider = StateProvider<bool>((ref) => false);
 
 // A provider to signal the UI to zoom to fit the optimized route
 final zoomToFitRouteTrigger = StateProvider<int>((ref) => 0);
+
+/// Signals the UI (map screen) to run the gated review-prompt sentiment flow.
+/// Bumped only after a delight moment when [ReviewPromptService.isEligibleForPrompt]
+/// has already passed, so the listener can show the dialog immediately.
+final reviewPromptTriggerProvider = StateProvider<int>((ref) => 0);
 
 /// A provider that exposes details of the currently selected route leg.
 /// The UI can watch this to show/hide the "Open in Maps" button.

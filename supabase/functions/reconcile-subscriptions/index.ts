@@ -10,8 +10,9 @@
 // account, leaving it stuck 'active' = free access. RevenueCat is the source of
 // truth; we reconcile against it instead of relying on every event being routable.
 //
-// Auth: verify_jwt = true. The pg_cron caller sends the project's service_role
-// key as the Bearer token. No public/unauthenticated access.
+// Auth: verify_jwt = true AND an in-function role=service_role claim check
+// (verify_jwt alone also accepts the PUBLIC anon key). The pg_cron caller sends
+// the project's service_role key as the Bearer token. No public access.
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
@@ -93,7 +94,38 @@ async function fetchRcEntitlementState(
   }
 }
 
-serve(async (_req) => {
+/**
+ * Extract the `role` claim from a Supabase JWT Authorization header.
+ * Signature is NOT verified here — the platform already did that (verify_jwt=true);
+ * we only need the claim to distinguish service_role (the cron) from anon (public).
+ */
+function jwtRole(authHeader: string): string | null {
+  const token = authHeader.replace(/^Bearer\s+/i, "");
+  const parts = token.split(".");
+  if (parts.length !== 3) return null;
+  try {
+    const b64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const pad = b64.length % 4 ? "=".repeat(4 - (b64.length % 4)) : "";
+    return (JSON.parse(atob(b64 + pad)).role as string) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+serve(async (req) => {
+  // Defense-in-depth: verify_jwt=true only proves the JWT is validly signed —
+  // the PUBLIC anon key also passes it. Require role=service_role so only the
+  // pg_cron job (which sends the service_role key) can trigger reconciliation;
+  // blocks anon-key callers from amplifying RevenueCat API cost / invocations.
+  // Checking the claim (not a fixed key string) is rotation- and format-safe.
+  if (jwtRole(req.headers.get("Authorization") ?? "") !== "service_role") {
+    console.warn("reconcile: rejected caller without service_role claim");
+    return new Response(JSON.stringify({ error: "Forbidden" }), {
+      status: 403,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
   const summary = {
     checked: 0,
     expired: 0,
@@ -112,7 +144,7 @@ serve(async (_req) => {
     if (error) {
       console.error("Failed to load active subscriptions:", error);
       return new Response(
-        JSON.stringify({ error: "DB read failed", details: error.message }),
+        JSON.stringify({ error: "DB read failed" }),
         { status: 500, headers: { "Content-Type": "application/json" } },
       );
     }
@@ -160,12 +192,9 @@ serve(async (_req) => {
       // RC says active. Heal the row only if product/expiry drifted (e.g. a
       // TRANSFER row left with NULL expires_at). Skip no-op writes so we don't
       // spam user_subscription_history.
-      const expiryDrift =
-        (row.expires_at ?? null) !==
-          (state.expiresAt ? new Date(state.expiresAt).toISOString() : null) &&
-        // normalise: compare as epoch to ignore formatting differences
-        new Date(row.expires_at ?? 0).getTime() !==
-          new Date(state.expiresAt ?? 0).getTime();
+      const rowExpiryMs = new Date(row.expires_at ?? 0).getTime();
+      const rcExpiryMs = new Date(state.expiresAt ?? 0).getTime();
+      const expiryDrift = rowExpiryMs !== rcExpiryMs;
       const productDrift =
         (row.product_identifier ?? null) !== (state.productIdentifier ?? null) &&
         state.productIdentifier !== null;
@@ -206,7 +235,7 @@ serve(async (_req) => {
   } catch (e) {
     console.error("Reconciliation handler error:", e);
     return new Response(
-      JSON.stringify({ error: "Internal error", details: e instanceof Error ? e.message : String(e), summary }),
+      JSON.stringify({ error: "Internal error" }),
       { status: 500, headers: { "Content-Type": "application/json" } },
     );
   }

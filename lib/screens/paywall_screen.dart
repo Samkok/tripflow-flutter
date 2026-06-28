@@ -3,9 +3,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:purchases_flutter/purchases_flutter.dart';
 import 'package:purchases_ui_flutter/purchases_ui_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:intl/intl.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'dart:io';
 import '../providers/subscription_provider.dart';
+import '../providers/user_trip_provider.dart';
+import '../providers/location_provider.dart';
 import '../services/revenuecat_service.dart';
 import '../services/supabase_service.dart';
 import '../widgets/app_toast.dart';
@@ -100,6 +103,12 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
                   children: [
                     // Hero section
                     _buildHeroSection(context),
+
+                    // Trial-expired value recap — reminds the user what they've
+                    // already built so subscribing feels like "keep my work,"
+                    // not an abstract upsell. Renders nothing for first-time /
+                    // trial-eligible users or when there's nothing to recap.
+                    _buildTrialValueRecap(context),
                     const SizedBox(height: 32),
 
                     // Features list
@@ -112,7 +121,11 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
 
                     // Subscribe button
                     _buildSubscribeButton(context),
-                    const SizedBox(height: 16),
+                    const SizedBox(height: 12),
+
+                    // Reassurance microcopy — reduces trial-start friction.
+                    _buildReassuranceLine(context),
+                    const SizedBox(height: 8),
 
                     // Restore purchases button
                     _buildRestoreButton(context),
@@ -213,6 +226,70 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
     );
   }
 
+  /// On a trial-expired (or trial-already-used) paywall, recap the value the
+  /// user has already created so the decision is framed as "keep what you
+  /// built," not an abstract upsell. Returns an empty box for first-time /
+  /// trial-eligible users, or when there's nothing meaningful to recap.
+  Widget _buildTrialValueRecap(BuildContext context) {
+    final theme = Theme.of(context);
+    final isTrialExpired = widget.trigger == PaywallTrigger.trialExpired;
+    final hasUsedTrialBefore = _anyPackageHasIntroOfferButIneligible();
+    if (!isTrialExpired && !hasUsedTrialBefore) return const SizedBox.shrink();
+
+    final tripCount = ref.watch(userTripsProvider).asData?.value.length ?? 0;
+    final placeCount =
+        ref.watch(savedLocationsProvider).asData?.value.length ?? 0;
+    if (tripCount == 0 && placeCount == 0) return const SizedBox.shrink();
+
+    final parts = <String>[];
+    if (tripCount > 0) {
+      parts.add('$tripCount ${tripCount == 1 ? 'trip' : 'trips'}');
+    }
+    if (placeCount > 0) {
+      parts.add('$placeCount ${placeCount == 1 ? 'place' : 'places'}');
+    }
+    final summary = parts.join(' and ');
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 24),
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: theme.colorScheme.primaryContainer.withValues(alpha: 0.4),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: theme.colorScheme.primary.withValues(alpha: 0.3),
+          ),
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.luggage_rounded, color: theme.colorScheme.primary),
+            const SizedBox(width: 12),
+            Expanded(
+              child: RichText(
+                text: TextSpan(
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: theme.colorScheme.onSurface,
+                  ),
+                  children: [
+                    const TextSpan(text: "You've already planned "),
+                    TextSpan(
+                      text: summary,
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    const TextSpan(
+                      text: '. Subscribe to keep planning and editing them.',
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   /// True when this device can still claim the intro offer for [package],
   /// i.e. the product has an intro offer AND StoreKit/Play say the user is
   /// eligible. Treats `unknown` as eligible (Android always returns unknown;
@@ -278,11 +355,15 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
   Widget _buildFeaturesList(BuildContext context) {
     final theme = Theme.of(context);
 
+    // Verified, real Pro capabilities only — no phantom features (App Store
+    // Guideline 2.3.1). Leads with the core differentiator: route optimization.
     final features = [
+      ('Smart route optimization', Icons.route_rounded),
       ('Unlimited trips', Icons.all_inclusive),
-      ('Offline maps access', Icons.download_for_offline),
-      ('Priority support', Icons.support_agent),
+      ('Unlimited saved places', Icons.place_outlined),
+      ('Multi-day itineraries', Icons.calendar_month_rounded),
       ('Trip collaboration', Icons.group),
+      ('Cross-device sync', Icons.devices_rounded),
     ];
 
     return Container(
@@ -364,7 +445,8 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
                   package: package,
                   isRecommended: true,
                   title: 'Yearly',
-                  subtitle: 'Best value - Save 40%',
+                  subtitle: _yearlySavingsLabel(
+                      monthlyPackageAsync.asData?.value, package),
                 )
               : const SizedBox.shrink(),
           loading: () => _buildLoadingCard(),
@@ -390,6 +472,38 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
     );
   }
 
+  /// Computes the real annual saving vs paying monthly, from the live store
+  /// prices — never hardcoded (which drifts when prices change and risks a
+  /// misleading-pricing rejection). Falls back to "Best value" when either
+  /// price is unavailable or the annual plan isn't actually cheaper.
+  String _yearlySavingsLabel(Package? monthly, Package? yearly) {
+    final m = monthly?.storeProduct.price;
+    final y = yearly?.storeProduct.price;
+    if (m == null || y == null || m <= 0) return 'Best value';
+    final annualizedMonthly = m * 12;
+    final pct = ((annualizedMonthly - y) / annualizedMonthly * 100).round();
+    if (pct <= 0) return 'Best value';
+    return 'Best value · Save $pct%';
+  }
+
+  /// Per-month equivalent for an annual package (e.g. "Just \$2.92/mo, billed
+  /// annually"). Anchors the yearly plan below the monthly plan's headline
+  /// price — the strongest lever for annual conversion. Null when it can't be
+  /// computed safely.
+  String? _perMonthLine(Package package) {
+    if (package.packageType != PackageType.annual) return null;
+    final price = package.storeProduct.price;
+    final code = package.storeProduct.currencyCode;
+    if (price <= 0 || code.isEmpty) return null;
+    try {
+      final perMonth =
+          NumberFormat.simpleCurrency(name: code).format(price / 12);
+      return 'Just $perMonth/mo, billed annually';
+    } catch (_) {
+      return null;
+    }
+  }
+
   Widget _buildPackageCard(
     BuildContext context, {
     required Package package,
@@ -409,6 +523,7 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
     final effectiveSubtitle = showTrialCopy
         ? '${_introOfferLabel(intro)}, then $priceString$period'
         : subtitle;
+    final perMonthLine = _perMonthLine(package);
 
     return GestureDetector(
       onTap: () {
@@ -500,6 +615,16 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
                       color: theme.colorScheme.onSurfaceVariant,
                     ),
                   ),
+                  if (perMonthLine != null) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      perMonthLine,
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: theme.colorScheme.primary,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -579,6 +704,37 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
           ),
         ),
       ),
+    );
+  }
+
+  /// Trust microcopy directly under the CTA. For an eligible trial it makes the
+  /// "no charge today" promise explicit (the single biggest trial-start lever);
+  /// otherwise it reassures on cancellation.
+  Widget _buildReassuranceLine(BuildContext context) {
+    final theme = Theme.of(context);
+    final hasTrial = _packageHasEligibleTrial(_selectedPackage);
+    final text = hasTrial
+        ? 'No payment due now · Cancel anytime'
+        : 'Cancel anytime · billed through your store account';
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Icon(
+          Icons.lock_outline_rounded,
+          size: 14,
+          color: theme.colorScheme.onSurfaceVariant,
+        ),
+        const SizedBox(width: 6),
+        Flexible(
+          child: Text(
+            text,
+            textAlign: TextAlign.center,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ),
+      ],
     );
   }
 

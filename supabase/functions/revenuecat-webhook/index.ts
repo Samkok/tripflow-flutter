@@ -343,24 +343,30 @@ serve(async (req) => {
     console.log('Webhook received:', {
       method: req.method,
       url: req.url,
-      headers: Object.fromEntries(req.headers),
+      // Redact Authorization — it carries the webhook auth secret; never log it.
+      headers: { ...Object.fromEntries(req.headers), authorization: '[redacted]' },
     });
 
-    // 1. Verify webhook authenticity (optional but recommended)
-    if (revenueCatAuthKey) {
-      const authHeader = req.headers.get('Authorization');
-      if (authHeader !== `Bearer ${revenueCatAuthKey}`) {
-        console.error('Unauthorized webhook request - invalid auth token');
-        return new Response(
-          JSON.stringify({ error: 'Unauthorized' }),
-          {
-            status: 401,
-            headers: { 'Content-Type': 'application/json' },
-          }
-        );
-      }
-      console.log('Authorization verified');
+    // 1. Verify webhook authenticity — MANDATORY, fail-closed.
+    // The request body fully controls app_user_id / type / expiry, so an
+    // unauthenticated POST could forge subscription state for ANY user
+    // (privilege escalation / free premium). Refuse to run if the shared secret
+    // isn't configured, and always require a matching Authorization header.
+    if (!revenueCatAuthKey) {
+      console.error('REVENUECAT_WEBHOOK_AUTH_KEY not configured — refusing to process webhook');
+      return new Response(
+        JSON.stringify({ error: 'Server misconfigured' }),
+        { status: 503, headers: { 'Content-Type': 'application/json' } }
+      );
     }
+    if (req.headers.get('Authorization') !== `Bearer ${revenueCatAuthKey}`) {
+      console.error('Unauthorized webhook request - invalid or missing auth token');
+      return new Response(
+        JSON.stringify({ error: 'Unauthorized' }),
+        { status: 401, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+    console.log('Authorization verified');
 
     // 2. Parse webhook payload
     let payload: RevenueCatWebhookEvent;
@@ -762,12 +768,11 @@ serve(async (req) => {
     });
 
     if (error) {
-      console.error('Error upserting subscription:', error);
+      // Log the detail server-side only; don't leak DB internals to the caller.
+      const errorId = crypto.randomUUID();
+      console.error(`Error upserting subscription [${errorId}]:`, error);
       return new Response(
-        JSON.stringify({
-          error: 'Database error',
-          details: error.message,
-        }),
+        JSON.stringify({ error: 'Database error', id: errorId }),
         {
           status: 500,
           headers: { 'Content-Type': 'application/json' },
@@ -823,12 +828,11 @@ serve(async (req) => {
       }
     );
   } catch (error) {
-    console.error('Webhook handler error:', error);
+    // Log full detail server-side; return only a generic message + trace id.
+    const errorId = crypto.randomUUID();
+    console.error(`Webhook handler error [${errorId}]:`, error);
     return new Response(
-      JSON.stringify({
-        error: 'Internal server error',
-        details: error instanceof Error ? error.message : String(error),
-      }),
+      JSON.stringify({ error: 'Internal server error', id: errorId }),
       {
         status: 500,
         headers: { 'Content-Type': 'application/json' },

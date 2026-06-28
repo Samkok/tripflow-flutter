@@ -22,6 +22,7 @@ import 'services/supabase_service.dart';
 import 'services/revenuecat_service.dart';
 import 'services/auth_service.dart';
 import 'services/notification_service.dart';
+import 'services/review_prompt_service.dart';
 import 'repositories/location_repository.dart';
 
 import 'package:firebase_core/firebase_core.dart';
@@ -130,6 +131,10 @@ Future<void> _bootstrap() async {
         Hive.registerAdapter(SavedLocationAdapter());
       }),
     ]);
+
+    // Count this launch as a session for the review-prompt engagement gate.
+    // SharedPreferences is ready after the Future.wait above; fire-and-forget.
+    unawaited(ReviewPromptService.instance.recordSession());
 
     // Open the locations box AFTER Hive.initFlutter + registerAdapter. This
     // exposes [Bootstrap.hasCachedLocations] for the splash skip-delay
