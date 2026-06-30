@@ -66,3 +66,7 @@ node_modules/
 
 # Secrets — must never be committed (revoke any keys previously committed in git history)
 ios/Flutter/AppConfig.xcconfig
+
+store_assets/
+marketing/*
+legal/*

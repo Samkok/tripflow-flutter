@@ -6,6 +6,7 @@ import 'dart:ui';
 import 'package:voyza/screens/trip_screen.dart';
 import 'package:voyza/screens/map_screen.dart';
 import 'package:voyza/screens/settings_screen.dart';
+import 'package:voyza/widgets/analytics_consent_dialog.dart';
 
 class MainScreen extends ConsumerStatefulWidget {
   const MainScreen({super.key});
@@ -37,6 +38,10 @@ class _MainScreenState extends ConsumerState<MainScreen> {
       }
       if (mounted) {
         ref.read(initialSyncCompleteProvider.notifier).state = true;
+      }
+      // One-time analytics consent prompt for EU/UK/CH users (no-op elsewhere).
+      if (mounted) {
+        await maybeShowAnalyticsConsent(context);
       }
     });
   }

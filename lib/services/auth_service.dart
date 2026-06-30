@@ -5,6 +5,7 @@ import 'package:voyza/repositories/location_repository.dart';
 import 'package:voyza/repositories/user_profile_repository.dart';
 import 'package:voyza/services/supabase_service.dart';
 import 'package:voyza/services/revenuecat_service.dart';
+import 'package:voyza/services/analytics_service.dart';
 import 'package:voyza/services/notification_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:hive_flutter/hive_flutter.dart';
@@ -324,6 +325,10 @@ class AuthService {
           }
           rethrow;
         }
+
+        // Funnel analytics: fire only after the profile insert succeeds — i.e.
+        // a genuinely new account past the 23505 duplicate backstop above.
+        AnalyticsService.instance.signup('email');
       }
     } catch (e) {
       debugPrint('e during sign up: $e');

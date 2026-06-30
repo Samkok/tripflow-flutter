@@ -1,0 +1,66 @@
+import 'dart:async';
+
+import 'package:firebase_analytics/firebase_analytics.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter/foundation.dart';
+
+/// Funnel instrumentation — the master unblock from the marketing plan.
+///
+/// Without these events the team cannot see where users leak (activation is
+/// invisible) and the ad platforms cannot optimize for PAYERS instead of cheap
+/// installs. Event names mirror the AARRR funnel exactly:
+///   signup → trip_created → place_added → route_optimized (the activation aha)
+///   → trial_started → purchase.
+///
+/// Safe to call from any path: every method is fire-and-forget and never throws.
+/// Firebase initializes POST-first-frame (see main.dart), so calls before that
+/// are silently dropped rather than crashing the caller — critically, we must
+/// NOT touch `FirebaseAnalytics.instance` until the default app exists, because
+/// that getter throws synchronously (`core/no-app`) and the throw would escape
+/// into flows like signup or post-purchase navigation.
+class AnalyticsService {
+  AnalyticsService._();
+  static final instance = AnalyticsService._();
+
+  void _fire(String name, [Map<String, Object>? params]) {
+    // `Firebase.apps` never throws; `FirebaseAnalytics.instance` does (before
+    // init). Resolve lazily inside the guard + try/catch so nothing escapes.
+    if (Firebase.apps.isEmpty) return;
+    try {
+      unawaited(
+        FirebaseAnalytics.instance
+            .logEvent(name: name, parameters: params)
+            .catchError((Object e) {
+          debugPrint('AnalyticsService $name: $e');
+        }),
+      );
+    } catch (e) {
+      debugPrint('AnalyticsService $name (pre-init): $e');
+    }
+  }
+
+  /// A new account was created. [method] = 'email' (extend for OAuth later).
+  void signup(String method) => _fire('signup', {'method': method});
+
+  /// A trip was created (first real activation step).
+  void tripCreated() => _fire('trip_created');
+
+  /// A place was saved. [totalPlaces] feeds the 3–5 "aha" threshold analysis
+  /// (approximate — derived from the current in-memory list).
+  void placeAdded(int totalPlaces) =>
+      _fire('place_added', {'total_places': totalPlaces});
+
+  /// THE ACTIVATION AHA: a multi-stop route was optimized. [stops] = stop count.
+  void routeOptimized(int stops) => _fire('route_optimized', {'stops': stops});
+
+  /// A free trial was started.
+  void trialStarted(String product) =>
+      _fire('trial_started', {'product': product});
+
+  /// A paid purchase completed (no eligible trial). [price]/[currency] come
+  /// from the store product so ad-platform ROAS optimization gets real values.
+  void purchase(String product, double price, String currency) => _fire(
+        'purchase',
+        {'product': product, 'value': price, 'currency': currency},
+      );
+}

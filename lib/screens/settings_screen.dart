@@ -15,6 +15,7 @@ import '../providers/auth_provider.dart';
 import '../providers/nearby_radius_provider.dart';
 import '../providers/zoom_fit_settings_provider.dart';
 import '../services/notification_service.dart';
+import '../services/analytics_consent_service.dart';
 import '../providers/trip_collaborator_provider.dart';
 import '../providers/user_trip_provider.dart';
 import '../providers/trip_provider.dart';
@@ -89,6 +90,8 @@ class SettingsScreen extends ConsumerWidget {
           const _NearbyRadiusTile(),
           const SizedBox(height: 12),
           const _IncludeCurrentInFitTile(),
+          const SizedBox(height: 12),
+          const _AnalyticsTile(),
           const SizedBox(height: 24),
 
           // About Section
@@ -1005,6 +1008,67 @@ class _NearbyRadiusTile extends ConsumerWidget {
 // "zoom to fit" FAB also fits the device's current position into the
 // camera bounds. Defaults to on; persisted via [includeCurrentInFitProvider].
 // ---------------------------------------------------------------------------
+
+/// Settings toggle for analytics consent. Reflects the effective state
+/// (EU/UK/CH default OFF; elsewhere ON) and lets the user opt in/out anytime.
+class _AnalyticsTile extends StatefulWidget {
+  const _AnalyticsTile();
+
+  @override
+  State<_AnalyticsTile> createState() => _AnalyticsTileState();
+}
+
+class _AnalyticsTileState extends State<_AnalyticsTile> {
+  bool? _enabled;
+
+  @override
+  void initState() {
+    super.initState();
+    AnalyticsConsentService.instance.isEnabled().then((v) {
+      if (mounted) setState(() => _enabled = v);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      decoration: BoxDecoration(
+        color: theme.cardColor,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: SwitchListTile(
+        value: _enabled ?? false,
+        onChanged: _enabled == null
+            ? null
+            : (v) async {
+                setState(() => _enabled = v);
+                await AnalyticsConsentService.instance.setConsent(v);
+              },
+        secondary: Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: theme.colorScheme.primary.withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Icon(Icons.insights_rounded,
+              color: theme.colorScheme.primary),
+        ),
+        title: const Text('Share usage analytics'),
+        subtitle:
+            const Text('Privacy-friendly. Helps us improve VoyZa.'),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      ),
+    );
+  }
+}
 
 class _IncludeCurrentInFitTile extends ConsumerWidget {
   const _IncludeCurrentInFitTile();

@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:voyza/models/trip.dart';
+import 'package:voyza/models/saved_location.dart';
+import 'package:uuid/uuid.dart';
 import 'package:voyza/providers/trip_provider.dart';
 import 'package:voyza/providers/user_trip_provider.dart';
 import 'package:voyza/providers/auth_provider.dart';
@@ -11,6 +13,7 @@ import 'package:voyza/providers/local_active_trip_provider.dart';
 import 'package:voyza/screens/login_screen.dart';
 import 'package:voyza/screens/trip_details_screen.dart';
 import 'package:voyza/services/subscription_limit_service.dart';
+import 'package:voyza/services/analytics_service.dart';
 import 'package:voyza/utils/countries.dart';
 import 'package:voyza/utils/trip_date_validator.dart';
 import 'package:voyza/widgets/app_toast.dart';
@@ -228,6 +231,7 @@ class _TripScreenState extends ConsumerState<TripScreen> {
 
         // Invalidate and refresh
         ref.invalidate(userTripsProvider);
+        AnalyticsService.instance.tripCreated();
         _resetForm();
 
         if (mounted) {
@@ -265,6 +269,77 @@ class _TripScreenState extends ConsumerState<TripScreen> {
       debugPrint('Error setting active trip: $e');
       if (mounted) {
         AppToast.error(context, 'Could not activate trip. Please try again.');
+      }
+    }
+  }
+
+  /// Activation lever: drops the user into a pre-built, editable sample trip
+  /// (Lisbon, 6 stops) so they can tap Optimize and reach the route "aha" in
+  /// one tap — without forcing demo data on everyone. Fully editable/deletable.
+  Future<void> _createSampleTrip() async {
+    final userId = ref.read(currentUserIdProvider);
+    if (userId == null) {
+      _showLoginRequiredModal(context);
+      return;
+    }
+    try {
+      final now = DateTime.now();
+      final day = DateTime(now.year, now.month, now.day);
+      final tripRepository = ref.read(tripRepositoryProvider);
+      final locationRepository = ref.read(locationRepositoryProvider);
+
+      final trip = await tripRepository.createTrip(
+        userId: userId,
+        name: 'Lisbon — sample trip ✨',
+        description:
+            'A demo trip so you can see route optimization in action. Edit or delete it anytime.',
+        countryCode: 'PT',
+        startDate: day,
+        endDate: day,
+      );
+
+      // Real Lisbon spots, intentionally out of geographic order so Optimize
+      // visibly reorders them. (name, lat, lng)
+      const places = <(String, double, double)>[
+        ('Time Out Market', 38.7067, -9.1459),
+        ('Belém Tower', 38.6916, -9.2160),
+        ('São Jorge Castle', 38.7139, -9.1335),
+        ('Jerónimos Monastery', 38.6979, -9.2065),
+        ('Praça do Comércio', 38.7077, -9.1366),
+        ('LX Factory', 38.7028, -9.1786),
+      ];
+      const uuid = Uuid();
+      for (final p in places) {
+        await locationRepository.addLocation(SavedLocation(
+          id: uuid.v4(),
+          userId: '', // repository fills from auth state
+          name: p.$1,
+          lat: p.$2,
+          lng: p.$3,
+          createdAt: DateTime.now(),
+          fingerprint: '', // repository fills
+          tripId: trip.id,
+          scheduledDate: day,
+          stayDuration: 60,
+        ));
+      }
+
+      ref.invalidate(userTripsProvider);
+      AnalyticsService.instance.tripCreated();
+      if (!mounted) return;
+      await _setActiveTrip(trip);
+      if (!mounted) return;
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (context) => TripDetailsScreen(trip: trip)),
+      );
+    } catch (e) {
+      debugPrint('Error creating sample trip: $e');
+      if (mounted) {
+        AppToast.error(
+          context,
+          'Could not create the sample trip. Please try again.',
+        );
       }
     }
   }
@@ -568,21 +643,58 @@ class _TripScreenState extends ConsumerState<TripScreen> {
             tripsAsync.when(
               data: (trips) {
                 if (trips.isEmpty) {
+                  // Activation empty state: the lever for the ~77% who never
+                  // create a trip. Teach the 3-step value (save places →
+                  // optimize → smarter route) so the first trip feels worth it.
+                  final t = Theme.of(context);
+                  Widget step(IconData icon, String text) => Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 4),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(icon, size: 18, color: t.colorScheme.primary),
+                            const SizedBox(width: 10),
+                            Flexible(
+                              child: Text(text,
+                                  style: t.textTheme.bodyMedium?.copyWith(
+                                      color: t.colorScheme.onSurfaceVariant)),
+                            ),
+                          ],
+                        ),
+                      );
                   return SliverToBoxAdapter(
                     child: Padding(
-                      padding: const EdgeInsets.all(32),
+                      padding: const EdgeInsets.fromLTRB(28, 20, 28, 8),
                       child: Center(
-                        child: Text(
-                          'No trips yet. Create one to get started!',
-                          textAlign: TextAlign.center,
-                          style:
-                              Theme.of(context).textTheme.bodyMedium?.copyWith(
-                                    color: Theme.of(context)
-                                        .textTheme
-                                        .bodyMedium
-                                        ?.color
-                                        ?.withValues(alpha: 0.6),
-                                  ),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.route_rounded,
+                                size: 46, color: t.colorScheme.primary),
+                            const SizedBox(height: 14),
+                            Text('Plan your first trip',
+                                style: t.textTheme.titleMedium
+                                    ?.copyWith(fontWeight: FontWeight.bold)),
+                            const SizedBox(height: 14),
+                            step(Icons.place_outlined,
+                                'Save 3+ places you want to visit'),
+                            step(Icons.auto_awesome_rounded,
+                                'Tap Optimize — VoyZa orders them smartly'),
+                            step(Icons.timelapse_rounded,
+                                'See more, backtrack less'),
+                            const SizedBox(height: 18),
+                            ElevatedButton.icon(
+                              onPressed: _createSampleTrip,
+                              icon: const Icon(Icons.auto_awesome_rounded,
+                                  size: 18),
+                              label: const Text('Try a sample trip'),
+                            ),
+                            const SizedBox(height: 8),
+                            Text('or tap "New Trip" above to start from scratch',
+                                textAlign: TextAlign.center,
+                                style: t.textTheme.bodySmall?.copyWith(
+                                    color: t.colorScheme.onSurfaceVariant)),
+                          ],
                         ),
                       ),
                     ),

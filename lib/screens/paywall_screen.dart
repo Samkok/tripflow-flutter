@@ -8,6 +8,7 @@ import 'package:device_info_plus/device_info_plus.dart';
 import 'dart:io';
 import '../providers/subscription_provider.dart';
 import '../providers/user_trip_provider.dart';
+import '../services/analytics_service.dart';
 import '../providers/location_provider.dart';
 import '../services/revenuecat_service.dart';
 import '../services/supabase_service.dart';
@@ -61,10 +62,17 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
       }
       final sp = p.storeProduct;
       final intro = sp.introductoryPrice;
+      // Android surfaces the trial via the default subscription option's free
+      // phase, not introductoryPrice — log both so we can see which store path
+      // is delivering the offer.
+      final free = sp.defaultOption?.freePhase;
+      final optCount = sp.subscriptionOptions?.length ?? 0;
       debugPrint(
         '[Paywall diag] $label: id=${sp.identifier} '
         'price=${sp.priceString} '
-        'introductoryPrice=${intro == null ? "null (no offer reaching app)" : "${intro.priceString} for ${intro.periodNumberOfUnits} ${intro.periodUnit.name}"}',
+        'introductoryPrice=${intro == null ? "null (iOS-only)" : "${intro.priceString} for ${intro.periodNumberOfUnits} ${intro.periodUnit.name}"} '
+        'androidFreePhase=${free == null ? "null" : free.billingPeriod?.iso8601 ?? "present"} '
+        'subscriptionOptions=$optCount',
       );
     }
 
@@ -290,12 +298,24 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
     );
   }
 
-  /// True when this device can still claim the intro offer for [package],
-  /// i.e. the product has an intro offer AND StoreKit/Play say the user is
-  /// eligible. Treats `unknown` as eligible (Android always returns unknown;
-  /// the store enforces ineligibility at purchase time).
+  /// The Android (Play new-model) free-trial phase for a package, if present.
+  /// Android exposes trials via the default subscription option's `freePhase`,
+  /// NOT `introductoryPrice` (which is iOS-only and always null on Android).
+  PricingPhase? _androidFreePhase(Package? package) {
+    return package?.storeProduct.defaultOption?.freePhase;
+  }
+
+  /// True when this device can still claim the free trial for [package].
+  /// - iOS: the product has an intro offer AND StoreKit says the user is
+  ///   eligible.
+  /// - Android: the default subscription option has a free phase. Google
+  ///   enforces new-customer eligibility at purchase time, so presence of the
+  ///   free phase is the right signal to surface the trial.
   bool _packageHasEligibleTrial(Package? package) {
     if (package == null) return false;
+    if (Platform.isAndroid) {
+      return _androidFreePhase(package) != null;
+    }
     if (package.storeProduct.introductoryPrice == null) return false;
     final eligibility = ref.watch(introEligibilityProvider).asData?.value ??
         const <String, IntroEligibilityStatus>{};
@@ -350,6 +370,34 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
       _ => 'days',
     };
     return '$count $unitLabel free';
+  }
+
+  /// Human-readable label for an Android free-trial phase, e.g. "3 days free".
+  String _androidTrialLabel(PricingPhase free) {
+    final period = free.billingPeriod;
+    if (period == null) return 'Free trial';
+    final count = period.value;
+    final unitLabel = switch (period.unit) {
+      PeriodUnit.day => count == 1 ? 'day' : 'days',
+      PeriodUnit.week => count == 1 ? 'week' : 'weeks',
+      PeriodUnit.month => count == 1 ? 'month' : 'months',
+      PeriodUnit.year => count == 1 ? 'year' : 'years',
+      _ => 'days',
+    };
+    return '$count $unitLabel free';
+  }
+
+  /// Cross-platform "X days free" trial label for a package, or null when the
+  /// package has no eligible trial. iOS reads `introductoryPrice`; Android
+  /// reads the subscription option's free phase.
+  String? _trialLabelFor(Package package) {
+    if (!_packageHasEligibleTrial(package)) return null;
+    if (Platform.isAndroid) {
+      final free = _androidFreePhase(package);
+      return free != null ? _androidTrialLabel(free) : null;
+    }
+    final intro = package.storeProduct.introductoryPrice;
+    return intro != null ? _introOfferLabel(intro) : null;
   }
 
   Widget _buildFeaturesList(BuildContext context) {
@@ -515,13 +563,12 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
     final priceString = package.storeProduct.priceString;
     final period = package.packageType == PackageType.annual ? '/year' : '/month';
     final isSelected = _selectedPackage?.identifier == package.identifier;
-    final intro = package.storeProduct.introductoryPrice;
-    // Only surface the intro-offer subtitle when this device can actually
-    // claim it. Showing "3 days free" to a user who already used the trial
-    // would be misleading — the store charges them immediately on purchase.
-    final showTrialCopy = intro != null && _packageHasEligibleTrial(package);
-    final effectiveSubtitle = showTrialCopy
-        ? '${_introOfferLabel(intro)}, then $priceString$period'
+    // Cross-platform trial label (iOS introductoryPrice / Android free phase),
+    // null when there's no eligible trial — so we never dangle "3 days free"
+    // at a user who can't actually claim it.
+    final trialLabel = _trialLabelFor(package);
+    final effectiveSubtitle = trialLabel != null
+        ? '$trialLabel, then $priceString$period'
         : subtitle;
     final perMonthLine = _perMonthLine(package);
 
@@ -806,6 +853,18 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
     setState(() => _isLoading = false);
 
     if (success && mounted) {
+      // Funnel analytics: trial start vs paid purchase (feeds ad-platform
+      // value events so campaigns can optimize for payers, not installs).
+      if (_packageHasEligibleTrial(_selectedPackage)) {
+        AnalyticsService.instance.trialStarted(pkg.storeProduct.identifier);
+      } else {
+        AnalyticsService.instance.purchase(
+          pkg.storeProduct.identifier,
+          pkg.storeProduct.price,
+          pkg.storeProduct.currencyCode,
+        );
+      }
+
       // Store email to RevenueCat for authenticated users
       final user = SupabaseService.instance.client.auth.currentUser;
       if (user?.email != null) {

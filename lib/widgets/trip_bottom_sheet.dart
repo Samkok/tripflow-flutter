@@ -612,9 +612,48 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                 final isGenerating = ref.watch(isGeneratingRouteProvider);
                 final locationsForDate =
                     ref.watch(locationsForSelectedDateProvider);
-                final hasLocations = locationsForDate.isNotEmpty;
+                final count = locationsForDate.length;
+                final hasLocations = count > 0;
                 final canTap = hasLocations && !isGenerating;
                 final primaryColor = Theme.of(context).colorScheme.primary;
+
+                // Goal-gradient nudge: route optimization only pays off at 3+
+                // stops, so below that we coach toward the "aha" instead of
+                // offering a trivial optimize. Re-optimize stays available once
+                // a route already exists.
+                const ahaThreshold = 3;
+                if (count > 0 &&
+                    count < ahaThreshold &&
+                    !hasOptimizedRoute &&
+                    !isGenerating) {
+                  final remaining = ahaThreshold - count;
+                  return Container(
+                    decoration: BoxDecoration(
+                      color: primaryColor.withValues(alpha: 0.10),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                          color: primaryColor.withValues(alpha: 0.30)),
+                    ),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 14, vertical: 10),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.add_location_alt_rounded,
+                            color: primaryColor, size: 18),
+                        const SizedBox(width: 8),
+                        Text(
+                          'Add $remaining more to optimize',
+                          style: TextStyle(
+                            color: primaryColor,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 13,
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                }
 
                 final button = Container(
                   decoration: BoxDecoration(

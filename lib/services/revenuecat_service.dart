@@ -3,6 +3,8 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_analytics/firebase_analytics.dart';
 import 'package:purchases_flutter/purchases_flutter.dart';
 
 /// RevenueCat configuration constants
@@ -72,6 +74,25 @@ class RevenueCatService {
     await _initCompleter.future;
   }
 
+  /// Links the Firebase App Instance ID to RevenueCat so the RC→Firebase
+  /// integration attributes its server-side events (rc_initial_purchase, etc.)
+  /// to the SAME Google Analytics user as the app's client events. Required by
+  /// the RevenueCat Firebase integration. Call once both Firebase and RC are
+  /// initialized; safe and idempotent (no-ops if Firebase isn't up yet).
+  Future<void> linkFirebaseAppInstanceId() async {
+    try {
+      if (Firebase.apps.isEmpty) return;
+      await waitForInitialization().timeout(const Duration(seconds: 8));
+      final id = await FirebaseAnalytics.instance.appInstanceId;
+      if (id != null && id.isNotEmpty) {
+        await Purchases.setFirebaseAppInstanceId(id);
+        debugPrint('RevenueCatService: linked Firebase app instance id to RC');
+      }
+    } catch (e) {
+      debugPrint('RevenueCatService.linkFirebaseAppInstanceId: $e');
+    }
+  }
+
   /// Initialize RevenueCat SDK
   /// Should be called once during app startup
   static Future<void> initialize() async {
@@ -102,6 +123,17 @@ class RevenueCatService {
       }
 
       await Purchases.configure(configuration);
+
+      // Apple Search Ads attribution (iOS only): lets RevenueCat attribute
+      // installs/purchases to ASA campaigns + keywords via the AdServices token,
+      // so we can measure which keywords actually drive payers. No-op on Android.
+      if (Platform.isIOS) {
+        try {
+          await Purchases.enableAdServicesAttributionTokenCollection();
+        } catch (e) {
+          debugPrint('RevenueCatService: ASA attribution enable failed: $e');
+        }
+      }
 
       // Set up listener for customer info updates
       Purchases.addCustomerInfoUpdateListener((customerInfo) {

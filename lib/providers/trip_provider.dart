@@ -12,6 +12,7 @@ import '../models/trip_model.dart';
 import '../models/trip.dart';
 import '../services/google_maps_service.dart';
 import '../services/places_service.dart';
+import '../services/analytics_service.dart';
 import '../services/review_prompt_service.dart';
 import '../services/storage_service.dart';
 import '../providers/debounced_settings_provider.dart';
@@ -319,6 +320,9 @@ class TripNotifier extends StateNotifier<TripState> {
 
       debugPrint('addLocation: Adding location "${savedLoc.name}" with tripId=${savedLoc.tripId ?? "null (no trip)"}');
       await _ref.read(locationRepositoryProvider).addLocation(savedLoc);
+
+      // Funnel analytics: a place was saved (drives the 3–5 "aha" threshold).
+      AnalyticsService.instance.placeAdded(state.pinnedLocations.length + 1);
 
       // Clear optimized route when location is added
       state = state.copyWith(
@@ -1217,6 +1221,13 @@ class TripNotifier extends StateNotifier<TripState> {
       );
 
       _ref.read(zoomToFitRouteTrigger.notifier).update((state) => state + 1);
+
+      // Funnel analytics: the activation "aha" — only when a real route was
+      // produced (skip the timeout/empty-result path that still writes state).
+      if (state.optimizedRoute.isNotEmpty) {
+        AnalyticsService.instance
+            .routeOptimized(state.optimizedLocationsForSelectedDate.length);
+      }
 
       // Delight moment: a successful optimization. Record the signal, then
       // (if all engagement/cooldown gates pass) signal the UI to run the

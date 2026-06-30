@@ -23,6 +23,7 @@ import 'services/revenuecat_service.dart';
 import 'services/auth_service.dart';
 import 'services/notification_service.dart';
 import 'services/review_prompt_service.dart';
+import 'services/analytics_consent_service.dart';
 import 'repositories/location_repository.dart';
 
 import 'package:firebase_core/firebase_core.dart';
@@ -191,6 +192,11 @@ Future<void> _bootstrap() async {
         debugPrint('Main: Initializing Firebase core (post-frame idle)...');
         await Firebase.initializeApp();
         debugPrint('Main: Firebase core initialized');
+        // Apply analytics consent state (EU/UK/CH default OFF until opt-in).
+        await AnalyticsConsentService.instance.applyAtStartup();
+        // Link Firebase App Instance ID → RevenueCat so the RC↔Firebase
+        // integration attributes server events to the same GA user.
+        unawaited(RevenueCatService().linkFirebaseAppInstanceId());
       } catch (e) {
         debugPrint('Main: Firebase core init failed (non-fatal): $e');
       }
