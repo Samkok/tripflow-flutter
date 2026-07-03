@@ -4,6 +4,8 @@ import 'package:url_launcher/url_launcher.dart';
 class TermsScreen extends StatelessWidget {
   const TermsScreen({super.key});
 
+  static const _privacyPolicyUrl = 'https://voyza.xtremon.com/privacy';
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -13,63 +15,130 @@ class TermsScreen extends StatelessWidget {
         elevation: 1,
       ),
       body: SingleChildScrollView(
-        padding: EdgeInsets.all(24.0),
+        padding: const EdgeInsets.all(24.0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             _buildSection(
               context,
               '1. Introduction',
-              'Welcome to Voyza ("the App"). These Terms and Conditions govern your use of our application and services. By downloading, accessing, or using the App, you agree to be bound by these terms. If you do not agree to these terms, please do not use the App.',
+              'Welcome to VoyZa ("VoyZa" or "the App"), a trip planner and multi-stop route optimizer. These Terms and Conditions govern your use of the App and its services. By downloading, accessing, or using the App, you agree to be bound by these Terms. If you do not agree, please do not use the App.',
             ),
             _buildSection(
               context,
               '2. Description of Service',
-              'TripFlow is a trip planning and route optimization tool. The App allows you to search for locations, pin them to a trip plan, and generate an optimized travel route. Key features include map interaction, location management, and route visualization.',
+              'VoyZa lets you search for places, save them to trips, build itineraries, and generate optimized multi-stop routes. Creating an account lets your trips sync across your devices through our cloud service and lets you collaborate on trips with people you invite. VoyZa also offers an optional paid subscription, VoyZa Pro.',
             ),
             _buildSection(
               context,
-              '3. Use of Third-Party Services',
-              'The App utilizes services from Google, including Google Maps, Google Places API, and Google Directions API, to provide map data, place information, and routing. Your use of these features is also subject to Google\'s Terms of Service and Google Maps/Google Earth Additional Terms of Service.',
+              '3. Third-Party Services',
+              "The App relies on third-party services to work, including Google Maps Platform (Maps, Places, and Directions) for maps, place information, and routing; Supabase for account authentication and cloud data storage; RevenueCat together with the App Store and Google Play for subscriptions and billing; and Firebase (Google) for analytics, performance monitoring, and push notifications. Your use of these features is also subject to those providers' terms, including Google's Terms of Service and the Google Maps/Google Earth Additional Terms of Service.",
             ),
             _buildSection(
               context,
               '4. Location Data',
-              'To provide core functionalities, such as route optimization from your current position, the App requires access to your device\'s location data. By using the App, you consent to us accessing this data. Your location data is used solely for the purpose of providing and improving the service and is not stored or shared with third parties, other than as required by the mapping services (e.g., Google) to generate routes.',
+              'VoyZa uses your device location to show where you are on the map, find nearby places, and optimize routes from your current position. Location and place coordinates are sent to Google Maps Platform to provide search, geocoding, and routing. You can control location access in your device settings; some features will not work without it. See our Privacy Policy for details on how location data is handled.',
             ),
             _buildSection(
               context,
-              '5. User-Generated Content',
-              'Any locations you pin, trips you create, or routes you generate ("User Content") are stored locally on your device using its internal storage. We do not have access to, nor do we collect, your User Content. You are solely responsible for backing up and managing your data.',
+              '5. Your Content, Cloud Storage & Collaboration',
+              "Trips, places, routes, notes, and other content you create (\"Your Content\") are stored in your VoyZa account in our cloud database and synced to your devices — they are not kept only on your device. When you invite collaborators to a trip, they can view that trip's content and, if you grant edit access, change it; every member of a shared trip can also see the other members' email addresses. You are responsible for the content you add and for the people you choose to invite. You keep your rights in Your Content and grant us the limited rights needed to store, process, sync, and display it in order to operate the service. See our Privacy Policy for details.",
             ),
             _buildSection(
               context,
-              '6. Disclaimer of Warranties',
-              'The App and its services are provided "as is" and "as available" without any warranties of any kind. We do not warrant that the App will be error-free or uninterrupted. All travel information, including but not limited to maps, routes, travel times, and distances, is provided by third-party services and may contain inaccuracies. You should always exercise your own judgment, be aware of your surroundings, and verify all information before relying on it for navigation or travel. We are not responsible for any damages or losses resulting from your reliance on this information.',
+              '6. Subscriptions (VoyZa Pro)',
+              'VoyZa Pro is an optional auto-renewing subscription sold through the App Store and Google Play. Pricing, billing period, and any free-trial terms are shown at the point of purchase and are billed by the applicable store. Subscriptions renew automatically unless cancelled at least 24 hours before the end of the current period; you can manage or cancel them in your App Store or Google Play account settings. To keep our free tier fair, we use a device identifier to enforce one free trial per device.',
             ),
             _buildSection(
               context,
-              '7. Limitation of Liability',
-              'To the fullest extent permitted by applicable law, in no event shall the creators of TripFlow be liable for any indirect, incidental, special, consequential, or punitive damages, or any loss of profits or revenues, whether incurred directly or indirectly, or any loss of data, use, goodwill, or other intangible losses, resulting from (a) your access to or use of or inability to access or use the App; (b) any conduct or content of any third party on the App; or (c) unauthorized access, use, or alteration of your transmissions or content.',
+              '7. Referral & Invitation Program',
+              'You can invite other people to VoyZa and to collaborate on your trips. When you invite someone who is not yet a VoyZa user by email, we store that email address to deliver the invitation and to connect you both if they join (see our Privacy Policy). Under our referral program (for example, "give a month, get a month"), when a person you refer signs up using your referral link or code and starts a qualifying free trial or subscription, you and the person you referred may each receive a promotional period of VoyZa Pro (currently 30 days each). Rewards are granted as promotional access, have no cash value, and are non-transferable. To keep the program fair, rewards are capped (currently 12 rewarded referrals per 12-month period), and referrals must be genuine invitations to real people you know. Self-referrals; creating fake, duplicate, or additional accounts; referring your own devices or accounts; and any automated, deceptive, or abusive activity are prohibited, and we use limited signals (including a device identifier) to detect them. Please invite only people who are happy to hear from you, and do not send spam. We may change, suspend, or end the referral program, and may withhold, revoke, or reverse rewards obtained through prohibited or fraudulent activity, at any time.',
             ),
             _buildSection(
               context,
-              '8. Intellectual Property',
-              'All rights, title, and interest in and to the App (excluding content provided by third parties) are and will remain the exclusive property of its creators. The App is protected by copyright and other laws. Nothing in these Terms gives you a right to use the TripFlow name or any of the TripFlow trademarks, logos, domain names, and other distinctive brand features.',
+              '8. Analytics & Advertising',
+              "We use Firebase Analytics and Google Analytics to understand how VoyZa is used so we can improve it, and we measure the effectiveness of our own marketing — for example, attributing app installs and subscriptions to advertising campaigns run through Google Ads. VoyZa does not display third-party advertising inside the App, and we do not track you across other companies' apps and websites for advertising. For users in the EEA, the UK, and Switzerland, non-essential analytics and advertising signals stay off until you opt in; you can review or change your choice at any time in Settings → Privacy → Analytics & Ads consent. Full details are in our Privacy Policy.",
+            ),
+            _buildPrivacySection(context),
+            _buildSection(
+              context,
+              '10. Disclaimer of Warranties',
+              'The App and its services are provided "as is" and "as available" without warranties of any kind. We do not warrant that the App will be error-free or uninterrupted. All travel information, including maps, routes, travel times, and distances, is provided by third-party services and may contain inaccuracies. Always exercise your own judgment, be aware of your surroundings, and verify information before relying on it for navigation or travel. We are not responsible for any damages or losses resulting from your reliance on this information.',
             ),
             _buildSection(
               context,
-              '9. Changes to Terms',
-              'We may revise these Terms and Conditions from time to time. We will notify you of any changes by posting the new Terms and Conditions on this page. You are advised to review this page periodically for any changes. Changes to these Terms are effective when they are posted on this page.',
+              '11. Limitation of Liability',
+              'To the fullest extent permitted by applicable law, in no event shall VoyZa or its creators be liable for any indirect, incidental, special, consequential, or punitive damages, or any loss of profits, revenues, data, use, goodwill, or other intangible losses, resulting from (a) your access to or use of, or inability to access or use, the App; (b) any conduct or content of any third party on the App; or (c) unauthorized access, use, or alteration of your transmissions or content.',
+            ),
+            _buildSection(
+              context,
+              '12. Intellectual Property',
+              'All rights, title, and interest in and to the App (excluding content provided by third parties and Your Content) are and will remain the exclusive property of VoyZa and its creators. The App is protected by copyright and other laws. Nothing in these Terms gives you the right to use the VoyZa name or any VoyZa trademarks, logos, domain names, or other distinctive brand features.',
+            ),
+            _buildSection(
+              context,
+              '13. Changes to Terms',
+              'We may revise these Terms from time to time. We will notify you of material changes by posting the updated Terms on this page. Your continued use of the App after changes take effect means you accept the revised Terms. Please review this page periodically.',
             ),
             _buildContactSection(context),
             const SizedBox(height: 24),
             const Text(
-              'Last updated: November 15, 2025',
+              'Last updated: July 3, 2026',
               style: TextStyle(fontStyle: FontStyle.italic, color: Colors.grey),
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildPrivacySection(BuildContext context) {
+    final bodyStyle =
+        Theme.of(context).textTheme.bodyMedium?.copyWith(height: 1.5);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 24.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '9. Privacy',
+            style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                  fontWeight: FontWeight.bold,
+                ),
+          ),
+          const SizedBox(height: 8),
+          RichText(
+            text: TextSpan(
+              style: bodyStyle,
+              children: [
+                const TextSpan(
+                  text:
+                      'Our Privacy Policy explains what we collect, how we use and share it, the choices you have, and how to exercise your rights. It forms part of these Terms. You can read it at ',
+                ),
+                WidgetSpan(
+                  alignment: PlaceholderAlignment.baseline,
+                  baseline: TextBaseline.alphabetic,
+                  child: GestureDetector(
+                    onTap: () => launchUrl(
+                      Uri.parse(_privacyPolicyUrl),
+                      mode: LaunchMode.externalApplication,
+                    ),
+                    child: Text(
+                      'voyza.xtremon.com/privacy',
+                      style: bodyStyle?.copyWith(
+                        color: Theme.of(context).colorScheme.primary,
+                        decoration: TextDecoration.underline,
+                        decorationColor: Theme.of(context).colorScheme.primary,
+                      ),
+                    ),
+                  ),
+                ),
+                const TextSpan(
+                    text: ', or open it any time from Settings in the App.'),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -83,7 +152,7 @@ class TermsScreen extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            '10. Contact Us',
+            '14. Contact Us',
             style: Theme.of(context).textTheme.titleLarge?.copyWith(
                   fontWeight: FontWeight.bold,
                 ),

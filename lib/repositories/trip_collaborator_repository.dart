@@ -8,10 +8,18 @@ class AddCollaboratorResult {
   final String? error;
   final TripCollaborator? collaborator;
 
+  /// True when the invited email has no VoyZa account yet — instead of an
+  /// error, the UI should offer to send a referral invite (they'll both get
+  /// a free month, and the invitee auto-joins this trip on signup).
+  final bool needsInvite;
+  final String? inviteEmail;
+
   AddCollaboratorResult({
     required this.success,
     this.error,
     this.collaborator,
+    this.needsInvite = false,
+    this.inviteEmail,
   });
 }
 
@@ -45,9 +53,12 @@ class TripCollaboratorRepository {
       final userId = await getUserIdByEmail(email);
 
       if (userId == null) {
+        // Not a user yet — surface the referral invite path instead of a
+        // dead-end. The sheet turns this into "invite them, both get a month."
         return AddCollaboratorResult(
           success: false,
-          error: 'No account found with that email address. Make sure the person has signed up first.',
+          needsInvite: true,
+          inviteEmail: email,
         );
       }
 
@@ -101,6 +112,28 @@ class TripCollaboratorRepository {
         success: false,
         error: 'Failed to add collaborator: ${e.toString()}',
       );
+    }
+  }
+
+  /// Store a pending referral invite for a non-user email + return the
+  /// inviter's referral code (to share). The invitee auto-joins [tripId]
+  /// when they sign up (via the claim-invites edge function). Returns null
+  /// on failure (e.g. no write access).
+  Future<String?> createPendingInvite({
+    required String tripId,
+    required String email,
+    required String permission,
+  }) async {
+    try {
+      final code = await _supabase.rpc('create_pending_trip_invite', params: {
+        'p_trip_id': tripId,
+        'p_email': email,
+        'p_permission': permission,
+      });
+      return code is String && code.isNotEmpty ? code : null;
+    } catch (e) {
+      debugPrint('Error creating pending invite: $e');
+      return null;
     }
   }
 

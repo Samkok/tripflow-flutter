@@ -1,7 +1,7 @@
 name: voyza
 description: A mobile app for optimizing trip routes with Google Maps integration
 publish_to: 'none'
-version: 1.0.6+2
+version: 1.0.6+4
 
 environment:
   sdk: '>=3.0.0 <4.0.0'

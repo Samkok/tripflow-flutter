@@ -85,10 +85,17 @@ class LocationService {
   }
 
   static Future<String?> getCurrentCountryCode() async {
-    try {
-      final coordinates = await getCurrentLocation();
-      if (coordinates == null) return null;
+    final coordinates = await getCurrentLocation();
+    if (coordinates == null) return null;
+    return getCountryCodeForLocation(coordinates);
+  }
 
+  /// Reverse-geocodes a KNOWN point to its ISO 3166-1 alpha-2 country code
+  /// (uppercase, e.g. 'JP'), matching how trips store `countryCode`. Takes an
+  /// explicit [coordinates] so callers can resolve the country of a location
+  /// already in memory without triggering a fresh GPS fix.
+  static Future<String?> getCountryCodeForLocation(LatLng coordinates) async {
+    try {
       final url = 'https://maps.googleapis.com/maps/api/geocode/json'
           '?latlng=${coordinates.latitude},${coordinates.longitude}'
           '&key=${ApiService.googleMapsApiKey}';
@@ -106,13 +113,13 @@ class LocationService {
         for (final component in addressComponents) {
           final types = component['types'] as List;
           if (types.contains('country')) {
-            return component['short_name'];
+            return (component['short_name'] as String?)?.toUpperCase();
           }
         }
       }
       return null;
     } catch (e) {
-      debugPrint('Error getting current country code: $e');
+      debugPrint('Error getting country code for location: $e');
       return null;
     }
   }

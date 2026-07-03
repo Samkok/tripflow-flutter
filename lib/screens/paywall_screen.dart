@@ -14,6 +14,7 @@ import '../services/revenuecat_service.dart';
 import '../services/subscription_limit_service.dart';
 import '../services/supabase_service.dart';
 import '../widgets/app_toast.dart';
+import '../widgets/referral_prompt.dart';
 import '../repositories/user_profile_repository.dart';
 
 /// Reasons the paywall might be shown — drives the headline copy.
@@ -946,7 +947,16 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
 
       debugPrint('PaywallScreen: Current isPro state: ${ref.read(isProProvider)}');
 
-      Navigator.of(context).pop(true);
+      // Post-purchase referral prompt — the happiest moment, and the
+      // reward cost is offset by their payment. Only on a fresh purchase
+      // (not restore), and only for signed-in users (anonymous purchasers
+      // have no referral code to share). Shown before we pop the paywall.
+      if (mounted &&
+          SupabaseService.instance.client.auth.currentUser != null) {
+        await showReferralAfterPurchase(context, ref);
+      }
+
+      if (mounted) Navigator.of(context).pop(true);
 
       if (mounted) {
         AppToast.success(context, 'Welcome to VoyZa Pro!');

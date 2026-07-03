@@ -35,12 +35,14 @@ import '../services/location_add_service.dart';
 import '../services/onboarding_service.dart';
 import '../providers/nearby_radius_provider.dart';
 import '../providers/zoom_fit_settings_provider.dart';
+import '../utils/countries.dart';
 import '../widgets/app_toast.dart';
 import '../providers/subscription_provider.dart';
 import '../services/analytics_service.dart';
 import '../widgets/celebration_dialogs.dart';
 import '../widgets/free_places_meter.dart';
 import '../widgets/map_tutorial.dart';
+import '../widgets/referral_prompt.dart';
 import '../widgets/map_widget.dart';
 import '../widgets/nearby_places_picker_sheet.dart';
 import '../widgets/trip_bottom_sheet.dart';
@@ -78,6 +80,17 @@ class _MapScreenState extends ConsumerState<MapScreen>
   final _optimizeButtonKey = GlobalKey();
   bool _tutorialCheckInFlight = false;
   TutorialCoachMark? _activeTutorial;
+
+  // Country of the device's current location, reverse-geocoded from the known
+  // position (see [_resolveCurrentLocationCountry]). Used by "zoom to fit" to
+  // exclude the current location when it's in a different country than the
+  // active trip. Null until resolved (fit falls back to including it).
+  String? _currentLocationCountry;
+  LatLng? _currentLocationCountryFor;
+  // Dedupes the cross-country "location not included" toast so repeated /
+  // background fits don't spam it. Holds the last "trip>current" pair notified;
+  // reset whenever the countries match again so a later mismatch re-notifies.
+  String? _crossCountryFitNoticeKey;
 
   @override
   void initState() {
@@ -200,6 +213,9 @@ class _MapScreenState extends ConsumerState<MapScreen>
       final currentLocation = await LocationService.getCurrentLocation();
       if (currentLocation != null) {
         ref.read(tripProvider.notifier).updateCurrentLocation(currentLocation);
+        // Resolve its country up front so the first "zoom to fit" already
+        // knows whether we're in the trip's country.
+        _resolveCurrentLocationCountry(currentLocation);
 
         // Initial camera positioning
         if (_mapController != null) {
@@ -778,6 +794,11 @@ class _MapScreenState extends ConsumerState<MapScreen>
                     MaterialPageRoute(builder: (_) => const LoginScreen()),
                   )
               : null,
+          // Authenticated users get the referral CTA instead — the aha
+          // moment is the single highest-converting referral surface.
+          onInvite: isAnonymous
+              ? null
+              : () => inviteFriends(context, ref, source: 'celebration'),
         );
       });
     });
@@ -1500,14 +1521,86 @@ class _MapScreenState extends ConsumerState<MapScreen>
     );
   }
 
+  /// Resolves and caches the country of the device's [location] so
+  /// [_zoomToFitTrip] can compare it against the active trip's country without
+  /// an async hop. Re-geocodes only after ~5km of movement (country
+  /// granularity), so it costs at most one network call per meaningful move.
+  Future<void> _resolveCurrentLocationCountry(LatLng location) async {
+    final last = _currentLocationCountryFor;
+    if (last != null &&
+        _currentLocationCountry != null &&
+        _metersBetween(last, location) < 5000) {
+      return; // still near the last resolve — reuse the cached country
+    }
+    final country = await LocationService.getCountryCodeForLocation(location);
+    if (!mounted || country == null) return;
+    _currentLocationCountry = country;
+    _currentLocationCountryFor = location;
+  }
+
+  double _metersBetween(LatLng a, LatLng b) {
+    const earthRadius = 6371000.0; // meters
+    final dLat = (b.latitude - a.latitude) * math.pi / 180.0;
+    final dLng = (b.longitude - a.longitude) * math.pi / 180.0;
+    final lat1 = a.latitude * math.pi / 180.0;
+    final lat2 = b.latitude * math.pi / 180.0;
+    final h = math.sin(dLat / 2) * math.sin(dLat / 2) +
+        math.cos(lat1) *
+            math.cos(lat2) *
+            math.sin(dLng / 2) *
+            math.sin(dLng / 2);
+    return 2 * earthRadius * math.asin(math.min(1.0, math.sqrt(h)));
+  }
+
   void _zoomToFitTrip() {
     if (_mapController == null) return;
 
     final locations = ref.read(locationsForSelectedDateProvider);
     final includeCurrent = ref.read(includeCurrentInFitProvider);
     final currentLocation = ref.read(tripProvider).currentLocation;
+
+    // Keep the current-location country fresh (cheap after the first resolve)
+    // so the cross-country check has an answer on the next fit even if the
+    // device has since moved.
+    if (currentLocation != null) {
+      _resolveCurrentLocationCountry(currentLocation);
+    }
+
+    // If the device is in a different country than the active trip, never fold
+    // the current location into the bounds — a trip in Japan shouldn't zoom out
+    // to a phone in Cambodia. This OVERRIDES the "include current location"
+    // preference, which only makes sense within a single country.
+    final tripCountry =
+        ref.read(realtimeActiveTripProvider).asData?.value?.countryCode;
+    final currentCountry = _currentLocationCountry;
+    final crossCountry = tripCountry != null &&
+        currentCountry != null &&
+        tripCountry.toUpperCase() != currentCountry.toUpperCase();
+
+    if (crossCountry) {
+      // Announce it once — but only when the preference would otherwise have
+      // included the location and there are stops to frame. Deduped by the
+      // country pair so background / repeated fits don't spam the toast.
+      if (includeCurrent && currentLocation != null && locations.isNotEmpty) {
+        final key = '$tripCountry>$currentCountry';
+        if (_crossCountryFitNoticeKey != key) {
+          _crossCountryFitNoticeKey = key;
+          final countryName = findCountryByCode(tripCountry)?.name;
+          final where = countryName ?? "the trip's country";
+          AppToast.info(
+            context,
+            "You're not in $where right now, so your current location "
+            "isn't included in the map view.",
+          );
+        }
+      }
+    } else {
+      // Countries match (or one is unknown) — let a later mismatch re-notify.
+      _crossCountryFitNoticeKey = null;
+    }
+
     final currentForFit =
-        includeCurrent ? currentLocation : null;
+        (includeCurrent && !crossCountry) ? currentLocation : null;
 
     // Build the points list before the small-list short-circuit so the
     // current-location preference also takes effect when there's only 0–1

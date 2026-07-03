@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/trip_collaborator.dart';
 import '../providers/trip_collaborator_provider.dart';
+import '../services/analytics_service.dart';
 import 'app_toast.dart';
 
 class CollaboratorsSheet extends ConsumerStatefulWidget {
@@ -78,8 +80,73 @@ class _CollaboratorsSheetState extends ConsumerState<CollaboratorsSheet> {
       ref.invalidate(userTripPermissionProvider(widget.tripId));
 
       AppToast.success(context, 'Added $email as collaborator');
+    } else if (result.needsInvite) {
+      // Not a VoyZa user yet — offer the referral invite instead of erroring.
+      await _showInviteNonUser(result.inviteEmail ?? email);
     } else {
       setState(() => _errorMessage = result.error);
+    }
+  }
+
+  /// Shown when the invited email has no account: turn the dead-end into the
+  /// referral loop — invite them to join & plan this trip, both get a month,
+  /// and they auto-join this trip on signup (claim-invites edge function).
+  Future<void> _showInviteNonUser(String email) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) {
+        final theme = Theme.of(ctx);
+        return AlertDialog(
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: const Text('They\'re not on VoyZa yet'),
+          content: Text(
+            '$email doesn\'t have an account. Invite them to plan '
+            '"${widget.tripName}" with you — you\'ll both get a free month of '
+            'Pro, and they\'ll join this trip automatically when they sign up.',
+            style: theme.textTheme.bodyMedium,
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton.icon(
+              onPressed: () => Navigator.pop(ctx, true),
+              icon: const Icon(Icons.card_giftcard_rounded, size: 18),
+              label: const Text('Send invite'),
+            ),
+          ],
+        );
+      },
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _isLoading = true);
+    final repository = ref.read(tripCollaboratorRepositoryProvider);
+    final code = await repository.createPendingInvite(
+      tripId: widget.tripId,
+      email: email,
+      permission: _selectedPermission,
+    );
+    if (!mounted) return;
+    setState(() => _isLoading = false);
+
+    if (code == null) {
+      AppToast.error(context, 'Couldn\'t create the invite. Please try again.');
+      return;
+    }
+    _emailController.clear();
+    AnalyticsService.instance.referralPromptShown('collab_invite');
+    await SharePlus.instance.share(ShareParams(
+      text: 'Join me on VoyZa to plan "${widget.tripName}" together — '
+          'and we\'ll both get a free month of Pro. Use my code $code when '
+          'you sign up: https://voyza.xtremon.com/r/$code',
+      subject: 'Plan "${widget.tripName}" with me on VoyZa',
+    ));
+    if (mounted) {
+      AppToast.success(
+          context, 'Invite ready to share — they\'ll join when they sign up.');
     }
   }
 

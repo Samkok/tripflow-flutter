@@ -335,6 +335,239 @@ function determineSubscriptionStatus(
 }
 
 // ============================================================================
+// Referral rewards — "Give a month, get a month"
+// ============================================================================
+//
+// State machine (referrals table): pending → qualified → rewarded.
+// pending   — created by redeem-referral (referee already got their 30 days)
+// qualified — the referee's first real INITIAL_PURCHASE landed (trial or paid)
+// rewarded  — the referrer's promotional grant succeeded (cap-checked)
+//
+// Invariants: the pending→qualified transition is a compare-and-swap, and the
+// reward step only fires while rewarded_at IS NULL — so RC webhook retries can
+// never double-grant, and a transiently failed grant self-heals on the
+// referee's next event (e.g. RENEWAL).
+
+const REFERRAL_ENTITLEMENT = 'premium';
+const REFERRAL_CAP_PER_365D = 12;
+
+/**
+ * Grant promotional Pro time via the RevenueCat REST API. RC promotional
+ * grants REPLACE any existing promotional entitlement, so when the referrer
+ * already has promo time left we round UP to the smallest duration covering
+ * remaining + 30 days, starting now — continuous coverage with zero gap risk,
+ * at worst a few bonus days (acceptable; grants are free months anyway).
+ */
+async function grantPromotionalMonth(
+  rcAppUserId: string,
+  existingPromoExpiresMs: number | null,
+): Promise<boolean> {
+  if (!revenueCatSecretApiKey) {
+    console.error('referral: REVENUECAT_SECRET_API_KEY not set — cannot grant');
+    return false;
+  }
+  const now = Date.now();
+  const remainingDays = existingPromoExpiresMs && existingPromoExpiresMs > now
+    ? (existingPromoExpiresMs - now) / 86_400_000
+    : 0;
+  const targetDays = remainingDays + 30;
+  // Never SHORTEN coverage: grants replace the existing promo, and 'yearly'
+  // (365d) is the longest rung. Defer instead — the row stays 'qualified'
+  // and self-heals on a later event once the remaining stack has shrunk.
+  if (targetDays > 365) {
+    console.log('referral: promo stack too long to extend now — deferring');
+    return false;
+  }
+  // Smallest RC duration ≥ targetDays.
+  const duration = targetDays <= 30
+    ? 'monthly'
+    : targetDays <= 60
+      ? 'two_month'
+      : targetDays <= 90
+        ? 'three_month'
+        : targetDays <= 180
+          ? 'six_month'
+          : 'yearly';
+
+  const res = await fetch(
+    `https://api.revenuecat.com/v1/subscribers/${encodeURIComponent(rcAppUserId)}` +
+      `/entitlements/${REFERRAL_ENTITLEMENT}/promotional`,
+    {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${revenueCatSecretApiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ duration }),
+    },
+  );
+  if (!res.ok) {
+    console.error('referral: promotional grant failed', res.status, await res.text());
+    return false;
+  }
+  console.log(`referral: granted ${duration} promo to ${rcAppUserId}`);
+  return true;
+}
+
+/** Referrer's current promotional-entitlement expiry (ms), or null. */
+async function getPromoExpiryMs(rcAppUserId: string): Promise<number | null> {
+  if (!revenueCatSecretApiKey) return null;
+  try {
+    const res = await fetch(
+      `https://api.revenuecat.com/v1/subscribers/${encodeURIComponent(rcAppUserId)}`,
+      { headers: { 'Authorization': `Bearer ${revenueCatSecretApiKey}` } },
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    const ent = data?.subscriber?.entitlements?.[REFERRAL_ENTITLEMENT];
+    if (!ent?.expires_date) return null;
+    // Only treat as "promo time to extend" when the entitlement is backed by
+    // a promotional product — a paying store subscriber gets a plain month
+    // (overlap accepted in v1; banking on EXPIRATION is a v1.1 upgrade).
+    const isPromo = typeof ent.product_identifier === 'string' &&
+      ent.product_identifier.startsWith('rc_promo_');
+    if (!isPromo) return null;
+    const ms = Date.parse(ent.expires_date);
+    return Number.isFinite(ms) ? ms : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/** Branded "you earned a month" email via Resend. Best-effort. */
+async function sendReferralRewardEmail(userId: string, monthsThisYear: number) {
+  const resendKey = Deno.env.get('RESEND_API_KEY');
+  if (!resendKey) return;
+  const from = Deno.env.get('LIFECYCLE_FROM') ?? 'VoyZa <onboarding@resend.dev>';
+  const { data: profile } = await supabase
+    .from('user_profiles').select('email').eq('user_id', userId).maybeSingle();
+  if (!profile?.email) return;
+  const p = 'margin:0 0 12px;color:#46535f;font-size:15px;line-height:1.5';
+  const html =
+    `<div style="background:#f4f6f8;padding:24px;font-family:-apple-system,'Segoe UI',Roboto,sans-serif">` +
+    `<div style="max-width:520px;margin:0 auto;background:#fff;border-radius:16px;overflow:hidden;border:1px solid #e6e9ee">` +
+    `<div style="background:linear-gradient(135deg,#2B1D70,#2E5BD0 60%,#15BFB6);padding:22px 24px;color:#fff;font-weight:800;font-size:20px">VoyZa</div>` +
+    `<div style="padding:24px">` +
+    `<h1 style="margin:0 0 14px;font-size:22px;color:#16202b">You earned a free month of Pro! 🎉</h1>` +
+    `<p style="${p}">A friend you invited just started using VoyZa Pro — so we've added <strong>30 days of Pro</strong> to your account.</p>` +
+    `<p style="${p}">That's ${monthsThisYear} of 12 free months earned this year. Keep sharing your code to earn more.</p>` +
+    `</div>` +
+    `<div style="padding:16px 24px;color:#9aa4ad;font-size:12px;border-top:1px solid #eef1f4">VoyZa · voyza.xtremon.com</div>` +
+    `</div></div>`;
+  try {
+    await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${resendKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        from, to: profile.email,
+        subject: 'You earned a free month of VoyZa Pro', html,
+      }),
+    });
+  } catch (e) {
+    console.error('referral: reward email failed (non-fatal):', e);
+  }
+}
+
+/**
+ * Called after every successful subscription upsert. Never throws — a
+ * referral failure must not fail the webhook (RC would retry and re-run
+ * subscription writes).
+ */
+async function processReferralReward(event: any, refereeUserId: string) {
+  try {
+    if ((event.store ?? '').toUpperCase() === 'PROMOTIONAL') return;
+    if (
+      (event.environment ?? '').toUpperCase() === 'SANDBOX' &&
+      Deno.env.get('REFERRAL_ALLOW_SANDBOX') !== 'true'
+    ) {
+      return;
+    }
+
+    // 1. Is this referee part of a referral that hasn't been rewarded yet?
+    const { data: referral } = await supabase
+      .from('referrals')
+      .select('id, referrer_user_id, status, rewarded_at')
+      .eq('referee_user_id', refereeUserId)
+      .in('status', ['pending', 'qualified'])
+      .maybeSingle();
+    if (!referral) return;
+
+    // 2. pending → qualified fires ONLY on the referee's first real
+    // purchase/trial event. Already-qualified rows, by contrast, may
+    // self-heal a transiently failed reward on ANY of the referee's later
+    // events (RENEWAL etc.) — INITIAL_PURCHASE never recurs for the same
+    // subscription, so gating everything on it would strand them.
+    if (referral.status === 'pending') {
+      if (event.type !== 'INITIAL_PURCHASE') return;
+      await supabase
+        .from('referrals')
+        .update({ status: 'qualified', qualified_at: new Date().toISOString() })
+        .eq('id', referral.id)
+        .eq('status', 'pending');
+    }
+
+    if (referral.rewarded_at != null) return; // already rewarded
+
+    // 3. Cap: 12 rewarded referrals per trailing 365 days. (Best-effort,
+    // not atomic across concurrent qualifications of DIFFERENT referees —
+    // worst case the cap overshoots by one month. Accepted.)
+    const since = new Date(Date.now() - 365 * 86_400_000).toISOString();
+    const { count } = await supabase
+      .from('referrals')
+      .select('id', { count: 'exact', head: true })
+      .eq('referrer_user_id', referral.referrer_user_id)
+      .eq('status', 'rewarded')
+      .gte('rewarded_at', since);
+    if ((count ?? 0) >= REFERRAL_CAP_PER_365D) {
+      console.log('referral: cap reached for referrer', referral.referrer_user_id);
+      return; // stays 'qualified'; UI shows "cap reached"
+    }
+
+    // 4. CLAIM before granting — the rewarded_at CAS is the mutex, so two
+    // concurrent deliveries of the same event can't double-grant. If the
+    // grant then fails, the claim is reverted and a later event retries.
+    const { data: claimed } = await supabase
+      .from('referrals')
+      .update({ status: 'rewarded', rewarded_at: new Date().toISOString() })
+      .eq('id', referral.id)
+      .is('rewarded_at', null)
+      .select('id');
+    if (!claimed || claimed.length === 0) return; // lost the race
+
+    // 5. Grant the referrer 30 days (extend when they have promo time left).
+    const promoExpiry = await getPromoExpiryMs(referral.referrer_user_id);
+    const granted = await grantPromotionalMonth(
+      referral.referrer_user_id, promoExpiry);
+    if (!granted) {
+      // Revert the claim so the row self-heals on a later referee event.
+      await supabase
+        .from('referrals')
+        .update({ status: 'qualified', rewarded_at: null })
+        .eq('id', referral.id);
+      return;
+    }
+
+    const monthsThisYear = (count ?? 0) + 1;
+
+    // 6. In-app notification (the existing DB→push pipeline delivers FCM).
+    await supabase.from('notifications').insert({
+      user_id: referral.referrer_user_id,
+      type: 'referral_reward',
+      title: 'You earned a free month of VoyZa Pro! 🎉',
+      body:
+        `A friend you invited just got started — 30 days of Pro added. ` +
+        `${monthsThisYear} of 12 free months earned this year.`,
+      data: { screen: 'referral' },
+    });
+
+    // 7. Email (best-effort).
+    await sendReferralRewardEmail(referral.referrer_user_id, monthsThisYear);
+  } catch (e) {
+    console.error('referral: processReferralReward failed (non-fatal):', e);
+  }
+}
+
+// ============================================================================
 // Main Handler
 // ============================================================================
 
@@ -813,7 +1046,12 @@ serve(async (req) => {
       }
     }
 
-    // 9. Return success response
+    // 9. Referral qualification/reward hook. Fully self-contained and
+    // non-fatal: userId here is always a resolved Supabase UUID (anonymous
+    // events either returned early or were mapped by resolveAuthenticatedOwner).
+    await processReferralReward(event, userId);
+
+    // 10. Return success response
     return new Response(
       JSON.stringify({
         message: 'Webhook processed successfully',

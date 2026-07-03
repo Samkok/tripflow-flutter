@@ -95,4 +95,22 @@ class AnalyticsService {
   /// step that was on screen when the user bailed.
   void mapTutorialSkipped(int step) =>
       _fire('map_tutorial_skipped', {'step': step});
+
+  /// The referral share sheet was opened. Organic channel — NEVER imported
+  /// into Google Ads (see marketing/analytics-events.md).
+  void referralShare() => _fire('referral_share');
+
+  /// A referral code was successfully redeemed (client-observed).
+  void referralCodeRedeemed() => _fire('referral_code_redeemed');
+
+  /// The referrer noticed a new earned month. [monthsTotal] = trailing-365d
+  /// rewarded count at observation time.
+  void referralRewardEarned(int monthsTotal) =>
+      _fire('referral_reward_earned', {'months_total': monthsTotal});
+
+  /// A referral invite action was taken from a specific surface. [source] =
+  /// celebration | post_purchase | home_banner | collab_invite | settings.
+  /// Lets us measure share-rate per placement. Organic — never Ads.
+  void referralPromptShown(String source) =>
+      _fire('referral_prompt_shown', {'source': source});
 }

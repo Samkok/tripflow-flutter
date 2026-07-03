@@ -22,6 +22,7 @@ import 'services/supabase_service.dart';
 import 'services/revenuecat_service.dart';
 import 'services/auth_service.dart';
 import 'services/notification_service.dart';
+import 'services/referral_service.dart';
 import 'services/review_prompt_service.dart';
 import 'services/analytics_consent_service.dart';
 import 'repositories/location_repository.dart';
@@ -360,9 +361,24 @@ class _MyAppState extends ConsumerState<MyApp> with WidgetsBindingObserver {
               MaterialPageRoute(builder: (_) => const LoginScreen()),
               (_) => false,
             );
+          } else if (data.event == AuthChangeEvent.signedIn) {
+            // Referral: a code entered at signup is saved locally (no session
+            // exists until the email is verified) — redeem it on the first
+            // verified sign-in. Idempotent + no-op without a pending code.
+            unawaited(ReferralService.instance.redeemPendingCodeIfAny());
+            // Collaboration invites: auto-join any trips this email was
+            // invited to (as a non-user) + reward both sides. Idempotent.
+            unawaited(ReferralService.instance.claimInvites());
           }
         },
       );
+
+      // Covers the "verified earlier, app relaunched with a live session"
+      // path where no signedIn event fires this run.
+      if (SupabaseService.instance.client.auth.currentSession != null) {
+        unawaited(ReferralService.instance.redeemPendingCodeIfAny());
+        unawaited(ReferralService.instance.claimInvites());
+      }
 
       // PERFORMANCE: Defer collaborator realtime to let UI render first
       // Initialize after a short delay so it doesn't compete with initial frame

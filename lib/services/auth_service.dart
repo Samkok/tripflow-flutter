@@ -7,6 +7,7 @@ import 'package:voyza/services/supabase_service.dart';
 import 'package:voyza/services/revenuecat_service.dart';
 import 'package:voyza/services/analytics_service.dart';
 import 'package:voyza/services/notification_service.dart';
+import 'package:voyza/services/referral_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import '../models/saved_location.dart';
@@ -211,6 +212,7 @@ class AuthService {
     String? firstName,
     String? lastName,
     String? phoneNumber,
+    String? referralCode,
   }) async {
     try {
       // Create user account
@@ -329,6 +331,13 @@ class AuthService {
         // Funnel analytics: fire only after the profile insert succeeds — i.e.
         // a genuinely new account past the 23505 duplicate backstop above.
         AnalyticsService.instance.signup('email');
+
+        // Referral: no session exists yet (email verification pending), so
+        // the code can't be redeemed here. Persist it locally; main.dart's
+        // auth listener redeems it on the first verified sign-in.
+        if (referralCode != null && referralCode.trim().isNotEmpty) {
+          await ReferralService.instance.savePendingCode(referralCode);
+        }
       }
     } catch (e) {
       debugPrint('e during sign up: $e');

@@ -21,6 +21,7 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
+  final _referralCodeController = TextEditingController();
   final _formKey = GlobalKey<FormState>();
   bool _isLoading = false;
   bool _agreedToTerms = false;
@@ -79,6 +80,9 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
       await ref.read(authServiceProvider).signUp(
             _emailController.text,
             _passwordController.text,
+            referralCode: _referralCodeController.text.trim().isEmpty
+                ? null
+                : _referralCodeController.text.trim(),
           );
       if (mounted) {
         // Ask the user (once per email) whether to save the credential
@@ -272,6 +276,24 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
                       ? 'Passwords do not match'
                       : null,
                 ),
+                const SizedBox(height: 16),
+                TextFormField(
+                  controller: _referralCodeController,
+                  textCapitalization: TextCapitalization.characters,
+                  decoration: const InputDecoration(
+                    labelText: 'Referral code (optional)',
+                    hintText: 'VOYZA-XXXXXX',
+                    prefixIcon: Icon(Icons.card_giftcard_rounded),
+                    border: OutlineInputBorder(),
+                  ),
+                  validator: (val) {
+                    final v = (val ?? '').trim();
+                    if (v.isEmpty) return null;
+                    return RegExp(r'^[A-Za-z0-9-]{4,12}$').hasMatch(v)
+                        ? null
+                        : 'That code doesn\'t look right';
+                  },
+                ),
                 const SizedBox(height: 24),
                 Row(
                   children: [
@@ -326,6 +348,7 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
     _emailController.dispose();
     _passwordController.dispose();
     _confirmPasswordController.dispose();
+    _referralCodeController.dispose();
     super.dispose();
   }
 }

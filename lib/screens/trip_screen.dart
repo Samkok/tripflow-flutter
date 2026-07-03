@@ -19,6 +19,8 @@ import 'package:voyza/utils/trip_date_validator.dart';
 import 'package:voyza/widgets/app_toast.dart';
 import 'package:voyza/widgets/country_flag_icon.dart';
 import 'package:voyza/widgets/country_picker_sheet.dart';
+import 'package:voyza/widgets/referral_prompt.dart';
+import 'package:voyza/widgets/trip_collaborators_row.dart';
 import 'package:voyza/widgets/trip_skeleton.dart';
 
 class TripScreen extends ConsumerStatefulWidget {
@@ -621,6 +623,11 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                     ]
                   : null,
             ),
+
+            // Persistent referral banner — self-suppresses for signed-out
+            // users and advocates (already shared / have referrals).
+            if (!_selectionMode)
+              const SliverToBoxAdapter(child: ReferralHomeBanner()),
 
             // Active Trip Section
             SliverToBoxAdapter(
@@ -1469,6 +1476,15 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                           ),
                         ],
 
+                        // Co-collaborators on this shared trip (read-only —
+                        // guests can see who else they're planning with).
+                        const SizedBox(height: 10),
+                        TripCollaboratorsRow(
+                          tripId: trip.id,
+                          tripName: trip.name,
+                          canManage: false,
+                        ),
+
                         const SizedBox(height: 8),
                         // Activate/Deactivate button for shared trips
                         SizedBox(
@@ -1909,6 +1925,17 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                                 }),
                               ),
                             ],
+                          ),
+                        ],
+
+                        // Collaborators + add-collaborator button (owned
+                        // trips only — this content builder isn't used for
+                        // shared cards). Hidden during multi-select.
+                        if (!_selectionMode) ...[
+                          const SizedBox(height: 12),
+                          TripCollaboratorsRow(
+                            tripId: trip.id,
+                            tripName: trip.name,
                           ),
                         ],
 

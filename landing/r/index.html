@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>A free month of VoyZa Pro for you</title>
+<meta property="og:title" content="A free month of VoyZa Pro 🎁">
+<meta property="og:description" content="Your friend invited you to VoyZa — smart trip routes, zero backtracking. This code gives you 1 month of Pro free.">
+<meta property="og:type" content="website">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, 'Segoe UI', Roboto, sans-serif;
+    background: #f4f6f8; color: #16202b; min-height: 100vh;
+    display: flex; align-items: center; justify-content: center; padding: 24px 16px;
+  }
+  .card {
+    max-width: 440px; width: 100%; background: #fff; border-radius: 20px;
+    overflow: hidden; border: 1px solid #e6e9ee;
+    box-shadow: 0 10px 30px rgba(22, 32, 43, .08);
+  }
+  .header {
+    background: linear-gradient(135deg, #2B1D70, #2E5BD0 60%, #15BFB6);
+    padding: 26px 28px; color: #fff; font-weight: 800; font-size: 22px;
+  }
+  .body { padding: 28px; }
+  h1 { font-size: 24px; line-height: 1.25; margin-bottom: 10px; }
+  p.sub { color: #46535f; font-size: 15px; line-height: 1.55; margin-bottom: 22px; }
+  .code-pill {
+    display: flex; align-items: center; justify-content: center; gap: 10px;
+    background: #eef3ff; border: 2px dashed #2E5BD0; border-radius: 14px;
+    padding: 16px; margin-bottom: 12px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 22px; font-weight: 800; letter-spacing: 2px; color: #16202b;
+  }
+  .copy-btn {
+    width: 100%; border: 0; background: #2E5BD0; color: #fff; font-weight: 700;
+    font-size: 16px; padding: 14px; border-radius: 12px; cursor: pointer;
+    margin-bottom: 26px; font-family: inherit;
+  }
+  .copy-btn.copied { background: #22C55E; }
+  .steps { color: #46535f; font-size: 14px; line-height: 1.6; margin-bottom: 24px; }
+  .steps b { color: #16202b; }
+  .stores { display: flex; flex-direction: column; gap: 10px; }
+  .store-btn {
+    display: block; text-align: center; text-decoration: none; font-weight: 700;
+    font-size: 15px; padding: 14px; border-radius: 12px;
+  }
+  .store-primary { background: #16202b; color: #fff; }
+  .store-secondary { background: #fff; color: #16202b; border: 1.5px solid #d4dae2; }
+  .footer { padding: 16px 28px; color: #9aa4ad; font-size: 12px; border-top: 1px solid #eef1f4; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="header">VoyZa</div>
+    <div class="body">
+      <h1 id="headline">Your friend gave you 1 month of VoyZa Pro 🎁</h1>
+      <p class="sub">VoyZa plans your trip days for you — save the places you
+        want to see and it puts them in the smartest order. No backtracking.</p>
+
+      <div id="code-block">
+        <div class="code-pill" id="code-pill">VOYZA-······</div>
+        <button class="copy-btn" id="copy-btn">Copy code</button>
+      </div>
+
+      <div class="steps">
+        <b>How to claim your free month:</b><br>
+        1. Install VoyZa below<br>
+        2. Create your account<br>
+        3. Enter this code at signup — Pro unlocks the moment you verify
+      </div>
+
+      <div class="stores" id="stores">
+        <a class="store-btn store-primary" id="ios-btn"
+           href="https://apps.apple.com/us/app/voyza/id6758559163">Download on the App Store</a>
+        <a class="store-btn store-secondary" id="android-btn"
+           href="https://play.google.com/store/apps/details?id=com.superiordev.voyza">Get it on Google Play</a>
+      </div>
+    </div>
+    <div class="footer">VoyZa · voyza.xtremon.com</div>
+  </div>
+
+<script>
+(function () {
+  // Code from /r/{CODE} path, with ?c={CODE} fallback for hosts without rewrites.
+  var m = location.pathname.match(/\/r\/([A-Za-z0-9-]{4,16})\/?$/);
+  var code = m ? m[1] : new URLSearchParams(location.search).get('c');
+  code = (code || '').toUpperCase();
+  var valid = /^[A-Z0-9-]{4,16}$/.test(code);
+
+  var pill = document.getElementById('code-pill');
+  var btn = document.getElementById('copy-btn');
+
+  if (valid) {
+    pill.textContent = code;
+    // Trip-collaboration invite: /r/{CODE}?t={tripId} → friendlier framing.
+    // (The auto-join happens server-side via the invitee's email, so the
+    // trip id itself doesn't need to survive install — this is copy only.)
+    if (new URLSearchParams(location.search).get('t')) {
+      document.getElementById('headline').textContent =
+        'Your friend invited you to plan a trip on VoyZa 🎁';
+      document.querySelector('p.sub').textContent =
+        'Sign up and you’ll join their trip automatically — and you '
+        + 'both get a free month of Pro.';
+    }
+  } else {
+    // No/invalid code — fall back to a generic invite.
+    document.getElementById('headline').textContent =
+      'Plan smarter trips with VoyZa';
+    document.getElementById('code-block').style.display = 'none';
+  }
+
+  btn.addEventListener('click', function () {
+    function done() {
+      btn.textContent = 'Copied! Paste it at signup';
+      btn.classList.add('copied');
+      setTimeout(function () {
+        btn.textContent = 'Copy code';
+        btn.classList.remove('copied');
+      }, 2500);
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(code).then(done, function () { fallback(); });
+    } else { fallback(); }
+    function fallback() {
+      var ta = document.createElement('textarea');
+      ta.value = code; document.body.appendChild(ta);
+      ta.select(); document.execCommand('copy');
+      document.body.removeChild(ta); done();
+    }
+  });
+
+  // Emphasize the visitor's own platform.
+  var isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+  var isAndroid = /Android/i.test(navigator.userAgent);
+  var stores = document.getElementById('stores');
+  var ios = document.getElementById('ios-btn');
+  var android = document.getElementById('android-btn');
+  if (isAndroid) {
+    stores.insertBefore(android, ios);
+    android.className = 'store-btn store-primary';
+    ios.className = 'store-btn store-secondary';
+  }
+})();
+</script>
+</body>
+</html>

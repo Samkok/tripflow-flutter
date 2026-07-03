@@ -26,6 +26,7 @@ import '../widgets/delete_account_dialog.dart';
 import '../widgets/pro_feature_gate.dart';
 import 'login_screen.dart';
 import 'profile_screen.dart';
+import 'referral_screen.dart';
 import 'security_screen.dart';
 import 'signup_screen.dart';
 import 'subscription_management_screen.dart';
@@ -94,9 +95,18 @@ class SettingsScreen extends ConsumerWidget {
           const _AnalyticsTile(),
           const SizedBox(height: 24),
 
+          // Invite friends — referral program (signed-in users only).
+          if (ref.watch(currentUserProvider) != null) ...[
+            _buildSectionHeader(context, 'Invite friends'),
+            _buildInviteFriendsTile(context),
+            const SizedBox(height: 24),
+          ],
+
           // About Section
           _buildSectionHeader(context, 'About'),
           _buildTermsTile(context),
+          const SizedBox(height: 12),
+          _buildPrivacyTile(context),
           const SizedBox(height: 12),
           _buildRateTile(context),
           const SizedBox(height: 12),
@@ -421,6 +431,44 @@ class SettingsScreen extends ConsumerWidget {
     );
   }
 
+  Widget _buildInviteFriendsTile(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Theme.of(context).cardColor,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: ListTile(
+        onTap: () {
+          Navigator.of(context).push(
+            MaterialPageRoute(builder: (context) => const ReferralScreen()),
+          );
+        },
+        leading: Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color:
+                Theme.of(context).colorScheme.primary.withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Icon(
+            Icons.card_giftcard_rounded,
+            color: Theme.of(context).colorScheme.primary,
+          ),
+        ),
+        title: const Text('Invite friends'),
+        subtitle: const Text('Give a month of Pro, get a month free'),
+        trailing: const Icon(Icons.arrow_forward_ios, size: 16),
+      ),
+    );
+  }
+
   Widget _buildTermsTile(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
@@ -452,6 +500,48 @@ class SettingsScreen extends ConsumerWidget {
           ),
         ),
         title: const Text('Terms & Conditions'),
+        trailing: const Icon(Icons.arrow_forward_ios, size: 16),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPrivacyTile(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Theme.of(context).cardColor,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: ListTile(
+        onTap: () async {
+          final uri = Uri.parse('https://voyza.xtremon.com/privacy');
+          if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+            if (context.mounted) {
+              AppToast.error(context, 'Could not open the privacy policy.');
+            }
+          }
+        },
+        leading: Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Icon(
+            Icons.privacy_tip_outlined,
+            color: Theme.of(context).colorScheme.primary,
+          ),
+        ),
+        title: const Text('Privacy Policy'),
         trailing: const Icon(Icons.arrow_forward_ios, size: 16),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(20),

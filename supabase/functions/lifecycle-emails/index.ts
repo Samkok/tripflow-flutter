@@ -73,7 +73,8 @@ function render(stage: string): { subject: string; html: string } | null {
         subject: "Your next trip deserves a smarter route",
         html: layout(
           "Your next trip deserves a smarter route",
-          "<p>Planning somewhere new? Your saved trips and places are still here. Re-open VoyZa to optimize your next multi-stop day — and start a fresh free trial of Pro.</p>",
+          "<p>Planning somewhere new? Your saved trips and places are still here. Re-open VoyZa to optimize your next multi-stop day — and start a fresh free trial of Pro.</p>"
+          + "<p>💡 <b>Bonus:</b> invite a friend who's planning a trip — you'll both get a free month of Pro. Find your invite code in Settings → Invite friends.</p>",
           "Start planning",
         ),
       };

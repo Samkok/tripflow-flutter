@@ -92,11 +92,17 @@ Future<void> showFirstTripCelebration(BuildContext context,
 /// "Sign up free to keep your places" nudge (their local places genuinely
 /// merge into the account on login via syncOnLogin). Invoked AFTER the
 /// dialog pops.
+///
+/// [onInvite] is provided only for AUTHENTICATED users (who have a referral
+/// code): renders a secondary "Invite a friend, get a free month" button —
+/// the aha moment is the highest-converting referral surface. Mutually
+/// exclusive with [onSignUp] in practice (anon has no code).
 Future<void> showFirstOptimizeCelebration(
   BuildContext context, {
   required int stops,
   required Duration totalTime,
   VoidCallback? onSignUp,
+  VoidCallback? onInvite,
 }) {
   return showDialog<void>(
     context: context,
@@ -104,6 +110,7 @@ Future<void> showFirstOptimizeCelebration(
       stops: stops,
       totalTime: totalTime,
       onSignUp: onSignUp,
+      onInvite: onInvite,
     ),
   );
 }
@@ -112,11 +119,13 @@ class _FirstOptimizeDialog extends StatefulWidget {
   final int stops;
   final Duration totalTime;
   final VoidCallback? onSignUp;
+  final VoidCallback? onInvite;
 
   const _FirstOptimizeDialog({
     required this.stops,
     required this.totalTime,
     this.onSignUp,
+    this.onInvite,
   });
 
   @override
@@ -222,6 +231,19 @@ class _FirstOptimizeDialogState extends State<_FirstOptimizeDialog> {
                         cb();
                       },
                       child: const Text('Sign up free to keep your places'),
+                    ),
+                  ),
+                if (widget.onInvite != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: TextButton.icon(
+                      onPressed: () {
+                        final cb = widget.onInvite!;
+                        Navigator.of(context).pop();
+                        cb();
+                      },
+                      icon: const Icon(Icons.card_giftcard_rounded, size: 18),
+                      label: const Text('Invite a friend, get a free month'),
                     ),
                   ),
               ],
