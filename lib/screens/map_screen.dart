@@ -6,8 +6,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'dart:ui';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:intl/intl.dart';
+import 'package:tutorial_coach_mark/tutorial_coach_mark.dart';
 import 'package:voyza/core/theme.dart';
 import 'package:voyza/screens/location_search_screen.dart';
+import 'package:voyza/screens/login_screen.dart';
 import 'package:voyza/widgets/add_to_trip_sheet.dart';
 import 'package:voyza/widgets/review_sentiment_dialog.dart';
 import 'package:voyza/widgets/location_detail_sheet.dart';
@@ -17,19 +19,28 @@ import '../models/user_profile.dart';
 import '../providers/location_provider.dart';
 import '../providers/optimized_map_overlay_provider.dart';
 import '../providers/trip_provider.dart';
+import '../providers/trip_simulation_provider.dart';
 import '../providers/theme_provider.dart';
 import '../providers/map_ui_state_provider.dart';
 import '../providers/debounced_settings_provider.dart';
 import '../providers/trip_collaborator_provider.dart';
 import '../providers/trip_listener_provider.dart';
 import '../providers/local_active_trip_provider.dart';
+import '../providers/onboarding_provider.dart';
 import '../providers/auth_provider.dart';
 import '../services/location_service.dart';
 import '../services/places_service.dart';
+import '../services/anonymous_user_service.dart';
 import '../services/location_add_service.dart';
+import '../services/onboarding_service.dart';
 import '../providers/nearby_radius_provider.dart';
 import '../providers/zoom_fit_settings_provider.dart';
 import '../widgets/app_toast.dart';
+import '../providers/subscription_provider.dart';
+import '../services/analytics_service.dart';
+import '../widgets/celebration_dialogs.dart';
+import '../widgets/free_places_meter.dart';
+import '../widgets/map_tutorial.dart';
 import '../widgets/map_widget.dart';
 import '../widgets/nearby_places_picker_sheet.dart';
 import '../widgets/trip_bottom_sheet.dart';
@@ -59,6 +70,15 @@ class _MapScreenState extends ConsumerState<MapScreen>
   // OPTIMIZATION: Cache for lifecycle management
   AppLifecycleState? _lastLifecycleState;
 
+  // ── One-time map spotlight tour ────────────────────────────────────────
+  // Keys are State fields (created once) so the spotlight elements survive
+  // rebuilds; the search bar lives in a Consumer's cached child and the
+  // optimize button is passed down into TripBottomSheet.
+  final _searchBarKey = GlobalKey();
+  final _optimizeButtonKey = GlobalKey();
+  bool _tutorialCheckInFlight = false;
+  TutorialCoachMark? _activeTutorial;
+
   @override
   void initState() {
     super.initState();
@@ -66,6 +86,11 @@ class _MapScreenState extends ConsumerState<MapScreen>
     WidgetsBinding.instance.addObserver(this);
     _sheetController = DraggableScrollableController();
     _initializeLocation();
+    // Session 2+: an anonymous user lands directly on the map tab with no
+    // provider event, so check once after the first frame.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _maybeStartMapTutorial();
+    });
   }
 
   // OPTIMIZATION: Handle app lifecycle to pause heavy operations when app is backgrounded
@@ -86,6 +111,10 @@ class _MapScreenState extends ConsumerState<MapScreen>
     // OPTIMIZATION: Remove lifecycle observer
     WidgetsBinding.instance.removeObserver(this);
 
+    // Defensive: never strand the tutorial's OverlayEntry on teardown.
+    _activeTutorial?.finish();
+    _activeTutorial = null;
+
     _sheetController?.dispose();
 
     // PERFORMANCE: Cancel location stream to prevent memory leaks and battery drain
@@ -95,6 +124,75 @@ class _MapScreenState extends ConsumerState<MapScreen>
     _mapController = null;
 
     super.dispose();
+  }
+
+  /// One-time map spotlight tour (search → long-press → optimize).
+  /// Gate chain, in order — every await is followed by a liveness re-check:
+  ///  visible tab → settle delay → route current → loading overlay gone →
+  ///  onboarding resolved → tour flag unset → show. Flag is marked on BOTH
+  ///  finish and skip; app-kill mid-tour leaves it unset (tour repeats —
+  ///  the correct failure direction).
+  Future<void> _maybeStartMapTutorial() async {
+    if (_tutorialCheckInFlight || _activeTutorial != null) return;
+    _tutorialCheckInFlight = true;
+    try {
+      if (ref.read(selectedTabIndexProvider) != 1) return;
+
+      // Let the landing settle (map paint, sheet snap, toasts).
+      await Future.delayed(const Duration(milliseconds: 600));
+      if (!mounted) return;
+      if (ref.read(selectedTabIndexProvider) != 1) return;
+      if (ModalRoute.of(context)?.isCurrent != true) return;
+
+      // Don't spotlight through the map loading overlay — same pair of
+      // conditions that dismisses it (see the Stack's loading branch).
+      if (!ref.read(initialSyncCompleteProvider)) return;
+      if (!ref.read(cachedMarkerBitmapsProvider).hasValue) return;
+
+      final effectiveId = ref.read(currentUserIdProvider) ??
+          await AnonymousUserService.id;
+      if (!mounted) return;
+
+      final service = OnboardingService.instance;
+      // Only after onboarding is resolved (completed/skipped/seeded) — the
+      // tour must never race the onboarding route.
+      if (await service.shouldShowOnboarding(effectiveId)) return;
+      if (await service.hasCelebrated(
+          effectiveId, OnboardingMilestone.mapTutorial)) {
+        return;
+      }
+
+      if (!mounted) return;
+      if (ModalRoute.of(context)?.isCurrent != true) return;
+      if (ref.read(selectedTabIndexProvider) != 1) return;
+
+      Future<void> markDone() async {
+        _activeTutorial = null;
+        await service.markCelebrated(
+            effectiveId, OnboardingMilestone.mapTutorial);
+      }
+
+      _activeTutorial = buildMapTutorial(
+        context,
+        searchBarKey: _searchBarKey,
+        optimizeKey: _optimizeButtonKey,
+        isPro: ref.read(isProProvider),
+        onFinish: () {
+          unawaited(markDone());
+          AnalyticsService.instance.mapTutorialCompleted();
+        },
+        onSkip: (lastStep) {
+          unawaited(markDone());
+          AnalyticsService.instance.mapTutorialSkipped(lastStep);
+          return true; // allow the dismissal
+        },
+      );
+      // rootOverlay: the scrim must cover the bottom nav so the user can't
+      // switch tabs out from under the tour.
+      _activeTutorial!.show(context: context, rootOverlay: true);
+    } finally {
+      _tutorialCheckInFlight = false;
+    }
   }
 
   Future<void> _initializeLocation() async {
@@ -623,6 +721,67 @@ class _MapScreenState extends ConsumerState<MapScreen>
       });
     });
 
+    // One-time FIRST-optimize celebration. Delayed so the zoom-to-fit
+    // settles first (mirrors the review flow's beat). Defers to the
+    // timing-warnings sheet when one is due — the flag stays unset in that
+    // case, so the next successful optimize celebrates instead. This
+    // listener owns the per-user celebrated flag: re-check → mark → show.
+    // One-time map spotlight tour re-evaluation points: the tab becoming
+    // visible, and MainScreen's "onboarding resolved" bump (the anonymous
+    // flow is already ON the map tab when onboarding pops, so no tab event
+    // fires for them).
+    ref.listen<int>(selectedTabIndexProvider, (prev, next) {
+      if (next == 1 && prev != 1) _maybeStartMapTutorial();
+    });
+    ref.listen<int>(mapTutorialRecheckProvider, (prev, next) {
+      if (next != (prev ?? 0)) _maybeStartMapTutorial();
+    });
+
+    ref.listen<int>(firstOptimizeCelebrationTrigger, (previous, next) {
+      if (next <= (previous ?? 0)) return;
+      Future.delayed(const Duration(milliseconds: 1200), () async {
+        if (!mounted) return;
+        // Anonymous users celebrate too — flags keyed to the persistent
+        // device UUID. Their dialog carries a signup nudge: local places
+        // merge into the account on login (syncOnLogin), so "keep your
+        // places" is a true promise and this is the conversion moment.
+        final authUserId = ref.read(currentUserIdProvider);
+        final isAnonymous = authUserId == null;
+        final userId = authUserId ?? await AnonymousUserService.id;
+        if (!mounted) return;
+        final service = OnboardingService.instance;
+        if (await service.hasCelebrated(
+            userId, OnboardingMilestone.firstOptimize)) {
+          return;
+        }
+        // Same condition as the TimingWarningsSheet listener in
+        // trip_bottom_sheet — if the warnings sheet is up/imminent, don't
+        // stack the celebration on top of it.
+        final sim = ref.read(tripSimulationProvider);
+        if (sim != null && !sim.fullyFeasible) {
+          final acked = ref.read(acknowledgedTimingWarningsProvider);
+          final hasUnacked = sim.stops.any(
+              (s) => s.warnings.isNotEmpty && !acked.contains(s.locationId));
+          if (hasUnacked) return;
+        }
+        if (!mounted) return;
+        final tripState = ref.read(tripProvider);
+        await service.markCelebrated(
+            userId, OnboardingMilestone.firstOptimize);
+        if (!mounted || !context.mounted) return;
+        await showFirstOptimizeCelebration(
+          context,
+          stops: tripState.optimizedLocationsForSelectedDate.length,
+          totalTime: tripState.totalTravelTime,
+          onSignUp: isAnonymous
+              ? () => Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const LoginScreen()),
+                  )
+              : null,
+        );
+      });
+    });
+
     // Auto-frame the map when the user changes the selected date: zoom to
     // fit the day's stops, or fall back to the device location when the
     // day is empty. Date changes are synchronous, so a post-frame callback
@@ -890,9 +1049,12 @@ class _MapScreenState extends ConsumerState<MapScreen>
                   error: (_, __) => child!,
                 );
               },
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
                   // Fake search bar — pushes [LocationSearchScreen]
                   // instead of focusing an inline TextField. This
                   // sidesteps every keyboard-driven layout shift that
@@ -934,6 +1096,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
                               );
                             },
                             child: Container(
+                              key: _searchBarKey, // spotlight-tour anchor
                               padding: const EdgeInsets.symmetric(
                                   horizontal: 16, vertical: 14),
                               decoration: BoxDecoration(
@@ -985,6 +1148,14 @@ class _MapScreenState extends ConsumerState<MapScreen>
                         ),
                       ),
                     ),
+                  ),
+                    ],
+                  ),
+                  // Goal-gradient progress: free users see how much of the
+                  // 5-place allowance is used, live. Hidden for Pro.
+                  const Padding(
+                    padding: EdgeInsets.only(top: 8),
+                    child: FreePlacesProgressChip(),
                   ),
                 ],
               ),
@@ -1136,6 +1307,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
           TripBottomSheet(
             sheetController: _sheetController,
             onLocationTap: _zoomToLocation,
+            optimizeKey: _optimizeButtonKey, // spotlight-tour anchor
             // onGoToCurrentLocation is now handled by the FAB
             onShowZoneSettings: _showProximitySliderBottomSheet,
             // onZoomToFitTrip is now handled by the FAB

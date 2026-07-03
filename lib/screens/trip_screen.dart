@@ -10,9 +10,9 @@ import 'package:voyza/providers/auth_provider.dart';
 import 'package:voyza/providers/location_provider.dart';
 import 'package:voyza/providers/trip_collaborator_provider.dart';
 import 'package:voyza/providers/local_active_trip_provider.dart';
+import 'package:voyza/providers/onboarding_provider.dart';
 import 'package:voyza/screens/login_screen.dart';
 import 'package:voyza/screens/trip_details_screen.dart';
-import 'package:voyza/services/subscription_limit_service.dart';
 import 'package:voyza/services/analytics_service.dart';
 import 'package:voyza/utils/countries.dart';
 import 'package:voyza/utils/trip_date_validator.dart';
@@ -30,6 +30,7 @@ class TripScreen extends ConsumerStatefulWidget {
 
 class _TripScreenState extends ConsumerState<TripScreen> {
   bool _showCreateForm = false;
+  bool _creatingSampleTrip = false;
   final _nameController = TextEditingController();
   final _descriptionController = TextEditingController();
   String? _selectedCountryCode; // Optional ISO-3166-1 alpha-2 for new trip
@@ -203,16 +204,20 @@ class _TripScreenState extends ConsumerState<TripScreen> {
       return;
     }
 
-    // Trial / Pro gate. Pro users always pass; trial users pass while their
-    // 72-hour window is open; otherwise the paywall is shown and we abort
-    // unless the user just subscribed.
-    final canCreate = await SubscriptionLimitService(ref).canCreate(context);
-    if (!canCreate) return;
-    if (!mounted) return;
-
+    // Trip creation is free and unlimited — only saved places are metered
+    // (see SubscriptionLimitService.canAddPlace). The paywall promises
+    // "Unlimited trips," so no gate here.
     try {
       final authState = ref.read(authStateProvider);
       final tripRepository = ref.read(tripRepositoryProvider);
+
+      // Captured BEFORE the create/invalidate so "first" means "had zero
+      // trips when they tapped Create." Drives the one-time congrats modal
+      // on the details screen (double-gated by a per-user prefs flag).
+      // Fail-safe: while the trips list is loading/errored we can't know,
+      // so we DON'T celebrate rather than risk congratulating a veteran.
+      final wasFirstTrip =
+          ref.read(userTripsProvider).asData?.value.isEmpty ?? false;
 
       await authState.whenData((state) async {
         final userId = state.session?.user.id;
@@ -238,7 +243,10 @@ class _TripScreenState extends ConsumerState<TripScreen> {
           Navigator.push(
             context,
             MaterialPageRoute(
-              builder: (context) => TripDetailsScreen(trip: newTrip),
+              builder: (context) => TripDetailsScreen(
+                trip: newTrip,
+                celebrateFirstTrip: wasFirstTrip,
+              ),
             ),
           );
         }
@@ -254,7 +262,10 @@ class _TripScreenState extends ConsumerState<TripScreen> {
     }
   }
 
-  Future<void> _setActiveTrip(Trip trip) async {
+  /// [goToMap] jumps the bottom nav to the Map tab after activation — the
+  /// natural next step is seeing the trip on the map. The sample-trip flow
+  /// passes false because it pushes TripDetailsScreen on top instead.
+  Future<void> _setActiveTrip(Trip trip, {bool goToMap = true}) async {
     try {
       // Clear cached locations on the map before activating a new trip
       ref.read(tripProvider.notifier).clearTrip();
@@ -264,6 +275,9 @@ class _TripScreenState extends ConsumerState<TripScreen> {
 
       if (mounted) {
         AppToast.success(context, '${trip.name} is now active');
+        if (goToMap) {
+          ref.read(mainTabRequestProvider.notifier).state = 1; // Map tab
+        }
       }
     } catch (e) {
       debugPrint('Error setting active trip: $e');
@@ -274,9 +288,21 @@ class _TripScreenState extends ConsumerState<TripScreen> {
   }
 
   /// Activation lever: drops the user into a pre-built, editable sample trip
-  /// (Lisbon, 6 stops) so they can tap Optimize and reach the route "aha" in
+  /// (Lisbon, 5 stops) so they can tap Optimize and reach the route "aha" in
   /// one tap — without forcing demo data on everyone. Fully editable/deletable.
   Future<void> _createSampleTrip() async {
+    // Re-entrancy guard: reachable from both the empty-state button and the
+    // onboarding trigger; a double-fire would create two demo trips.
+    if (_creatingSampleTrip) return;
+    _creatingSampleTrip = true;
+    try {
+      await _createSampleTripInner();
+    } finally {
+      _creatingSampleTrip = false;
+    }
+  }
+
+  Future<void> _createSampleTripInner() async {
     final userId = ref.read(currentUserIdProvider);
     if (userId == null) {
       _showLoginRequiredModal(context);
@@ -292,7 +318,8 @@ class _TripScreenState extends ConsumerState<TripScreen> {
         userId: userId,
         name: 'Lisbon — sample trip ✨',
         description:
-            'A demo trip so you can see route optimization in action. Edit or delete it anytime.',
+            'A demo trip so you can see route optimization in action. '
+            'Delete it anytime to free up your free places.',
         countryCode: 'PT',
         startDate: day,
         endDate: day,
@@ -300,13 +327,17 @@ class _TripScreenState extends ConsumerState<TripScreen> {
 
       // Real Lisbon spots, intentionally out of geographic order so Optimize
       // visibly reorders them. (name, lat, lng)
+      //
+      // Exactly 5 — the sample writes straight to the repository (bypassing
+      // the LocationAddService gate), so it must not exceed
+      // SubscriptionLimitService.freePlaceAllowance or a brand-new free user
+      // would be over their allowance the moment they tap the demo.
       const places = <(String, double, double)>[
         ('Time Out Market', 38.7067, -9.1459),
         ('Belém Tower', 38.6916, -9.2160),
         ('São Jorge Castle', 38.7139, -9.1335),
         ('Jerónimos Monastery', 38.6979, -9.2065),
         ('Praça do Comércio', 38.7077, -9.1366),
-        ('LX Factory', 38.7028, -9.1786),
       ];
       const uuid = Uuid();
       for (final p in places) {
@@ -327,7 +358,7 @@ class _TripScreenState extends ConsumerState<TripScreen> {
       ref.invalidate(userTripsProvider);
       AnalyticsService.instance.tripCreated();
       if (!mounted) return;
-      await _setActiveTrip(trip);
+      await _setActiveTrip(trip, goToMap: false);
       if (!mounted) return;
       Navigator.push(
         context,
@@ -434,6 +465,22 @@ class _TripScreenState extends ConsumerState<TripScreen> {
   Widget build(BuildContext context) {
     // Note: Collaborator realtime listener is now initialized at app root (main.dart)
     // No need to initialize it here anymore
+
+    // Onboarding hand-offs. TripScreen lives in MainScreen's IndexedStack, so
+    // it's alive and listening when the onboarding route pops.
+    ref.listen<String?>(tripFormPrefillProvider, (prev, code) {
+      if (code == null) return;
+      ref.read(tripFormPrefillProvider.notifier).state = null; // consume
+      setState(() {
+        _showCreateForm = true;
+        // '' = "open the form without a country" (user skipped the question).
+        _selectedCountryCode = code.isEmpty ? null : code;
+      });
+    });
+    ref.listen<int>(sampleTripRequestProvider, (prev, next) {
+      if (prev == next) return;
+      _createSampleTrip();
+    });
 
     final tripsAsync = ref.watch(userTripsProvider);
     final activeTripAsync = ref.watch(localActiveTripProvider);

@@ -16,7 +16,10 @@ import 'package:voyza/widgets/app_toast.dart';
 import 'package:voyza/widgets/collaborators_sheet.dart';
 import 'package:voyza/widgets/google_maps_url_dialog.dart';
 import 'package:voyza/services/location_add_service.dart';
+import 'package:voyza/services/onboarding_service.dart';
+import 'package:voyza/services/subscription_limit_service.dart';
 import 'package:voyza/models/location_model.dart';
+import 'package:voyza/widgets/celebration_dialogs.dart';
 import 'package:voyza/widgets/location_detail_sheet.dart';
 import 'package:voyza/widgets/location_photo_gallery.dart';
 import 'package:voyza/providers/local_active_trip_provider.dart';
@@ -25,9 +28,16 @@ import 'package:voyza/providers/trip_provider.dart';
 class TripDetailsScreen extends ConsumerStatefulWidget {
   final Trip trip;
 
+  /// True only when pushed right after the user created their very first
+  /// trip (see trip_screen._createTrip). Shows the one-time congrats modal
+  /// on arrival — celebrating here, where the next action (adding places)
+  /// lives, instead of on the screen being left behind.
+  final bool celebrateFirstTrip;
+
   const TripDetailsScreen({
     super.key,
     required this.trip,
+    this.celebrateFirstTrip = false,
   });
 
   @override
@@ -153,7 +163,30 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
       // The local Hive box is only populated at login, so it may be stale if the user
       // was invited after they last logged in.
       ref.read(locationRepositoryProvider).fetchRemoteLocations();
+
+      // One-time "first trip" congrats. Double-gated: the caller only sets
+      // the flag on a genuine first creation, and the per-user prefs flag
+      // makes it impossible to repeat (e.g. delete-and-recreate).
+      if (widget.celebrateFirstTrip) {
+        _maybeCelebrateFirstTrip();
+      }
     });
+  }
+
+  Future<void> _maybeCelebrateFirstTrip() async {
+    final userId = ref.read(currentUserIdProvider);
+    if (userId == null) return;
+    final service = OnboardingService.instance;
+    if (await service.hasCelebrated(userId, OnboardingMilestone.firstTrip)) {
+      return;
+    }
+    await service.markCelebrated(userId, OnboardingMilestone.firstTrip);
+    if (mounted) {
+      await showFirstTripCelebration(
+        context,
+        placesUsed: SubscriptionLimitService.ownPlaceCount(ref),
+      );
+    }
   }
 
   @override

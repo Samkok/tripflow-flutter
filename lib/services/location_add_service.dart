@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
@@ -5,13 +7,18 @@ import 'package:intl/intl.dart';
 import '../models/location_model.dart';
 import '../models/saved_location.dart';
 import '../models/trip.dart';
+import '../providers/auth_provider.dart';
 import '../providers/location_provider.dart';
+import '../providers/subscription_provider.dart';
 import '../providers/trip_provider.dart';
 import '../providers/trip_listener_provider.dart';
 import '../providers/user_trip_provider.dart';
+import '../services/anonymous_user_service.dart';
+import '../services/onboarding_service.dart';
 import '../services/places_service.dart';
 import '../services/subscription_limit_service.dart';
 import '../utils/trip_date_validator.dart';
+import '../widgets/app_toast.dart';
 
 /// Central service for adding locations.
 ///
@@ -20,6 +27,13 @@ import '../utils/trip_date_validator.dart';
 /// through this service so the gating checks (subscription paywall,
 /// scheduled-date guard, and **strict country guard**) live in one place
 /// and stay consistent.
+///
+/// The free-place paywall gate applies only to paths that CREATE a new
+/// saved place ([beforeAddingLocation], [addSavedLocation]). The attach
+/// paths ([attachExistingLocationToTrip], [attachLocationsToTrip]) only
+/// re-tag rows that already exist and count against the allowance, so
+/// they are not gated — otherwise a free user at the limit couldn't
+/// organize their own places into trips.
 ///
 /// The country guard is hard-blocking: when the active trip has a tagged
 /// country and the candidate location's country is known to differ, the
@@ -38,6 +52,50 @@ class LocationAddService {
       if (t.id == tripId) return t;
     }
     return null;
+  }
+
+  /// Goal-gradient feedback after a NEW place is persisted (create paths
+  /// only — attach paths don't consume the allowance). Free users get a
+  /// "N of 5 free places used" toast; the very first place ever gets a
+  /// warmer nudge toward the 3-place Optimize threshold instead.
+  ///
+  /// Applies to ANONYMOUS users too (one-time flags keyed to the persistent
+  /// device UUID) — they can add places and hit the same gate, so they get
+  /// the same goal-gradient feedback pushing them toward the optimize "aha."
+  ///
+  /// [usedAfter] is captured by the caller BEFORE the repository write
+  /// (+1), so it can't race the location stream.
+  ///
+  /// Callers show their own "Added {name}" toast right after we return, and
+  /// [AppToast] replaces rather than stacks — so this one fires on a delay
+  /// and lands as the caller's toast wraps up. Best-effort: never throws.
+  void _afterSuccessfulNewPlace(BuildContext context, int usedAfter) {
+    try {
+      if (_ref.read(isProProvider)) return;
+      final authUserId = _ref.read(currentUserIdProvider);
+      const total = SubscriptionLimitService.freePlaceAllowance;
+      final used = usedAfter > total ? total : usedAfter;
+      unawaited(() async {
+        final userId = authUserId ?? await AnonymousUserService.id;
+        final service = OnboardingService.instance;
+        final isFirstEver = !await service.hasCelebrated(
+            userId, OnboardingMilestone.firstPlace);
+        if (isFirstEver) {
+          await service.markCelebrated(
+              userId, OnboardingMilestone.firstPlace);
+        }
+        // The warm "unlock Optimize" nudge only fits when this is genuinely
+        // their first place on the board — a sample-trip user already has 5,
+        // so they get the meter copy like everyone else.
+        final message = (isFirstEver && used == 1)
+            ? 'First place saved! ✨ Add 2 more to unlock Optimize'
+            : 'Place saved — $used of $total free places used';
+        await Future.delayed(const Duration(milliseconds: 1900));
+        if (context.mounted) AppToast.info(context, message);
+      }());
+    } catch (_) {
+      // Feedback is cosmetic; never break the add flow over it.
+    }
   }
 
   Future<void> _persistTripDateExtension(
@@ -91,7 +149,7 @@ class LocationAddService {
     LocationModel location, {
     String? locationCountryCode,
   }) async {
-    final canAdd = await SubscriptionLimitService(_ref).canCreate(context);
+    final canAdd = await SubscriptionLimitService(_ref).canAddPlace(context);
     if (!canAdd) return false;
 
     final activeTrip =
@@ -114,6 +172,10 @@ class LocationAddService {
     );
     if (!result.proceed) return false;
 
+    // Captured before the write so the toast count can't race the stream.
+    // Own places only — collaborators' shared-trip rows don't count.
+    final usedAfter = SubscriptionLimitService.ownPlaceCount(_ref) + 1;
+
     // Add the location BEFORE persisting any trip-date extension. The
     // extension invalidates userTripsProvider, which cascades through
     // localActiveTripProvider into realtimeActiveTripProvider — leaving it
@@ -125,6 +187,7 @@ class LocationAddService {
     if (activeTrip != null && result.didExtend) {
       await _persistTripDateExtension(activeTrip, result);
     }
+    if (context.mounted) _afterSuccessfulNewPlace(context, usedAfter);
     return true;
   }
 
@@ -136,7 +199,7 @@ class LocationAddService {
     SavedLocation location, {
     String? locationCountryCode,
   }) async {
-    final canAdd = await SubscriptionLimitService(_ref).canCreate(context);
+    final canAdd = await SubscriptionLimitService(_ref).canAddPlace(context);
     if (!canAdd) return false;
 
     final trip = _findTripById(location.tripId);
@@ -158,6 +221,10 @@ class LocationAddService {
     );
     if (!result.proceed) return false;
 
+    // Captured before the write so the toast count can't race the stream.
+    // Own places only — collaborators' shared-trip rows don't count.
+    final usedAfter = SubscriptionLimitService.ownPlaceCount(_ref) + 1;
+
     // Same ordering rule as [addLocation]: persist the location first so
     // the subsequent userTripsProvider invalidation can't strand it
     // mid-write.
@@ -166,6 +233,7 @@ class LocationAddService {
     if (trip != null && result.didExtend) {
       await _persistTripDateExtension(trip, result);
     }
+    if (context.mounted) _afterSuccessfulNewPlace(context, usedAfter);
     return true;
   }
 
@@ -193,10 +261,8 @@ class LocationAddService {
     Trip targetTrip, {
     String? locationCountryCode,
   }) async {
-    final canAdd = await SubscriptionLimitService(_ref).canCreate(context);
-    if (!canAdd) return false;
-
-    if (!context.mounted) return false;
+    // No paywall gate: attaching re-tags an existing place; it doesn't
+    // consume the free-place allowance.
     final countryOk = await assertLocationInTripCountry(
       context,
       targetTrip,
@@ -243,8 +309,8 @@ class LocationAddService {
   /// country and date checks for shared trips.
   ///
   /// Returns true when at least one location was attached, false when the
-  /// paywall blocked it, the country check refused it, or the user
-  /// cancelled the date-extension dialog.
+  /// country check refused it or the user cancelled the date-extension
+  /// dialog.
   Future<bool> attachLocationsToTrip(
     BuildContext context,
     List<SavedLocation> picks,
@@ -252,9 +318,8 @@ class LocationAddService {
   ) async {
     if (picks.isEmpty) return false;
 
-    final canAdd = await SubscriptionLimitService(_ref).canCreate(context);
-    if (!canAdd) return false;
-
+    // No paywall gate: attaching re-tags existing places; it doesn't
+    // consume the free-place allowance.
     final tripCode = targetTrip.countryCode;
     if (tripCode != null) {
       final codes = await Future.wait(picks.map(_resolveCountryCodeForSaved));

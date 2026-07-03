@@ -61,6 +61,18 @@ class ReviewPromptService {
     }
   }
 
+  /// Lifetime (per-install) count of successful optimizes. Exposed so
+  /// OnboardingService can seed the first-optimize celebration flag for
+  /// users who were already active before onboarding shipped.
+  Future<int> getSuccessfulOptimizeCount() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      return prefs.getInt(_kSuccessfulOptimizes) ?? 0;
+    } catch (_) {
+      return 0;
+    }
+  }
+
   /// Bump the lifetime "successful optimize" counter. This only counts a
   /// delight signal — it never shows the OS prompt by itself. Call on the
   /// optimization SUCCESS path only (never after an error/empty result).

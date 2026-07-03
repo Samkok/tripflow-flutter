@@ -13,12 +13,15 @@ import '../models/trip.dart';
 import '../services/google_maps_service.dart';
 import '../services/places_service.dart';
 import '../services/analytics_service.dart';
+import '../services/anonymous_user_service.dart';
+import '../services/onboarding_service.dart';
 import '../services/review_prompt_service.dart';
 import '../services/storage_service.dart';
 import '../providers/debounced_settings_provider.dart';
 import '../utils/zone_utils.dart';
 import '../utils/isolate_utils.dart';
 import '../models/saved_location.dart';
+import 'auth_provider.dart';
 import 'location_provider.dart';
 import 'trip_listener_provider.dart';
 import 'trip_collaborator_provider.dart';
@@ -1224,7 +1227,8 @@ class TripNotifier extends StateNotifier<TripState> {
 
       // Funnel analytics: the activation "aha" — only when a real route was
       // produced (skip the timeout/empty-result path that still writes state).
-      if (state.optimizedRoute.isNotEmpty) {
+      final optimizeSucceeded = state.optimizedRoute.isNotEmpty;
+      if (optimizeSucceeded) {
         AnalyticsService.instance
             .routeOptimized(state.optimizedLocationsForSelectedDate.length);
       }
@@ -1233,9 +1237,32 @@ class TripNotifier extends StateNotifier<TripState> {
       // (if all engagement/cooldown gates pass) signal the UI to run the
       // sentiment-gated review flow. The OS prompt is only ever reached after
       // the user confirms they're happy.
+      //
+      // The FIRST-ever optimize gets the one-time celebration instead (via
+      // [firstOptimizeCelebrationTrigger]); it IS that run's delight moment,
+      // so the review-prompt signal is skipped to guarantee the two dialogs
+      // can never stack. The map_screen listener owns the celebrated flag —
+      // it re-checks, defers to the timing-warnings sheet when one is due,
+      // and only marks the flag when the celebration actually shows.
       unawaited(() async {
+        var celebrationPending = false;
+        if (optimizeSucceeded) {
+          // Anonymous users celebrate too (flags keyed to the persistent
+          // device UUID) — the optimize "aha" is the conversion moment.
+          final userId = _ref.read(currentUserIdProvider) ??
+              await AnonymousUserService.id;
+          if (!await OnboardingService.instance
+              .hasCelebrated(userId, OnboardingMilestone.firstOptimize)) {
+            celebrationPending = true;
+            _ref
+                .read(firstOptimizeCelebrationTrigger.notifier)
+                .update((s) => s + 1);
+          }
+        }
         await ReviewPromptService.instance.recordSuccessfulOptimize();
-        await _maybeSignalReviewPrompt();
+        if (!celebrationPending) {
+          await _maybeSignalReviewPrompt();
+        }
       }());
     } catch (e) {
       log('Error generating route: $e');
@@ -1415,6 +1442,13 @@ final zoomToFitRouteTrigger = StateProvider<int>((ref) => 0);
 /// Bumped only after a delight moment when [ReviewPromptService.isEligibleForPrompt]
 /// has already passed, so the listener can show the dialog immediately.
 final reviewPromptTriggerProvider = StateProvider<int>((ref) => 0);
+
+/// Signals the UI (map screen) that a just-finished optimize is the user's
+/// FIRST ever, so it can show the one-time celebration. The listener owns
+/// the per-user "celebrated" flag: it re-checks it, defers to the
+/// timing-warnings sheet when one is due (leaving the flag unset so the
+/// next optimize celebrates instead), and marks it only on actual show.
+final firstOptimizeCelebrationTrigger = StateProvider<int>((ref) => 0);
 
 /// A provider that exposes details of the currently selected route leg.
 /// The UI can watch this to show/hide the "Open in Maps" button.

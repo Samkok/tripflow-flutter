@@ -70,6 +70,14 @@ dependencies:
   firebase_performance: ^0.10.0
   country_flags: ^4.1.2
 
+  # One-time activation celebrations (first route optimized). Pure-Flutter
+  # particle painter, no assets or native code.
+  confetti: ^0.8.0
+
+  # One-time map spotlight tour (search → long-press → optimize). Overlay
+  # controller, no widget-tree wrapping; supports arbitrary-rect targets.
+  tutorial_coach_mark: ^1.3.3
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

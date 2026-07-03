@@ -25,12 +25,17 @@ class TripBottomSheet extends ConsumerStatefulWidget {
   final VoidCallback? onShowZoneSettings;
   final int? highlightedLocationIndex;
 
+  /// Anchor for the map spotlight tour's "Optimize" step. Attached to the
+  /// header optimize BUTTON only (never the 1–2-place nudge pill).
+  final GlobalKey? optimizeKey;
+
   const TripBottomSheet({
     super.key,
     this.sheetController,
     this.onLocationTap,
     this.onShowZoneSettings,
     this.highlightedLocationIndex,
+    this.optimizeKey,
   });
 
   // A simple provider to signal when the "View Route" button is tapped for a historical trip.
@@ -608,7 +613,12 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                 );
               }),
               const SizedBox(width: 8),
-              Consumer(builder: (context, ref, _) {
+            ],
+            // Optimize affordance — ALWAYS rendered (disabled at 0 places)
+            // so brand-new users see the goal from the start and the
+            // first-run spotlight tour has an anchor. Formerly inside the
+            // hasPinnedLocations gate, which removed it for empty states.
+            Consumer(builder: (context, ref, _) {
                 final isGenerating = ref.watch(isGeneratingRouteProvider);
                 final locationsForDate =
                     ref.watch(locationsForSelectedDateProvider);
@@ -656,6 +666,7 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                 }
 
                 final button = Container(
+                  key: widget.optimizeKey,
                   decoration: BoxDecoration(
                     gradient: LinearGradient(
                       colors: canTap
@@ -713,8 +724,7 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
 
                 if (!canTap) return button;
                 return _PulsingGlow(glowColor: primaryColor, child: button);
-              }),
-            ],
+            }),
           ],
         ),
       ],
@@ -1799,6 +1809,49 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
 
       final isViewingHistory = isPastDate && hasRoute;
       final hasLocations = locationsForDate.isNotEmpty;
+
+      // Same goal-gradient rule as the header button: optimization only
+      // pays off at 3+ stops, so below that we coach toward the "aha"
+      // instead of offering a trivial optimize. Re-optimize stays
+      // available once a route already exists.
+      const ahaThreshold = 3;
+      final stopCount = locationsForDate.length;
+      if (stopCount > 0 &&
+          stopCount < ahaThreshold &&
+          !hasRoute &&
+          !isGenerating &&
+          !isViewingHistory) {
+        final remaining = ahaThreshold - stopCount;
+        final primaryColor = Theme.of(context).colorScheme.primary;
+        return Container(
+          width: double.infinity,
+          decoration: BoxDecoration(
+            color: primaryColor.withValues(alpha: 0.10),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: primaryColor.withValues(alpha: 0.30)),
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.add_location_alt_rounded,
+                  color: primaryColor, size: 18),
+              const SizedBox(width: 8),
+              Flexible(
+                child: Text(
+                  'Add $remaining more place${remaining == 1 ? '' : 's'} to optimize',
+                  style: TextStyle(
+                    color: primaryColor,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      }
 
       String buttonText;
       VoidCallback? onPressedAction;

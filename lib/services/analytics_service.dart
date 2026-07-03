@@ -63,4 +63,36 @@ class AnalyticsService {
         'purchase',
         {'product': product, 'value': price, 'currency': currency},
       );
+
+  /// The paywall was shown to the user. [source] identifies the trigger
+  /// (e.g. 'place_limit') so funnel analysis can tell gate-driven views
+  /// apart from voluntary upgrade taps.
+  void paywallViewed(String source) =>
+      _fire('paywall_viewed', {'source': source});
+
+  /// First-run onboarding flow appeared.
+  void onboardingStarted() => _fire('onboarding_started');
+
+  /// Onboarding finished via a CTA. [travelerType] is the page-1 answer
+  /// (city|food|nature|mixed); [pickedCountry] whether page 2 got a pick.
+  void onboardingCompleted(String travelerType, bool pickedCountry) => _fire(
+        'onboarding_completed',
+        {
+          'traveler_type': travelerType,
+          'picked_country': pickedCountry ? 'yes' : 'no',
+        },
+      );
+
+  /// Onboarding dismissed via Skip/back. [step] = 0-based page index.
+  void onboardingSkipped(int step) =>
+      _fire('onboarding_skipped', {'step': step});
+
+  /// The one-time map spotlight tour was completed ("Got it" on the last
+  /// step).
+  void mapTutorialCompleted() => _fire('map_tutorial_completed');
+
+  /// The map spotlight tour was skipped. [step] = 0-based index of the
+  /// step that was on screen when the user bailed.
+  void mapTutorialSkipped(int step) =>
+      _fire('map_tutorial_skipped', {'step': step});
 }

@@ -11,6 +11,7 @@ import '../providers/user_trip_provider.dart';
 import '../services/analytics_service.dart';
 import '../providers/location_provider.dart';
 import '../services/revenuecat_service.dart';
+import '../services/subscription_limit_service.dart';
 import '../services/supabase_service.dart';
 import '../widgets/app_toast.dart';
 import '../repositories/user_profile_repository.dart';
@@ -19,6 +20,10 @@ import '../repositories/user_profile_repository.dart';
 enum PaywallTrigger {
   trialExpired,
   upgradePrompt,
+
+  /// The free saved-place allowance is used up (see
+  /// [SubscriptionLimitService.freePlaceAllowance]).
+  placeLimit,
 }
 
 /// True while a paywall route is on the Navigator stack. Lets app-level
@@ -172,11 +177,21 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
     final hasEligibleTrial = _anyPackageHasEligibleIntroOffer();
     final hasUsedTrialBefore = _anyPackageHasIntroOfferButIneligible();
     final isTrialExpired = widget.trigger == PaywallTrigger.trialExpired;
+    final isPlaceLimit = widget.trigger == PaywallTrigger.placeLimit;
 
     final String headline;
     final String subheadline;
     final IconData heroIcon;
-    if (isTrialExpired || hasUsedTrialBefore) {
+    if (isPlaceLimit) {
+      // The user hit the gate mid-flow with a trip in progress — frame the
+      // upgrade around continuing what they're building right now.
+      headline =
+          "You've used all ${SubscriptionLimitService.freePlaceAllowance} free places";
+      subheadline = hasEligibleTrial
+          ? 'Go unlimited with Pro — try it free for 3 days.'
+          : 'Go unlimited with VoyZa Pro to keep building your trip.';
+      heroIcon = Icons.add_location_alt_rounded;
+    } else if (isTrialExpired || hasUsedTrialBefore) {
       headline = 'Your free trial has ended';
       subheadline = 'Subscribe to keep creating trips and locations.';
       heroIcon = Icons.lock_clock;

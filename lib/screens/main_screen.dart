@@ -2,10 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:voyza/providers/auth_provider.dart';
 import 'package:voyza/providers/location_provider.dart';
+import 'package:voyza/providers/onboarding_provider.dart';
 import 'dart:ui';
 import 'package:voyza/screens/trip_screen.dart';
 import 'package:voyza/screens/map_screen.dart';
 import 'package:voyza/screens/settings_screen.dart';
+import 'package:voyza/screens/onboarding/onboarding_screen.dart';
 import 'package:voyza/widgets/analytics_consent_dialog.dart';
 
 class MainScreen extends ConsumerStatefulWidget {
@@ -21,11 +23,22 @@ class _MainScreenState extends ConsumerState<MainScreen> {
   @override
   void initState() {
     super.initState();
+    // Anonymous users land on the MAP tab: they can't create trips, so the
+    // Trips tab is a dead end for them — the map (search → add places) is
+    // where their journey starts. Authenticated users keep Trips first.
+    if (ref.read(currentUserIdProvider) == null) {
+      _selectedIndex = 1;
+    }
     // Perform initial data fetch once at startup (not in build, to avoid
     // re-running on every auth-token refresh / connectivity change).
     // After sync completes, set initialSyncCompleteProvider so the map screen
     // can hide its loading overlay once marker bitmaps are also ready.
     WidgetsBinding.instance.addPostFrameCallback((_) async {
+      // Publish the initial tab so offstage IndexedStack children (MapScreen)
+      // know whether they're actually visible. Post-frame: providers must
+      // not be mutated during build/init.
+      ref.read(selectedTabIndexProvider.notifier).state = _selectedIndex;
+
       final repository = ref.read(locationRepositoryProvider);
       // Cap how long the loading overlay can block: if the fetch is slow, reveal
       // the map anyway (cached/empty) and let it populate reactively via the
@@ -43,6 +56,18 @@ class _MainScreenState extends ConsumerState<MainScreen> {
       if (mounted) {
         await maybeShowAnalyticsConsent(context);
       }
+      // One-time first-run onboarding for fresh users with zero trips
+      // (no-op for everyone else). Sequenced AFTER consent so the two
+      // full-screen surfaces never stack.
+      if (mounted) {
+        await maybeShowOnboarding(context, ref);
+      }
+      // Onboarding resolved (shown, skipped, or not needed) — let the map
+      // tutorial re-evaluate. The anonymous flow is already ON the map tab,
+      // so no tab event would otherwise fire.
+      if (mounted) {
+        ref.read(mapTutorialRecheckProvider.notifier).state++;
+      }
     });
   }
 
@@ -56,6 +81,7 @@ class _MainScreenState extends ConsumerState<MainScreen> {
     setState(() {
       _selectedIndex = index;
     });
+    ref.read(selectedTabIndexProvider.notifier).state = index;
   }
 
   @override
@@ -63,6 +89,16 @@ class _MainScreenState extends ConsumerState<MainScreen> {
     // Watch the sync manager so it re-evaluates when connectivity/auth changes,
     // ensuring the realtime subscription is re-established after reconnects.
     ref.watch(syncManagerProvider);
+
+    // One-shot tab-switch requests (e.g. trip activated → jump to Map).
+    ref.listen<int?>(mainTabRequestProvider, (prev, next) {
+      if (next == null) return;
+      ref.read(mainTabRequestProvider.notifier).state = null; // consume
+      if (next != _selectedIndex && next >= 0 && next < _widgetOptions.length) {
+        setState(() => _selectedIndex = next);
+        ref.read(selectedTabIndexProvider.notifier).state = next;
+      }
+    });
 
     // Re-run the location sync whenever the user logs in mid-session.
     // currentUserIdProvider is stable across token refreshes (only changes on
@@ -83,6 +119,14 @@ class _MainScreenState extends ConsumerState<MainScreen> {
         }
         if (mounted) {
           ref.read(initialSyncCompleteProvider.notifier).state = true;
+        }
+        // A user who signed up mid-session (anonymous → account) gets the
+        // one-time onboarding too, once their sync has settled.
+        if (mounted && context.mounted) {
+          await maybeShowOnboarding(context, ref);
+        }
+        if (mounted) {
+          ref.read(mapTutorialRecheckProvider.notifier).state++;
         }
       }
     });
