@@ -1,3 +1,22 @@
+# VoyZa CI/CD — build + auto-publish to the App Store and Google Play.
+#
+# HOW TO RELEASE: push a version tag, e.g.
+#     git tag v1.0.7 && git push origin v1.0.7
+# That fires BOTH workflows below (one tag = release to both stores).
+# (To deploy on every merge instead, swap each `triggering:` block for
+#  events: [push] + branch_patterns — see the commented note in each.)
+#
+# ONE-TIME PREREQUISITES (configured in the Codemagic UI, not here):
+#   • Variable groups: supabase, google_map, revenuecat, android_key,
+#     app_store_credentials, and NEW → `google_play` containing
+#     GOOGLE_PLAY_SERVICE_ACCOUNT_CREDENTIALS (the full Play service-account
+#     JSON — use this exact variable name so the CLI auto-detects it too).
+#   • App Store Connect API key added as the integration named `CodeMagicKey`.
+#   • Android upload keystore uploaded to Codemagic as reference `voyza_key`.
+#   • Google Play: the FIRST .aab must be uploaded to Play Console manually
+#     once (to create the app + first release); Codemagic automates the rest.
+#   • App Store: the app listing must be complete or Apple review rejects.
+
 workflows:
   android-release:
     name: Android Release
@@ -7,6 +26,7 @@ workflows:
         - google_map
         - revenuecat
         - android_key
+        - google_play        # NEW: holds GOOGLE_PLAY_SERVICE_ACCOUNT_CREDENTIALS
       flutter: stable
       android_signing:
         - voyza_key
@@ -31,12 +51,53 @@ workflows:
         script: |
           flutter pub get
 
-      - name: Build Android AAB
+      - name: Set version code from Google Play + build AAB
+        # Pull the highest versionCode already on Play (across ALL tracks) and
+        # build the next one above it, so an automated upload can never collide
+        # with the versionCodes from your earlier manual releases. The CLI
+        # auto-reads GOOGLE_PLAY_SERVICE_ACCOUNT_CREDENTIALS from the env, and
+        # `set -e` fails the build loudly if Play can't be reached (better than
+        # silently building a too-low versionCode that Google would reject).
         script: |
-          flutter build appbundle --release --build-number=$BUILD_NUMBER
+          set -e
+          LATEST=$(google-play get-latest-build-number \
+            --package-name "com.superiordev.voyza")
+          NEXT=$(( LATEST + 1 ))
+          echo "Play latest versionCode=$LATEST -> building $NEXT"
+          flutter build appbundle --release --build-number=$NEXT
 
     artifacts:
       - build/**/outputs/**/*.aab
+
+    # Deploy only on version tags (e.g. v1.0.7). See header for how to release.
+    triggering:
+      events:
+        - tag
+      tag_patterns:
+        - pattern: 'v*'
+          include: true
+      cancel_previous_builds: false
+
+    publishing:
+      google_play:
+        # Requires the `google_play` variable group above AND the one-time
+        # manual first upload to Play Console (see header). After that this
+        # publishes every tagged build automatically.
+        credentials: $GOOGLE_PLAY_SERVICE_ACCOUNT_CREDENTIALS
+        # `internal` is the safest first target: instant, no review, real
+        # store lane — use it to verify signing + service-account auth end to
+        # end. Promote to production by replacing the two lines below with the
+        # commented block.
+        track: internal
+        # --- Promote to full production when verified: ---
+        #   track: production
+        #   submit_as_draft: true     # creates a draft release you Release manually
+        #   rollout_fraction: 0.25    # (optional) staged rollout to 25% of users
+        #   in_app_update_priority: 3 # (optional) 0-5 flexible/immediate update
+        changes_not_sent_for_review: false
+      email:
+        recipients:
+          - hengsamkok76@gmail.com
 
   ios-release:
     name: Build iOS App
@@ -74,10 +135,6 @@ workflows:
       - name: Install Flutter dependencies
         script: flutter pub get
 
-      - name: Build iOS App
-        script: |
-          flutter build ios
-
       - name: Install CocoaPods dependencies
         script: |
           cd ios
@@ -91,25 +148,37 @@ workflows:
           /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $APP_VERSION" "ios/Runner/Info.plist"
           /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $APP_BUILD_NUMBER" "ios/Runner/Info.plist"
 
+      # Single build step — `flutter build ipa` runs pub get + pod install and
+      # produces the signed .ipa; the earlier standalone `flutter build ios`
+      # was redundant and has been removed.
       - name: Build iOS App
         script: flutter build ipa --release --build-number=$BUILD_NUMBER
     artifacts:
       - build/ios/ipa/*.ipa
+
+    # Deploy only on version tags (e.g. v1.0.7). See header for how to release.
     triggering:
       events:
-        - pull_request
-      branch_patterns:
-        - pattern: "main"
+        - tag
+      tag_patterns:
+        - pattern: 'v*'
           include: true
-          source: true
-      cancel_previous_builds: true
+      cancel_previous_builds: false
+
     publishing:
       app_store_connect:
         auth: integration
         submit_to_testflight: true
         beta_groups:
           - App Store Connect Users
+        # Production App Store submission. Requires a COMPLETE App Store
+        # listing (screenshots, description, privacy) or Apple rejects.
+        # release_type: MANUAL = after Apple approves, YOU press "Release" in
+        # App Store Connect. Switch to AFTER_APPROVAL for fully automatic
+        # public release, or comment these three lines to stay TestFlight-only.
+        submit_to_app_store: true
+        release_type: MANUAL
+        cancel_previous_submissions: true
       email:
         recipients:
           - hengsamkok76@gmail.com
-          
