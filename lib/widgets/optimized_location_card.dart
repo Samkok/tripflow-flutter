@@ -111,8 +111,7 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
                         Padding(
-                          padding:
-                              const EdgeInsets.fromLTRB(10, 12, 4, 12),
+                          padding: const EdgeInsets.fromLTRB(10, 12, 4, 12),
                           child: _buildHeaderRow(
                             context,
                             hasPhotos: hasPhotos,
@@ -130,8 +129,8 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
                                   photoRefs: photoRefs,
                                   heroTagPrefix: '${location.id}_photo',
                                   title: location.name,
-                                  padding: const EdgeInsets.fromLTRB(
-                                      10, 0, 10, 12),
+                                  padding:
+                                      const EdgeInsets.fromLTRB(10, 0, 10, 12),
                                 )
                               : const SizedBox(
                                   width: double.infinity, height: 0),
@@ -167,11 +166,9 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
   Widget _buildAccentBar(BuildContext context, Color accent) {
     Widget content;
     if (location.isDone) {
-      content =
-          const Icon(Icons.check_rounded, color: Colors.white, size: 16);
+      content = const Icon(Icons.check_rounded, color: Colors.white, size: 16);
     } else if (location.isSkipped) {
-      content =
-          const Icon(Icons.remove_rounded, color: Colors.white, size: 16);
+      content = const Icon(Icons.remove_rounded, color: Colors.white, size: 16);
     } else {
       content = Text(
         '$number',
@@ -228,8 +225,7 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
           IconButton(
             visualDensity: VisualDensity.compact,
             padding: EdgeInsets.zero,
-            constraints:
-                const BoxConstraints(minWidth: 32, minHeight: 32),
+            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
             tooltip: _isExpanded ? 'Hide photos' : 'Show photos',
             icon: AnimatedRotation(
               turns: _isExpanded ? 0.5 : 0,
@@ -311,8 +307,7 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(Icons.hotel_rounded,
-              size: 12, color: theme.colorScheme.primary),
+          Icon(Icons.hotel_rounded, size: 12, color: theme.colorScheme.primary),
           const SizedBox(width: 4),
           Text(
             '${df.format(start)} – ${df.format(end)}',
@@ -337,8 +332,7 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
         .select((m) => m[location.id] ?? const <TimingWarning>[]));
     if (warnings.isEmpty) return const SizedBox.shrink();
 
-    final w = warnings
-        .reduce((a, b) => a.kind.index >= b.kind.index ? a : b);
+    final w = warnings.reduce((a, b) => a.kind.index >= b.kind.index ? a : b);
     final theme = Theme.of(context);
     Color fg;
     IconData icon;
@@ -449,6 +443,9 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
         context: context,
         backgroundColor: Colors.transparent,
         isScrollControlled: true,
+        // Keep a full-height sheet (photos + hours + multi-day on small
+        // screens) from rendering its header under the status bar/notch.
+        useSafeArea: true,
         builder: (modalContext) => LocationDetailSheet(
           location: location,
           number: number,
@@ -543,8 +540,8 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
               ),
               title: Text(
                 location.isDone ? 'Unmark as Done' : 'Mark as Done',
-                style:
-                    TextStyle(color: hasWriteAccess ? Colors.green : Colors.grey),
+                style: TextStyle(
+                    color: hasWriteAccess ? Colors.green : Colors.grey),
               ),
             ),
           ),

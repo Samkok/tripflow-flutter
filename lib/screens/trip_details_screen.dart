@@ -24,6 +24,7 @@ import 'package:voyza/widgets/location_detail_sheet.dart';
 import 'package:voyza/widgets/location_photo_gallery.dart';
 import 'package:voyza/providers/local_active_trip_provider.dart';
 import 'package:voyza/providers/trip_provider.dart';
+import 'package:voyza/utils/trip_dates.dart';
 
 class TripDetailsScreen extends ConsumerStatefulWidget {
   final Trip trip;
@@ -118,7 +119,6 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
     _exitSelectionMode();
   }
 
-
   void _showLocationDetail(
     SavedLocation location,
     int indexInList,
@@ -127,15 +127,20 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
     String coordAddress(SavedLocation l) =>
         '${l.lat.toStringAsFixed(5)}, ${l.lng.toStringAsFixed(5)}';
 
-    final locationModel = location.toLocationModel(address: coordAddress(location));
-    final dateGroupModels =
-        dateGroup.map((l) => l.toLocationModel(address: coordAddress(l))).toList();
+    final locationModel =
+        location.toLocationModel(address: coordAddress(location));
+    final dateGroupModels = dateGroup
+        .map((l) => l.toLocationModel(address: coordAddress(l)))
+        .toList();
 
     final scrollController = ScrollController();
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
+      // Keep a full-height sheet (photos + hours + multi-day on small
+      // screens) from rendering its header under the status bar/notch.
+      useSafeArea: true,
       builder: (ctx) => LocationDetailSheet(
         location: locationModel,
         number: indexInList + 1,
@@ -198,7 +203,9 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
   Future<void> _setActiveTrip() async {
     try {
       ref.read(tripProvider.notifier).clearTrip();
-      await ref.read(localActiveTripIdProvider.notifier).setActiveTrip(widget.trip.id);
+      await ref
+          .read(localActiveTripIdProvider.notifier)
+          .setActiveTrip(widget.trip.id);
       if (mounted) {
         AppToast.success(context, '${widget.trip.name} is now active');
       }
@@ -227,10 +234,10 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
     ref.invalidate(hasWriteAccessProvider(widget.trip.id));
     ref.invalidate(isTripOwnerProvider(widget.trip.id));
     ref.invalidate(userTripPermissionProvider(widget.trip.id));
-    
+
     // Also invalidate location data to refresh the list
     ref.invalidate(locationRepositoryProvider);
-    
+
     // Wait a bit for providers to refresh
     await Future.delayed(const Duration(milliseconds: 500));
   }
@@ -242,7 +249,8 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
 
     // Check if current user is the owner
     final isOwnerAsync = ref.watch(isTripOwnerProvider(widget.trip.id));
-    final hasWriteAccessAsync = ref.watch(hasWriteAccessProvider(widget.trip.id));
+    final hasWriteAccessAsync =
+        ref.watch(hasWriteAccessProvider(widget.trip.id));
 
     return Scaffold(
       appBar: _selectionMode
@@ -272,12 +280,11 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
                           : null,
                   onChanged: (_) {
                     setState(() {
-                      if (_selectedIds.length ==
-                          _currentTripLocations.length) {
+                      if (_selectedIds.length == _currentTripLocations.length) {
                         _selectedIds.clear();
                       } else {
-                        _selectedIds.addAll(
-                            _currentTripLocations.map((l) => l.id));
+                        _selectedIds
+                            .addAll(_currentTripLocations.map((l) => l.id));
                       }
                     });
                   },
@@ -285,8 +292,7 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
                 IconButton(
                   icon: const Icon(Icons.delete_outline, color: Colors.red),
                   tooltip: 'Delete selected',
-                  onPressed:
-                      _selectedIds.isEmpty ? null : _deleteSelected,
+                  onPressed: _selectedIds.isEmpty ? null : _deleteSelected,
                 ),
               ],
             )
@@ -326,10 +332,8 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
                 padding:
                     const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                 child: FilledButton.icon(
-                  style:
-                      FilledButton.styleFrom(backgroundColor: Colors.red),
-                  onPressed:
-                      _selectedIds.isEmpty ? null : _deleteSelected,
+                  style: FilledButton.styleFrom(backgroundColor: Colors.red),
+                  onPressed: _selectedIds.isEmpty ? null : _deleteSelected,
                   icon: const Icon(Icons.delete_outline),
                   label: Text(
                       'Delete ${_selectedIds.length} location${_selectedIds.length == 1 ? '' : 's'}'),
@@ -347,9 +351,8 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
             // and drop targets are only enabled for users who can edit.
             Expanded(
               child: _buildLocationStreamBody(
-                hasWriteAccess: hasWriteAccessAsync
-                        .whenOrNull(data: (v) => v) ??
-                    false,
+                hasWriteAccess:
+                    hasWriteAccessAsync.whenOrNull(data: (v) => v) ?? false,
               ),
             ),
           ],
@@ -358,34 +361,36 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
       floatingActionButton: _selectionMode
           ? null
           : hasWriteAccessAsync.when(
-        data: (hasWriteAccess) => hasWriteAccess
-            ? Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  FloatingActionButton.extended(
-                    heroTag: 'fab_add_existing',
-                    onPressed: () => _showExistingLocationsSheet(),
-                    icon: const Icon(Icons.playlist_add_rounded),
-                    label: const Text('Add Existing'),
-                    backgroundColor: Theme.of(context).cardColor,
-                    foregroundColor: Theme.of(context).colorScheme.primary,
-                  ),
-                  const SizedBox(height: 12),
-                  FloatingActionButton.extended(
-                    heroTag: 'fab_add_location',
-                    onPressed: () => _showAddLocationDialog(),
-                    icon: const Icon(Icons.add_location_alt_outlined),
-                    label: const Text('Add Location'),
-                    backgroundColor: Theme.of(context).colorScheme.primary,
-                    foregroundColor: Colors.black,
-                  ),
-                ],
-              )
-            : null,
-        loading: () => null,
-        error: (_, __) => null,
-      ),
+              data: (hasWriteAccess) => hasWriteAccess
+                  ? Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        FloatingActionButton.extended(
+                          heroTag: 'fab_add_existing',
+                          onPressed: () => _showExistingLocationsSheet(),
+                          icon: const Icon(Icons.playlist_add_rounded),
+                          label: const Text('Add Existing'),
+                          backgroundColor: Theme.of(context).cardColor,
+                          foregroundColor:
+                              Theme.of(context).colorScheme.primary,
+                        ),
+                        const SizedBox(height: 12),
+                        FloatingActionButton.extended(
+                          heroTag: 'fab_add_location',
+                          onPressed: () => _showAddLocationDialog(),
+                          icon: const Icon(Icons.add_location_alt_outlined),
+                          label: const Text('Add Location'),
+                          backgroundColor:
+                              Theme.of(context).colorScheme.primary,
+                          foregroundColor: Colors.black,
+                        ),
+                      ],
+                    )
+                  : null,
+              loading: () => null,
+              error: (_, __) => null,
+            ),
     );
   }
 
@@ -460,7 +465,8 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
             'Trip details - Stream state: ${snapshot.connectionState}, hasData: ${snapshot.hasData}, data length: ${snapshot.data?.length ?? 0}');
 
         // Handle connection states
-        if (snapshot.connectionState == ConnectionState.waiting && snapshot.data == null) {
+        if (snapshot.connectionState == ConnectionState.waiting &&
+            snapshot.data == null) {
           return const Center(child: CircularProgressIndicator());
         }
 
@@ -477,7 +483,8 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
 
         // Get data safely
         final allLocations = snapshot.data ?? const [];
-        debugPrint('Trip details - Total locations in stream: ${allLocations.length}');
+        debugPrint(
+            'Trip details - Total locations in stream: ${allLocations.length}');
 
         if (allLocations.isEmpty) {
           debugPrint('Trip details - No locations in stream');
@@ -485,9 +492,8 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
         }
 
         // Filter by trip ID
-        var tripLocations = allLocations
-            .where((loc) => loc.tripId == widget.trip.id)
-            .toList();
+        var tripLocations =
+            allLocations.where((loc) => loc.tripId == widget.trip.id).toList();
 
         // Apply search filter if query is not empty
         if (_searchQuery.isNotEmpty) {
@@ -497,8 +503,10 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
         }
 
         debugPrint('Trip details - Trip ID: ${widget.trip.id}');
-        debugPrint('Trip details - Filtered locations: ${tripLocations.length}');
-        debugPrint('Trip details - Location details: ${allLocations.map((l) => '${l.name}(tripId=${l.tripId})').join(", ")}');
+        debugPrint(
+            'Trip details - Filtered locations: ${tripLocations.length}');
+        debugPrint(
+            'Trip details - Location details: ${allLocations.map((l) => '${l.name}(tripId=${l.tripId})').join(", ")}');
 
         if (tripLocations.isEmpty) {
           debugPrint('Trip details - No locations match this trip');
@@ -512,7 +520,8 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
           });
         }
 
-        return _buildLocationsList(tripLocations, hasWriteAccess: hasWriteAccess);
+        return _buildLocationsList(tripLocations,
+            hasWriteAccess: hasWriteAccess);
       },
     );
   }
@@ -521,38 +530,30 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
   /// the same calendar day compare equal.
   DateTime _dayKey(DateTime d) => DateTime(d.year, d.month, d.day);
 
-  /// Builds the full list of dates to display: every day in the trip's
-  /// start..end range plus any other dates that already host locations
-  /// (e.g. legacy rows scheduled outside the range, or `createdAt`
-  /// fallbacks). Sorted chronologically.
+  /// True when [day] is a calendar day strictly before today. Used to lock
+  /// out the per-date "add a place" affordances for dates that have already
+  /// passed (mirrors the search screen's guard and the detail sheet's
+  /// past-date edit lockout).
+  bool _isPastDay(DateTime day) =>
+      _dayKey(day).isBefore(_dayKey(DateTime.now()));
+
+  /// Builds the full, gap-free list of dates to display: the contiguous span
+  /// from the earliest to the latest date the trip touches — the trip's
+  /// declared start..end range unioned with every scheduled location — with
+  /// every in-between day filled in. That guarantees an empty interstitial
+  /// day (e.g. Jan 2 between stops on Jan 1 and Jan 3) still gets a drop
+  /// slot, even when the trip has no explicit date range. Sorted
+  /// chronologically. See [contiguousTripDates] — the same helper drives the
+  /// trip-plan bottom sheet so both surfaces show identical days.
   List<DateTime> _buildAllDates(List<SavedLocation> locations) {
-    final dates = <DateTime>{};
-
-    final startDate = widget.trip.startDate;
-    final endDate = widget.trip.endDate;
-    if (startDate != null && endDate != null) {
-      var d = _dayKey(startDate);
-      final end = _dayKey(endDate);
-      while (!d.isAfter(end)) {
-        dates.add(d);
-        d = d.add(const Duration(days: 1));
-      }
-    }
-
-    for (final loc in locations) {
-      // Every day in the location's stay range contributes to the displayed
-      // date list — that way a hotel set for the entire trip shows up on
-      // each day even if there are no other stops scheduled that day.
-      final start = _dayKey(loc.scheduledDate ?? loc.createdAt);
-      final endRaw = loc.scheduledEndDate ?? loc.scheduledDate ?? loc.createdAt;
-      final end = _dayKey(endRaw);
-      for (var d = start; !d.isAfter(end); d = d.add(const Duration(days: 1))) {
-        dates.add(d);
-      }
-    }
-
-    final sorted = dates.toList()..sort((a, b) => a.compareTo(b));
-    return sorted;
+    return contiguousTripDates([
+      widget.trip.startDate,
+      widget.trip.endDate,
+      for (final loc in locations) ...[
+        loc.scheduledDate ?? loc.createdAt,
+        loc.scheduledEndDate ?? loc.scheduledDate ?? loc.createdAt,
+      ],
+    ]);
   }
 
   Widget _buildLocationsList(
@@ -569,7 +570,11 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
       final start = _dayKey(startRaw);
       final endRaw = location.scheduledEndDate ?? startRaw;
       final end = _dayKey(endRaw);
-      for (var d = start; !d.isAfter(end); d = d.add(const Duration(days: 1))) {
+      // Step by calendar day (not Duration(days:1)) so keys stay on local
+      // midnight across DST transitions and match _buildAllDates' slots.
+      for (var d = start;
+          !d.isAfter(end);
+          d = DateTime(d.year, d.month, d.day + 1)) {
         groupedByDay.putIfAbsent(d, () => []).add(location);
       }
     }
@@ -701,8 +706,8 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
                     foregroundColor: isActive
                         ? Colors.green
                         : Theme.of(context).colorScheme.primary,
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 12, vertical: 6),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                     minimumSize: Size.zero,
                     tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                     shape: RoundedRectangleBorder(
@@ -735,7 +740,8 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
                 ),
               ],
             ),
-            if (widget.trip.startDate != null && widget.trip.endDate != null) ...[
+            if (widget.trip.startDate != null &&
+                widget.trip.endDate != null) ...[
               const SizedBox(height: 10),
               Builder(builder: (context) {
                 final s = DateTime(widget.trip.startDate!.year,
@@ -757,11 +763,10 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
                     Expanded(
                       child: Text(
                         '$dateText  ·  $dayCount day${dayCount == 1 ? '' : 's'}',
-                        style:
-                            Theme.of(context).textTheme.bodySmall?.copyWith(
-                                  color: Theme.of(context).colorScheme.primary,
-                                  fontWeight: FontWeight.w600,
-                                ),
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              color: Theme.of(context).colorScheme.primary,
+                              fontWeight: FontWeight.w600,
+                            ),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
@@ -797,6 +802,9 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
   }) {
     final dateLabel = DateFormat('MMMM dd, yyyy').format(day);
     final theme = Theme.of(context);
+    // A place can only be added to today or a future day. Past days stay
+    // read-only for adding (existing cards can still be dragged around).
+    final canAddHere = hasWriteAccess && !_isPastDay(day);
 
     return Padding(
       padding: const EdgeInsets.only(top: 16, left: 16, right: 16),
@@ -833,40 +841,77 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: theme.colorScheme.primary.withValues(alpha: 0.15),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        dateLabel,
-                        style: theme.textTheme.labelLarge?.copyWith(
-                          color: theme.colorScheme.primary,
-                          fontWeight: FontWeight.w600,
+                Row(
+                  children: [
+                    // Flexible + ellipsis so a long date label at large
+                    // accessibility text scales truncates instead of
+                    // overflowing the header Row.
+                    Flexible(
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 6),
+                        decoration: BoxDecoration(
+                          color:
+                              theme.colorScheme.primary.withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Flexible(
+                              child: Text(
+                                dateLabel,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: theme.textTheme.labelLarge?.copyWith(
+                                  color: theme.colorScheme.primary,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                            if (locations.isNotEmpty) ...[
+                              const SizedBox(width: 8),
+                              Text(
+                                '${locations.length}',
+                                style: theme.textTheme.labelSmall?.copyWith(
+                                  color: theme.colorScheme.primary
+                                      .withValues(alpha: 0.7),
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
+                          ],
                         ),
                       ),
-                      if (locations.isNotEmpty) ...[
-                        const SizedBox(width: 8),
-                        Text(
-                          '${locations.length}',
-                          style: theme.textTheme.labelSmall?.copyWith(
-                            color:
-                                theme.colorScheme.primary.withValues(alpha: 0.7),
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
+                    ),
+                    const Spacer(),
+                    // Per-day quick-add: adds a place already scheduled to
+                    // THIS day, so empty gap days can be filled directly.
+                    // Hidden on past days — you can't schedule into the past.
+                    if (canAddHere)
+                      IconButton(
+                        onPressed: () => _showAddLocationForDate(day),
+                        icon: Icon(Icons.add_circle_outline,
+                            color: theme.colorScheme.primary),
+                        iconSize: 22,
+                        visualDensity: VisualDensity.compact,
+                        padding: EdgeInsets.zero,
+                        constraints:
+                            const BoxConstraints(minWidth: 40, minHeight: 32),
+                        tooltip: 'Add a place on this day',
+                      ),
+                  ],
                 ),
                 const SizedBox(height: 12),
                 if (locations.isEmpty)
-                  _buildEmptyDayPlaceholder(highlighted: highlighted)
+                  canAddHere
+                      ? InkWell(
+                          onTap: () => _showAddLocationForDate(day),
+                          borderRadius: BorderRadius.circular(10),
+                          child: _buildEmptyDayPlaceholder(
+                              highlighted: highlighted, canAdd: true),
+                        )
+                      : _buildEmptyDayPlaceholder(highlighted: highlighted)
                 else
                   ListView.separated(
                     shrinkWrap: true,
@@ -889,7 +934,8 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
     );
   }
 
-  Widget _buildEmptyDayPlaceholder({required bool highlighted}) {
+  Widget _buildEmptyDayPlaceholder(
+      {required bool highlighted, bool canAdd = false}) {
     final theme = Theme.of(context);
     final color = highlighted
         ? theme.colorScheme.primary
@@ -903,15 +949,19 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
       ),
       child: Row(
         children: [
-          Icon(Icons.add_road_outlined, size: 18, color: color),
+          Icon(canAdd && !highlighted ? Icons.add : Icons.add_road_outlined,
+              size: 18, color: color),
           const SizedBox(width: 10),
           Expanded(
             child: Text(
               highlighted
                   ? 'Release to move here'
-                  : 'No locations · drag a card here',
+                  : (canAdd
+                      ? 'No places yet · tap to add or drag a card here'
+                      : 'No locations · drag a card here'),
               style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.textTheme.bodyMedium?.color?.withValues(alpha: 0.7),
+                color:
+                    theme.textTheme.bodyMedium?.color?.withValues(alpha: 0.7),
               ),
             ),
           ),
@@ -1106,9 +1156,8 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
                                   .textTheme
                                   .labelSmall
                                   ?.copyWith(
-                                    color: Theme.of(context)
-                                        .colorScheme
-                                        .primary,
+                                    color:
+                                        Theme.of(context).colorScheme.primary,
                                     fontWeight: FontWeight.w600,
                                   ),
                               maxLines: 1,
@@ -1138,14 +1187,13 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
                     children: [
                       Text(
                         timeString,
-                        style:
-                            Theme.of(context).textTheme.labelSmall?.copyWith(
-                                  color: Theme.of(context)
-                                      .textTheme
-                                      .bodyMedium
-                                      ?.color
-                                      ?.withValues(alpha: 0.5),
-                                ),
+                        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                              color: Theme.of(context)
+                                  .textTheme
+                                  .bodyMedium
+                                  ?.color
+                                  ?.withValues(alpha: 0.5),
+                            ),
                       ),
                       if (location.stayDuration > 0)
                         Text(
@@ -1166,8 +1214,8 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
                     IconButton(
                       visualDensity: VisualDensity.compact,
                       padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints(
-                          minWidth: 32, minHeight: 32),
+                      constraints:
+                          const BoxConstraints(minWidth: 32, minHeight: 32),
                       tooltip: isExpanded ? 'Hide photos' : 'Show photos',
                       icon: AnimatedRotation(
                         turns: isExpanded ? 0.5 : 0,
@@ -1240,7 +1288,6 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
     );
   }
 
-
   void _showAddLocationDialog() {
     showModalBottomSheet(
       context: context,
@@ -1248,6 +1295,21 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
       backgroundColor: Colors.transparent,
       builder: (context) => _LocationSearchSheet(
         trip: widget.trip,
+      ),
+    );
+  }
+
+  /// Opens the place-search sheet pre-scheduled to [day], so a place picked
+  /// there lands on that specific date instead of today. Wired to the
+  /// per-date add button and the empty-day placeholder.
+  void _showAddLocationForDate(DateTime day) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => _LocationSearchSheet(
+        trip: widget.trip,
+        scheduledDate: day,
       ),
     );
   }
@@ -1265,8 +1327,13 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
 class _LocationSearchSheet extends ConsumerStatefulWidget {
   final Trip trip;
 
+  /// When set, a place added through this sheet is scheduled to this day
+  /// instead of today — used by the per-date "add to this day" affordances.
+  final DateTime? scheduledDate;
+
   const _LocationSearchSheet({
     required this.trip,
+    this.scheduledDate,
   });
 
   String get tripId => trip.id;
@@ -1316,10 +1383,8 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
   /// not the user's active trip).
   bool _isAlreadyInTrip(String? placeId) {
     if (placeId == null || placeId.isEmpty) return false;
-    final saved =
-        ref.read(savedLocationsProvider).asData?.value ?? const [];
-    return saved.any(
-        (l) => l.tripId == widget.tripId && l.placeId == placeId);
+    final saved = ref.read(savedLocationsProvider).asData?.value ?? const [];
+    return saved.any((l) => l.tripId == widget.tripId && l.placeId == placeId);
   }
 
   /// Reset the sheet back to its "ready for the next search" state after
@@ -1364,83 +1429,90 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
             children: [
               Column(
                 children: [
-              // Drag handle
-              Container(
-                margin: const EdgeInsets.only(top: 12, bottom: 8),
-                height: 4,
-                width: 40,
-                decoration: BoxDecoration(
-                  color: Colors.grey[400],
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-
-              // Header
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        'Search for Location',
-                        style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                              fontWeight: FontWeight.bold,
-                            ),
-                      ),
+                  // Drag handle
+                  Container(
+                    margin: const EdgeInsets.only(top: 12, bottom: 8),
+                    height: 4,
+                    width: 40,
+                    decoration: BoxDecoration(
+                      color: Colors.grey[400],
+                      borderRadius: BorderRadius.circular(2),
                     ),
-                    IconButton(
-                      icon: const Icon(Icons.close),
-                      onPressed: () => Navigator.pop(context),
-                    ),
-                  ],
-                ),
-              ),
+                  ),
 
-              // Search bar
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                child: TextField(
-                  controller: _searchController,
-                  focusNode: _searchFocusNode,
-                  autofocus: true,
-                  decoration: InputDecoration(
-                    hintText: 'Search for a place...',
-                    prefixIcon: const Icon(Icons.search),
-                    suffixIcon: Row(
-                      mainAxisSize: MainAxisSize.min,
+                  // Header
+                  Padding(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    child: Row(
                       children: [
-                        IconButton(
-                          icon: const Icon(Icons.link),
-                          tooltip: 'Paste Google Maps link',
-                          onPressed: _showUrlInputDialog,
-                        ),
-                        if (_searchController.text.isNotEmpty)
-                          IconButton(
-                            icon: const Icon(Icons.clear),
-                            onPressed: () {
-                              _searchController.clear();
-                              ref.read(tripDetailSearchProvider.notifier).clear();
-                              setState(() {});
-                            },
+                        Expanded(
+                          child: Text(
+                            'Search for Location',
+                            style: Theme.of(context)
+                                .textTheme
+                                .titleLarge
+                                ?.copyWith(
+                                  fontWeight: FontWeight.bold,
+                                ),
                           ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.close),
+                          onPressed: () => Navigator.pop(context),
+                        ),
                       ],
                     ),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    filled: true,
-                    fillColor: Theme.of(context).cardColor,
                   ),
-                  onChanged: _onSearchChanged,
-                ),
-              ),
 
-              const Divider(),
+                  // Search bar
+                  Padding(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    child: TextField(
+                      controller: _searchController,
+                      focusNode: _searchFocusNode,
+                      autofocus: true,
+                      decoration: InputDecoration(
+                        hintText: 'Search for a place...',
+                        prefixIcon: const Icon(Icons.search),
+                        suffixIcon: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            IconButton(
+                              icon: const Icon(Icons.link),
+                              tooltip: 'Paste Google Maps link',
+                              onPressed: _showUrlInputDialog,
+                            ),
+                            if (_searchController.text.isNotEmpty)
+                              IconButton(
+                                icon: const Icon(Icons.clear),
+                                onPressed: () {
+                                  _searchController.clear();
+                                  ref
+                                      .read(tripDetailSearchProvider.notifier)
+                                      .clear();
+                                  setState(() {});
+                                },
+                              ),
+                          ],
+                        ),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        filled: true,
+                        fillColor: Theme.of(context).cardColor,
+                      ),
+                      onChanged: _onSearchChanged,
+                    ),
+                  ),
 
-              // Search results
-              Expanded(
-                child: _buildSearchResults(scrollController),
-              ),
+                  const Divider(),
+
+                  // Search results
+                  Expanded(
+                    child: _buildSearchResults(scrollController),
+                  ),
                 ],
               ),
               // Busy overlay shown during either add path. AbsorbPointer
@@ -1473,8 +1545,8 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
                               const SizedBox(
                                 width: 22,
                                 height: 22,
-                                child: CircularProgressIndicator(
-                                    strokeWidth: 2.4),
+                                child:
+                                    CircularProgressIndicator(strokeWidth: 2.4),
                               ),
                               const SizedBox(width: 14),
                               Text(
@@ -1509,7 +1581,8 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
             Icon(
               Icons.search,
               size: 64,
-              color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.3),
+              color:
+                  Theme.of(context).colorScheme.primary.withValues(alpha: 0.3),
             ),
             const SizedBox(height: 16),
             Text(
@@ -1568,7 +1641,8 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
             Icon(
               Icons.location_off,
               size: 64,
-              color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.3),
+              color:
+                  Theme.of(context).colorScheme.primary.withValues(alpha: 0.3),
             ),
             const SizedBox(height: 16),
             Text(
@@ -1619,7 +1693,8 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
           leading: Container(
             padding: const EdgeInsets.all(8),
             decoration: BoxDecoration(
-              color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.15),
+              color:
+                  Theme.of(context).colorScheme.primary.withValues(alpha: 0.15),
               borderRadius: BorderRadius.circular(8),
             ),
             child: Icon(
@@ -1659,8 +1734,30 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
     }
   }
 
+  /// Backstop for the per-date add flow. The sheet can carry a preselected
+  /// [scheduledDate] (from a day slot's add button); refuse to schedule a new
+  /// place onto a day before today — covering the edge where the day was
+  /// valid at render time but has since rolled into the past, or any future
+  /// code path that reaches these add methods without the UI gate. Mirrors
+  /// the search screen's guard. Returns true (and warns) when the add must
+  /// be refused.
+  bool _blockIfScheduledDateInPast() {
+    final d = widget.scheduledDate;
+    if (d == null) return false;
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    if (DateTime(d.year, d.month, d.day).isBefore(today)) {
+      if (mounted) {
+        AppToast.warning(context, 'Cannot add locations to a past date.');
+      }
+      return true;
+    }
+    return false;
+  }
+
   Future<void> _processGoogleMapsUrl(String text) async {
     if (_isPastingUrl || _isAddingPlace) return;
+    if (_blockIfScheduledDateInPast()) return;
 
     if (!GoogleMapsUrlExtractor.isValidGoogleMapsUrl(text)) {
       if (mounted) {
@@ -1749,7 +1846,7 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
         lng: placeDetails.coordinates.longitude,
         isSkipped: false,
         stayDuration: 1800,
-        scheduledDate: DateTime.now(),
+        scheduledDate: widget.scheduledDate ?? DateTime.now(),
         createdAt: DateTime.now(),
         tripId: widget.tripId,
         photoReference: placeDetails.photoReference,
@@ -1789,6 +1886,7 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
     // Defensive — overlay should block a second tap, but guard the
     // race during its mount frame.
     if (_isAddingPlace || _isPastingUrl) return;
+    if (_blockIfScheduledDateInPast()) return;
 
     // Permission check at function level
     final hasWriteAccess =
@@ -1849,7 +1947,7 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
         lng: placeDetails.coordinates.longitude,
         isSkipped: false,
         stayDuration: 1800, // 30 minutes default
-        scheduledDate: DateTime.now(),
+        scheduledDate: widget.scheduledDate ?? DateTime.now(),
         createdAt: DateTime.now(),
         tripId: widget.tripId, // Assign to this trip
         photoReference: placeDetails.photoReference,
@@ -1942,10 +2040,9 @@ class _ExistingLocationsSheetState
                     Expanded(
                       child: Text(
                         'Add Existing Location',
-                        style:
-                            Theme.of(context).textTheme.titleLarge?.copyWith(
-                                  fontWeight: FontWeight.bold,
-                                ),
+                        style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                              fontWeight: FontWeight.bold,
+                            ),
                       ),
                     ),
                     IconButton(
@@ -1974,8 +2071,7 @@ class _ExistingLocationsSheetState
   Widget _buildLocationList(
       String currentUserId, ScrollController scrollController) {
     return StreamBuilder<List<SavedLocation>>(
-      stream:
-          ref.read(locationRepositoryProvider).watchLocations(),
+      stream: ref.read(locationRepositoryProvider).watchLocations(),
       initialData: const [],
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting &&
@@ -1984,8 +2080,7 @@ class _ExistingLocationsSheetState
         }
 
         final unassigned = (snapshot.data ?? [])
-            .where((loc) =>
-                loc.tripId == null && loc.userId == currentUserId)
+            .where((loc) => loc.tripId == null && loc.userId == currentUserId)
             .toList();
 
         if (unassigned.isEmpty) {
@@ -2039,8 +2134,7 @@ class _ExistingLocationsSheetState
                 color: Theme.of(context).cardColor,
                 borderRadius: BorderRadius.circular(10),
                 border: Border.all(
-                  color:
-                      Theme.of(context).dividerColor.withValues(alpha: 0.1),
+                  color: Theme.of(context).dividerColor.withValues(alpha: 0.1),
                   width: 1,
                 ),
               ),

@@ -60,6 +60,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
   DraggableScrollableController? _sheetController;
   bool _isTrackingLocation = false;
   int? _highlightedLocationIndex;
+
   /// Set when [localActiveTripIdProvider] changes (activate / switch /
   /// deactivate). The actual camera move waits until [pinnedLocations]
   /// next emits, so we operate on the locations of the new trip rather
@@ -132,7 +133,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
 
     // PERFORMANCE: Cancel location stream to prevent memory leaks and battery drain
     _locationSubscription?.cancel();
-    
+
     // OPTIMIZATION: Dispose map controller if still active
     _mapController = null;
 
@@ -162,8 +163,8 @@ class _MapScreenState extends ConsumerState<MapScreen>
       if (!ref.read(initialSyncCompleteProvider)) return;
       if (!ref.read(cachedMarkerBitmapsProvider).hasValue) return;
 
-      final effectiveId = ref.read(currentUserIdProvider) ??
-          await AnonymousUserService.id;
+      final effectiveId =
+          ref.read(currentUserIdProvider) ?? await AnonymousUserService.id;
       if (!mounted) return;
 
       final service = OnboardingService.instance;
@@ -291,7 +292,8 @@ class _MapScreenState extends ConsumerState<MapScreen>
 
   Future<void> _onMapLongPress(LatLng coordinates) async {
     // Check if user has write access to the active trip
-    final hasWriteAccess = await ref.read(hasActiveTripWriteAccessProvider.future);
+    final hasWriteAccess =
+        await ref.read(hasActiveTripWriteAccessProvider.future);
     if (!mounted) return;
 
     if (!hasWriteAccess) {
@@ -374,8 +376,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
         coordinates: details?.coordinates ?? fallback.coordinates,
         addedAt: DateTime.now(),
         scheduledDate: scheduledDate,
-        photoReference:
-            details?.photoReference ?? fallback.photoReference,
+        photoReference: details?.photoReference ?? fallback.photoReference,
         photoReferences: details?.photoReferences.isNotEmpty == true
             ? details!.photoReferences
             : fallback.photoReferences,
@@ -434,6 +435,9 @@ class _MapScreenState extends ConsumerState<MapScreen>
       context: context,
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
+      // Keep a full-height sheet (photos + hours + multi-day on small
+      // screens) from rendering its header under the status bar/notch.
+      useSafeArea: true,
       builder: (modalContext) => LocationDetailSheet(
         location: location,
         number: stopNumber,
@@ -695,9 +699,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
         final isPastDate = selectedDate.isBefore(today);
 
         // If we are on a past date and a route has just been loaded...
-        if (isPastDate &&
-            next.isNotEmpty &&
-            (previous?.isEmpty ?? true)) {
+        if (isPastDate && next.isNotEmpty && (previous?.isEmpty ?? true)) {
           WidgetsBinding.instance.addPostFrameCallback((_) {
             _zoomToFitRoute(next);
           });
@@ -782,8 +784,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
         }
         if (!mounted) return;
         final tripState = ref.read(tripProvider);
-        await service.markCelebrated(
-            userId, OnboardingMilestone.firstOptimize);
+        await service.markCelebrated(userId, OnboardingMilestone.firstOptimize);
         if (!mounted || !context.mounted) return;
         await showFirstOptimizeCelebration(
           context,
@@ -856,8 +857,8 @@ class _MapScreenState extends ConsumerState<MapScreen>
             .where((l) => l.isActiveOnDate(selectedDate))
             .map((l) => l.id)
             .toSet();
-        final membershipChanged = prevIds.length != nextIds.length ||
-            !prevIds.containsAll(nextIds);
+        final membershipChanged =
+            prevIds.length != nextIds.length || !prevIds.containsAll(nextIds);
         if (membershipChanged) {
           WidgetsBinding.instance.addPostFrameCallback((_) {
             _updateCameraForCurrentDate();
@@ -938,14 +939,22 @@ class _MapScreenState extends ConsumerState<MapScreen>
                         ClipRRect(
                           borderRadius: BorderRadius.circular(16),
                           child: BackdropFilter(
-                            filter: ImageFilter.blur(sigmaX: 15.0, sigmaY: 15.0),
+                            filter:
+                                ImageFilter.blur(sigmaX: 15.0, sigmaY: 15.0),
                             child: Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 20, vertical: 14),
                               decoration: BoxDecoration(
                                 gradient: LinearGradient(
                                   colors: [
-                                    Theme.of(context).colorScheme.primary.withValues(alpha: 0.95),
-                                    Theme.of(context).colorScheme.primary.withValues(alpha: 0.85),
+                                    Theme.of(context)
+                                        .colorScheme
+                                        .primary
+                                        .withValues(alpha: 0.95),
+                                    Theme.of(context)
+                                        .colorScheme
+                                        .primary
+                                        .withValues(alpha: 0.85),
                                   ],
                                 ),
                                 borderRadius: BorderRadius.circular(16),
@@ -955,7 +964,10 @@ class _MapScreenState extends ConsumerState<MapScreen>
                                 ),
                                 boxShadow: [
                                   BoxShadow(
-                                    color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.3),
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .primary
+                                        .withValues(alpha: 0.3),
                                     blurRadius: 20,
                                     offset: const Offset(0, 8),
                                   ),
@@ -971,7 +983,8 @@ class _MapScreenState extends ConsumerState<MapScreen>
                                   Container(
                                     padding: const EdgeInsets.all(8),
                                     decoration: BoxDecoration(
-                                      color: Colors.white.withValues(alpha: 0.2),
+                                      color:
+                                          Colors.white.withValues(alpha: 0.2),
                                       borderRadius: BorderRadius.circular(10),
                                     ),
                                     child: const Icon(
@@ -983,12 +996,14 @@ class _MapScreenState extends ConsumerState<MapScreen>
                                   const SizedBox(width: 12),
                                   Expanded(
                                     child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
                                       children: [
                                         Text(
                                           'Active Trip',
                                           style: TextStyle(
-                                            color: Colors.white.withValues(alpha: 0.9),
+                                            color: Colors.white
+                                                .withValues(alpha: 0.9),
                                             fontSize: 11,
                                             fontWeight: FontWeight.w500,
                                             letterSpacing: 0.5,
@@ -1027,13 +1042,12 @@ class _MapScreenState extends ConsumerState<MapScreen>
                                             final dateText = activeTrip
                                                         .startDate ==
                                                     activeTrip.endDate
-                                                ? DateFormat('MMM d, y')
-                                                    .format(activeTrip
-                                                        .startDate!)
+                                                ? DateFormat('MMM d, y').format(
+                                                    activeTrip.startDate!)
                                                 : '${DateFormat('MMM d').format(activeTrip.startDate!)} - ${DateFormat('MMM d').format(activeTrip.endDate!)}';
                                             return Padding(
-                                              padding: const EdgeInsets.only(
-                                                  top: 2),
+                                              padding:
+                                                  const EdgeInsets.only(top: 2),
                                               child: Text(
                                                 '$dateText  ·  $dayCount day${dayCount == 1 ? '' : 's'}',
                                                 style: TextStyle(
@@ -1044,8 +1058,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
                                                   letterSpacing: 0.2,
                                                 ),
                                                 maxLines: 1,
-                                                overflow:
-                                                    TextOverflow.ellipsis,
+                                                overflow: TextOverflow.ellipsis,
                                               ),
                                             );
                                           }),
@@ -1076,100 +1089,101 @@ class _MapScreenState extends ConsumerState<MapScreen>
                   Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                  // Fake search bar — pushes [LocationSearchScreen]
-                  // instead of focusing an inline TextField. This
-                  // sidesteps every keyboard-driven layout shift that
-                  // an inline TextField caused on this screen (the map
-                  // getting "pulled down" on focus). The chrome
-                  // (rounded, translucent, blurred, with a search icon
-                  // and hint text) is preserved so it still reads as a
-                  // search bar at a glance.
-                  Expanded(
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(30),
-                      child: BackdropFilter(
-                        filter: ImageFilter.blur(sigmaX: 10.0, sigmaY: 10.0),
-                        child: Material(
-                          color: Colors.transparent,
-                          child: InkWell(
-                            borderRadius: BorderRadius.circular(30),
-                            onTap: () {
-                              // Zero-duration page transition: the new
-                              // screen appears instantly instead of
-                              // sliding in. The standard slide-in left
-                              // a window (~300ms on iOS) during which
-                              // the map screen was still visible — any
-                              // MediaQuery / keyboard event from the
-                              // mounting screen propagated back to the
-                              // map and visibly shifted it before the
-                              // transition finished. With Duration.zero,
-                              // the new screen fully covers the map
-                              // before the next frame paints.
-                              Navigator.of(context).push(
-                                PageRouteBuilder(
-                                  pageBuilder: (context, _, __) =>
-                                      const LocationSearchScreen(),
-                                  transitionDuration: Duration.zero,
-                                  reverseTransitionDuration:
-                                      Duration.zero,
-                                  opaque: true,
-                                ),
-                              );
-                            },
-                            child: Container(
-                              key: _searchBarKey, // spotlight-tour anchor
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 16, vertical: 14),
-                              decoration: BoxDecoration(
-                                color: Theme.of(context)
-                                    .colorScheme
-                                    .surface
-                                    .withValues(alpha: 0.92),
+                      // Fake search bar — pushes [LocationSearchScreen]
+                      // instead of focusing an inline TextField. This
+                      // sidesteps every keyboard-driven layout shift that
+                      // an inline TextField caused on this screen (the map
+                      // getting "pulled down" on focus). The chrome
+                      // (rounded, translucent, blurred, with a search icon
+                      // and hint text) is preserved so it still reads as a
+                      // search bar at a glance.
+                      Expanded(
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(30),
+                          child: BackdropFilter(
+                            filter:
+                                ImageFilter.blur(sigmaX: 10.0, sigmaY: 10.0),
+                            child: Material(
+                              color: Colors.transparent,
+                              child: InkWell(
                                 borderRadius: BorderRadius.circular(30),
-                                border: Border.all(
-                                  color: Theme.of(context)
-                                      .dividerColor
-                                      .withValues(alpha: 0.2),
-                                  width: 1.5,
-                                ),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: Colors.black.withValues(alpha: 0.15),
-                                    blurRadius: 20,
-                                    offset: const Offset(0, 5),
-                                  ),
-                                ],
-                              ),
-                              child: Row(
-                                children: [
-                                  const Icon(
-                                    Icons.search,
-                                    color: AppTheme.primaryColor,
-                                  ),
-                                  const SizedBox(width: 12),
-                                  Expanded(
-                                    child: Text(
-                                      'Search for places...',
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .titleMedium
-                                          ?.copyWith(
-                                            color: Theme.of(context)
-                                                .colorScheme
-                                                .onSurfaceVariant,
-                                          ),
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
+                                onTap: () {
+                                  // Zero-duration page transition: the new
+                                  // screen appears instantly instead of
+                                  // sliding in. The standard slide-in left
+                                  // a window (~300ms on iOS) during which
+                                  // the map screen was still visible — any
+                                  // MediaQuery / keyboard event from the
+                                  // mounting screen propagated back to the
+                                  // map and visibly shifted it before the
+                                  // transition finished. With Duration.zero,
+                                  // the new screen fully covers the map
+                                  // before the next frame paints.
+                                  Navigator.of(context).push(
+                                    PageRouteBuilder(
+                                      pageBuilder: (context, _, __) =>
+                                          const LocationSearchScreen(),
+                                      transitionDuration: Duration.zero,
+                                      reverseTransitionDuration: Duration.zero,
+                                      opaque: true,
                                     ),
+                                  );
+                                },
+                                child: Container(
+                                  key: _searchBarKey, // spotlight-tour anchor
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 16, vertical: 14),
+                                  decoration: BoxDecoration(
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .surface
+                                        .withValues(alpha: 0.92),
+                                    borderRadius: BorderRadius.circular(30),
+                                    border: Border.all(
+                                      color: Theme.of(context)
+                                          .dividerColor
+                                          .withValues(alpha: 0.2),
+                                      width: 1.5,
+                                    ),
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: Colors.black
+                                            .withValues(alpha: 0.15),
+                                        blurRadius: 20,
+                                        offset: const Offset(0, 5),
+                                      ),
+                                    ],
                                   ),
-                                ],
+                                  child: Row(
+                                    children: [
+                                      const Icon(
+                                        Icons.search,
+                                        color: AppTheme.primaryColor,
+                                      ),
+                                      const SizedBox(width: 12),
+                                      Expanded(
+                                        child: Text(
+                                          'Search for places...',
+                                          style: Theme.of(context)
+                                              .textTheme
+                                              .titleMedium
+                                              ?.copyWith(
+                                                color: Theme.of(context)
+                                                    .colorScheme
+                                                    .onSurfaceVariant,
+                                              ),
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
                               ),
                             ),
                           ),
                         ),
                       ),
-                    ),
-                  ),
                     ],
                   ),
                   // Goal-gradient progress: free users see how much of the
@@ -1205,14 +1219,14 @@ class _MapScreenState extends ConsumerState<MapScreen>
           // the position correct even if something else (Android
           // adjustResize, system UI change) ever does shrink the
           // logical screen height.
-          Builder(builder: (context) {
-            final view = View.of(context);
-            final screenH =
-                view.physicalSize.height / view.devicePixelRatio;
-            return Positioned(
-              bottom: screenH * 0.23 + 16,
-              right: 16,
-              child: AnimatedSize(
+          Builder(
+            builder: (context) {
+              final view = View.of(context);
+              final screenH = view.physicalSize.height / view.devicePixelRatio;
+              return Positioned(
+                bottom: screenH * 0.23 + 16,
+                right: 16,
+                child: AnimatedSize(
                   duration: const Duration(milliseconds: 250),
                   curve: Curves.easeInOut,
                   alignment: Alignment.bottomRight,
@@ -1222,10 +1236,8 @@ class _MapScreenState extends ConsumerState<MapScreen>
                           ref.watch(locationsForSelectedDateProvider);
                       final hasRoute = ref.watch(tripProvider
                           .select((s) => s.optimizedRoute.isNotEmpty));
-                      final isGenerating =
-                          ref.watch(isGeneratingRouteProvider);
-                      final currentUserId =
-                          ref.watch(currentUserIdProvider);
+                      final isGenerating = ref.watch(isGeneratingRouteProvider);
+                      final currentUserId = ref.watch(currentUserIdProvider);
                       final allSaved =
                           ref.watch(savedLocationsProvider).asData?.value ??
                               const [];
@@ -1255,9 +1267,8 @@ class _MapScreenState extends ConsumerState<MapScreen>
                             mini: true,
                             backgroundColor:
                                 Theme.of(context).colorScheme.errorContainer,
-                            foregroundColor: Theme.of(context)
-                                .colorScheme
-                                .onErrorContainer,
+                            foregroundColor:
+                                Theme.of(context).colorScheme.onErrorContainer,
                             onPressed: () => ref
                                 .read(tripProvider.notifier)
                                 .clearOptimizedRoute(),
@@ -1377,7 +1388,10 @@ class _MapScreenState extends ConsumerState<MapScreen>
                 width: 80,
                 height: 80,
                 decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.12),
+                  color: Theme.of(context)
+                      .colorScheme
+                      .primary
+                      .withValues(alpha: 0.12),
                   borderRadius: BorderRadius.circular(22),
                 ),
                 child: Icon(
@@ -1390,8 +1404,8 @@ class _MapScreenState extends ConsumerState<MapScreen>
               Text(
                 'Loading your locations...',
                 style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.w600,
-                ),
+                      fontWeight: FontWeight.w600,
+                    ),
               ),
               const SizedBox(height: 20),
               SizedBox(
@@ -1464,7 +1478,8 @@ class _MapScreenState extends ConsumerState<MapScreen>
       } catch (e) {
         debugPrint("Failed to get current location on demand: $e");
         if (!mounted) return;
-        AppToast.error(context, 'Failed to get your location. Please try again.');
+        AppToast.error(
+            context, 'Failed to get your location. Please try again.');
         return;
       }
     }
@@ -1652,10 +1667,10 @@ class _MapScreenState extends ConsumerState<MapScreen>
     const searchBarHeight = 60.0;
 
     final topUIHeight = topSafePadding +
-                       topMargin +
-                       activeTripBannerHeight +
-                       spacingAfterBanner +
-                       searchBarHeight;
+        topMargin +
+        activeTripBannerHeight +
+        spacingAfterBanner +
+        searchBarHeight;
 
     // Bottom UI: Bottom sheet in collapsed state takes 23% of screen height
     final bottomSheetCollapsedHeight = screenHeight * 0.23;
@@ -1680,7 +1695,8 @@ class _MapScreenState extends ConsumerState<MapScreen>
     // Calculate edge-specific padding
     final topPadding = topUIHeight + bufferPadding;
     final bottomPadding = bottomSheetCollapsedHeight + bufferPadding;
-    const rightPadding = rightUIWidth + rightBufferPadding; // Use larger buffer for right
+    const rightPadding =
+        rightUIWidth + rightBufferPadding; // Use larger buffer for right
     const leftPadding = leftMargin + bufferPadding;
 
     // Create expanded bounds that account for asymmetric padding
@@ -1697,7 +1713,8 @@ class _MapScreenState extends ConsumerState<MapScreen>
     // This ensures the actual locations fit within the visible area
     final verticalExpansionTop = (topPadding / visibleHeight) * latSpan;
     final verticalExpansionBottom = (bottomPadding / visibleHeight) * latSpan;
-    final horizontalExpansionLeft = (leftPadding / screenHeight) * lngSpan; // Use screenHeight as approximation for aspect ratio
+    final horizontalExpansionLeft = (leftPadding / screenHeight) *
+        lngSpan; // Use screenHeight as approximation for aspect ratio
     final horizontalExpansionRight = (rightPadding / screenHeight) * lngSpan;
 
     // Create expanded bounds
@@ -1715,7 +1732,8 @@ class _MapScreenState extends ConsumerState<MapScreen>
     // Animate to the expanded bounds with minimal padding
     // This ensures all original markers are visible within the UI-free area
     _mapController!.animateCamera(
-      CameraUpdate.newLatLngBounds(expandedBounds, 20.0), // Small uniform padding for safety
+      CameraUpdate.newLatLngBounds(
+          expandedBounds, 20.0), // Small uniform padding for safety
     );
   }
 

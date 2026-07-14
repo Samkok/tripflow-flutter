@@ -125,10 +125,10 @@ class TripState {
 
 class TripNotifier extends StateNotifier<TripState> {
   final Ref _ref;
-  
+
   // OPTIMIZATION: Debounce timer for route generation to prevent excessive recalculation
   Timer? _routeOptimizationDebounceTimer;
-  
+
   // OPTIMIZATION: Cache for today's date to avoid repeated DateTime calculations
   late DateTime _cachedToday;
   DateTime? _cachedTodayDate;
@@ -142,7 +142,7 @@ class TripNotifier extends StateNotifier<TripState> {
   DateTime get today {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
-    
+
     // Invalidate cache if day has changed
     if (_cachedTodayDate != today) {
       _cachedToday = today;
@@ -172,7 +172,8 @@ class TripNotifier extends StateNotifier<TripState> {
     if (isOwner) return true;
 
     // Check if user has write permission
-    final permission = await _ref.read(userTripPermissionProvider(activeTrip.id).future);
+    final permission =
+        await _ref.read(userTripPermissionProvider(activeTrip.id).future);
     return permission == 'write';
   }
 
@@ -272,7 +273,8 @@ class TripNotifier extends StateNotifier<TripState> {
     // Permission check at function level
     final hasAccess = await _hasWriteAccess();
     if (!hasAccess) {
-      debugPrint('addLocation: Permission denied - user does not have write access');
+      debugPrint(
+          'addLocation: Permission denied - user does not have write access');
       return;
     }
 
@@ -321,7 +323,8 @@ class TripNotifier extends StateNotifier<TripState> {
         scheduledEndDate: locationWithDate.scheduledEndDate,
       );
 
-      debugPrint('addLocation: Adding location "${savedLoc.name}" with tripId=${savedLoc.tripId ?? "null (no trip)"}');
+      debugPrint(
+          'addLocation: Adding location "${savedLoc.name}" with tripId=${savedLoc.tripId ?? "null (no trip)"}');
       await _ref.read(locationRepositoryProvider).addLocation(savedLoc);
 
       // Funnel analytics: a place was saved (drives the 3–5 "aha" threshold).
@@ -348,9 +351,11 @@ class TripNotifier extends StateNotifier<TripState> {
     // Permission check - must have write access to the target trip
     final isOwner = await _ref.read(isTripOwnerProvider(tripId).future);
     if (!isOwner) {
-      final permission = await _ref.read(userTripPermissionProvider(tripId).future);
+      final permission =
+          await _ref.read(userTripPermissionProvider(tripId).future);
       if (permission != 'write') {
-        debugPrint('addLocationsToTrip: Permission denied - user does not have write access to trip $tripId');
+        debugPrint(
+            'addLocationsToTrip: Permission denied - user does not have write access to trip $tripId');
         return;
       }
     }
@@ -374,7 +379,8 @@ class TripNotifier extends StateNotifier<TripState> {
     // Permission check at function level
     final hasAccess = await _hasWriteAccess();
     if (!hasAccess) {
-      debugPrint('removeLocationsFromTrip: Permission denied - user does not have write access');
+      debugPrint(
+          'removeLocationsFromTrip: Permission denied - user does not have write access');
       return;
     }
 
@@ -393,7 +399,8 @@ class TripNotifier extends StateNotifier<TripState> {
     // Permission check at function level
     final hasAccess = await _hasWriteAccess();
     if (!hasAccess) {
-      debugPrint('removeLocation: Permission denied - user does not have write access');
+      debugPrint(
+          'removeLocation: Permission denied - user does not have write access');
       return;
     }
 
@@ -421,7 +428,8 @@ class TripNotifier extends StateNotifier<TripState> {
     // Permission check at function level
     final hasAccess = await _hasWriteAccess();
     if (!hasAccess) {
-      debugPrint('removeMultipleLocations: Permission denied - user does not have write access');
+      debugPrint(
+          'removeMultipleLocations: Permission denied - user does not have write access');
       return;
     }
 
@@ -452,7 +460,8 @@ class TripNotifier extends StateNotifier<TripState> {
     // Permission check at function level
     final hasAccess = await _hasWriteAccess();
     if (!hasAccess) {
-      debugPrint('skipMultipleLocations: Permission denied - user does not have write access');
+      debugPrint(
+          'skipMultipleLocations: Permission denied - user does not have write access');
       return;
     }
 
@@ -482,7 +491,8 @@ class TripNotifier extends StateNotifier<TripState> {
     // Permission check at function level
     final hasAccess = await _hasWriteAccess();
     if (!hasAccess) {
-      debugPrint('unskipMultipleLocations: Permission denied - user does not have write access');
+      debugPrint(
+          'unskipMultipleLocations: Permission denied - user does not have write access');
       return;
     }
 
@@ -566,8 +576,8 @@ class TripNotifier extends StateNotifier<TripState> {
 
       if (onDate.length < 2) continue;
 
-      final allDone = onDate
-          .every((l) => l.isDone || justMarkedIds.contains(l.id));
+      final allDone =
+          onDate.every((l) => l.isDone || justMarkedIds.contains(l.id));
       if (allDone) {
         // Fire-and-forget: never block the mark-as-done UX on this.
         unawaited(_maybeSignalReviewPrompt());
@@ -625,7 +635,8 @@ class TripNotifier extends StateNotifier<TripState> {
     // Permission check at function level
     final hasAccess = await _hasWriteAccess();
     if (!hasAccess) {
-      debugPrint('reorderLocation: Permission denied - user does not have write access');
+      debugPrint(
+          'reorderLocation: Permission denied - user does not have write access');
       return;
     }
 
@@ -657,7 +668,8 @@ class TripNotifier extends StateNotifier<TripState> {
     // Permission check at function level
     final hasAccess = await _hasWriteAccess();
     if (!hasAccess) {
-      debugPrint('updateLocationName: Permission denied - user does not have write access');
+      debugPrint(
+          'updateLocationName: Permission denied - user does not have write access');
       return;
     }
 
@@ -686,7 +698,8 @@ class TripNotifier extends StateNotifier<TripState> {
     // Permission check at function level
     final hasAccess = await _hasWriteAccess();
     if (!hasAccess) {
-      debugPrint('updateLocationStayDuration: Permission denied - user does not have write access');
+      debugPrint(
+          'updateLocationStayDuration: Permission denied - user does not have write access');
       return;
     }
 
@@ -723,7 +736,8 @@ class TripNotifier extends StateNotifier<TripState> {
     // Permission check at function level
     final hasAccess = await _hasWriteAccess();
     if (!hasAccess) {
-      debugPrint('updateLocationScheduledDate: Permission denied - user does not have write access');
+      debugPrint(
+          'updateLocationScheduledDate: Permission denied - user does not have write access');
       return;
     }
 
@@ -816,8 +830,7 @@ class TripNotifier extends StateNotifier<TripState> {
   /// every context (active trip, trip details, …) without a state lookup.
   /// Returns true on success, false if Places API returned nothing or a
   /// permission/auth check blocked the write.
-  Future<bool> refreshLocationHours(
-      String locationId, String placeId) async {
+  Future<bool> refreshLocationHours(String locationId, String placeId) async {
     final hasAccess = await _hasWriteAccess();
     if (!hasAccess) {
       debugPrint('refreshLocationHours: Permission denied');
@@ -845,7 +858,8 @@ class TripNotifier extends StateNotifier<TripState> {
     // Permission check at function level
     final hasAccess = await _hasWriteAccess();
     if (!hasAccess) {
-      debugPrint('updateMultipleLocationsScheduledDate: Permission denied - user does not have write access');
+      debugPrint(
+          'updateMultipleLocationsScheduledDate: Permission denied - user does not have write access');
       return;
     }
 
@@ -876,7 +890,8 @@ class TripNotifier extends StateNotifier<TripState> {
     // Permission check at function level
     final hasAccess = await _hasWriteAccess();
     if (!hasAccess) {
-      debugPrint('copyMultipleLocationsToDate: Permission denied - user does not have write access');
+      debugPrint(
+          'copyMultipleLocationsToDate: Permission denied - user does not have write access');
       return;
     }
 
@@ -931,7 +946,8 @@ class TripNotifier extends StateNotifier<TripState> {
             // range to a new anchor would be ambiguous; user can re-set
             // the range on the new copy explicitly.
           );
-          debugPrint('copyMultipleLocationsToDate: Copying "${savedLoc.name}" with tripId=${savedLoc.tripId ?? "null (no trip)"}');
+          debugPrint(
+              'copyMultipleLocationsToDate: Copying "${savedLoc.name}" with tripId=${savedLoc.tripId ?? "null (no trip)"}');
           await repository.addLocation(savedLoc);
         } catch (e) {
           log('Error copying to repository for id ${loc.id}: $e');
@@ -968,7 +984,8 @@ class TripNotifier extends StateNotifier<TripState> {
 
     // OPTIMIZATION: Debounce the route generation by 500ms to prevent excessive API calls
     // when user is rapidly changing dates or locations
-    _routeOptimizationDebounceTimer = Timer(const Duration(milliseconds: 500), () {
+    _routeOptimizationDebounceTimer =
+        Timer(const Duration(milliseconds: 500), () {
       _performRouteOptimization(
         startLocationId: startLocationId,
         selectedDate: selectedDate,
@@ -1047,8 +1064,8 @@ class TripNotifier extends StateNotifier<TripState> {
 
       // OPTIMIZATION: Run clustering on an isolate to prevent UI blocking
       final proximityThreshold = _ref.read(proximityThresholdCommittedProvider);
-      final clusterResult =
-          await IsolateUtils.clusterLocationsIsolate(locationsToOptimize, proximityThreshold);
+      final clusterResult = await IsolateUtils.clusterLocationsIsolate(
+          locationsToOptimize, proximityThreshold);
 
       // OPTIMIZATION: Reconstruct clusters from isolate result
       final List<List<LocationModel>> clusters = [];
@@ -1249,8 +1266,8 @@ class TripNotifier extends StateNotifier<TripState> {
         if (optimizeSucceeded) {
           // Anonymous users celebrate too (flags keyed to the persistent
           // device UUID) — the optimize "aha" is the conversion moment.
-          final userId = _ref.read(currentUserIdProvider) ??
-              await AnonymousUserService.id;
+          final userId =
+              _ref.read(currentUserIdProvider) ?? await AnonymousUserService.id;
           if (!await OnboardingService.instance
               .hasCelebrated(userId, OnboardingMilestone.firstOptimize)) {
             celebrationPending = true;
@@ -1323,8 +1340,7 @@ class TripNotifier extends StateNotifier<TripState> {
   /// route, which is intentional: the user is asking to see this specific
   /// pair, and the existing Clear Route controls can wipe it just like an
   /// optimization result.
-  Future<void> previewRouteBetween(
-      LocationModel from, LocationModel to) async {
+  Future<void> previewRouteBetween(LocationModel from, LocationModel to) async {
     if (from.id == to.id) return;
     _ref.read(isGeneratingRouteProvider.notifier).state = true;
     try {
@@ -1344,8 +1360,7 @@ class TripNotifier extends StateNotifier<TripState> {
       );
 
       final routePoints = result['routePoints'] as List<LatLng>;
-      final legDetails =
-          result['legDetails'] as List<Map<String, dynamic>>;
+      final legDetails = result['legDetails'] as List<Map<String, dynamic>>;
       final legPolylines = result['legPolylines'] as List<List<LatLng>>;
 
       if (routePoints.isEmpty) {
@@ -1382,10 +1397,10 @@ class TripNotifier extends StateNotifier<TripState> {
             loc,
       ];
 
-      final updatedFrom = updatedPinned.firstWhere((l) => l.id == from.id,
-          orElse: () => from);
-      final updatedTo = updatedPinned.firstWhere((l) => l.id == to.id,
-          orElse: () => to);
+      final updatedFrom =
+          updatedPinned.firstWhere((l) => l.id == from.id, orElse: () => from);
+      final updatedTo =
+          updatedPinned.firstWhere((l) => l.id == to.id, orElse: () => to);
 
       state = state.copyWith(
         pinnedLocations: updatedPinned,
@@ -1529,7 +1544,8 @@ final locationsForSelectedDateProvider = Provider<List<LocationModel>>((ref) {
 
   // Fallback: every location active on this date (single-day rows match
   // only their day; range rows match every day in their `[start..end]`).
-  return pinnedLocations.where((loc) => loc.isActiveOnDate(selectedDate))
+  return pinnedLocations
+      .where((loc) => loc.isActiveOnDate(selectedDate))
       .toList();
 });
 
@@ -1545,7 +1561,11 @@ final datesWithLocationsProvider = Provider<Set<DateTime>>((ref) {
         loc.scheduledDate!.day);
     final endRaw = loc.scheduledEndDate ?? loc.scheduledDate!;
     final end = DateTime(endRaw.year, endRaw.month, endRaw.day);
-    for (var d = start; !d.isAfter(end); d = d.add(const Duration(days: 1))) {
+    // Step by calendar day (not Duration(days:1)) so keys stay on local
+    // midnight across DST transitions and match the pickers' day values.
+    for (var d = start;
+        !d.isAfter(end);
+        d = DateTime(d.year, d.month, d.day + 1)) {
       dates.add(d);
     }
   }

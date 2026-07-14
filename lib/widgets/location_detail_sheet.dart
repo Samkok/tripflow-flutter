@@ -18,6 +18,7 @@ import 'package:voyza/utils/trip_date_validator.dart';
 
 import '../core/theme.dart';
 import 'app_toast.dart';
+import 'location_photo_gallery.dart';
 
 class LocationDetailSheet extends ConsumerWidget {
   final LocationModel location;
@@ -25,10 +26,12 @@ class LocationDetailSheet extends ConsumerWidget {
   final ScrollController parentScrollController;
   final DraggableScrollableController? parentSheetController;
   final Function(LatLng)? onLocationTap;
+
   /// When opened from a context that isn't the active map trip (e.g. trip
   /// details screen), pass the sibling locations for the same date here so
   /// the From/To picker shows the correct list instead of the active-trip list.
   final List<LocationModel>? locationsForDate;
+
   /// When opened from trip details for a non-active trip, pass the trip ID
   /// so the multi-day stay section's permission check and write path target
   /// the right trip (instead of the active-map trip). Null = use the active
@@ -77,38 +80,98 @@ class LocationDetailSheet extends ConsumerWidget {
           width: 1,
         ),
       ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Header with stop number
-          _buildHeader(context, ref, updatedLocation, isPastDate),
+      // The sheet has no fixed height — it sizes to its content. Wrapping in
+      // a scroll view keeps every section reachable (and constraint-safe) on
+      // small screens now that the photo strip adds height; when the content
+      // fits, MainAxisSize.min keeps the sheet hugging it exactly as before.
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Header with stop number
+            _buildHeader(context, ref, updatedLocation, isPastDate),
 
-          // Hours section — Google's hours for the planned day + user override
-          // for the closing-time-aware optimizer. Only shown when there's
-          // something to show (Google data, user override, or a placeId that
-          // makes refresh actionable) so empty manual-coord rows don't get a
-          // dead section.
-          if (_hasAnyHoursAffordance(updatedLocation)) ...[
+            // Photos section — Google Places photos for this stop. The strip is
+            // bounded on both axes (fixed-height SizedBox hosting a horizontal
+            // ListView), so it cannot introduce unbounded-constraint errors in
+            // this intrinsically-sized Column. Tapping a photo opens the
+            // full-screen swipe-to-dismiss gallery viewer.
+            if (updatedLocation.photoReferences.isNotEmpty) ...[
+              const Divider(height: 32),
+              _buildPhotosSection(context, updatedLocation),
+            ],
+
+            // Hours section — Google's hours for the planned day + user override
+            // for the closing-time-aware optimizer. Only shown when there's
+            // something to show (Google data, user override, or a placeId that
+            // makes refresh actionable) so empty manual-coord rows don't get a
+            // dead section.
+            if (_hasAnyHoursAffordance(updatedLocation)) ...[
+              const Divider(height: 32),
+              _buildHoursSection(context, ref, updatedLocation, isPastDate),
+            ],
+
+            // Multi-day stay section — lets the user mark this location as an
+            // accommodation that spans multiple days, with quick actions for
+            // single-day / pick-range / entire-trip. Shown for any editable
+            // stop (no extra gating; useful for hotels, residencies, etc.).
             const Divider(height: 32),
-            _buildHoursSection(context, ref, updatedLocation, isPastDate),
-          ],
+            _buildMultiDaySection(context, ref, updatedLocation, isPastDate),
 
-          // Multi-day stay section — lets the user mark this location as an
-          // accommodation that spans multiple days, with quick actions for
-          // single-day / pick-range / entire-trip. Shown for any editable
-          // stop (no extra gating; useful for hotels, residencies, etc.).
-          const Divider(height: 32),
-          _buildMultiDaySection(context, ref, updatedLocation, isPastDate),
-
-          // Travel info (if available)
-          if (updatedLocation.travelTimeFromPrevious != null &&
-              updatedLocation.distanceFromPrevious != null) ...[
-            const Divider(height: 32),
-            _buildTravelInfo(context, ref, updatedLocation),
+            // Travel info (if available)
+            if (updatedLocation.travelTimeFromPrevious != null &&
+                updatedLocation.distanceFromPrevious != null) ...[
+              const Divider(height: 32),
+              _buildTravelInfo(context, ref, updatedLocation),
+            ],
           ],
-        ],
+        ),
       ),
+    );
+  }
+
+  /// Horizontal strip of the place's Google photos. Reuses the same
+  /// [LocationPhotoGallery] as the expanded trip cards; the hero prefix is
+  /// namespaced to this sheet so it can't collide with a card gallery for
+  /// the same location still visible behind the modal.
+  Widget _buildPhotosSection(BuildContext context, LocationModel loc) {
+    final theme = Theme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(Icons.photo_library_outlined,
+                size: 18, color: theme.colorScheme.primary),
+            const SizedBox(width: 8),
+            Text(
+              'Photos',
+              style: theme.textTheme.titleMedium?.copyWith(
+                color: theme.colorScheme.primary,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              '${loc.photoReferences.length}',
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: theme.colorScheme.primary.withValues(alpha: 0.7),
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        LocationPhotoGallery(
+          photoRefs: loc.photoReferences,
+          heroTagPrefix: '${loc.id}_sheet_photo',
+          title: loc.name,
+          padding: EdgeInsets.zero,
+          tileWidth: 132,
+          tileHeight: 96,
+        ),
+      ],
     );
   }
 
@@ -118,7 +181,8 @@ class LocationDetailSheet extends ConsumerWidget {
     // OPTIMIZATION: Watch only when permission data is ready to avoid unnecessary rebuilds
     // The widget will rebuild ONLY when permission actually changes, not on every event
     final hasWriteAccessAsync = ref.watch(hasActiveTripWriteAccessProvider);
-    final hasWriteAccess = hasWriteAccessAsync.whenOrNull(data: (value) => value) ?? false;
+    final hasWriteAccess =
+        hasWriteAccessAsync.whenOrNull(data: (value) => value) ?? false;
 
     // Disable editing if past date OR no write access
     final canEdit = !isPastDate && hasWriteAccess;
@@ -143,8 +207,7 @@ class LocationDetailSheet extends ConsumerWidget {
                       // the index number is meaningless — replace it with
                       // a minus glyph and let the label below say just
                       // "Stop" (no number).
-                      ? const Icon(Icons.remove,
-                          color: Colors.white, size: 24)
+                      ? const Icon(Icons.remove, color: Colors.white, size: 24)
                       : Text(
                           '$number',
                           style: const TextStyle(
@@ -185,7 +248,8 @@ class LocationDetailSheet extends ConsumerWidget {
             // Delete button
             GestureDetector(
               onTap: hasWriteAccess
-                  ? () => _showDeleteConfirmationDialog(context, ref, updatedLocation)
+                  ? () => _showDeleteConfirmationDialog(
+                      context, ref, updatedLocation)
                   : null,
               child: Container(
                 width: 44,
@@ -194,7 +258,8 @@ class LocationDetailSheet extends ConsumerWidget {
                   shape: BoxShape.circle,
                   color: hasWriteAccess ? Colors.red[600] : Colors.grey[400],
                 ),
-                child: const Icon(Icons.delete_outline, color: Colors.white, size: 22),
+                child: const Icon(Icons.delete_outline,
+                    color: Colors.white, size: 22),
               ),
             ),
             const SizedBox(width: 8),
@@ -212,8 +277,7 @@ class LocationDetailSheet extends ConsumerWidget {
                           notifier
                               .unskipMultipleLocations({updatedLocation.id});
                         } else {
-                          notifier
-                              .skipMultipleLocations({updatedLocation.id});
+                          notifier.skipMultipleLocations({updatedLocation.id});
                         }
                       }
                     : null,
@@ -293,14 +357,19 @@ class LocationDetailSheet extends ConsumerWidget {
             // Date
             Expanded(
               child: OutlinedButton.icon(
-                icon: Icon(Icons.calendar_today_outlined, size: 18,
-                    color: canEdit ? Theme.of(context).colorScheme.primary : Colors.grey),
+                icon: Icon(Icons.calendar_today_outlined,
+                    size: 18,
+                    color: canEdit
+                        ? Theme.of(context).colorScheme.primary
+                        : Colors.grey),
                 label: const Text('Date'),
                 onPressed: canEdit
                     ? () async {
-                        final datesWithLocations = ref.read(datesWithLocationsProvider);
+                        final datesWithLocations =
+                            ref.read(datesWithLocationsProvider);
                         final now = DateTime.now();
-                        final newDate = await DatePickerUtils.showCustomDatePicker(
+                        final newDate =
+                            await DatePickerUtils.showCustomDatePicker(
                           context: context,
                           initialDate: updatedLocation.scheduledDate ?? now,
                           firstDate: DateTime(now.year, now.month, now.day),
@@ -308,12 +377,10 @@ class LocationDetailSheet extends ConsumerWidget {
                           highlightedDates: datesWithLocations,
                         );
                         if (newDate == null) return;
-                        final normalized = DateTime(
-                            newDate.year, newDate.month, newDate.day);
-                        final activeTrip = ref
-                            .read(realtimeActiveTripProvider)
-                            .asData
-                            ?.value;
+                        final normalized =
+                            DateTime(newDate.year, newDate.month, newDate.day);
+                        final activeTrip =
+                            ref.read(realtimeActiveTripProvider).asData?.value;
                         if (!context.mounted) return;
                         final allowed = await ensureScheduledDateAllowed(
                           context,
@@ -329,10 +396,14 @@ class LocationDetailSheet extends ConsumerWidget {
                       }
                     : null,
                 style: OutlinedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+                  padding:
+                      const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
                   side: BorderSide(
                     color: canEdit
-                        ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.3)
+                        ? Theme.of(context)
+                            .colorScheme
+                            .primary
+                            .withValues(alpha: 0.3)
                         : Colors.grey.withValues(alpha: 0.3),
                   ),
                 ),
@@ -342,17 +413,25 @@ class LocationDetailSheet extends ConsumerWidget {
             // Edit
             Expanded(
               child: OutlinedButton.icon(
-                icon: Icon(Icons.edit_outlined, size: 18,
-                    color: canEdit ? Theme.of(context).colorScheme.primary : Colors.grey),
+                icon: Icon(Icons.edit_outlined,
+                    size: 18,
+                    color: canEdit
+                        ? Theme.of(context).colorScheme.primary
+                        : Colors.grey),
                 label: const Text('Edit'),
                 onPressed: canEdit
-                    ? () => _showEditLocationNameDialog(context, ref, updatedLocation)
+                    ? () => _showEditLocationNameDialog(
+                        context, ref, updatedLocation)
                     : null,
                 style: OutlinedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+                  padding:
+                      const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
                   side: BorderSide(
                     color: canEdit
-                        ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.3)
+                        ? Theme.of(context)
+                            .colorScheme
+                            .primary
+                            .withValues(alpha: 0.3)
                         : Colors.grey.withValues(alpha: 0.3),
                   ),
                 ),
@@ -366,17 +445,25 @@ class LocationDetailSheet extends ConsumerWidget {
             // Set Stay
             Expanded(
               child: OutlinedButton.icon(
-                icon: Icon(Icons.timer_outlined, size: 18,
-                    color: canEdit ? Theme.of(context).colorScheme.primary : Colors.grey),
+                icon: Icon(Icons.timer_outlined,
+                    size: 18,
+                    color: canEdit
+                        ? Theme.of(context).colorScheme.primary
+                        : Colors.grey),
                 label: const Text('Set Stay'),
                 onPressed: canEdit
-                    ? () => _showEditStayDurationDialog(context, ref, updatedLocation)
+                    ? () => _showEditStayDurationDialog(
+                        context, ref, updatedLocation)
                     : null,
                 style: OutlinedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+                  padding:
+                      const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
                   side: BorderSide(
                     color: canEdit
-                        ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.3)
+                        ? Theme.of(context)
+                            .colorScheme
+                            .primary
+                            .withValues(alpha: 0.3)
                         : Colors.grey.withValues(alpha: 0.3),
                   ),
                 ),
@@ -386,14 +473,18 @@ class LocationDetailSheet extends ConsumerWidget {
             // Google Map
             Expanded(
               child: OutlinedButton.icon(
-                icon: Icon(Icons.map_outlined, size: 18,
-                    color: Theme.of(context).colorScheme.primary),
+                icon: Icon(Icons.map_outlined,
+                    size: 18, color: Theme.of(context).colorScheme.primary),
                 label: const Text('Google Map'),
                 onPressed: () => _openGoogleMaps(updatedLocation),
                 style: OutlinedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+                  padding:
+                      const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
                   side: BorderSide(
-                    color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.3),
+                    color: Theme.of(context)
+                        .colorScheme
+                        .primary
+                        .withValues(alpha: 0.3),
                   ),
                 ),
               ),
@@ -408,8 +499,8 @@ class LocationDetailSheet extends ConsumerWidget {
         // context (e.g. trip details screen) so the picker shows the correct
         // sibling list rather than the active-map-trip list.
         Builder(builder: (context) {
-          final List<LocationModel> effectiveLocations = locationsForDate ??
-              ref.watch(locationsForSelectedDateProvider);
+          final List<LocationModel> effectiveLocations =
+              locationsForDate ?? ref.watch(locationsForSelectedDateProvider);
           final others = effectiveLocations
               .where((l) => l.id != updatedLocation.id)
               .toList();
@@ -421,14 +512,13 @@ class LocationDetailSheet extends ConsumerWidget {
             required VoidCallback? onPressed,
           }) {
             return OutlinedButton.icon(
-              icon: Icon(icon,
-                  size: 18,
-                  color: canRoute ? primary : Colors.grey),
+              icon:
+                  Icon(icon, size: 18, color: canRoute ? primary : Colors.grey),
               label: Text(label),
               onPressed: onPressed,
               style: OutlinedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(
-                    vertical: 10, horizontal: 8),
+                padding:
+                    const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
                 side: BorderSide(
                   color: canRoute
                       ? primary.withValues(alpha: 0.3)
@@ -495,11 +585,11 @@ class LocationDetailSheet extends ConsumerWidget {
                   'Remove from trip',
                   style: TextStyle(color: Colors.orange.shade700),
                 ),
-                onPressed: () => _confirmRemoveFromTrip(
-                    context, ref, updatedLocation),
+                onPressed: () =>
+                    _confirmRemoveFromTrip(context, ref, updatedLocation),
                 style: OutlinedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(
-                      vertical: 10, horizontal: 8),
+                  padding:
+                      const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
                   side: BorderSide(
                     color: Colors.orange.shade700.withValues(alpha: 0.4),
                   ),
@@ -616,6 +706,7 @@ class LocationDetailSheet extends ConsumerWidget {
         parentScrollController.jumpTo(0);
       }
     }
+
     if (collapse != null) {
       collapse.then((_) => resetScroll());
     } else {
@@ -676,8 +767,7 @@ class LocationDetailSheet extends ConsumerWidget {
   ///   • "09:00 – 22:00" for a single period.
   ///   • "09:00 – 13:00, 14:00 – 22:00" for split hours (lunch break, etc).
   ///   • "Closed" when no period covers this day.
-  String _formatGoogleHoursForDay(
-      List<OpeningPeriod>? hours, int googleDay) {
+  String _formatGoogleHoursForDay(List<OpeningPeriod>? hours, int googleDay) {
     if (hours == null || hours.isEmpty) return 'No data';
     if (hours.length == 1 && hours.first.isAlwaysOpen) {
       return 'Open 24 hours';
@@ -749,11 +839,11 @@ class LocationDetailSheet extends ConsumerWidget {
               IconButton(
                 visualDensity: VisualDensity.compact,
                 padding: EdgeInsets.zero,
-                constraints:
-                    const BoxConstraints(minWidth: 32, minHeight: 32),
+                constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
                 tooltip: 'Refresh from Google',
                 icon: const Icon(Icons.refresh, size: 20),
-                onPressed: canEdit ? () => _refreshHours(context, ref, loc) : null,
+                onPressed:
+                    canEdit ? () => _refreshHours(context, ref, loc) : null,
               ),
           ],
         ),
@@ -854,8 +944,7 @@ class LocationDetailSheet extends ConsumerWidget {
               const SizedBox(width: 8),
               Expanded(
                 child: TextButton(
-                  onPressed: () =>
-                      Navigator.of(ctx).pop(_OverrideAction.never),
+                  onPressed: () => Navigator.of(ctx).pop(_OverrideAction.never),
                   child: const FittedBox(
                     fit: BoxFit.scaleDown,
                     child: Text('Never closes'),
@@ -889,9 +978,8 @@ class LocationDetailSheet extends ConsumerWidget {
 
     if (!context.mounted) return;
     final current = loc.userClosingMinuteOverride;
-    final initial = (current != null && current != kNeverCloses)
-        ? current
-        : defaultMinutes;
+    final initial =
+        (current != null && current != kNeverCloses) ? current : defaultMinutes;
     final picked = await showTimePicker(
       context: context,
       initialTime: TimeOfDay(hour: initial ~/ 60, minute: initial % 60),
@@ -1025,7 +1113,8 @@ class LocationDetailSheet extends ConsumerWidget {
             OutlinedButton.icon(
               icon: const Icon(Icons.date_range_outlined, size: 16),
               label: Text(isMultiDay ? 'Edit dates' : 'Set range'),
-              onPressed: canEdit ? () => _pickStayRange(context, ref, loc) : null,
+              onPressed:
+                  canEdit ? () => _pickStayRange(context, ref, loc) : null,
               style: OutlinedButton.styleFrom(
                 visualDensity: VisualDensity.compact,
                 padding:
@@ -1136,7 +1225,8 @@ class LocationDetailSheet extends ConsumerWidget {
     final scopedTrip = _scopedTrip(ref);
     final today = _dayKey(DateTime.now());
     final initialStart = _dayKey(loc.scheduledDate ?? today);
-    final initialEnd = _dayKey(loc.scheduledEndDate ?? loc.scheduledDate ?? today);
+    final initialEnd =
+        _dayKey(loc.scheduledEndDate ?? loc.scheduledDate ?? today);
 
     // Bounds must always include the existing range — otherwise the picker
     // throws when the location was already scheduled outside the trip's
@@ -1154,10 +1244,8 @@ class LocationDetailSheet extends ConsumerWidget {
       initialEnd,
       fallbackLast,
     ];
-    final firstDate =
-        firstCandidates.reduce((a, b) => a.isBefore(b) ? a : b);
-    final lastDate =
-        lastCandidates.reduce((a, b) => a.isAfter(b) ? a : b);
+    final firstDate = firstCandidates.reduce((a, b) => a.isBefore(b) ? a : b);
+    final lastDate = lastCandidates.reduce((a, b) => a.isAfter(b) ? a : b);
 
     final picked = await showDateRangePicker(
       context: context,
@@ -1279,11 +1367,16 @@ class LocationDetailSheet extends ConsumerWidget {
                         duration: const Duration(milliseconds: 300),
                         curve: Curves.easeInOut);
 
-                    // 4. Scroll the main list back to the top.
+                    // 4. Scroll the main list back to the top. hasClients
+                    // guard: the map-pin path hands us a dummy controller
+                    // that is never attached (and is disposed early), so
+                    // animating it unguarded would throw.
                     WidgetsBinding.instance.addPostFrameCallback((_) {
-                      parentScrollController.animateTo(0,
-                          duration: const Duration(milliseconds: 300),
-                          curve: Curves.easeInOut);
+                      if (parentScrollController.hasClients) {
+                        parentScrollController.animateTo(0,
+                            duration: const Duration(milliseconds: 300),
+                            curve: Curves.easeInOut);
+                      }
                     });
                   },
                   style: OutlinedButton.styleFrom(
@@ -1359,7 +1452,8 @@ class LocationDetailSheet extends ConsumerWidget {
               ),
               focusedBorder: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
-                borderSide: const BorderSide(color: AppTheme.primaryColor, width: 2),
+                borderSide:
+                    const BorderSide(color: AppTheme.primaryColor, width: 2),
               ),
             ),
             onSubmitted: (newName) {
@@ -1428,8 +1522,8 @@ class LocationDetailSheet extends ConsumerWidget {
 
           return AlertDialog(
             backgroundColor: Theme.of(context).cardColor,
-            shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(20)),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
             titlePadding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
             contentPadding: const EdgeInsets.fromLTRB(20, 12, 20, 4),
             title: Row(
@@ -1467,10 +1561,9 @@ class LocationDetailSheet extends ConsumerWidget {
                   [presets[0], presets[1], presets[2]],
                   [presets[3], presets[4], presets[5]],
                 ].map((rowPresets) => Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: Row(
-                    children: rowPresets
-                        .expand((duration) {
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Row(
+                        children: rowPresets.expand((duration) {
                           final isSelected = selected == duration;
                           return [
                             Expanded(
@@ -1526,10 +1619,9 @@ class LocationDetailSheet extends ConsumerWidget {
                             if (duration != rowPresets.last)
                               const SizedBox(width: 8),
                           ];
-                        })
-                        .toList(),
-                  ),
-                )),
+                        }).toList(),
+                      ),
+                    )),
                 const SizedBox(height: 16),
                 const Divider(height: 1),
                 const SizedBox(height: 14),
@@ -1582,14 +1674,12 @@ class LocationDetailSheet extends ConsumerWidget {
                     Expanded(
                       child: FilledButton(
                         onPressed: () {
-                          final minutes =
-                              int.tryParse(customController.text);
+                          final minutes = int.tryParse(customController.text);
                           if (minutes != null && minutes > 0) {
                             ref
                                 .read(tripProvider.notifier)
                                 .updateLocationStayDuration(
-                                    location.id,
-                                    Duration(minutes: minutes));
+                                    location.id, Duration(minutes: minutes));
                             Navigator.of(ctx).pop();
                           }
                         },
@@ -1645,7 +1735,9 @@ class LocationDetailSheet extends ConsumerWidget {
                 // Perform the deletion directly via repository (bypasses
                 // tripProvider's access-check which is tied to the active map
                 // trip, not the trip being viewed in trip details).
-                ref.read(locationRepositoryProvider).deleteLocation(location.id);
+                ref
+                    .read(locationRepositoryProvider)
+                    .deleteLocation(location.id);
 
                 if (context.mounted) {
                   AppToast.error(context, 'Deleted ${location.name}');
@@ -1795,8 +1887,8 @@ class _RouteEndpointPicker extends StatelessWidget {
             Expanded(
               child: ListView.separated(
                 controller: scrollController,
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 12, vertical: 8),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 itemCount: candidates.length,
                 separatorBuilder: (_, __) => const SizedBox(height: 4),
                 itemBuilder: (context, i) {
@@ -1826,14 +1918,12 @@ class _RouteEndpointPicker extends StatelessWidget {
                             const SizedBox(width: 12),
                             Expanded(
                               child: Column(
-                                crossAxisAlignment:
-                                    CrossAxisAlignment.start,
+                                crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   Text(
                                     loc.name,
                                     style: theme.textTheme.titleSmall
-                                        ?.copyWith(
-                                            fontWeight: FontWeight.w600),
+                                        ?.copyWith(fontWeight: FontWeight.w600),
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
                                   ),
@@ -1841,10 +1931,10 @@ class _RouteEndpointPicker extends StatelessWidget {
                                     const SizedBox(height: 2),
                                     Text(
                                       loc.address,
-                                      style: theme.textTheme.bodySmall
-                                          ?.copyWith(
-                                        color: theme
-                                            .colorScheme.onSurfaceVariant,
+                                      style:
+                                          theme.textTheme.bodySmall?.copyWith(
+                                        color:
+                                            theme.colorScheme.onSurfaceVariant,
                                       ),
                                       maxLines: 2,
                                       overflow: TextOverflow.ellipsis,

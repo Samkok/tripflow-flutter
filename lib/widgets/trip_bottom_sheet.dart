@@ -13,6 +13,7 @@ import '../utils/date_picker_utils.dart';
 import 'timing_warnings_sheet.dart';
 import '../utils/external_app_links.dart';
 import '../utils/trip_date_validator.dart';
+import '../utils/trip_dates.dart';
 import '../core/theme.dart';
 import 'app_toast.dart';
 import 'optimized_location_card.dart';
@@ -619,111 +620,111 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
             // first-run spotlight tour has an anchor. Formerly inside the
             // hasPinnedLocations gate, which removed it for empty states.
             Consumer(builder: (context, ref, _) {
-                final isGenerating = ref.watch(isGeneratingRouteProvider);
-                final locationsForDate =
-                    ref.watch(locationsForSelectedDateProvider);
-                final count = locationsForDate.length;
-                final hasLocations = count > 0;
-                final canTap = hasLocations && !isGenerating;
-                final primaryColor = Theme.of(context).colorScheme.primary;
+              final isGenerating = ref.watch(isGeneratingRouteProvider);
+              final locationsForDate =
+                  ref.watch(locationsForSelectedDateProvider);
+              final count = locationsForDate.length;
+              final hasLocations = count > 0;
+              final canTap = hasLocations && !isGenerating;
+              final primaryColor = Theme.of(context).colorScheme.primary;
 
-                // Goal-gradient nudge: route optimization only pays off at 3+
-                // stops, so below that we coach toward the "aha" instead of
-                // offering a trivial optimize. Re-optimize stays available once
-                // a route already exists.
-                const ahaThreshold = 3;
-                if (count > 0 &&
-                    count < ahaThreshold &&
-                    !hasOptimizedRoute &&
-                    !isGenerating) {
-                  final remaining = ahaThreshold - count;
-                  return Container(
-                    decoration: BoxDecoration(
-                      color: primaryColor.withValues(alpha: 0.10),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(
-                          color: primaryColor.withValues(alpha: 0.30)),
-                    ),
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 14, vertical: 10),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.add_location_alt_rounded,
-                            color: primaryColor, size: 18),
-                        const SizedBox(width: 8),
-                        Text(
-                          'Add $remaining more to optimize',
-                          style: TextStyle(
-                            color: primaryColor,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 13,
-                          ),
-                        ),
-                      ],
-                    ),
-                  );
-                }
-
-                final button = Container(
-                  key: widget.optimizeKey,
+              // Goal-gradient nudge: route optimization only pays off at 3+
+              // stops, so below that we coach toward the "aha" instead of
+              // offering a trivial optimize. Re-optimize stays available once
+              // a route already exists.
+              const ahaThreshold = 3;
+              if (count > 0 &&
+                  count < ahaThreshold &&
+                  !hasOptimizedRoute &&
+                  !isGenerating) {
+                final remaining = ahaThreshold - count;
+                return Container(
                   decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      colors: canTap
-                          ? [
-                              primaryColor,
-                              primaryColor.withValues(alpha: 0.8),
-                            ]
-                          : [
-                              primaryColor.withValues(alpha: 0.35),
-                              primaryColor.withValues(alpha: 0.25),
-                            ],
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                    ),
+                    color: primaryColor.withValues(alpha: 0.10),
                     borderRadius: BorderRadius.circular(12),
+                    border:
+                        Border.all(color: primaryColor.withValues(alpha: 0.30)),
                   ),
-                  child: Material(
-                    color: Colors.transparent,
-                    child: InkWell(
-                      onTap: canTap
-                          ? () => _showChooseStartPointDialog(context, ref,
-                              isReoptimizing: hasOptimizedRoute)
-                          : null,
-                      borderRadius: BorderRadius.circular(12),
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 16, vertical: 10),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              isGenerating
-                                  ? Icons.hourglass_empty
-                                  : Icons.route_rounded,
-                              color: Colors.white,
-                              size: 20,
-                            ),
-                            const SizedBox(width: 8),
-                            Text(
-                              hasOptimizedRoute
-                                  ? 'Re-optimize'
-                                  : 'Optimize Route',
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontWeight: FontWeight.bold,
-                                fontSize: 14,
-                              ),
-                            ),
-                          ],
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.add_location_alt_rounded,
+                          color: primaryColor, size: 18),
+                      const SizedBox(width: 8),
+                      Text(
+                        'Add $remaining more to optimize',
+                        style: TextStyle(
+                          color: primaryColor,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 13,
                         ),
+                      ),
+                    ],
+                  ),
+                );
+              }
+
+              final button = Container(
+                key: widget.optimizeKey,
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: canTap
+                        ? [
+                            primaryColor,
+                            primaryColor.withValues(alpha: 0.8),
+                          ]
+                        : [
+                            primaryColor.withValues(alpha: 0.35),
+                            primaryColor.withValues(alpha: 0.25),
+                          ],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    onTap: canTap
+                        ? () => _showChooseStartPointDialog(context, ref,
+                            isReoptimizing: hasOptimizedRoute)
+                        : null,
+                    borderRadius: BorderRadius.circular(12),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 10),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            isGenerating
+                                ? Icons.hourglass_empty
+                                : Icons.route_rounded,
+                            color: Colors.white,
+                            size: 20,
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            hasOptimizedRoute
+                                ? 'Re-optimize'
+                                : 'Optimize Route',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 14,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ),
-                );
+                ),
+              );
 
-                if (!canTap) return button;
-                return _PulsingGlow(glowColor: primaryColor, child: button);
+              if (!canTap) return button;
+              return _PulsingGlow(glowColor: primaryColor, child: button);
             }),
           ],
         ),
@@ -1008,28 +1009,29 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
     });
   }
 
-  /// Horizontal strip of per-day quick-jump chips covering the active trip's
-  /// `startDate..endDate` range. Each chip shows "N · MMM d" (N is 1-based
-  /// day index) and sets [selectedDateProvider] when tapped. Returns an
-  /// empty widget when there's no active trip or no date range — the
-  /// caller renders it unconditionally and lets this method decide.
+  /// Horizontal strip of per-day quick-jump chips covering every day the
+  /// trip spans. Each chip shows "N · MMM d" (N is 1-based day index) and
+  /// sets [selectedDateProvider] when tapped. The day axis is the full,
+  /// gap-free span of the trip — its declared start..end range unioned with
+  /// every scheduled location, with in-between days filled — so a trip with
+  /// no explicit date range still gets one chip per planned day, and an
+  /// empty interstitial day (e.g. Jan 2 between stops on Jan 1 and Jan 3)
+  /// still gets a chip. Returns an empty widget only when the trip touches
+  /// no dates at all.
   Widget _buildTripDayChips(BuildContext context, WidgetRef ref) {
     final activeTripAsync = ref.watch(realtimeActiveTripProvider);
     final trip = activeTripAsync.asData?.value;
-    final startDate = trip?.startDate;
-    final endDate = trip?.endDate;
-    if (trip == null || startDate == null || endDate == null) {
-      return const SizedBox.shrink();
-    }
+    final locations = ref.watch(tripProvider.select((s) => s.pinnedLocations));
 
-    final start = DateTime(startDate.year, startDate.month, startDate.day);
-    final end = DateTime(endDate.year, endDate.month, endDate.day);
-    if (end.isBefore(start)) return const SizedBox.shrink();
-
-    final days = <DateTime>[];
-    for (var d = start; !d.isAfter(end); d = d.add(const Duration(days: 1))) {
-      days.add(d);
-    }
+    final days = contiguousTripDates([
+      trip?.startDate,
+      trip?.endDate,
+      for (final loc in locations) ...[
+        loc.scheduledDate ?? loc.addedAt,
+        loc.scheduledEndDate ?? loc.scheduledDate ?? loc.addedAt,
+      ],
+    ]);
+    if (days.isEmpty) return const SizedBox.shrink();
 
     final selectedRaw = ref.watch(selectedDateProvider);
     final selected =
@@ -1670,7 +1672,22 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
       final key = DateTime(raw.year, raw.month, raw.day);
       grouped.putIfAbsent(key, () => []).add(loc);
     }
-    final sortedDates = grouped.keys.toList()..sort();
+
+    // Show every day the trip spans — including empty in-between days — not
+    // only days that already host a location. Union the contiguous trip span
+    // (declared range + scheduled locations, gaps filled) with the group keys
+    // so nothing is orphaned. Same helper as the day-chip strip and the trip
+    // detail page, so all three surfaces show identical days.
+    final trip = ref.watch(realtimeActiveTripProvider).asData?.value;
+    final span = contiguousTripDates([
+      trip?.startDate,
+      trip?.endDate,
+      for (final loc in all) ...[
+        loc.scheduledDate ?? loc.addedAt,
+        loc.scheduledEndDate ?? loc.scheduledDate ?? loc.addedAt,
+      ],
+    ]);
+    final sortedDates = (<DateTime>{...span, ...grouped.keys}.toList())..sort();
 
     final selectedDate = ref.watch(selectedDateProvider);
     final today =
@@ -1678,7 +1695,7 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
 
     final widgets = <Widget>[];
     for (final date in sortedDates) {
-      final locs = grouped[date]!;
+      final locs = grouped[date] ?? const <LocationModel>[];
       final isSelected = date == selectedDate;
       widgets.add(_buildDateGroupHeader(context, date, today, locs.length,
           isSelected: isSelected, onTap: () {
@@ -1691,6 +1708,26 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
       final done = locs.where((l) => l.isDone).toList();
       final skipped = locs.where((l) => l.isSkipped).toList();
       final ordered = [...normal, ...done, ...skipped];
+
+      // Empty in-between day: keep the header (so the day is visible and
+      // tappable to plan it) with a muted placeholder instead of cards.
+      if (ordered.isEmpty) {
+        widgets.add(Padding(
+          padding: const EdgeInsets.only(left: 8, top: 2, bottom: 4),
+          child: Text(
+            'No places scheduled yet',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context)
+                      .textTheme
+                      .bodyMedium
+                      ?.color
+                      ?.withValues(alpha: 0.5),
+                  fontStyle: FontStyle.italic,
+                ),
+          ),
+        ));
+        continue;
+      }
 
       for (int i = 0; i < ordered.length; i++) {
         final loc = ordered[i];
