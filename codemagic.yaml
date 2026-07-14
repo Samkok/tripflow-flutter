@@ -109,16 +109,34 @@ workflows:
         - supabase
         - google_map
         - revenuecat
+        # app_store_credentials must ALSO contain CERTIFICATE_PRIVATE_KEY — a
+        # signing private key the CLI uses to create/fetch the distribution
+        # certificate (see the "Set up iOS code signing" script below).
         - app_store_credentials
-      ios_signing:
-        distribution_type: app_store
-        bundle_identifier: com.superiordev.voyza
       vars:
         APP_STORE_APPLE_ID: 6758559163
       flutter: stable
       xcode: latest
       cocoapods: default
     scripts:
+      # Explicit App Store code signing (replaces the declarative ios_signing
+      # block, which only FETCHED existing profiles and kept failing with
+      # "No matching profiles found ... app_store"). `fetch-signing-files
+      # --create` uses the codemagic-ci App Store Connect API key to CREATE
+      # the distribution certificate + App Store provisioning profile for the
+      # bundle id if they don't exist yet, then applies them to the Xcode
+      # project. The API key env vars come from the app_store_connect
+      # integration; CERTIFICATE_PRIVATE_KEY (the signing key) comes from the
+      # app_store_credentials group and is read automatically by the CLI.
+      - name: Set up iOS code signing
+        script: |
+          keychain initialize
+          app-store-connect fetch-signing-files "com.superiordev.voyza" \
+            --type IOS_APP_STORE \
+            --create
+          keychain add-certificates
+          xcode-project use-profiles
+
       - name: Create .env file
         script: |
           echo "" > .env
