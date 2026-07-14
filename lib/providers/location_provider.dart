@@ -5,7 +5,6 @@ import '../repositories/location_repository.dart';
 import '../models/saved_location.dart';
 import '../services/auth_service.dart';
 import 'auth_provider.dart';
-import 'connectivity_provider.dart';
 import 'trip_listener_provider.dart';
 
 final locationRepositoryProvider = Provider<LocationRepository>((ref) {
@@ -45,7 +44,8 @@ final filteredLocationsForMapProvider =
   // First, get all locations from the stream
   final locationsStream = repository.watchLocations();
 
-  debugPrint('filteredLocationsForMapProvider: Starting to listen for location changes');
+  debugPrint(
+      'filteredLocationsForMapProvider: Starting to listen for location changes');
 
   await for (final locations in locationsStream) {
     // Get current active trip from the watched async value
@@ -56,17 +56,17 @@ final filteredLocationsForMapProvider =
 
     if (activeTrip != null) {
       // Trip is active: filter to only locations in this trip
-      final filtered = locations
-          .where((loc) => loc.tripId == activeTrip.id)
-          .toList();
-      debugPrint('filteredLocationsForMapProvider: ✅ Trip ${activeTrip.name} (${activeTrip.id}) active → emitting ${filtered.length}/${locations.length} locations');
+      final filtered =
+          locations.where((loc) => loc.tripId == activeTrip.id).toList();
+      debugPrint(
+          'filteredLocationsForMapProvider: ✅ Trip ${activeTrip.name} (${activeTrip.id}) active → emitting ${filtered.length}/${locations.length} locations');
       yield filtered;
     } else if (!isAuthenticated) {
       // Anonymous user with no active trip: show all local locations
-      final localLocations = locations
-          .where((loc) => loc.source == 'local')
-          .toList();
-      debugPrint('filteredLocationsForMapProvider: Anonymous mode → emitting ${localLocations.length} local locations');
+      final localLocations =
+          locations.where((loc) => loc.source == 'local').toList();
+      debugPrint(
+          'filteredLocationsForMapProvider: Anonymous mode → emitting ${localLocations.length} local locations');
       yield localLocations;
     } else {
       // Authenticated user with no active trip: show only their own unassigned locations.
@@ -77,12 +77,12 @@ final filteredLocationsForMapProvider =
               (loc.tripId == null || loc.tripId!.isEmpty) &&
               loc.userId == currentUserId)
           .toList();
-      debugPrint('filteredLocationsForMapProvider: No trip active (authenticated) → emitting ${unassignedLocations.length} unassigned locations');
+      debugPrint(
+          'filteredLocationsForMapProvider: No trip active (authenticated) → emitting ${unassignedLocations.length} unassigned locations');
       yield unassignedLocations;
     }
   }
 });
-
 
 /// Manages the Supabase realtime subscription lifecycle.
 ///
@@ -95,21 +95,24 @@ final filteredLocationsForMapProvider =
 /// connectivity change, triggering Hive updates → marker bitmap regeneration → map blink.
 /// The one-time initial fetch is handled in MainScreen.initState instead.
 final syncManagerProvider = Provider<void>((ref) {
-  final connectivity = ref.watch(connectivityProvider);
   final authState = ref.watch(authStateProvider);
   final repository = ref.watch(locationRepositoryProvider);
 
   final user = authState.asData?.value.session?.user;
 
-  if (user != null && connectivity == ConnectivityStatus.isConnected) {
-    // subscribeToRealtimeChanges() is idempotent — safe to call on every rebuild.
+  if (user != null) {
+    // Idempotent — no-op while the channel is healthy for this user.
     repository.subscribeToRealtimeChanges();
-  } else {
-    // Unsubscribe when offline or logged out.
-    // _subscription is set to null in unsubscribe() so re-subscribing on
-    // reconnect works correctly.
+  } else if (authState.hasValue) {
+    // A real auth emission with no session (signed out) — tear down.
+    // While authState is still loading on cold start we do nothing.
     repository.unsubscribe();
   }
+  // Deliberately NOT watching connectivity here. realtime_client reconnects
+  // the socket and rejoins channels on its own after a network drop; the old
+  // connectivity-driven unsubscribe/resubscribe raced those rejoins (the
+  // reachability checker flaps on mobile links) and could kill a join
+  // mid-flight, permanently wedging the channel on the old implementation.
 });
 
 /// Becomes true once performInitialLocationSync() completes.
@@ -156,6 +159,7 @@ Future<void> _runBackgroundLocationSync(LocationRepository repository) async {
       await repository.syncOnLogin();
     }
   } catch (e) {
-    debugPrint('performInitialLocationSync: background sync failed (non-fatal): $e');
+    debugPrint(
+        'performInitialLocationSync: background sync failed (non-fatal): $e');
   }
 }

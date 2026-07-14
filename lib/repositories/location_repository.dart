@@ -43,22 +43,24 @@ class LocationRepository {
       }
     } catch (e) {
       // If there's a HiveError (corrupted data or unknown typeId), delete and recreate
-      if (e.toString().contains('HiveError') || e.toString().contains('unknown typeId')) {
-        debugPrint('Corrupted Hive cache detected: $e. Clearing and recreating...');
-        
+      if (e.toString().contains('HiveError') ||
+          e.toString().contains('unknown typeId')) {
+        debugPrint(
+            'Corrupted Hive cache detected: $e. Clearing and recreating...');
+
         // Close the box if it's open
         if (Hive.isBoxOpen(_boxName)) {
           await Hive.box(_boxName).clear();
           await Hive.box(_boxName).close();
         }
-        
+
         // Delete the corrupted box
         try {
           await Hive.deleteBoxFromDisk(_boxName);
         } catch (deleteError) {
           debugPrint('Could not delete corrupted box from disk: $deleteError');
         }
-        
+
         // Recreate the box
         _box = await Hive.openBox<SavedLocation>(_boxName);
         debugPrint('Hive cache cleared and recreated successfully');
@@ -73,10 +75,12 @@ class LocationRepository {
     final migrationDone = prefs.getBool(_migrationKey) ?? false;
 
     if (!migrationDone && _box!.isNotEmpty) {
-      final needsMigration = _box!.values.any((loc) => loc.tripId == null && loc.source == 'synced');
+      final needsMigration = _box!.values
+          .any((loc) => loc.tripId == null && loc.source == 'synced');
 
       if (needsMigration) {
-        debugPrint('Clearing Hive cache due to schema update (added tripId/scheduledDate fields)');
+        debugPrint(
+            'Clearing Hive cache due to schema update (added tripId/scheduledDate fields)');
         await _box!.clear();
 
         // Set flag to sync data later instead of blocking startup
@@ -155,27 +159,33 @@ class LocationRepository {
     // BUGFIX: Use copyWith to safely update the location instead of JSON round-trip
     // This avoids potential issues with fromJson() not handling all fields
     var updatedLocation = localLocation;
-    
+
     // Apply updates using copyWith for type-safe updates
     if (updates.containsKey('trip_id')) {
-      updatedLocation = updatedLocation.copyWith(tripId: updates['trip_id'] as String?);
+      updatedLocation =
+          updatedLocation.copyWith(tripId: updates['trip_id'] as String?);
     }
     if (updates.containsKey('is_skipped')) {
-      updatedLocation = updatedLocation.copyWith(isSkipped: updates['is_skipped'] as bool);
+      updatedLocation =
+          updatedLocation.copyWith(isSkipped: updates['is_skipped'] as bool);
     }
     if (updates.containsKey('is_done')) {
-      updatedLocation = updatedLocation.copyWith(isDone: updates['is_done'] as bool);
+      updatedLocation =
+          updatedLocation.copyWith(isDone: updates['is_done'] as bool);
     }
     if (updates.containsKey('scheduled_date')) {
       final dateStr = updates['scheduled_date'];
-      final parsedDate = dateStr is String ? DateTime.parse(dateStr) : dateStr as DateTime?;
+      final parsedDate =
+          dateStr is String ? DateTime.parse(dateStr) : dateStr as DateTime?;
       updatedLocation = updatedLocation.copyWith(scheduledDate: parsedDate);
     }
     if (updates.containsKey('stay_duration')) {
-      updatedLocation = updatedLocation.copyWith(stayDuration: updates['stay_duration'] as int);
+      updatedLocation = updatedLocation.copyWith(
+          stayDuration: updates['stay_duration'] as int);
     }
     if (updates.containsKey('name')) {
-      updatedLocation = updatedLocation.copyWith(name: updates['name'] as String);
+      updatedLocation =
+          updatedLocation.copyWith(name: updates['name'] as String);
     }
     if (updates.containsKey('google_opening_hours')) {
       // Accept either an in-memory typed list (from the refresh path) or a
@@ -194,8 +204,7 @@ class LocationRepository {
       // keep the old ones), so passing null here would be a no-op. Skip the
       // copyWith call entirely on null to match that semantic.
       if (periods != null) {
-        updatedLocation =
-            updatedLocation.copyWith(googleOpeningHours: periods);
+        updatedLocation = updatedLocation.copyWith(googleOpeningHours: periods);
       }
     }
     if (updates.containsKey('user_closing_minute_override')) {
@@ -208,23 +217,18 @@ class LocationRepository {
     }
     if (updates.containsKey('hours_last_refreshed_at')) {
       final raw = updates['hours_last_refreshed_at'];
-      final dt = raw is DateTime
-          ? raw
-          : (raw is String ? DateTime.parse(raw) : null);
+      final dt =
+          raw is DateTime ? raw : (raw is String ? DateTime.parse(raw) : null);
       if (dt != null) {
-        updatedLocation =
-            updatedLocation.copyWith(hoursLastRefreshedAt: dt);
+        updatedLocation = updatedLocation.copyWith(hoursLastRefreshedAt: dt);
       }
     }
     if (updates.containsKey('scheduled_end_date')) {
       // Sentinel-aware in copyWith — passing null clears the range
       // (revert to single-day stay).
       final raw = updates['scheduled_end_date'];
-      final parsed = raw is String
-          ? DateTime.parse(raw)
-          : raw as DateTime?;
-      updatedLocation =
-          updatedLocation.copyWith(scheduledEndDate: parsed);
+      final parsed = raw is String ? DateTime.parse(raw) : raw as DateTime?;
+      updatedLocation = updatedLocation.copyWith(scheduledEndDate: parsed);
     }
 
     // Mark as not synced since we made local changes
@@ -249,8 +253,13 @@ class LocationRepository {
     final user = _supabase.auth.currentUser;
     if (user == null) return;
 
-    // Ensure the location object has the correct user_id before syncing.
-    final locationToSync = location.copyWith(userId: user.id);
+    // Only anonymous-origin rows ('local') get stamped with the current
+    // user's id. Rows that already have an owner keep it — unconditionally
+    // overwriting user_id here used to flip ownership of the OWNER's rows to
+    // whichever collaborator last edited them in a shared trip.
+    final locationToSync = location.source == 'local'
+        ? location.copyWith(userId: user.id, source: 'synced')
+        : location;
 
     try {
       debugPrint("Add location should arrive here");
@@ -286,7 +295,8 @@ class LocationRepository {
           .map((data) => SavedLocation.fromJson(data))
           .toList();
 
-      debugPrint('syncOnLogin: Fetched ${remoteLocations.length} locations (including collaborative trips)');
+      debugPrint(
+          'syncOnLogin: Fetched ${remoteLocations.length} locations (including collaborative trips)');
     } catch (e) {
       debugPrint('Error syncing fetch remote: $e');
       return; // Stop if we can't get remote state
@@ -397,7 +407,8 @@ class LocationRepository {
           .order('created_at', ascending: false);
 
       final List<dynamic> data = response;
-      debugPrint('fetchRemoteLocations: Fetched ${data.length} locations (including collaborative trips)');
+      debugPrint(
+          'fetchRemoteLocations: Fetched ${data.length} locations (including collaborative trips)');
 
       // Batch-write all locations in a single putAll call instead of N individual
       // put() calls. Each individual put fires its own Hive watch event, so N puts
@@ -469,7 +480,7 @@ class LocationRepository {
     for (final localLoc in localLocations) {
       try {
         final localFp = localLoc.fingerprint;
-        
+
         // Skip if fingerprint already exists in remote
         if (remoteByFingerprint.containsKey(localFp)) {
           result.skippedCount++;
@@ -510,7 +521,8 @@ class LocationRepository {
 
       // Emit current contents immediately (no debounce for the initial snapshot)
       final initialData = _box!.values.toList();
-      debugPrint('watchLocations: Emitting initial data with ${initialData.length} items');
+      debugPrint(
+          'watchLocations: Emitting initial data with ${initialData.length} items');
       yield initialData;
 
       // Watch for future changes — debounced so rapid consecutive Hive writes
@@ -532,7 +544,8 @@ class LocationRepository {
       try {
         await for (final _ in controller.stream) {
           final data = _box!.values.toList();
-          debugPrint('watchLocations: Box changed (debounced), now has ${data.length} items');
+          debugPrint(
+              'watchLocations: Box changed (debounced), now has ${data.length} items');
           yield data;
         }
       } finally {
@@ -584,8 +597,7 @@ class LocationRepository {
     // updates without waiting for the realtime subscription.
     final keysToDelete = _box!.values
         .where((loc) =>
-            loc.tripId == tripId &&
-            (user == null || loc.userId == user.id))
+            loc.tripId == tripId && (user == null || loc.userId == user.id))
         .map((loc) => loc.id)
         .toList();
     if (keysToDelete.isNotEmpty) {
@@ -620,62 +632,136 @@ class LocationRepository {
     await _box!.clear();
   }
 
-  // Realtime subscription
-  // Subscribe to ALL location changes that the user has access to
-  // RLS policies on the database handle access control automatically
+  // ---------------------------------------------------------------------
+  // Realtime subscription (unfiltered — RLS scopes events per subscriber,
+  // which is what lets collaborators receive changes to shared-trip rows).
+  //
+  // Reliability model: the old implementation called `.subscribe()` with no
+  // status callback and guarded re-entry with `_subscription != null`. One
+  // failed join (socket race on cold start, token refresh mid-join, network
+  // blip) left a permanently errored channel that the guard then pinned for
+  // the whole app session — devices connected the websocket but never held a
+  // postgres_changes registration, so no edits/deletes ever streamed. Now:
+  //   • subscribe() is a no-op only while the channel is healthy for the
+  //     CURRENT user (re-subscribes if the signed-in user changed);
+  //   • join failures (channelError / timedOut / unexpected close) schedule
+  //     an exponential-backoff retry that rebuilds the channel from scratch;
+  //   • teardown is tracked so an intentional unsubscribe() doesn't retry.
+  // Network drops need no handling here — realtime_client reconnects the
+  // socket and rejoins healthy channels on its own.
+  // ---------------------------------------------------------------------
+
+  String? _subscribedUserId;
+  Timer? _retryTimer;
+  int _retryAttempt = 0;
+  bool _teardownInProgress = false;
+
   void subscribeToRealtimeChanges() {
     final user = _supabase.auth.currentUser;
     if (user == null) return;
-    // Guard against duplicate subscriptions. Since syncManagerProvider now uses
-    // ref.watch, it can be called multiple times when connectivity/auth changes.
-    // Without this guard, every reconnect would create a new leaking channel.
-    if (_subscription != null) return;
 
-    // Don't filter by user_id - let RLS policies handle access control
-    // This allows receiving updates for locations in collaborative trips
+    // Healthy (or join in flight) for this user — nothing to do.
+    if (_subscription != null && _subscribedUserId == user.id) return;
+
+    // Different user than the active channel (logout → login): rebuild.
+    if (_subscription != null) _resetChannel();
+
+    _retryTimer?.cancel();
+    _subscribedUserId = user.id;
+    debugPrint('LocationRealtime: subscribing for user ${user.id}');
+
     _subscription = _supabase
         .channel('public:locations')
         .onPostgresChanges(
           event: PostgresChangeEvent.all,
           schema: 'public',
           table: 'locations',
-          // No filter - RLS policies will automatically filter what this user can see
-          callback: (payload) {
-            // Ensure box is ready before handling changes
-            if (_box == null || !_box!.isOpen) {
-              if (Hive.isBoxOpen(_boxName)) {
-                _box = Hive.box<SavedLocation>(_boxName);
-              } else {
-                return; // Cannot handle update if box is closed
-              }
-            }
-
-            debugPrint('Realtime location change: ${payload.eventType}');
-
-            try {
-              if (payload.eventType == PostgresChangeEvent.insert ||
-                  payload.eventType == PostgresChangeEvent.update) {
-                final newLoc = SavedLocation.fromJson(payload.newRecord);
-                _box!.put(newLoc.id, newLoc);
-              } else if (payload.eventType == PostgresChangeEvent.delete) {
-                final oldRecord = payload.oldRecord;
-                if (oldRecord.containsKey('id')) {
-                  _box!.delete(oldRecord['id']);
-                }
-              }
-            } catch (e) {
-              debugPrint('Realtime callback error for ${payload.eventType}: $e');
-            }
-          },
+          callback: _handleRealtimePayload,
         )
-        .subscribe();
+        .subscribe((status, error) {
+      switch (status) {
+        case RealtimeSubscribeStatus.subscribed:
+          _retryAttempt = 0;
+          debugPrint('LocationRealtime: ✅ subscribed');
+        case RealtimeSubscribeStatus.channelError:
+        case RealtimeSubscribeStatus.timedOut:
+          debugPrint(
+              'LocationRealtime: ❌ $status${error != null ? ' ($error)' : ''} — will retry');
+          _scheduleRetry();
+        case RealtimeSubscribeStatus.closed:
+          // Fires for our own teardown too — only retry server closes.
+          if (!_teardownInProgress) {
+            debugPrint('LocationRealtime: channel closed — will retry');
+            _scheduleRetry();
+          }
+      }
+    });
+  }
+
+  void _handleRealtimePayload(PostgresChangePayload payload) {
+    // Ensure box is ready before handling changes
+    if (_box == null || !_box!.isOpen) {
+      if (Hive.isBoxOpen(_boxName)) {
+        _box = Hive.box<SavedLocation>(_boxName);
+      } else {
+        return; // Cannot handle update if box is closed
+      }
+    }
+
+    debugPrint('Realtime location change: ${payload.eventType}');
+
+    try {
+      if (payload.eventType == PostgresChangeEvent.insert ||
+          payload.eventType == PostgresChangeEvent.update) {
+        final newLoc = SavedLocation.fromJson(payload.newRecord);
+        _box!.put(newLoc.id, newLoc);
+      } else if (payload.eventType == PostgresChangeEvent.delete) {
+        final oldRecord = payload.oldRecord;
+        if (oldRecord.containsKey('id')) {
+          _box!.delete(oldRecord['id']);
+        }
+      }
+    } catch (e) {
+      debugPrint('Realtime callback error for ${payload.eventType}: $e');
+    }
+  }
+
+  void _scheduleRetry() {
+    _retryTimer?.cancel();
+    // 2s, 4s, 8s … capped at 60s.
+    final delay = Duration(seconds: (2 << _retryAttempt).clamp(2, 60));
+    _retryAttempt = (_retryAttempt + 1).clamp(0, 6);
+    _retryTimer = Timer(delay, () {
+      if (_supabase.auth.currentUser == null) return;
+      debugPrint(
+          'LocationRealtime: retrying subscription (attempt $_retryAttempt)');
+      _resetChannel();
+      subscribeToRealtimeChanges();
+    });
+  }
+
+  /// Detaches and asynchronously removes the current channel. Safe to call
+  /// when the socket is already dead — removal errors are swallowed.
+  void _resetChannel() {
+    final channel = _subscription;
+    _subscription = null;
+    _subscribedUserId = null;
+    if (channel == null) return;
+    _teardownInProgress = true;
+    unawaited(() async {
+      try {
+        await _supabase.removeChannel(channel);
+      } catch (_) {
+        // Socket already gone — nothing to clean up server-side.
+      } finally {
+        _teardownInProgress = false;
+      }
+    }());
   }
 
   void unsubscribe() {
-    if (_subscription != null) {
-      _supabase.removeChannel(_subscription!);
-      // Reset to null so subscribeToRealtimeChanges() can re-subscribe after reconnect
-      _subscription = null;
-    }
+    _retryTimer?.cancel();
+    _retryAttempt = 0;
+    _resetChannel();
   }
 }

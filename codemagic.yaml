@@ -103,7 +103,7 @@ workflows:
     name: Build iOS App
     instance_type: mac_mini_m1
     integrations:
-      app_store_connect: CodeMagicKey
+      app_store_connect: codemagic-ci
     environment:
       groups:
         - supabase

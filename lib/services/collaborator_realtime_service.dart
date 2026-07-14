@@ -50,8 +50,17 @@ class CollaboratorRealtimeService {
 
   RealtimeChannel? _channel;
   bool _isSubscribed = false;
+  Timer? _retryTimer;
+  int _retryAttempt = 0;
+  bool _teardownInProgress = false;
 
-  /// Subscribe to collaborator changes for the current user
+  /// Subscribe to collaborator changes for the current user.
+  ///
+  /// Self-healing: join failures (channelError / timedOut / unexpected close)
+  /// schedule an exponential-backoff retry that rebuilds the channel from
+  /// scratch. The previous implementation just flipped [_isSubscribed] to
+  /// false and gave up — one failed join on cold start meant no collaborator
+  /// events for the rest of the app session.
   void subscribe() {
     if (_isSubscribed) {
       debugPrint('CollaboratorRealtimeService: Already subscribed, skipping');
@@ -60,11 +69,18 @@ class CollaboratorRealtimeService {
 
     final userId = _supabase.auth.currentUser?.id;
     if (userId == null) {
-      debugPrint('CollaboratorRealtimeService: ⚠️ No user logged in, skipping subscription');
+      debugPrint(
+          'CollaboratorRealtimeService: ⚠️ No user logged in, skipping subscription');
       return;
     }
 
-    debugPrint('CollaboratorRealtimeService: 🔔 Starting subscription for user $userId');
+    // Drop any stale (errored/closed) channel before building a new one so
+    // retries don't stack dead channel objects on the same topic.
+    _removeStaleChannel();
+    _retryTimer?.cancel();
+
+    debugPrint(
+        'CollaboratorRealtimeService: 🔔 Starting subscription for user $userId');
 
     try {
       _channel = _supabase
@@ -79,39 +95,75 @@ class CollaboratorRealtimeService {
               value: userId,
             ),
             callback: (payload) {
-              debugPrint('CollaboratorRealtimeService: 📨 Received ${payload.eventType} event');
-              debugPrint('CollaboratorRealtimeService: 📨 New: ${payload.newRecord}');
-              debugPrint('CollaboratorRealtimeService: 📨 Old: ${payload.oldRecord}');
+              debugPrint(
+                  'CollaboratorRealtimeService: 📨 Received ${payload.eventType} event');
+              debugPrint(
+                  'CollaboratorRealtimeService: 📨 New: ${payload.newRecord}');
+              debugPrint(
+                  'CollaboratorRealtimeService: 📨 Old: ${payload.oldRecord}');
               _handleChange(payload);
             },
           )
           .subscribe((status, error) {
-            if (status == RealtimeSubscribeStatus.subscribed) {
-              debugPrint('CollaboratorRealtimeService: ✅ Successfully subscribed to realtime updates');
-              _isSubscribed = true;
-            } else if (status == RealtimeSubscribeStatus.channelError) {
-              debugPrint('CollaboratorRealtimeService: ❌ Channel error during subscription');
-              _isSubscribed = false;
-            } else if (status == RealtimeSubscribeStatus.timedOut) {
-              debugPrint('CollaboratorRealtimeService: ⏱️ Subscription timed out');
-              _isSubscribed = false;
-            } else if (status == RealtimeSubscribeStatus.closed) {
-              debugPrint('CollaboratorRealtimeService: 🔒 Channel closed');
-              _isSubscribed = false;
-            } else {
-              debugPrint('CollaboratorRealtimeService: ℹ️ Status: $status');
-            }
-
-            if (error != null) {
-              debugPrint('CollaboratorRealtimeService: ❌ Subscription error: $error');
-              _isSubscribed = false;
-            }
-          });
+        if (status == RealtimeSubscribeStatus.subscribed) {
+          debugPrint(
+              'CollaboratorRealtimeService: ✅ Successfully subscribed to realtime updates');
+          _isSubscribed = true;
+          _retryAttempt = 0;
+        } else if (status == RealtimeSubscribeStatus.channelError ||
+            status == RealtimeSubscribeStatus.timedOut) {
+          debugPrint(
+              'CollaboratorRealtimeService: ❌ $status${error != null ? ' ($error)' : ''} — scheduling retry');
+          _isSubscribed = false;
+          _scheduleRetry();
+        } else if (status == RealtimeSubscribeStatus.closed) {
+          debugPrint('CollaboratorRealtimeService: 🔒 Channel closed');
+          _isSubscribed = false;
+          // Closed also fires on intentional unsubscribe — only retry
+          // when the server/socket closed us.
+          if (!_teardownInProgress) _scheduleRetry();
+        } else {
+          debugPrint('CollaboratorRealtimeService: ℹ️ Status: $status');
+        }
+      });
     } catch (e, stackTrace) {
-      debugPrint('CollaboratorRealtimeService: ❌ Exception during subscription: $e');
+      debugPrint(
+          'CollaboratorRealtimeService: ❌ Exception during subscription: $e');
       debugPrint('CollaboratorRealtimeService: Stack trace: $stackTrace');
       _isSubscribed = false;
+      _scheduleRetry();
     }
+  }
+
+  void _scheduleRetry() {
+    _retryTimer?.cancel();
+    // 2s, 4s, 8s … capped at 60s.
+    final delay = Duration(seconds: (2 << _retryAttempt).clamp(2, 60));
+    _retryAttempt = (_retryAttempt + 1).clamp(0, 6);
+    _retryTimer = Timer(delay, () {
+      if (_supabase.auth.currentUser == null) return;
+      debugPrint(
+          'CollaboratorRealtimeService: 🔄 Retrying subscription (attempt $_retryAttempt)');
+      subscribe();
+    });
+  }
+
+  /// Asynchronously removes a dead channel object; errors are swallowed
+  /// (the socket may already be gone).
+  void _removeStaleChannel() {
+    final stale = _channel;
+    _channel = null;
+    if (stale == null) return;
+    _teardownInProgress = true;
+    unawaited(() async {
+      try {
+        await _supabase.removeChannel(stale);
+      } catch (_) {
+        // Already gone.
+      } finally {
+        _teardownInProgress = false;
+      }
+    }());
   }
 
   void _handleChange(PostgresChangePayload payload) {
@@ -173,11 +225,13 @@ class CollaboratorRealtimeService {
 
   /// Unsubscribe from collaborator changes
   void unsubscribe() {
-    if (!_isSubscribed) return;
+    _retryTimer?.cancel();
+    _retryAttempt = 0;
+    if (_channel == null && !_isSubscribed) return;
 
-    debugPrint('CollaboratorRealtimeService: Unsubscribing from collaborator changes');
-    _channel?.unsubscribe();
-    _channel = null;
+    debugPrint(
+        'CollaboratorRealtimeService: Unsubscribing from collaborator changes');
+    _removeStaleChannel();
     _isSubscribed = false;
   }
 

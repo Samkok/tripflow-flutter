@@ -114,7 +114,8 @@ class UserProfileRepository {
   }
 
   /// Update user profile
-  Future<UserProfile> updateUserProfile(String userId, UserProfile profile) async {
+  Future<UserProfile> updateUserProfile(
+      String userId, UserProfile profile) async {
     try {
       final response = await _supabase
           .from(_tableName)
@@ -171,13 +172,10 @@ class UserProfileRepository {
   }) async {
     try {
       // Update user_profile with trial_start_at
-      await _supabase
-          .from(_tableName)
-          .update({
-            'trial_start_at': DateTime.now().toIso8601String(),
-            'updated_at': DateTime.now().toIso8601String(),
-          })
-          .eq('user_id', userId);
+      await _supabase.from(_tableName).update({
+        'trial_start_at': DateTime.now().toIso8601String(),
+        'updated_at': DateTime.now().toIso8601String(),
+      }).eq('user_id', userId);
 
       // Log to trial_devices table
       await _supabase.from('trial_devices').insert({
@@ -211,7 +209,9 @@ class UserProfileRepository {
       // Try to upsert so existing record isn't overwritten if webhook beat us here
       final now = DateTime.now().toIso8601String();
       final expiresAtStr = trialExpiresAt?.toIso8601String() ??
-          DateTime.now().add(const Duration(days: 3)).toIso8601String(); // Default 3-day trial
+          DateTime.now()
+              .add(const Duration(days: 3))
+              .toIso8601String(); // Default 3-day trial
 
       await _supabase.from('user_subscriptions').upsert(
         {
@@ -226,12 +226,18 @@ class UserProfileRepository {
           'created_at': now,
           'updated_at': now,
         },
-        onConflict: 'user_id',
+        // Must name the FULL unique constraint (user_id, entitlement) —
+        // 'user_id' alone matches no constraint and Postgres rejects the
+        // whole upsert ("no unique or exclusion constraint matching the ON
+        // CONFLICT specification"), silently voiding every trial sync.
+        onConflict: 'user_id,entitlement',
       );
 
-      debugPrint('UserProfileRepository: ✅ Trial subscription synced for user $userId');
+      debugPrint(
+          'UserProfileRepository: ✅ Trial subscription synced for user $userId');
     } catch (e) {
-      debugPrint('UserProfileRepository: ⚠️ Failed to sync trial subscription: $e');
+      debugPrint(
+          'UserProfileRepository: ⚠️ Failed to sync trial subscription: $e');
       // Non-fatal — webhook will eventually create the record
     }
   }

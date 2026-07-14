@@ -78,16 +78,23 @@ class SubscriptionRealtimeService {
       // Retry with backoff instead of silently giving up.
       if (_authRetryCount < _maxAuthRetries) {
         _authRetryCount++;
-        debugPrint('SubscriptionRealtimeService: 🔄 Will retry auth check in ${_authRetryDelay.inSeconds}s (attempt $_authRetryCount/$_maxAuthRetries)');
+        debugPrint(
+            'SubscriptionRealtimeService: 🔄 Will retry auth check in ${_authRetryDelay.inSeconds}s (attempt $_authRetryCount/$_maxAuthRetries)');
         Future.delayed(_authRetryDelay, () => subscribe());
       } else {
-        debugPrint('SubscriptionRealtimeService: ❌ Max auth retries reached, giving up');
+        debugPrint(
+            'SubscriptionRealtimeService: ❌ Max auth retries reached, giving up');
       }
       return;
     }
     _authRetryCount = 0; // Reset on success
 
-    debugPrint('SubscriptionRealtimeService: 🔔 Starting subscription for user $userId');
+    // Drop any stale (errored/closed) channel before building a new one so
+    // reconnect attempts don't stack dead channel objects on the same topic.
+    _removeStaleChannel();
+
+    debugPrint(
+        'SubscriptionRealtimeService: 🔔 Starting subscription for user $userId');
 
     try {
       _channel = _supabase
@@ -102,39 +109,49 @@ class SubscriptionRealtimeService {
               value: userId,
             ),
             callback: (payload) {
-              debugPrint('SubscriptionRealtimeService: 📨 Received ${payload.eventType} event');
-              debugPrint('SubscriptionRealtimeService: 📨 New: ${payload.newRecord}');
-              debugPrint('SubscriptionRealtimeService: 📨 Old: ${payload.oldRecord}');
+              debugPrint(
+                  'SubscriptionRealtimeService: 📨 Received ${payload.eventType} event');
+              debugPrint(
+                  'SubscriptionRealtimeService: 📨 New: ${payload.newRecord}');
+              debugPrint(
+                  'SubscriptionRealtimeService: 📨 Old: ${payload.oldRecord}');
               _handleChange(payload);
             },
           )
           .subscribe((status, error) {
-            if (status == RealtimeSubscribeStatus.subscribed) {
-              debugPrint('SubscriptionRealtimeService: ✅ Successfully subscribed to realtime updates');
-              _isSubscribed = true;
-            } else if (status == RealtimeSubscribeStatus.channelError) {
-              debugPrint('SubscriptionRealtimeService: ❌ Channel error during subscription');
-              _isSubscribed = false;
-              _scheduleReconnect();
-            } else if (status == RealtimeSubscribeStatus.timedOut) {
-              debugPrint('SubscriptionRealtimeService: ⏱️ Subscription timed out');
-              _isSubscribed = false;
-              _scheduleReconnect();
-            } else if (status == RealtimeSubscribeStatus.closed) {
-              debugPrint('SubscriptionRealtimeService: 🔒 Channel closed');
-              _isSubscribed = false;
-            } else {
-              debugPrint('SubscriptionRealtimeService: ℹ️ Status: $status');
-            }
+        if (status == RealtimeSubscribeStatus.subscribed) {
+          debugPrint(
+              'SubscriptionRealtimeService: ✅ Successfully subscribed to realtime updates');
+          _isSubscribed = true;
+        } else if (status == RealtimeSubscribeStatus.channelError) {
+          debugPrint(
+              'SubscriptionRealtimeService: ❌ Channel error during subscription');
+          _isSubscribed = false;
+          _scheduleReconnect();
+        } else if (status == RealtimeSubscribeStatus.timedOut) {
+          debugPrint('SubscriptionRealtimeService: ⏱️ Subscription timed out');
+          _isSubscribed = false;
+          _scheduleReconnect();
+        } else if (status == RealtimeSubscribeStatus.closed) {
+          debugPrint('SubscriptionRealtimeService: 🔒 Channel closed');
+          _isSubscribed = false;
+          // Closed also fires on intentional unsubscribe — only
+          // reconnect when the server/socket closed us.
+          if (!_teardownInProgress) _scheduleReconnect();
+        } else {
+          debugPrint('SubscriptionRealtimeService: ℹ️ Status: $status');
+        }
 
-            if (error != null) {
-              debugPrint('SubscriptionRealtimeService: ❌ Subscription error: $error');
-              _isSubscribed = false;
-              _scheduleReconnect();
-            }
-          });
+        if (error != null) {
+          debugPrint(
+              'SubscriptionRealtimeService: ❌ Subscription error: $error');
+          _isSubscribed = false;
+          _scheduleReconnect();
+        }
+      });
     } catch (e, stackTrace) {
-      debugPrint('SubscriptionRealtimeService: ❌ Exception during subscription: $e');
+      debugPrint(
+          'SubscriptionRealtimeService: ❌ Exception during subscription: $e');
       debugPrint('SubscriptionRealtimeService: Stack trace: $stackTrace');
       _isSubscribed = false;
       _scheduleReconnect();
@@ -149,6 +166,28 @@ class SubscriptionRealtimeService {
       debugPrint('SubscriptionRealtimeService: 🔄 Attempting to reconnect...');
       subscribe();
     });
+  }
+
+  /// True while an intentional channel teardown is in flight, so the
+  /// resulting `closed` status doesn't trigger a reconnect.
+  bool _teardownInProgress = false;
+
+  /// Asynchronously removes a dead channel object; errors are swallowed
+  /// (the socket may already be gone).
+  void _removeStaleChannel() {
+    final stale = _channel;
+    _channel = null;
+    if (stale == null) return;
+    _teardownInProgress = true;
+    unawaited(() async {
+      try {
+        await _supabase.removeChannel(stale);
+      } catch (_) {
+        // Already gone.
+      } finally {
+        _teardownInProgress = false;
+      }
+    }());
   }
 
   void _handleChange(PostgresChangePayload payload) {
@@ -203,7 +242,8 @@ class SubscriptionRealtimeService {
     Map<String, dynamic> oldRecord,
   ) {
     final status = newRecord['status'] as String;
-    final oldStatus = oldRecord.isNotEmpty ? oldRecord['status'] as String? : null;
+    final oldStatus =
+        oldRecord.isNotEmpty ? oldRecord['status'] as String? : null;
 
     // Determine event type based on status transition
     SubscriptionEventType eventType;
@@ -228,7 +268,8 @@ class SubscriptionRealtimeService {
       try {
         expiresAt = DateTime.parse(expiresAtStr);
       } catch (e) {
-        debugPrint('SubscriptionRealtimeService: Failed to parse expires_at: $e');
+        debugPrint(
+            'SubscriptionRealtimeService: Failed to parse expires_at: $e');
       }
     }
 
@@ -248,7 +289,8 @@ class SubscriptionRealtimeService {
   /// Force resubscribe - unsubscribes and resubscribes with fresh auth
   /// Useful when auth state changes after initial subscription attempt
   Future<void> resubscribe() async {
-    debugPrint('SubscriptionRealtimeService: 🔄 Resubscribing with fresh auth...');
+    debugPrint(
+        'SubscriptionRealtimeService: 🔄 Resubscribing with fresh auth...');
     _authRetryCount = 0;
     unsubscribe();
     await subscribe();
@@ -256,13 +298,13 @@ class SubscriptionRealtimeService {
 
   /// Unsubscribe from subscription changes
   void unsubscribe() {
-    if (!_isSubscribed) return;
-
-    debugPrint('SubscriptionRealtimeService: 🔕 Unsubscribing from subscription changes');
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
-    _channel?.unsubscribe();
-    _channel = null;
+    if (_channel == null && !_isSubscribed) return;
+
+    debugPrint(
+        'SubscriptionRealtimeService: 🔕 Unsubscribing from subscription changes');
+    _removeStaleChannel();
     _isSubscribed = false;
   }
 
