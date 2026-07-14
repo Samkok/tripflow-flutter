@@ -37,11 +37,21 @@ target 'Runner' do
 end
 
 post_install do |installer|
+  # On CI (Codemagic sets CI=true / CM_BUILD_ID) the app is signed with a
+  # MANUAL App Store distribution profile via `xcode-project use-profiles`.
+  # The automatic + "Apple Development" overrides below run during `pod install`
+  # (which happens after use-profiles) and would force the Pods back to
+  # development signing — making the archive fail with
+  # "No iOS Development certificate / No Accounts". So skip them on CI.
+  # Local device builds keep them so they sign automatically with no setup.
+  on_ci = ENV['CI'] == 'true' || !ENV['CM_BUILD_ID'].nil?
+
   installer.pods_project.targets.each do |target|
     flutter_additional_ios_build_settings(target)
     target.build_configurations.each do |config|
       config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.0'
-      # Code signing settings for frameworks
+      next if on_ci
+      # Code signing settings for frameworks (local device builds only)
       config.build_settings['CODE_SIGNING_REQUIRED'] = 'YES'
       config.build_settings['CODE_SIGNING_ALLOWED'] = 'YES'
       config.build_settings['CODE_SIGN_IDENTITY'] = 'Apple Development'
@@ -49,17 +59,17 @@ post_install do |installer|
     end
   end
 
-  # Preserve development team settings in the main project
-  installer.generated_projects.each do |project|
-    project.targets.each do |target|
-      target.build_configurations.each do |config|
-        # Only set if not already set (preserves existing team)
-        if config.build_settings['DEVELOPMENT_TEAM'].nil? || config.build_settings['DEVELOPMENT_TEAM'].empty?
-          # Try to get team from environment or use automatic signing
-          config.build_settings['DEVELOPMENT_TEAM'] = ENV['DEVELOPMENT_TEAM'] || 'J57YQ6F7J9'
+  # Preserve development team + automatic signing in the generated projects
+  # (local device builds only — CI relies on manual App Store signing).
+  unless on_ci
+    installer.generated_projects.each do |project|
+      project.targets.each do |target|
+        target.build_configurations.each do |config|
+          if config.build_settings['DEVELOPMENT_TEAM'].nil? || config.build_settings['DEVELOPMENT_TEAM'].empty?
+            config.build_settings['DEVELOPMENT_TEAM'] = ENV['DEVELOPMENT_TEAM'] || 'J57YQ6F7J9'
+          end
+          config.build_settings['CODE_SIGN_STYLE'] = 'Automatic'
         end
-        # Enable automatic code signing
-        config.build_settings['CODE_SIGN_STYLE'] = 'Automatic'
       end
     end
   end
