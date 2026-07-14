@@ -153,10 +153,11 @@ workflows:
       - name: Install Flutter dependencies
         script: flutter pub get
 
-      - name: Install CocoaPods dependencies
-        script: |
-          cd ios
-          pod install
+      # NOTE: no standalone `pod install` step. `flutter build ipa` (below)
+      # regenerates ios/Flutter/Generated.xcconfig with THIS machine's
+      # FLUTTER_ROOT and then runs pod install itself — in the right order.
+      # A separate early `pod install` reads the (stale) Generated.xcconfig
+      # before Flutter fixes it and fails with "cannot load podhelper".
 
       - name: Update version info
         script: |
