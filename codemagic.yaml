@@ -162,7 +162,12 @@ workflows:
       - name: Update version info
         script: |
           APP_BUILD_NUMBER=$(($BUILD_NUMBER))
-          APP_VERSION="1.0.$(($BUILD_NUMBER))"
+          # Marketing version = pubspec.yaml's major.minor (e.g. "1.7.0+1" -> "1.7")
+          # plus the CI build number as the patch -> "1.7.<build>". Bump `version:`
+          # in pubspec.yaml (e.g. to 1.8.0) and this follows automatically.
+          # (Was hardcoded to "1.0.<build>", which is why the store showed 1.0.x.)
+          MAJOR_MINOR=$(grep '^version:' pubspec.yaml | sed -E 's/^version:[[:space:]]*//' | cut -d'+' -f1 | cut -d. -f1,2)
+          APP_VERSION="$MAJOR_MINOR.$APP_BUILD_NUMBER"
           echo "Updating Info.plist with APP_VERSION: $APP_VERSION and APP_BUILD_NUMBER: $APP_BUILD_NUMBER"
           /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $APP_VERSION" "ios/Runner/Info.plist"
           /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $APP_BUILD_NUMBER" "ios/Runner/Info.plist"
