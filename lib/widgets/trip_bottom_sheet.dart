@@ -353,6 +353,20 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                               tripProvider.select((s) => s.totalTravelTime));
                           final totalDistance = ref.watch(
                               tripProvider.select((s) => s.totalDistance));
+                          // Data integrity: with no optimized route the
+                          // distance/time are zeros and an ETA is just the
+                          // wall clock — show stops only. On past days an
+                          // ETA computed from "now" is meaningless — hide it
+                          // (real route facts stay).
+                          final hasRoute = ref.watch(tripProvider
+                              .select((s) => s.optimizedRoute.isNotEmpty));
+                          final summarySelectedDate =
+                              ref.watch(selectedDateProvider);
+                          final summaryNow = DateTime.now();
+                          final summaryToday = DateTime(summaryNow.year,
+                              summaryNow.month, summaryNow.day);
+                          final hideEta =
+                              summarySelectedDate.isBefore(summaryToday);
                           // Cross-fade between the full and compact route
                           // summary. Goes compact when EITHER the list is
                           // scrolled past the top (_summaryCompact, flipped by
@@ -388,12 +402,16 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                                     context,
                                     totalTravelTime,
                                     totalDistance,
-                                    locationsForDate.length),
+                                    locationsForDate.length,
+                                    hasRoute: hasRoute,
+                                    hideEta: hideEta),
                                 secondChild: _buildCompactTripSummary(
                                     context,
                                     totalTravelTime,
                                     totalDistance,
-                                    locationsForDate.length),
+                                    locationsForDate.length,
+                                    hasRoute: hasRoute,
+                                    hideEta: hideEta),
                               );
                             },
                           );
@@ -637,13 +655,20 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
               final hasLocations = count > 0;
               final canTap = hasLocations && !isGenerating;
               final primaryColor = Theme.of(context).colorScheme.primary;
+              // Past days are read-only (the history banner says so) — never
+              // coach adding places there.
+              final nudgeDate = ref.watch(selectedDateProvider);
+              final nudgeNow = DateTime.now();
+              final isPastDate = nudgeDate
+                  .isBefore(DateTime(nudgeNow.year, nudgeNow.month, nudgeNow.day));
 
               // Goal-gradient nudge: route optimization only pays off at 3+
               // stops, so below that we coach toward the "aha" instead of
               // offering a trivial optimize. Re-optimize stays available once
               // a route already exists.
               const ahaThreshold = TripBottomSheet.ahaThreshold;
-              if (count > 0 &&
+              if (!isPastDate &&
+                  count > 0 &&
                   count < ahaThreshold &&
                   !hasOptimizedRoute &&
                   !isGenerating) {
@@ -1175,8 +1200,10 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
     BuildContext context,
     Duration totalTravelTime,
     double totalDistance,
-    int totalStopsForDate,
-  ) {
+    int totalStopsForDate, {
+    required bool hasRoute,
+    required bool hideEta,
+  }) {
     final theme = Theme.of(context);
     final estimatedArrival = DateTime.now().add(totalTravelTime);
     final etaLabel = DateFormat('h:mm a').format(estimatedArrival);
@@ -1207,27 +1234,31 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                     text:
                         '$totalStopsForDate stop${totalStopsForDate == 1 ? '' : 's'}',
                   ),
-                  TextSpan(
-                    text: '  ·  ',
-                    style: TextStyle(color: theme.dividerColor),
-                  ),
-                  TextSpan(text: _formatDistance(totalDistance)),
-                  TextSpan(
-                    text: '  ·  ',
-                    style: TextStyle(color: theme.dividerColor),
-                  ),
-                  TextSpan(text: _formatDuration(totalTravelTime)),
-                  TextSpan(
-                    text: '  ·  ',
-                    style: TextStyle(color: theme.dividerColor),
-                  ),
-                  TextSpan(
-                    text: 'ETA $etaLabel',
-                    style: TextStyle(
-                      color: theme.colorScheme.primary,
-                      fontWeight: FontWeight.w700,
+                  if (hasRoute) ...[
+                    TextSpan(
+                      text: '  ·  ',
+                      style: TextStyle(color: theme.dividerColor),
                     ),
-                  ),
+                    TextSpan(text: _formatDistance(totalDistance)),
+                    TextSpan(
+                      text: '  ·  ',
+                      style: TextStyle(color: theme.dividerColor),
+                    ),
+                    TextSpan(text: _formatDuration(totalTravelTime)),
+                    if (!hideEta) ...[
+                      TextSpan(
+                        text: '  ·  ',
+                        style: TextStyle(color: theme.dividerColor),
+                      ),
+                      TextSpan(
+                        text: 'ETA $etaLabel',
+                        style: TextStyle(
+                          color: theme.colorScheme.primary,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  ],
                 ],
               ),
               maxLines: 1,
@@ -1259,8 +1290,13 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
     );
   }
 
-  Widget _buildTripSummary(BuildContext context, Duration totalTravelTime,
-      double totalDistance, int totalStopsForDate) {
+  Widget _buildTripSummary(
+      BuildContext context,
+      Duration totalTravelTime,
+      double totalDistance,
+      int totalStopsForDate,
+      {required bool hasRoute,
+      required bool hideEta}) {
     final estimatedArrival = DateTime.now().add(totalTravelTime);
 
     return Container(
@@ -1305,8 +1341,10 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                       children: [
                         // Share the before/after route card — every
                         // optimized route is a shareable artifact, not just
-                        // the first one.
-                        IconButton.filledTonal(
+                        // the first one. (Only once a route exists — the
+                        // card is the before/after reveal.)
+                        if (hasRoute)
+                          IconButton.filledTonal(
                           onPressed: () {
                             final s = ref.read(tripProvider);
                             RouteShareCardService.instance.shareRouteCard(
@@ -1340,7 +1378,7 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                             padding: const EdgeInsets.all(8),
                           ),
                         ),
-                        const SizedBox(height: 6),
+                        if (hasRoute) const SizedBox(height: 6),
                         IconButton.filledTonal(
                           onPressed: () => _openGoogleMaps(context, ref),
                           icon: const Icon(Icons.directions, size: 20),
@@ -1355,6 +1393,7 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                             padding: const EdgeInsets.all(8),
                           ),
                         ),
+                        if (hasRoute) ...[
                         const SizedBox(height: 4),
                         Container(
                           padding: const EdgeInsets.symmetric(
@@ -1389,6 +1428,7 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                             ],
                           ),
                         ),
+                        ],
                       ],
                     );
                   },
@@ -1404,27 +1444,30 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                 'Total Stops',
                 '$totalStopsForDate',
               ),
-              _summaryItem(
-                context,
-                'Travel Time',
-                _formatDuration(totalTravelTime),
-              ),
-              _summaryItem(
-                context,
-                'Distance',
-                _formatDistance(totalDistance),
-              ),
+              if (hasRoute) ...[
+                _summaryItem(
+                  context,
+                  'Travel Time',
+                  _formatDuration(totalTravelTime),
+                ),
+                _summaryItem(
+                  context,
+                  'Distance',
+                  _formatDistance(totalDistance),
+                ),
+              ],
             ],
           ),
           const SizedBox(height: 8),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              _summaryItem(
-                context,
-                'ETA',
-                DateFormat('h:mm a').format(estimatedArrival),
-              ),
+              if (hasRoute && !hideEta)
+                _summaryItem(
+                  context,
+                  'ETA',
+                  DateFormat('h:mm a').format(estimatedArrival),
+                ),
               // The story kernel: travel time saved vs the user's original
               // order. Only rendered when the delta is defensible (≥5 min).
               Consumer(builder: (context, ref, _) {
@@ -1687,8 +1730,8 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
           indicatorSize: TabBarIndicatorSize.tab,
           dividerColor: Colors.transparent,
           tabs: const [
-            Tab(text: 'Selected Date'),
-            Tab(text: 'All'),
+            Tab(text: 'This day'),
+            Tab(text: 'Whole trip'),
           ],
         ),
       ),
@@ -1919,7 +1962,9 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
           stopCount < ahaThreshold &&
           !hasRoute &&
           !isGenerating &&
-          !isViewingHistory) {
+          // Any past date is read-only — never nudge there (isViewingHistory
+          // alone misses past days that have no route yet).
+          !isPastDate) {
         final remaining = ahaThreshold - stopCount;
         final primaryColor = Theme.of(context).colorScheme.primary;
         return Container(

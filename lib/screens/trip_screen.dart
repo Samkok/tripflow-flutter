@@ -1367,14 +1367,17 @@ class _TripScreenState extends ConsumerState<TripScreen> {
           borderRadius: BorderRadius.circular(16),
           border: Border.all(
             color: isActive
-                ? Colors.green.withValues(alpha: 0.3)
+                ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.35)
                 : Theme.of(context).colorScheme.primary.withValues(alpha: 0.2),
             width: isActive ? 2 : 1,
           ),
           boxShadow: [
             BoxShadow(
               color: isActive
-                  ? Colors.green.withValues(alpha: 0.1)
+                  ? Theme.of(context)
+                      .colorScheme
+                      .primary
+                      .withValues(alpha: 0.08)
                   : Colors.black.withValues(alpha: 0.05),
               blurRadius: isActive ? 8 : 4,
               offset: Offset(0, isActive ? 4 : 2),
@@ -1583,9 +1586,21 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                               style: const TextStyle(fontSize: 12),
                             ),
                             style: ElevatedButton.styleFrom(
-                              backgroundColor:
-                                  isActive ? Colors.orange : Colors.green,
-                              foregroundColor: Colors.white,
+                              // Neutral styling: managing the active trip is
+                              // housekeeping, not a warning (orange) or a
+                              // success (green).
+                              backgroundColor: isActive
+                                  ? Theme.of(context)
+                                      .colorScheme
+                                      .onSurface
+                                      .withValues(alpha: 0.12)
+                                  : Theme.of(context).colorScheme.primary,
+                              foregroundColor: isActive
+                                  ? Theme.of(context)
+                                      .colorScheme
+                                      .onSurface
+                                      .withValues(alpha: 0.85)
+                                  : Theme.of(context).colorScheme.onPrimary,
                               padding: const EdgeInsets.symmetric(
                                 horizontal: 10,
                               ),
@@ -1744,14 +1759,16 @@ class _TripScreenState extends ConsumerState<TripScreen> {
     final localActiveTripId = ref.watch(localActiveTripIdProvider);
     final isActive = localActiveTripId == trip.id;
 
-    final statusColor = isActive ? Colors.green : Colors.orange;
+    // Green = active is a status semantic; "Inactive" is a neutral state,
+    // not a warning — grey, never orange.
+    final statusColor = isActive ? Colors.green : Colors.grey;
     final statusText = isActive ? 'Active' : 'Inactive';
 
     // Border and shadow change based on active / selected state
     final borderColor = isSelected
         ? Theme.of(context).colorScheme.primary
         : isActive
-            ? Colors.green.withValues(alpha: 0.3)
+            ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.35)
             : Theme.of(context).dividerColor.withValues(alpha: 0.2);
     final borderWidth = (isSelected || isActive) ? 2.0 : 1.0;
 

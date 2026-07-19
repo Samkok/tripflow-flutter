@@ -272,10 +272,12 @@ final styledPolylinesProvider = Provider<Set<Polyline>>((ref) {
         Polyline(
           polylineId: PolylineId(polylineId),
           points: legPoints,
-          // Grey when not clicked, vibrant primary color when highlighted
+          // The route is the product's hero — brand color always. A tapped
+          // leg still reads stronger via full opacity, extra width, and the
+          // white inner border added below.
           color: isHighlighted
               ? AppTheme.primaryColor
-              : Colors.grey.shade500,
+              : AppTheme.primaryColor.withValues(alpha: 0.85),
           // Professional width: thicker when highlighted
           width: isHighlighted ? 8 : 6,
           // No patterns for cleaner, more professional look
