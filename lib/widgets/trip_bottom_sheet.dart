@@ -39,6 +39,12 @@ class TripBottomSheet extends ConsumerStatefulWidget {
     this.optimizeKey,
   });
 
+  /// Places needed before route optimization is worth offering (the "aha").
+  /// Single source of truth for the goal-gradient nudges below. Distinct from
+  /// [SubscriptionLimitService.freePlaceAllowance] (the paywall cap of 5) — 3
+  /// unlocks Optimize, 5 hits the wall.
+  static const int ahaThreshold = 3;
+
   // A simple provider to signal when the "View Route" button is tapped for a historical trip.
   static final viewHistoricalRouteProvider =
       StateProvider<bool>((ref) => false);
@@ -632,7 +638,7 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
               // stops, so below that we coach toward the "aha" instead of
               // offering a trivial optimize. Re-optimize stays available once
               // a route already exists.
-              const ahaThreshold = 3;
+              const ahaThreshold = TripBottomSheet.ahaThreshold;
               if (count > 0 &&
                   count < ahaThreshold &&
                   !hasOptimizedRoute &&
@@ -1851,7 +1857,7 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
       // pays off at 3+ stops, so below that we coach toward the "aha"
       // instead of offering a trivial optimize. Re-optimize stays
       // available once a route already exists.
-      const ahaThreshold = 3;
+      const ahaThreshold = TripBottomSheet.ahaThreshold;
       final stopCount = locationsForDate.length;
       if (stopCount > 0 &&
           stopCount < ahaThreshold &&

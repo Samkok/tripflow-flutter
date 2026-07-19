@@ -87,6 +87,21 @@ class AnalyticsService {
   void onboardingSkipped(int step) =>
       _fire('onboarding_skipped', {'step': step});
 
+  /// Which onboarding CTA the user tapped to finish. [cta] = 'sample' (the
+  /// seeded sample trip — the fastest path to the optimize aha) | 'plan'
+  /// (create their own trip / start adding places). Measures sample-trip
+  /// uptake, especially for anonymous users once they can see that CTA.
+  void onboardingCta(String cta) => _fire('onboarding_cta', {'cta': cta});
+
+  /// A sample trip's places were seeded (the one-tap path to the aha).
+  /// [anonymous] distinguishes the no-account local seed from the
+  /// authenticated Supabase-trip seed; [placeCount] = seeded place count.
+  void sampleTripSeeded({required bool anonymous, required int placeCount}) =>
+      _fire('sample_trip_seeded', {
+        'anonymous': anonymous ? 'yes' : 'no',
+        'place_count': placeCount,
+      });
+
   /// The one-time map spotlight tour was completed ("Got it" on the last
   /// step).
   void mapTutorialCompleted() => _fire('map_tutorial_completed');

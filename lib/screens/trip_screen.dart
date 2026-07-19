@@ -359,6 +359,8 @@ class _TripScreenState extends ConsumerState<TripScreen> {
 
       ref.invalidate(userTripsProvider);
       AnalyticsService.instance.tripCreated();
+      AnalyticsService.instance
+          .sampleTripSeeded(anonymous: false, placeCount: places.length);
       if (!mounted) return;
       await _setActiveTrip(trip, goToMap: false);
       if (!mounted) return;

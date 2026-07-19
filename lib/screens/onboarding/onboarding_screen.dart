@@ -184,6 +184,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     if (_finishing) return;
     _finishing = true;
     await _complete();
+    AnalyticsService.instance.onboardingCta('plan');
     if (widget.isAnonymous) {
       // No trip form without an account — land them on the map where the
       // search bar is, ready to add their first place.
@@ -200,6 +201,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     if (_finishing) return;
     _finishing = true;
     await _complete();
+    AnalyticsService.instance.onboardingCta('sample');
     ref.read(sampleTripRequestProvider.notifier).state =
         ref.read(sampleTripRequestProvider) + 1;
     if (mounted) Navigator.of(context).pop();
