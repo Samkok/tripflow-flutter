@@ -16,6 +16,7 @@ import 'package:voyza/widgets/location_detail_sheet.dart';
 import 'package:uuid/uuid.dart';
 import '../models/location_model.dart';
 import '../models/user_profile.dart';
+import '../utils/geo_utils.dart';
 import '../providers/location_provider.dart';
 import '../providers/optimized_map_overlay_provider.dart';
 import '../providers/trip_provider.dart';
@@ -1567,21 +1568,6 @@ class _MapScreenState extends ConsumerState<MapScreen>
     return 2 * earthRadius * math.asin(math.min(1.0, math.sqrt(h)));
   }
 
-  /// Fallback distance (~500 km) used ONLY when a trip has no tagged country
-  /// (anonymous session / country-less trip): a device farther than this from
-  /// every stop is treated as being in a different region, so its GPS is not
-  /// folded into the map fit or used as a route anchor.
-  static const double _kForeignFallbackMeters = 500000;
-
-  double _minMetersToStops(LatLng current, List<LocationModel> stops) {
-    var min = double.infinity;
-    for (final s in stops) {
-      final d = _metersBetween(current, s.coordinates);
-      if (d < min) min = d;
-    }
-    return min;
-  }
-
   void _zoomToFitTrip() {
     if (_mapController == null) return;
 
@@ -1615,8 +1601,8 @@ class _MapScreenState extends ConsumerState<MapScreen>
       // framing the Lisbon sample trip).
       crossCountry = currentLocation != null &&
           locations.isNotEmpty &&
-          _minMetersToStops(currentLocation, locations) >
-              _kForeignFallbackMeters;
+          minMetersToAny(currentLocation, locations.map((l) => l.coordinates)) >
+              kForeignFallbackMeters;
     }
 
     if (crossCountry) {

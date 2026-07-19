@@ -507,10 +507,15 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
             ),
           ),
           const Spacer(),
+          // Anonymous users get the sample trip as the PRIMARY CTA: it's their
+          // one-tap path to the optimize aha (no account, no cold empty map).
+          // Authenticated users keep "plan my trip" primary with the sample as
+          // the secondary escape hatch.
           SizedBox(
             width: double.infinity,
             child: FilledButton(
-              onPressed: _planFirstTrip,
+              onPressed:
+                  widget.isAnonymous ? _trySampleTrip : _planFirstTrip,
               style: FilledButton.styleFrom(
                 padding: const EdgeInsets.symmetric(vertical: 16),
                 shape: RoundedRectangleBorder(
@@ -519,7 +524,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
               ),
               child: Text(
                 widget.isAnonymous
-                    ? 'Start adding places'
+                    ? 'Try a sample trip'
                     : _destination != null
                         ? 'Plan my ${_destination!.name} trip'
                         : 'Plan my first trip',
@@ -530,8 +535,11 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
           ),
           Center(
             child: TextButton(
-              onPressed: _trySampleTrip,
-              child: const Text('Try a sample trip instead'),
+              onPressed:
+                  widget.isAnonymous ? _planFirstTrip : _trySampleTrip,
+              child: Text(widget.isAnonymous
+                  ? 'Start adding my own places'
+                  : 'Try a sample trip instead'),
             ),
           ),
           const SizedBox(height: 12),

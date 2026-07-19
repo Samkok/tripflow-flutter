@@ -3,7 +3,6 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
-import 'package:geolocator/geolocator.dart';
 import 'package:voyza/models/location_model.dart';
 import 'package:voyza/providers/map_ui_state_provider.dart';
 import '../providers/trip_listener_provider.dart';
@@ -11,6 +10,8 @@ import '../providers/trip_provider.dart';
 import '../providers/trip_collaborator_provider.dart';
 import '../providers/trip_simulation_provider.dart';
 import '../utils/date_picker_utils.dart';
+import '../utils/geo_utils.dart';
+import '../services/review_prompt_service.dart';
 import 'timing_warnings_sheet.dart';
 import '../utils/external_app_links.dart';
 import '../utils/trip_date_validator.dart';
@@ -695,7 +696,7 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                   color: Colors.transparent,
                   child: InkWell(
                     onTap: canTap
-                        ? () => _showChooseStartPointDialog(context, ref,
+                        ? () => _onOptimizePressed(context, ref,
                             isReoptimizing: hasOptimizedRoute)
                         : null,
                     borderRadius: BorderRadius.circular(12),
@@ -1934,7 +1935,7 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
       } else {
         buttonText = hasRoute ? 'Re-optimize Route' : 'Optimize Route';
         onPressedAction = () =>
-            _showChooseStartPointDialog(context, ref, isReoptimizing: hasRoute);
+            _onOptimizePressed(context, ref, isReoptimizing: hasRoute);
       }
 
       final canGlow = onPressedAction != null && !isGenerating;
@@ -2038,6 +2039,29 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
         ),
       );
     });
+  }
+
+  /// The very first optimize on this install skips the start-point chooser and
+  /// delivers the reward immediately — the reveal IS the product, and gating it
+  /// behind a decision dilutes the aha (Fogg: reduce ability cost before adding
+  /// motivation). The provider's fallback picks a safe start (current location
+  /// only when it's plausibly near the stops — see geo_utils; else the first
+  /// stop). Start-point choice stays discoverable on every re-optimize.
+  Future<void> _onOptimizePressed(BuildContext context, WidgetRef ref,
+      {required bool isReoptimizing}) async {
+    if (!isReoptimizing) {
+      final lifetimeOptimizes =
+          await ReviewPromptService.instance.getSuccessfulOptimizeCount();
+      if (lifetimeOptimizes == 0) {
+        final selectedDate = ref.read(selectedDateProvider);
+        await ref
+            .read(tripProvider.notifier)
+            .generateOptimizedRoute(selectedDate: selectedDate);
+        return;
+      }
+    }
+    if (!context.mounted) return;
+    _showChooseStartPointDialog(context, ref, isReoptimizing: isReoptimizing);
   }
 
   void _showChooseStartPointDialog(BuildContext context, WidgetRef ref,
@@ -2352,26 +2376,6 @@ class _StartPointSheetState extends ConsumerState<_StartPointSheet> {
     }
   }
 
-  /// Fallback distance (~500 km) used ONLY when the trip has no tagged country
-  /// (anonymous session / country-less trip): a device farther than this from
-  /// every stop is treated as being in a different region, so its GPS is not
-  /// offered as a route anchor.
-  static const double _kForeignFallbackMeters = 500000;
-
-  double _minMetersToStops(LatLng current, List<LocationModel> stops) {
-    var min = double.infinity;
-    for (final s in stops) {
-      final d = Geolocator.distanceBetween(
-        current.latitude,
-        current.longitude,
-        s.coordinates.latitude,
-        s.coordinates.longitude,
-      );
-      if (d < min) min = d;
-    }
-    return min;
-  }
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -2412,8 +2416,9 @@ class _StartPointSheetState extends ConsumerState<_StartPointSheet> {
       // Lisbon sample from a phone in Cambodia).
       currentLocationMismatch = hasCurrentLocation &&
           dayStops.isNotEmpty &&
-          _minMetersToStops(tripState.currentLocation!, dayStops) >
-              _kForeignFallbackMeters;
+          minMetersToAny(tripState.currentLocation!,
+                  dayStops.map((s) => s.coordinates)) >
+              kForeignFallbackMeters;
     }
     final currentLocationDisabled =
         hasCurrentLocation && currentLocationMismatch;

@@ -19,6 +19,7 @@ import '../services/review_prompt_service.dart';
 import '../services/storage_service.dart';
 import '../providers/debounced_settings_provider.dart';
 import '../utils/zone_utils.dart';
+import '../utils/geo_utils.dart';
 import '../utils/isolate_utils.dart';
 import '../models/saved_location.dart';
 import 'auth_provider.dart';
@@ -1043,12 +1044,24 @@ class TripNotifier extends StateNotifier<TripState> {
       } else {
         // This is the primary fallback logic. If no start location is specified, or if the
         // specified one is invalid (e.g., from a different date), we land here.
-        if (state.currentLocation != null) {
-          startPoint = state.currentLocation!;
+        //
+        // Only auto-anchor to the device GPS when it's plausibly near the
+        // stops. Without this, paths that skip the start-point chooser (e.g.
+        // the first-ever optimize) would route a leg from another region —
+        // a phone in Cambodia anchoring the Lisbon sample trip. The chooser's
+        // own guard handles the dialog path; this covers every other caller.
+        final current = state.currentLocation;
+        final currentUsable = current != null &&
+            minMetersToAny(
+                    current, locationsForDate.map((l) => l.coordinates)) <=
+                kForeignFallbackMeters;
+        if (currentUsable) {
+          startPoint = current;
           effectiveStartLocationId = 'current_location';
         } else {
-          // This is the ultimate fallback: use the first location in the list.
-          // The check at the top of the function ensures locationsForDate is not empty here.
+          // Ultimate fallback: use the first location in the list (also the
+          // safe choice when the device is far from every stop). The check at
+          // the top of the function ensures locationsForDate is not empty.
           startPoint = locationsForDate.first.coordinates;
           effectiveStartLocationId = locationsForDate.first.id;
           locationsToOptimize.removeAt(0);
