@@ -31,6 +31,12 @@ class TripState {
   final List<LocationModel> pinnedLocations;
   final List<LocationModel>
       optimizedLocationsForSelectedDate; // New field for the optimized order
+
+  /// The selected date's stops in the USER'S order as they stood when the
+  /// current optimized route was generated (start anchor excluded). Powers the
+  /// honest "before" panel of the shareable route card; refreshed on every
+  /// successful optimize alongside [optimizedLocationsForSelectedDate].
+  final List<LocationModel> originalOrderForSelectedDate;
   final List<LatLng> optimizedRoute;
   final List<List<LatLng>> legPolylines;
   final List<Map<String, dynamic>> legDetails;
@@ -52,6 +58,7 @@ class TripState {
   TripState({
     this.pinnedLocations = const [],
     this.optimizedLocationsForSelectedDate = const [],
+    this.originalOrderForSelectedDate = const [],
     this.optimizedRoute = const [],
     this.legPolylines = const [],
     this.legDetails = const [],
@@ -67,6 +74,7 @@ class TripState {
   TripState copyWith({
     List<LocationModel>? pinnedLocations,
     List<LocationModel>? optimizedLocationsForSelectedDate,
+    List<LocationModel>? originalOrderForSelectedDate,
     List<LatLng>? optimizedRoute,
     List<List<LatLng>>? legPolylines,
     List<Map<String, dynamic>>? legDetails,
@@ -82,6 +90,8 @@ class TripState {
       pinnedLocations: pinnedLocations ?? this.pinnedLocations,
       optimizedLocationsForSelectedDate: optimizedLocationsForSelectedDate ??
           this.optimizedLocationsForSelectedDate,
+      originalOrderForSelectedDate:
+          originalOrderForSelectedDate ?? this.originalOrderForSelectedDate,
       optimizedRoute: optimizedRoute ?? this.optimizedRoute,
       legPolylines: legPolylines ?? this.legPolylines,
       legDetails: legDetails ?? this.legDetails,
@@ -1304,6 +1314,7 @@ class TripNotifier extends StateNotifier<TripState> {
         totalTravelTime: totalTravelTime,
         totalDistance: totalDistance,
         timeSaved: timeSaved,
+        originalOrderForSelectedDate: originalOrder,
       );
 
       _ref.read(zoomToFitRouteTrigger.notifier).update((state) => state + 1);

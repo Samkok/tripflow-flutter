@@ -131,4 +131,9 @@ class AnalyticsService {
   /// Lets us measure share-rate per placement. Organic — never Ads.
   void referralPromptShown(String source) =>
       _fire('referral_prompt_shown', {'source': source});
+
+  /// The before/after route card was shared (share sheet opened). The
+  /// artifact that carries the aha outside the app. Organic — never Ads.
+  void routeCardShared({required bool anonymous}) => _fire(
+      'route_card_shared', {'anonymous': anonymous ? 'yes' : 'no'});
 }

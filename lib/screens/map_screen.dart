@@ -16,6 +16,7 @@ import 'package:voyza/widgets/location_detail_sheet.dart';
 import 'package:uuid/uuid.dart';
 import '../models/location_model.dart';
 import '../models/user_profile.dart';
+import '../services/route_share_card_service.dart';
 import '../utils/geo_utils.dart';
 import '../providers/location_provider.dart';
 import '../providers/optimized_map_overlay_provider.dart';
@@ -802,6 +803,16 @@ class _MapScreenState extends ConsumerState<MapScreen>
           onInvite: isAnonymous
               ? null
               : () => inviteFriends(context, ref, source: 'celebration'),
+          // Everyone can carry the aha out of the app: the before/after
+          // route card (authed shares ride the referral link).
+          onShare: () => RouteShareCardService.instance.shareRouteCard(
+            originalOrder: tripState.originalOrderForSelectedDate,
+            optimizedOrder: tripState.optimizedLocationsForSelectedDate,
+            timeSaved: tripState.timeSaved,
+            anonymous: isAnonymous,
+            tripName:
+                ref.read(realtimeActiveTripProvider).asData?.value?.name,
+          ),
         );
       });
     });

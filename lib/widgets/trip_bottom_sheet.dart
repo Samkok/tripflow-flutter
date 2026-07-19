@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:voyza/models/location_model.dart';
 import 'package:voyza/providers/map_ui_state_provider.dart';
+import '../providers/auth_provider.dart';
 import '../providers/trip_listener_provider.dart';
 import '../providers/trip_provider.dart';
 import '../providers/trip_collaborator_provider.dart';
@@ -21,6 +22,7 @@ import 'app_toast.dart';
 import 'optimized_location_card.dart';
 import '../services/csv_service.dart';
 import '../services/places_service.dart';
+import '../services/route_share_card_service.dart';
 
 class TripBottomSheet extends ConsumerStatefulWidget {
   final DraggableScrollableController? sheetController;
@@ -1301,6 +1303,39 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                       crossAxisAlignment: CrossAxisAlignment.end,
                       mainAxisSize: MainAxisSize.min,
                       children: [
+                        // Share the before/after route card — every
+                        // optimized route is a shareable artifact, not just
+                        // the first one.
+                        IconButton.filledTonal(
+                          onPressed: () {
+                            final s = ref.read(tripProvider);
+                            RouteShareCardService.instance.shareRouteCard(
+                              originalOrder: s.originalOrderForSelectedDate,
+                              optimizedOrder:
+                                  s.optimizedLocationsForSelectedDate,
+                              timeSaved: s.timeSaved,
+                              anonymous:
+                                  ref.read(currentUserIdProvider) == null,
+                              tripName: ref
+                                  .read(realtimeActiveTripProvider)
+                                  .asData
+                                  ?.value
+                                  ?.name,
+                            );
+                          },
+                          icon: const Icon(Icons.ios_share_rounded, size: 20),
+                          tooltip: 'Share route card',
+                          style: IconButton.styleFrom(
+                            backgroundColor: Theme.of(context)
+                                .colorScheme
+                                .primary
+                                .withValues(alpha: 0.15),
+                            foregroundColor:
+                                Theme.of(context).colorScheme.primary,
+                            padding: const EdgeInsets.all(8),
+                          ),
+                        ),
+                        const SizedBox(height: 6),
                         IconButton.filledTonal(
                           onPressed: () => _openGoogleMaps(context, ref),
                           icon: const Icon(Icons.directions, size: 20),

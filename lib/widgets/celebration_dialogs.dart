@@ -104,6 +104,7 @@ Future<void> showFirstOptimizeCelebration(
   Duration timeSaved = Duration.zero,
   VoidCallback? onSignUp,
   VoidCallback? onInvite,
+  VoidCallback? onShare,
 }) {
   return showDialog<void>(
     context: context,
@@ -113,6 +114,7 @@ Future<void> showFirstOptimizeCelebration(
       timeSaved: timeSaved,
       onSignUp: onSignUp,
       onInvite: onInvite,
+      onShare: onShare,
     ),
   );
 }
@@ -128,12 +130,18 @@ class _FirstOptimizeDialog extends StatefulWidget {
   final VoidCallback? onSignUp;
   final VoidCallback? onInvite;
 
+  /// Opens the before/after route-card share sheet. Offered to EVERYONE
+  /// (authed + anonymous) — the aha peak is the moment worth sharing
+  /// (Contagious: share prompt at the emotional high point).
+  final VoidCallback? onShare;
+
   const _FirstOptimizeDialog({
     required this.stops,
     required this.totalTime,
     this.timeSaved = Duration.zero,
     this.onSignUp,
     this.onInvite,
+    this.onShare,
   });
 
   @override
@@ -242,6 +250,19 @@ class _FirstOptimizeDialogState extends State<_FirstOptimizeDialog> {
                     ),
                   ),
                 ),
+                if (widget.onShare != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: TextButton.icon(
+                      onPressed: () {
+                        final cb = widget.onShare!;
+                        Navigator.of(context).pop();
+                        cb();
+                      },
+                      icon: const Icon(Icons.ios_share_rounded, size: 18),
+                      label: const Text('Share your route'),
+                    ),
+                  ),
                 if (widget.onSignUp != null)
                   Padding(
                     padding: const EdgeInsets.only(top: 4),
