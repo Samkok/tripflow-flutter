@@ -196,6 +196,18 @@ class RouteShareCardService {
         token = inserted['token'] as String?;
       }
       if (token == null) return null;
+      // Branded links win trust + clicks: a raw *.supabase.co URL reads as
+      // phishing in a chat. Flip _brandedPublicTripBase on ONLY after the
+      // site has a server-side 301/302 rule
+      //   /t/*  ->  $SUPABASE_URL/functions/v1/public-trip?t=<splat>
+      // (same host that already serves /r/<code> referral links). A JS/meta
+      // redirect is NOT enough — chat unfurlers won't follow it and link
+      // previews would break. Until then we share the function URL directly:
+      // ugly but functional, and no security difference (the project ref is
+      // already public in the app binary; the token is the capability).
+      if (_brandedPublicTripBase != null) {
+        return '$_brandedPublicTripBase$token';
+      }
       final supabaseUrl = dotenv.env['SUPABASE_URL'] ?? '';
       if (supabaseUrl.isEmpty) return null;
       return '$supabaseUrl/functions/v1/public-trip?t=$token';
@@ -204,6 +216,10 @@ class RouteShareCardService {
       return null;
     }
   }
+
+  /// One-line flip once the voyza.xtremon.com `/t/*` redirect is live:
+  /// set to 'https://voyza.xtremon.com/t/'.
+  static const String? _brandedPublicTripBase = null;
 
   static String get _storeLink => Platform.isAndroid
       ? 'https://play.google.com/store/apps/details?id=com.superiordev.voyza'

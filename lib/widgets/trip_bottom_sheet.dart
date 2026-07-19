@@ -1335,8 +1335,11 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
               if (totalStopsForDate >= 2)
                 Consumer(
                   builder: (context, ref, _) {
-                    return Column(
-                      crossAxisAlignment: CrossAxisAlignment.end,
+                    // Horizontal action pair — a vertical stack here made the
+                    // header row tall, floating the title in dead space. The
+                    // old distance chip is gone: it duplicated the "Distance"
+                    // stat two rows below.
+                    return Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         // Share the before/after route card — every
@@ -1378,7 +1381,7 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                             padding: const EdgeInsets.all(8),
                           ),
                         ),
-                        if (hasRoute) const SizedBox(height: 6),
+                        if (hasRoute) const SizedBox(width: 8),
                         IconButton.filledTonal(
                           onPressed: () => _openGoogleMaps(context, ref),
                           icon: const Icon(Icons.directions, size: 20),
@@ -1393,42 +1396,6 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                             padding: const EdgeInsets.all(8),
                           ),
                         ),
-                        if (hasRoute) ...[
-                        const SizedBox(height: 4),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 8, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: Theme.of(context)
-                                .colorScheme
-                                .primary
-                                .withValues(alpha: 0.1),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(
-                                Icons.straighten,
-                                size: 14,
-                                color: Theme.of(context).colorScheme.primary,
-                              ),
-                              const SizedBox(width: 4),
-                              Text(
-                                _formatDistance(totalDistance),
-                                style: Theme.of(context)
-                                    .textTheme
-                                    .bodySmall
-                                    ?.copyWith(
-                                      color:
-                                          Theme.of(context).colorScheme.primary,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        ],
                       ],
                     );
                   },
