@@ -169,6 +169,12 @@ class _MapScreenState extends ConsumerState<MapScreen>
           ref.read(currentUserIdProvider) ?? await AnonymousUserService.id;
       if (!mounted) return;
 
+      // The tour opens with "Add your first place" — pointless (and factually
+      // wrong, fighting the places meter) when the board already has places,
+      // e.g. right after the one-tap sample-trip seed, where it would sit
+      // between the user and the glowing Optimize button. Empty boards only.
+      if (ref.read(tripProvider).pinnedLocations.isNotEmpty) return;
+
       final service = OnboardingService.instance;
       // Only after onboarding is resolved (completed/skipped/seeded) — the
       // tour must never race the onboarding route.

@@ -571,9 +571,16 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Text(
-          'Trip Plan',
-          style: Theme.of(context).textTheme.headlineMedium,
+        // Flexible: with Clear + Re-optimize both visible the action cluster
+        // can outgrow narrow screens — the title yields (ellipsis) instead of
+        // overflowing the row.
+        Flexible(
+          child: Text(
+            'Trip Plan',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(context).textTheme.headlineMedium,
+          ),
         ),
         Row(
           children: [
