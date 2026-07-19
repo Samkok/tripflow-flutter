@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:voyza/models/location_model.dart';
 import 'package:voyza/providers/map_ui_state_provider.dart';
 import '../providers/trip_listener_provider.dart';
@@ -2351,6 +2352,26 @@ class _StartPointSheetState extends ConsumerState<_StartPointSheet> {
     }
   }
 
+  /// Fallback distance (~500 km) used ONLY when the trip has no tagged country
+  /// (anonymous session / country-less trip): a device farther than this from
+  /// every stop is treated as being in a different region, so its GPS is not
+  /// offered as a route anchor.
+  static const double _kForeignFallbackMeters = 500000;
+
+  double _minMetersToStops(LatLng current, List<LocationModel> stops) {
+    var min = double.infinity;
+    for (final s in stops) {
+      final d = Geolocator.distanceBetween(
+        current.latitude,
+        current.longitude,
+        s.coordinates.latitude,
+        s.coordinates.longitude,
+      );
+      if (d < min) min = d;
+    }
+    return min;
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -2380,9 +2401,20 @@ class _StartPointSheetState extends ConsumerState<_StartPointSheet> {
     // True only once we've confirmed the device is in a DIFFERENT country
     // than the trip. Null country code (lookup pending or failed) is not
     // a mismatch — we don't want a flaky geocode to lock out the option.
-    final currentLocationMismatch = tripCountry != null &&
-        _currentCountryCode != null &&
-        _currentCountryCode != tripCountry;
+    final bool currentLocationMismatch;
+    if (tripCountry != null) {
+      currentLocationMismatch =
+          _currentCountryCode != null && _currentCountryCode != tripCountry;
+    } else {
+      // No trip country (anonymous session / country-less trip): fall back to
+      // proximity — if the device is far from every stop, anchoring the route
+      // to its GPS would route a leg across the world (e.g. optimizing the
+      // Lisbon sample from a phone in Cambodia).
+      currentLocationMismatch = hasCurrentLocation &&
+          dayStops.isNotEmpty &&
+          _minMetersToStops(tripState.currentLocation!, dayStops) >
+              _kForeignFallbackMeters;
+    }
     final currentLocationDisabled =
         hasCurrentLocation && currentLocationMismatch;
 
@@ -2483,7 +2515,9 @@ class _StartPointSheetState extends ConsumerState<_StartPointSheet> {
                                 : theme.colorScheme.primary),
                         title: 'My current location',
                         subtitle: currentLocationDisabled
-                            ? 'You\'re outside this trip\'s country — pick a stop within ${activeTrip?.countryCode ?? 'the trip\'s region'} to start from instead.'
+                            ? (tripCountry != null
+                                ? 'You\'re outside this trip\'s country — pick a stop within ${activeTrip?.countryCode ?? 'the trip\'s region'} to start from instead.'
+                                : 'You\'re far from these stops — pick a stop to start from instead.')
                             : (_countryCheckInFlight && tripCountry != null
                                 ? 'Checking whether you\'re in the trip\'s country…'
                                 : 'Use device GPS as the start anchor'),

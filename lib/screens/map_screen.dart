@@ -1567,6 +1567,21 @@ class _MapScreenState extends ConsumerState<MapScreen>
     return 2 * earthRadius * math.asin(math.min(1.0, math.sqrt(h)));
   }
 
+  /// Fallback distance (~500 km) used ONLY when a trip has no tagged country
+  /// (anonymous session / country-less trip): a device farther than this from
+  /// every stop is treated as being in a different region, so its GPS is not
+  /// folded into the map fit or used as a route anchor.
+  static const double _kForeignFallbackMeters = 500000;
+
+  double _minMetersToStops(LatLng current, List<LocationModel> stops) {
+    var min = double.infinity;
+    for (final s in stops) {
+      final d = _metersBetween(current, s.coordinates);
+      if (d < min) min = d;
+    }
+    return min;
+  }
+
   void _zoomToFitTrip() {
     if (_mapController == null) return;
 
@@ -1588,29 +1603,47 @@ class _MapScreenState extends ConsumerState<MapScreen>
     final tripCountry =
         ref.read(realtimeActiveTripProvider).asData?.value?.countryCode;
     final currentCountry = _currentLocationCountry;
-    final crossCountry = tripCountry != null &&
-        currentCountry != null &&
-        tripCountry.toUpperCase() != currentCountry.toUpperCase();
+    final bool crossCountry;
+    if (tripCountry != null) {
+      crossCountry = currentCountry != null &&
+          tripCountry.toUpperCase() != currentCountry.toUpperCase();
+    } else {
+      // No trip country (anonymous session, or a trip with no country tagged):
+      // the country comparison has nothing to compare against, so fall back to
+      // proximity — a device implausibly far from every stop is in a different
+      // region and must not be folded into the bounds (e.g. a phone in Cambodia
+      // framing the Lisbon sample trip).
+      crossCountry = currentLocation != null &&
+          locations.isNotEmpty &&
+          _minMetersToStops(currentLocation, locations) >
+              _kForeignFallbackMeters;
+    }
 
     if (crossCountry) {
       // Announce it once — but only when the preference would otherwise have
-      // included the location and there are stops to frame. Deduped by the
-      // country pair so background / repeated fits don't spam the toast.
+      // included the location and there are stops to frame. Deduped so
+      // background / repeated fits don't spam the toast.
       if (includeCurrent && currentLocation != null && locations.isNotEmpty) {
-        final key = '$tripCountry>$currentCountry';
+        final key =
+            tripCountry != null ? '$tripCountry>$currentCountry' : 'far';
         if (_crossCountryFitNoticeKey != key) {
           _crossCountryFitNoticeKey = key;
-          final countryName = findCountryByCode(tripCountry)?.name;
-          final where = countryName ?? "the trip's country";
+          final where = tripCountry != null
+              ? (findCountryByCode(tripCountry)?.name ?? "the trip's country")
+              : null;
           AppToast.info(
             context,
-            "You're not in $where right now, so your current location "
-            "isn't included in the map view.",
+            where != null
+                ? "You're not in $where right now, so your current location "
+                    "isn't included in the map view."
+                : "Your current location is far from your stops, so it isn't "
+                    "included in the map view.",
           );
         }
       }
     } else {
-      // Countries match (or one is unknown) — let a later mismatch re-notify.
+      // Countries match (or one is unknown, or in range) — let a later
+      // mismatch re-notify.
       _crossCountryFitNoticeKey = null;
     }
 
