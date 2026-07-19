@@ -1385,6 +1385,20 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                 'ETA',
                 DateFormat('h:mm a').format(estimatedArrival),
               ),
+              // The story kernel: travel time saved vs the user's original
+              // order. Only rendered when the delta is defensible (≥5 min).
+              Consumer(builder: (context, ref, _) {
+                final timeSaved =
+                    ref.watch(tripProvider.select((s) => s.timeSaved));
+                if (timeSaved < const Duration(minutes: 5)) {
+                  return const SizedBox.shrink();
+                }
+                return _summaryItem(
+                  context,
+                  'Time Saved',
+                  '~${_formatDuration(timeSaved)}',
+                );
+              }),
             ],
           ),
           Consumer(builder: (context, ref, _) {

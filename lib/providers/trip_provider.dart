@@ -38,6 +38,14 @@ class TripState {
   final Duration totalTravelTime;
   final double? currentHeading;
   final double totalDistance;
+
+  /// Travel time the optimization saved vs routing the SAME stops in the
+  /// user's original order (pure travel legs — stay durations cancel out).
+  /// [Duration.zero] means "none or unknown" (baseline call skipped/failed);
+  /// only meaningful while an optimized route is present, and refreshed on
+  /// every successful optimize. This is the product's story kernel — surface
+  /// it only when ≥ ~5 minutes so the claim always stays defensible.
+  final Duration timeSaved;
   String startLocationId;
   final int? selectedLegIndex;
 
@@ -51,6 +59,7 @@ class TripState {
     this.totalTravelTime = Duration.zero,
     this.currentHeading,
     this.totalDistance = 0.0,
+    this.timeSaved = Duration.zero,
     this.startLocationId = '',
     this.selectedLegIndex,
   });
@@ -65,6 +74,7 @@ class TripState {
     Duration? totalTravelTime,
     double? currentHeading,
     double? totalDistance,
+    Duration? timeSaved,
     String? startLocationId,
     int? selectedLegIndex,
   }) {
@@ -79,6 +89,7 @@ class TripState {
       totalTravelTime: totalTravelTime ?? this.totalTravelTime,
       currentHeading: currentHeading ?? this.currentHeading,
       totalDistance: totalDistance ?? this.totalDistance,
+      timeSaved: timeSaved ?? this.timeSaved,
       startLocationId: startLocationId ?? this.startLocationId,
       selectedLegIndex: selectedLegIndex, // Allow setting to null
     );
@@ -98,6 +109,7 @@ class TripState {
         other.currentLocation == currentLocation &&
         other.totalTravelTime == totalTravelTime &&
         other.totalDistance == totalDistance &&
+        other.timeSaved == timeSaved &&
         other.selectedLegIndex == selectedLegIndex;
     // Note: Deliberately excluding legPolylines and legDetails from equality to keep the check fast. They change together with optimizedRoute anyway.
   }
@@ -111,6 +123,7 @@ class TripState {
       currentLocation,
       totalTravelTime,
       totalDistance,
+      timeSaved,
       selectedLegIndex,
     );
   }
@@ -1075,6 +1088,32 @@ class TripNotifier extends StateNotifier<TripState> {
         return;
       }
 
+      // ── "Time saved" baseline ────────────────────────────────────────────
+      // Route the SAME stops in the user's ORIGINAL order (our optimizer does
+      // the reordering below; Google only routes along it). The delta between
+      // this baseline and the optimized route is the product's story kernel:
+      // "saved you ~1h 40m of backtracking." Runs concurrently with the
+      // clustering + main route call and NEVER blocks the reveal — on any
+      // failure the delta is simply zero (= not shown).
+      final originalOrder = List<LocationModel>.from(locationsToOptimize);
+      Future<Duration?> baselineTravelFuture = Future.value(null);
+      if (originalOrder.length >= 2) {
+        baselineTravelFuture = GoogleMapsService.getOptimizedRouteDetails(
+          origin: startPoint,
+          destination: originalOrder.last,
+          waypoints: originalOrder.sublist(0, originalOrder.length - 1),
+          optimizeWaypoints: false,
+        ).timeout(const Duration(seconds: 20)).then<Duration?>((res) {
+          final legs = res['legDetails'] as List<Map<String, dynamic>>;
+          if (legs.isEmpty) return null;
+          return legs.fold<Duration>(
+              Duration.zero, (sum, leg) => sum + (leg['duration'] as Duration));
+        }).catchError((Object e) {
+          debugPrint('Baseline (original-order) route call failed: $e');
+          return null;
+        });
+      }
+
       // OPTIMIZATION: Run clustering on an isolate to prevent UI blocking
       final proximityThreshold = _ref.read(proximityThresholdCommittedProvider);
       final clusterResult = await IsolateUtils.clusterLocationsIsolate(
@@ -1243,6 +1282,19 @@ class TripNotifier extends StateNotifier<TripState> {
       final totalDistance = legDetails.fold(0.0,
           (sum, leg) => sum + ((leg['distance'] as num?)?.toDouble() ?? 0.0));
 
+      // Resolve the baseline and derive the saved-time delta. Compare pure
+      // travel legs on both sides (stay durations are identical either way).
+      // Clamp at zero: the greedy optimizer can occasionally lose to the
+      // user's own order — never show a negative "saving."
+      final optimizedTravel = legDetails.fold<Duration>(
+          Duration.zero, (sum, leg) => sum + (leg['duration'] as Duration));
+      var timeSaved = Duration.zero;
+      final baselineTravel = await baselineTravelFuture;
+      if (baselineTravel != null && legDetails.isNotEmpty) {
+        final delta = baselineTravel - optimizedTravel;
+        if (!delta.isNegative) timeSaved = delta;
+      }
+
       state = state.copyWith(
         pinnedLocations: updatedPinnedLocations,
         optimizedLocationsForSelectedDate: finalOptimizedLocationsForDate,
@@ -1251,6 +1303,7 @@ class TripNotifier extends StateNotifier<TripState> {
         legDetails: legDetails,
         totalTravelTime: totalTravelTime,
         totalDistance: totalDistance,
+        timeSaved: timeSaved,
       );
 
       _ref.read(zoomToFitRouteTrigger.notifier).update((state) => state + 1);
@@ -1259,8 +1312,10 @@ class TripNotifier extends StateNotifier<TripState> {
       // produced (skip the timeout/empty-result path that still writes state).
       final optimizeSucceeded = state.optimizedRoute.isNotEmpty;
       if (optimizeSucceeded) {
-        AnalyticsService.instance
-            .routeOptimized(state.optimizedLocationsForSelectedDate.length);
+        AnalyticsService.instance.routeOptimized(
+          state.optimizedLocationsForSelectedDate.length,
+          minutesSaved: timeSaved.inMinutes,
+        );
       }
 
       // Delight moment: a successful optimization. Record the signal, then

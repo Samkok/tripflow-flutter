@@ -50,8 +50,11 @@ class AnalyticsService {
   void placeAdded(int totalPlaces) =>
       _fire('place_added', {'total_places': totalPlaces});
 
-  /// THE ACTIVATION AHA: a multi-stop route was optimized. [stops] = stop count.
-  void routeOptimized(int stops) => _fire('route_optimized', {'stops': stops});
+  /// THE ACTIVATION AHA: a multi-stop route was optimized. [stops] = stop
+  /// count; [minutesSaved] = travel time saved vs the user's original order
+  /// (0 = no saving or baseline unavailable).
+  void routeOptimized(int stops, {int minutesSaved = 0}) => _fire(
+      'route_optimized', {'stops': stops, 'minutes_saved': minutesSaved});
 
   /// A free trial was started.
   void trialStarted(String product) =>

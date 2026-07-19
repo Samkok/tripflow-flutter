@@ -791,6 +791,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
           context,
           stops: tripState.optimizedLocationsForSelectedDate.length,
           totalTime: tripState.totalTravelTime,
+          timeSaved: tripState.timeSaved,
           onSignUp: isAnonymous
               ? () => Navigator.of(context).push(
                     MaterialPageRoute(builder: (_) => const LoginScreen()),

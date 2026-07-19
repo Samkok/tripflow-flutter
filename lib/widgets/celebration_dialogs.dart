@@ -101,6 +101,7 @@ Future<void> showFirstOptimizeCelebration(
   BuildContext context, {
   required int stops,
   required Duration totalTime,
+  Duration timeSaved = Duration.zero,
   VoidCallback? onSignUp,
   VoidCallback? onInvite,
 }) {
@@ -109,6 +110,7 @@ Future<void> showFirstOptimizeCelebration(
     builder: (ctx) => _FirstOptimizeDialog(
       stops: stops,
       totalTime: totalTime,
+      timeSaved: timeSaved,
       onSignUp: onSignUp,
       onInvite: onInvite,
     ),
@@ -118,12 +120,18 @@ Future<void> showFirstOptimizeCelebration(
 class _FirstOptimizeDialog extends StatefulWidget {
   final int stops;
   final Duration totalTime;
+
+  /// Travel time saved vs the user's original order. Only shown when ≥ ~5
+  /// minutes — the number IS the retellable story ("it saved me an hour"),
+  /// so it must always be defensible.
+  final Duration timeSaved;
   final VoidCallback? onSignUp;
   final VoidCallback? onInvite;
 
   const _FirstOptimizeDialog({
     required this.stops,
     required this.totalTime,
+    this.timeSaved = Duration.zero,
     this.onSignUp,
     this.onInvite,
   });
@@ -153,6 +161,7 @@ class _FirstOptimizeDialogState extends State<_FirstOptimizeDialog> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final showTime = widget.totalTime > Duration.zero;
+    final showSaved = widget.timeSaved >= const Duration(minutes: 5);
     return Stack(
       alignment: Alignment.topCenter,
       children: [
@@ -200,6 +209,18 @@ class _FirstOptimizeDialogState extends State<_FirstOptimizeDialog> {
                         const TextSpan(text: ' door to door'),
                       ],
                       const TextSpan(text: ', with no backtracking.'),
+                      if (showSaved) ...[
+                        const TextSpan(text: '\nThat\'s '),
+                        TextSpan(
+                          text:
+                              '${_formatDuration(widget.timeSaved)} of backtracking saved',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w700,
+                            color: theme.colorScheme.primary,
+                          ),
+                        ),
+                        const TextSpan(text: ' vs your original order.'),
+                      ],
                     ],
                   ),
                   textAlign: TextAlign.center,
