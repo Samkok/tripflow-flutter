@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:voyza/models/trip.dart';
 import 'package:voyza/models/saved_location.dart';
 import 'package:uuid/uuid.dart';
@@ -14,6 +15,7 @@ import 'package:voyza/providers/onboarding_provider.dart';
 import 'package:voyza/screens/login_screen.dart';
 import 'package:voyza/screens/trip_details_screen.dart';
 import 'package:voyza/services/analytics_service.dart';
+import 'package:voyza/services/anonymous_user_service.dart';
 import 'package:voyza/utils/countries.dart';
 import 'package:voyza/utils/trip_date_validator.dart';
 import 'package:voyza/widgets/app_toast.dart';
@@ -307,7 +309,9 @@ class _TripScreenState extends ConsumerState<TripScreen> {
   Future<void> _createSampleTripInner() async {
     final userId = ref.read(currentUserIdProvider);
     if (userId == null) {
-      _showLoginRequiredModal(context);
+      // Anonymous: no Supabase trip. Seed trip-less LOCAL places instead so the
+      // user reaches the optimize aha in one tap (see _seedAnonymousSampleTrip).
+      await _seedAnonymousSampleTrip();
       return;
     }
     try {
@@ -374,6 +378,75 @@ class _TripScreenState extends ConsumerState<TripScreen> {
         AppToast.error(
           context,
           'Could not create the sample trip. Please try again.',
+        );
+      }
+    }
+  }
+
+  /// Anonymous variant of [_createSampleTripInner]: seeds the same demo places
+  /// as trip-less LOCAL locations (no account, no Supabase, no network) so an
+  /// anonymous user reaches the optimize "aha" in one tap. The places render on
+  /// the Map tab; Optimize runs purely on the in-memory list. On signup they
+  /// sync to the new account like any other local place.
+  Future<void> _seedAnonymousSampleTrip() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final anonId = await AnonymousUserService.id;
+      final seededKey = 'sample_seeded_$anonId';
+      // Idempotency: the sample CTA is reachable from BOTH onboarding and the
+      // Trips empty state. Re-seeding would push the user to 8/5 places and slam
+      // them into the paywall on their next add, so seed at most once per device.
+      if (prefs.getBool(seededKey) ?? false) {
+        ref.read(mainTabRequestProvider.notifier).state = 1; // Map tab
+        return;
+      }
+
+      final now = DateTime.now();
+      final day = DateTime(now.year, now.month, now.day);
+      final locationRepository = ref.read(locationRepositoryProvider);
+
+      // Same Lisbon spots as the authed sample, but 4 (not 5): these local rows
+      // count toward SubscriptionLimitService.freePlaceAllowance (5), so seeding
+      // 4 leaves one free slot before the paywall. Still > the aha threshold, so
+      // Optimize visibly reorders them.
+      const places = <(String, double, double)>[
+        ('Time Out Market', 38.7067, -9.1459),
+        ('Belém Tower', 38.6916, -9.2160),
+        ('São Jorge Castle', 38.7139, -9.1335),
+        ('Jerónimos Monastery', 38.6979, -9.2065),
+      ];
+      const uuid = Uuid();
+      for (final p in places) {
+        // tripId: null → trip-less. locationRepository.addLocation forks on auth
+        // state: for anon it writes to the local Hive box (source 'local',
+        // userId = AnonymousUserService.id) and skips Supabase entirely.
+        await locationRepository.addLocation(SavedLocation(
+          id: uuid.v4(),
+          userId: '', // repository fills from anon id
+          name: p.$1,
+          lat: p.$2,
+          lng: p.$3,
+          createdAt: DateTime.now(),
+          fingerprint: '', // repository fills
+          tripId: null,
+          scheduledDate: day,
+          stayDuration: 60,
+        ));
+      }
+
+      await prefs.setBool(seededKey, true);
+      AnalyticsService.instance
+          .sampleTripSeeded(anonymous: true, placeCount: places.length);
+      if (!mounted) return;
+      // Land on the Map tab; the seeded local places render there and the
+      // Optimize button lights up once the list is picked up.
+      ref.read(mainTabRequestProvider.notifier).state = 1;
+    } catch (e) {
+      debugPrint('Error seeding anonymous sample trip: $e');
+      if (mounted) {
+        AppToast.error(
+          context,
+          'Could not set up the sample trip. Please try again.',
         );
       }
     }

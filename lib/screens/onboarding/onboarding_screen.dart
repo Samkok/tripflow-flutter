@@ -528,13 +528,12 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
               ),
             ),
           ),
-          if (!widget.isAnonymous)
-            Center(
-              child: TextButton(
-                onPressed: _trySampleTrip,
-                child: const Text('Try a sample trip instead'),
-              ),
+          Center(
+            child: TextButton(
+              onPressed: _trySampleTrip,
+              child: const Text('Try a sample trip instead'),
             ),
+          ),
           const SizedBox(height: 12),
         ],
       ),
