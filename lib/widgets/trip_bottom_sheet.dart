@@ -1321,6 +1321,11 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                                   .asData
                                   ?.value
                                   ?.name,
+                              tripId: ref
+                                  .read(realtimeActiveTripProvider)
+                                  .asData
+                                  ?.value
+                                  ?.id,
                             );
                           },
                           icon: const Icon(Icons.ios_share_rounded, size: 20),

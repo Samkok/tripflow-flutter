@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
@@ -10,6 +11,7 @@ import 'package:share_plus/share_plus.dart';
 import '../models/location_model.dart';
 import 'analytics_service.dart';
 import 'referral_service.dart';
+import 'supabase_service.dart';
 
 /// Renders and shares the branded before/after route card — the artifact that
 /// lets the optimize "aha" leave the app (Contagious: observable usage +
@@ -115,13 +117,17 @@ class RouteShareCardService {
 
   /// Renders the card and opens the OS share sheet. [anonymous] decides the
   /// link: authed users share their referral link (give-a-month-get-a-month
-  /// rides along); anonymous users share the store link.
+  /// rides along); anonymous users share the store link. When [tripId] is
+  /// provided for an authed user, a wall-free public itinerary link (the
+  /// `public-trip` edge function) is included too — the recipient gets real
+  /// value with no account wall.
   Future<void> shareRouteCard({
     required List<LocationModel> originalOrder,
     required List<LocationModel> optimizedOrder,
     required Duration timeSaved,
     required bool anonymous,
     String? tripName,
+    String? tripId,
   }) async {
     try {
       final file = await renderCard(
@@ -142,16 +148,60 @@ class RouteShareCardService {
         link = _storeLink;
       }
 
+      String itinerary = '';
+      if (!anonymous && tripId != null) {
+        final publicLink = await _getOrCreatePublicLink(tripId);
+        if (publicLink != null) itinerary = '\nFull itinerary: $publicLink';
+      }
+
       final saved = timeSaved >= const Duration(minutes: 5)
           ? ' and saved ~${_formatDuration(timeSaved)} of backtracking'
           : '';
       final text =
-          'VoyZa put my ${optimizedOrder.length} stops in the smartest order$saved. $link';
+          'VoyZa put my ${optimizedOrder.length} stops in the smartest order$saved.$itinerary\n$link';
 
       await Share.shareXFiles([XFile(file.path)], text: text);
       AnalyticsService.instance.routeCardShared(anonymous: anonymous);
     } catch (e) {
       debugPrint('RouteShareCardService.shareRouteCard: $e');
+    }
+  }
+
+  /// Reuses an existing non-revoked share token for [tripId] or mints one
+  /// (RLS: owner-only). Returns the public page URL, or null on any failure
+  /// (share proceeds without the itinerary link — never blocks the sheet).
+  Future<String?> _getOrCreatePublicLink(String tripId) async {
+    try {
+      final client = SupabaseService.instance.client;
+      if (client.auth.currentSession == null) return null;
+
+      final existing = await client
+          .from('trip_shares')
+          .select('token')
+          .eq('trip_id', tripId)
+          .isFilter('revoked_at', null)
+          .limit(1)
+          .maybeSingle();
+      String? token = existing?['token'] as String?;
+
+      if (token == null) {
+        final inserted = await client
+            .from('trip_shares')
+            .insert({
+              'trip_id': tripId,
+              'created_by': client.auth.currentUser!.id,
+            })
+            .select('token')
+            .single();
+        token = inserted['token'] as String?;
+      }
+      if (token == null) return null;
+      final supabaseUrl = dotenv.env['SUPABASE_URL'] ?? '';
+      if (supabaseUrl.isEmpty) return null;
+      return '$supabaseUrl/functions/v1/public-trip?t=$token';
+    } catch (e) {
+      debugPrint('RouteShareCardService._getOrCreatePublicLink: $e');
+      return null;
     }
   }
 

@@ -812,6 +812,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
             anonymous: isAnonymous,
             tripName:
                 ref.read(realtimeActiveTripProvider).asData?.value?.name,
+            tripId: ref.read(realtimeActiveTripProvider).asData?.value?.id,
           ),
         );
       });
