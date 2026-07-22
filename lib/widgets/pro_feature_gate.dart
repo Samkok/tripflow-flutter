@@ -319,7 +319,9 @@ class ProUpgradeBanner extends ConsumerWidget {
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        'Plan your Tokyo trip, Paris trip, and Rome trip — all at once, without losing anything.',
+                        // High-arousal + hero-aligned: sell the outcome the
+                        // user has felt (the reorder), not a feature count.
+                        'Never zig-zag a city again — unlimited places, smart routes for every day.',
                         style: theme.textTheme.bodySmall?.copyWith(
                           color: Colors.white.withValues(alpha: 0.9),
                         ),

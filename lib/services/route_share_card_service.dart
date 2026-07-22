@@ -79,8 +79,12 @@ class RouteShareCardService {
       const panelW = 520.0;
       const leftX = 48.0;
       const rightX = _w - 48.0 - panelW;
+      // Emotional arc, not just data: the BEFORE label names the villain.
       _drawPanel(canvas, const Rect.fromLTWH(leftX, panelTop, panelW, panelH),
-          label: 'BEFORE', points: before, line: _beforeLine, numbered: false);
+          label: 'BEFORE — THE ZIG-ZAG DAY',
+          points: before,
+          line: _beforeLine,
+          numbered: false);
       _drawPanel(canvas, const Rect.fromLTWH(rightX, panelTop, panelW, panelH),
           label: 'AFTER — OPTIMIZED',
           points: after,
