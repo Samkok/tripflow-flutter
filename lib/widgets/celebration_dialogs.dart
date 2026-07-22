@@ -308,3 +308,102 @@ class _FirstOptimizeDialogState extends State<_FirstOptimizeDialog> {
     );
   }
 }
+
+/// Post-trip recap ("the trip, by the numbers") — shown once per trip in the
+/// T+1..T+3 window after it ends. The share CTA is the point: it rides the
+/// moment people are already posting trip photos, so the recap card becomes
+/// behavioral residue with attribution.
+Future<void> showTripRecapDialog(
+  BuildContext context, {
+  required String tripName,
+  required int days,
+  required int places,
+  required Duration timeSaved,
+  VoidCallback? onShare,
+}) {
+  String fmt(Duration d) {
+    final h = d.inHours;
+    final m = d.inMinutes % 60;
+    if (h > 0) return '${h}h ${m}m';
+    return '${m}m';
+  }
+
+  return showDialog<void>(
+    context: context,
+    builder: (ctx) {
+      final theme = Theme.of(ctx);
+      final primary = theme.colorScheme.primary;
+
+      Widget stat(String value, String label) => Column(
+            children: [
+              Text(value,
+                  style: theme.textTheme.headlineMedium
+                      ?.copyWith(fontWeight: FontWeight.w800, color: primary)),
+              const SizedBox(height: 2),
+              Text(label,
+                  style: theme.textTheme.bodySmall
+                      ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+            ],
+          );
+
+      return Dialog(
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(24, 28, 24, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('🧳', style: TextStyle(fontSize: 44)),
+              const SizedBox(height: 12),
+              Text(
+                'How was $tripName?',
+                textAlign: TextAlign.center,
+                style: theme.textTheme.titleLarge
+                    ?.copyWith(fontWeight: FontWeight.w800),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'Your trip, by the numbers:',
+                style: theme.textTheme.bodyMedium
+                    ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+              ),
+              const SizedBox(height: 18),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  stat('$days', days == 1 ? 'day' : 'days'),
+                  stat('$places', places == 1 ? 'place' : 'places'),
+                  if (timeSaved >= const Duration(minutes: 5))
+                    stat('~${fmt(timeSaved)}', 'saved'),
+                ],
+              ),
+              const SizedBox(height: 22),
+              if (onShare != null)
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    onPressed: () {
+                      Navigator.of(ctx).pop();
+                      onShare();
+                    },
+                    icon: const Icon(Icons.ios_share_rounded, size: 18),
+                    label: const Text('Share the recap'),
+                    style: FilledButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14)),
+                    ),
+                  ),
+                ),
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(),
+                child: const Text('Done'),
+              ),
+            ],
+          ),
+        ),
+      );
+    },
+  );
+}

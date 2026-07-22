@@ -12,6 +12,7 @@ import '../models/location_model.dart';
 import 'analytics_service.dart';
 import 'referral_service.dart';
 import 'supabase_service.dart';
+import 'time_saved_ledger_service.dart';
 
 /// Renders and shares the branded before/after route card — the artifact that
 /// lets the optimize "aha" leave the app (Contagious: observable usage +
@@ -41,11 +42,14 @@ class RouteShareCardService {
   static const _subText = Color(0xFF9AA7BD);
 
   /// Renders the card to a temp PNG. Returns null on any failure.
+  /// [lifetimeSaved] adds the compounding all-time footer when it's
+  /// meaningfully bigger than this route's own saving.
   Future<File?> renderCard({
     required List<LocationModel> originalOrder,
     required List<LocationModel> optimizedOrder,
     required Duration timeSaved,
     String? tripName,
+    Duration lifetimeSaved = Duration.zero,
   }) async {
     try {
       if (optimizedOrder.length < 2) return null;
@@ -94,6 +98,19 @@ class RouteShareCardService {
       _drawText(canvas, stat, const Offset(48, 520),
           fontSize: 40, weight: FontWeight.w800, color: _afterLine);
 
+      // Compounding social-currency footer — only when the lifetime stat is
+      // established and clearly more than this single route's saving.
+      if (lifetimeSaved >= const Duration(minutes: 30) &&
+          lifetimeSaved > timeSaved * 2) {
+        _drawText(
+            canvas,
+            '${_formatDuration(lifetimeSaved)} saved all-time with VoyZa',
+            const Offset(48, 578),
+            fontSize: 22,
+            weight: FontWeight.w600,
+            color: _subText);
+      }
+
       // Wordmark + link.
       _drawText(canvas, 'VoyZa', const Offset(_w - 260, 516),
           fontSize: 34, weight: FontWeight.w800, color: _text);
@@ -130,23 +147,17 @@ class RouteShareCardService {
     String? tripId,
   }) async {
     try {
+      final lifetimeSaved = await TimeSavedLedgerService.instance.total();
       final file = await renderCard(
         originalOrder: originalOrder,
         optimizedOrder: optimizedOrder,
         timeSaved: timeSaved,
         tripName: tripName,
+        lifetimeSaved: lifetimeSaved,
       );
       if (file == null) return;
 
-      String link;
-      if (!anonymous) {
-        final code = await ReferralService.instance.getOrCreateMyCode();
-        link = code != null
-            ? 'https://voyza.xtremon.com/r/$code'
-            : _storeLink;
-      } else {
-        link = _storeLink;
-      }
+      final link = await _audienceLink(anonymous: anonymous);
 
       String itinerary = '';
       if (!anonymous && tripId != null) {
@@ -164,6 +175,122 @@ class RouteShareCardService {
       AnalyticsService.instance.routeCardShared(anonymous: anonymous);
     } catch (e) {
       debugPrint('RouteShareCardService.shareRouteCard: $e');
+    }
+  }
+
+  /// Referral link for authed sharers (the give-a-month offer rides along);
+  /// store link for anonymous.
+  Future<String> _audienceLink({required bool anonymous}) async {
+    if (!anonymous) {
+      final code = await ReferralService.instance.getOrCreateMyCode();
+      if (code != null) return 'https://voyza.xtremon.com/r/$code';
+    }
+    return _storeLink;
+  }
+
+  /// Renders the post-trip recap card ("the trip, by the numbers") to a temp
+  /// PNG. Returns null on any failure.
+  Future<File?> renderRecapCard({
+    required String tripName,
+    required int days,
+    required int places,
+    required Duration timeSaved,
+  }) async {
+    try {
+      final recorder = ui.PictureRecorder();
+      final canvas = Canvas(recorder);
+      canvas.drawRect(
+          const Rect.fromLTWH(0, 0, _w, _h), Paint()..color = _bg);
+
+      _drawText(canvas, tripName.trim().isEmpty ? 'My trip' : tripName.trim(),
+          const Offset(48, 48),
+          fontSize: 48, weight: FontWeight.w800, color: _text, maxWidth: 1100);
+      _drawText(canvas, 'THE TRIP, BY THE NUMBERS', const Offset(48, 120),
+          fontSize: 22, weight: FontWeight.w600, color: _subText);
+
+      // Stat columns.
+      final stats = <(String, String)>[
+        ('$days', days == 1 ? 'day' : 'days'),
+        ('$places', places == 1 ? 'place' : 'places'),
+        if (timeSaved >= const Duration(minutes: 5))
+          ('~${_formatDuration(timeSaved)}', 'backtracking saved'),
+      ];
+      final colW = (_w - 96) / stats.length;
+      for (var i = 0; i < stats.length; i++) {
+        final x = 48 + colW * i;
+        _drawText(canvas, stats[i].$1, Offset(x, 240),
+            fontSize: 96,
+            weight: FontWeight.w800,
+            color: i == stats.length - 1 && stats.length == 3
+                ? _afterLine
+                : _text);
+        _drawText(canvas, stats[i].$2, Offset(x, 372),
+            fontSize: 26, weight: FontWeight.w600, color: _subText);
+      }
+
+      _drawText(canvas, 'Planned & optimized with VoyZa',
+          const Offset(48, 520),
+          fontSize: 30, weight: FontWeight.w700, color: _afterLine);
+
+      _drawText(canvas, 'VoyZa', const Offset(_w - 260, 516),
+          fontSize: 34, weight: FontWeight.w800, color: _text);
+      _drawText(canvas, 'voyza.xtremon.com', const Offset(_w - 260, 560),
+          fontSize: 20, weight: FontWeight.w500, color: _subText);
+
+      final picture = recorder.endRecording();
+      final img = await picture.toImage(_w.toInt(), _h.toInt());
+      final bytes = await img.toByteData(format: ui.ImageByteFormat.png);
+      if (bytes == null) return null;
+
+      final dir = await getTemporaryDirectory();
+      final file = File('${dir.path}/voyza_trip_recap.png');
+      await file.writeAsBytes(bytes.buffer.asUint8List(), flush: true);
+      return file;
+    } catch (e) {
+      debugPrint('RouteShareCardService.renderRecapCard: $e');
+      return null;
+    }
+  }
+
+  /// Renders the recap card and opens the OS share sheet. Rides on an
+  /// already-happening ritual (posting trip photos at T+1): the card is the
+  /// behavioral residue, the itinerary link the wall-free recipient path.
+  Future<void> shareRecapCard({
+    required String tripName,
+    required int days,
+    required int places,
+    required Duration timeSaved,
+    required bool anonymous,
+    String? tripId,
+  }) async {
+    try {
+      final file = await renderRecapCard(
+        tripName: tripName,
+        days: days,
+        places: places,
+        timeSaved: timeSaved,
+      );
+      if (file == null) return;
+
+      final link = await _audienceLink(anonymous: anonymous);
+      String itinerary = '';
+      if (!anonymous && tripId != null) {
+        final publicLink = await _getOrCreatePublicLink(tripId);
+        if (publicLink != null) itinerary = '\nFull itinerary: $publicLink';
+      }
+
+      final saved = timeSaved >= const Duration(minutes: 5)
+          ? ' · ~${_formatDuration(timeSaved)} of backtracking saved'
+          : '';
+      final text =
+          '$tripName, by the numbers — $days ${days == 1 ? 'day' : 'days'} · '
+          '$places ${places == 1 ? 'place' : 'places'}$saved. '
+          'Planned with VoyZa.$itinerary\n$link';
+
+      await Share.shareXFiles([XFile(file.path)], text: text);
+      AnalyticsService.instance.tripRecapShared();
+    } catch (e) {
+      debugPrint('RouteShareCardService.shareRecapCard: $e');
     }
   }
 

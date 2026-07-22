@@ -114,6 +114,13 @@ class AnalyticsService {
   void mapTutorialSkipped(int step) =>
       _fire('map_tutorial_skipped', {'step': step});
 
+  /// The post-trip recap dialog was shown (T+1..T+3 after a trip ended).
+  void tripRecapShown() => _fire('trip_recap_shown');
+
+  /// The post-trip recap card was shared (behavioral residue at the
+  /// photo-posting moment). Organic — never imported into Google Ads.
+  void tripRecapShared() => _fire('trip_recap_shared');
+
   /// The referral share sheet was opened. Organic channel — NEVER imported
   /// into Google Ads (see marketing/analytics-events.md).
   void referralShare() => _fire('referral_share');

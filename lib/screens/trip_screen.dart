@@ -16,6 +16,9 @@ import 'package:voyza/screens/login_screen.dart';
 import 'package:voyza/screens/trip_details_screen.dart';
 import 'package:voyza/services/analytics_service.dart';
 import 'package:voyza/services/anonymous_user_service.dart';
+import 'package:voyza/services/route_share_card_service.dart';
+import 'package:voyza/services/time_saved_ledger_service.dart';
+import 'package:voyza/widgets/celebration_dialogs.dart';
 import 'package:voyza/utils/countries.dart';
 import 'package:voyza/utils/trip_date_validator.dart';
 import 'package:voyza/widgets/app_toast.dart';
@@ -44,6 +47,84 @@ class _TripScreenState extends ConsumerState<TripScreen> {
   // Multi-select state
   bool _selectionMode = false;
   final Set<String> _selectedTripIds = {};
+
+  @override
+  void initState() {
+    super.initState();
+    // Post-trip recap: check once per launch, after the first frame + a
+    // settle delay so it never races onboarding or the map tutorial.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      Future.delayed(const Duration(seconds: 3), _maybeShowTripRecap);
+    });
+  }
+
+  /// Shows the one-time "trip, by the numbers" recap for a trip that ended
+  /// 1–3 days ago (mirrors the trip-date-nudges post_trip window — the T+1
+  /// push brings the user back; this dialog is what they land on). One trip
+  /// per launch; each trip only ever recaps once (SharedPreferences flag).
+  Future<void> _maybeShowTripRecap() async {
+    try {
+      if (!mounted) return;
+      final userId = ref.read(currentUserIdProvider);
+      if (userId == null) return; // trips (and their dates) are authed-only
+      final trips = await ref.read(userTripsProvider.future);
+      final now = DateTime.now();
+      final today = DateTime(now.year, now.month, now.day);
+
+      for (final trip in trips) {
+        final end = trip.endDate;
+        if (end == null) continue;
+        final endDay = DateTime(end.year, end.month, end.day);
+        final daysSinceEnd = today.difference(endDay).inDays;
+        if (daysSinceEnd < 1 || daysSinceEnd > 3) continue;
+
+        final prefs = await SharedPreferences.getInstance();
+        final shownKey = 'trip_recap_shown_${trip.id}';
+        if (prefs.getBool(shownKey) ?? false) continue;
+
+        // The trip's places (all saved, incl. done/skipped — it's a recap).
+        final locationsAsync = ref.read(savedLocationsProvider);
+        final places = locationsAsync.maybeWhen(
+          data: (all) => all.where((l) => l.tripId == trip.id).length,
+          orElse: () => 0,
+        );
+        if (places == 0) continue; // nothing to recap
+
+        final start = trip.startDate;
+        final days = start != null
+            ? endDay
+                    .difference(
+                        DateTime(start.year, start.month, start.day))
+                    .inDays +
+                1
+            : 1;
+        final saved =
+            await TimeSavedLedgerService.instance.totalForTrip(trip.id);
+
+        await prefs.setBool(shownKey, true);
+        if (!mounted) return;
+        AnalyticsService.instance.tripRecapShown();
+        await showTripRecapDialog(
+          context,
+          tripName: trip.name,
+          days: days < 1 ? 1 : days,
+          places: places,
+          timeSaved: saved,
+          onShare: () => RouteShareCardService.instance.shareRecapCard(
+            tripName: trip.name,
+            days: days < 1 ? 1 : days,
+            places: places,
+            timeSaved: saved,
+            anonymous: false,
+            tripId: trip.id,
+          ),
+        );
+        return; // at most one recap per launch
+      }
+    } catch (e) {
+      debugPrint('TripScreen._maybeShowTripRecap: $e');
+    }
+  }
 
   @override
   void dispose() {
