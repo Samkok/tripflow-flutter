@@ -317,7 +317,7 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
                   data: (isOwner) => isOwner
                       ? IconButton(
                           icon: const Icon(Icons.group_outlined),
-                          tooltip: 'Team Members',
+                          tooltip: 'Travel buddies',
                           onPressed: () => _showCollaboratorsSheet(),
                         )
                       : const SizedBox.shrink(),

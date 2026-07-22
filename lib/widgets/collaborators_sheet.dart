@@ -23,7 +23,9 @@ class CollaboratorsSheet extends ConsumerStatefulWidget {
 
 class _CollaboratorsSheetState extends ConsumerState<CollaboratorsSheet> {
   final TextEditingController _emailController = TextEditingController();
-  String _selectedPermission = 'read';
+  // Can Edit is the default: co-planning IS the product's collaborative value
+  // (Read Only is the exception, not the norm, for a travel buddy).
+  String _selectedPermission = 'write';
   bool _isLoading = false;
   String? _errorMessage;
 
@@ -38,7 +40,7 @@ class _CollaboratorsSheetState extends ConsumerState<CollaboratorsSheet> {
     final isOwner = await ref.read(isTripOwnerProvider(widget.tripId).future);
     if (!isOwner) {
       if (!mounted) return;
-      AppToast.warning(context, 'Only the trip owner can add team members.');
+      AppToast.warning(context, 'Only the trip owner can invite travel buddies.');
       return;
     }
 
@@ -79,7 +81,8 @@ class _CollaboratorsSheetState extends ConsumerState<CollaboratorsSheet> {
       ref.invalidate(hasWriteAccessProvider(widget.tripId));
       ref.invalidate(userTripPermissionProvider(widget.tripId));
 
-      AppToast.success(context, 'Added $email as collaborator');
+      AppToast.success(
+          context, 'Added $email — you\'re planning together now');
     } else if (result.needsInvite) {
       // Not a VoyZa user yet — offer the referral invite instead of erroring.
       await _showInviteNonUser(result.inviteEmail ?? email);
@@ -187,7 +190,8 @@ class _CollaboratorsSheetState extends ConsumerState<CollaboratorsSheet> {
     final isOwner = await ref.read(isTripOwnerProvider(widget.tripId).future);
     if (!isOwner) {
       if (!mounted) return;
-      AppToast.warning(context, 'Only the trip owner can remove team members.');
+      AppToast.warning(
+          context, 'Only the trip owner can remove travel buddies.');
       return;
     }
 
@@ -196,7 +200,7 @@ class _CollaboratorsSheetState extends ConsumerState<CollaboratorsSheet> {
       context: context,
       builder: (context) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('Remove Collaborator?'),
+        title: const Text('Remove travel buddy?'),
         content: Text(
           'Are you sure you want to remove ${collaborator.email} from this trip?',
         ),
@@ -290,7 +294,7 @@ class _CollaboratorsSheetState extends ConsumerState<CollaboratorsSheet> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            'Team Members',
+                            'Travel buddies',
                             style: Theme.of(context).textTheme.titleLarge?.copyWith(
                                   fontWeight: FontWeight.bold,
                                 ),
@@ -324,10 +328,49 @@ class _CollaboratorsSheetState extends ConsumerState<CollaboratorsSheet> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'Add Team Member',
+                        'Invite a travel buddy',
                         style: Theme.of(context).textTheme.titleMedium?.copyWith(
                               fontWeight: FontWeight.w600,
                             ),
+                      ),
+                      const SizedBox(height: 10),
+                      // The reward, stated up front — the invite IS the
+                      // referral loop (claim-invites grants both sides a
+                      // month when a new user joins).
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 10),
+                        decoration: BoxDecoration(
+                          color: Theme.of(context)
+                              .colorScheme
+                              .primary
+                              .withValues(alpha: 0.08),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: Theme.of(context)
+                                .colorScheme
+                                .primary
+                                .withValues(alpha: 0.3),
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(Icons.card_giftcard_rounded,
+                                size: 20,
+                                color: Theme.of(context).colorScheme.primary),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                'Invite a buddy who\'s new to VoyZa and you '
+                                'both get a free month of Pro.',
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .bodySmall
+                                    ?.copyWith(fontWeight: FontWeight.w600),
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                       const SizedBox(height: 12),
 
@@ -336,7 +379,7 @@ class _CollaboratorsSheetState extends ConsumerState<CollaboratorsSheet> {
                         controller: _emailController,
                         keyboardType: TextInputType.emailAddress,
                         decoration: InputDecoration(
-                          hintText: 'Enter email address',
+                          hintText: 'Their email address',
                           prefixIcon: const Icon(Icons.email_outlined),
                           border: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(12),
@@ -353,24 +396,25 @@ class _CollaboratorsSheetState extends ConsumerState<CollaboratorsSheet> {
                       ),
                       const SizedBox(height: 12),
 
-                      // Permission selector
+                      // Permission selector — Can Edit first (the collaborative
+                      // default); Read Only is the deliberate downgrade.
                       Row(
                         children: [
-                          Expanded(
-                            child: _buildPermissionOption(
-                              'read',
-                              'Read Only',
-                              Icons.visibility,
-                              'Can view locations',
-                            ),
-                          ),
-                          const SizedBox(width: 12),
                           Expanded(
                             child: _buildPermissionOption(
                               'write',
                               'Can Edit',
                               Icons.edit,
-                              'Can add, edit, delete',
+                              'Plan together, live',
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: _buildPermissionOption(
+                              'read',
+                              'View Only',
+                              Icons.visibility,
+                              'Can follow along',
                             ),
                           ),
                         ],
@@ -389,7 +433,7 @@ class _CollaboratorsSheetState extends ConsumerState<CollaboratorsSheet> {
                                   child: CircularProgressIndicator(strokeWidth: 2),
                                 )
                               : const Icon(Icons.person_add),
-                          label: Text(_isLoading ? 'Adding...' : 'Add Member'),
+                          label: Text(_isLoading ? 'Inviting…' : 'Invite'),
                           style: ElevatedButton.styleFrom(
                             backgroundColor: Theme.of(context).colorScheme.primary,
                             foregroundColor: Colors.black,
@@ -412,7 +456,7 @@ class _CollaboratorsSheetState extends ConsumerState<CollaboratorsSheet> {
                 child: Row(
                   children: [
                     Text(
-                      isOwner ? 'Current Team Members' : 'Team Members',
+                      isOwner ? 'Your travel buddies' : 'Travel buddies',
                       style: Theme.of(context).textTheme.titleMedium?.copyWith(
                             fontWeight: FontWeight.w600,
                           ),
@@ -420,7 +464,7 @@ class _CollaboratorsSheetState extends ConsumerState<CollaboratorsSheet> {
                     const Spacer(),
                     collaboratorsAsync.when(
                       data: (collaborators) => Text(
-                        '${collaborators.length} member${collaborators.length != 1 ? 's' : ''}',
+                        '${collaborators.length} on this trip',
                         style: Theme.of(context).textTheme.bodySmall?.copyWith(
                               color: Theme.of(context).textTheme.bodyMedium?.color?.withValues(alpha: 0.6),
                             ),
@@ -448,17 +492,33 @@ class _CollaboratorsSheetState extends ConsumerState<CollaboratorsSheet> {
                             ),
                             const SizedBox(height: 16),
                             Text(
-                              'No team members yet',
+                              'Plan this trip together',
                               style: Theme.of(context).textTheme.titleMedium,
                             ),
                             const SizedBox(height: 8),
-                            Text(
-                              isOwner
-                                  ? 'Add members using the form above'
-                                  : 'Only the owner can add team members',
-                              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                    color: Theme.of(context).textTheme.bodyMedium?.color?.withValues(alpha: 0.6),
-                                  ),
+                            Padding(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 32),
+                              child: Text(
+                                isOwner
+                                    ? 'Everyone sees the same live map — '
+                                        'changes sync instantly. And when a '
+                                        'buddy new to VoyZa joins, you both '
+                                        'get a free month of Pro.'
+                                    : 'Only the trip owner can invite '
+                                        'travel buddies.',
+                                textAlign: TextAlign.center,
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .bodySmall
+                                    ?.copyWith(
+                                      color: Theme.of(context)
+                                          .textTheme
+                                          .bodyMedium
+                                          ?.color
+                                          ?.withValues(alpha: 0.6),
+                                    ),
+                              ),
                             ),
                           ],
                         ),
@@ -500,7 +560,11 @@ class _CollaboratorsSheetState extends ConsumerState<CollaboratorsSheet> {
     String description,
   ) {
     final isSelected = _selectedPermission == value;
-    final color = value == 'write' ? Colors.orange : Colors.blue;
+    // Brand primary for the collaborative default; neutral for View Only —
+    // no warning-orange for a benign choice (color discipline).
+    final color = value == 'write'
+        ? Theme.of(context).colorScheme.primary
+        : Colors.blueGrey;
 
     return GestureDetector(
       onTap: () => setState(() => _selectedPermission = value),
@@ -550,7 +614,8 @@ class _CollaboratorsSheetState extends ConsumerState<CollaboratorsSheet> {
     required bool isCurrentUser,
   }) {
     final isWrite = collaborator.permission == 'write';
-    final permissionColor = isWrite ? Colors.orange : Colors.blue;
+    final permissionColor =
+        isWrite ? Theme.of(context).colorScheme.primary : Colors.blueGrey;
 
     return Container(
       padding: const EdgeInsets.all(12),
@@ -618,7 +683,7 @@ class _CollaboratorsSheetState extends ConsumerState<CollaboratorsSheet> {
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Text(
-                    isWrite ? 'Can Edit' : 'Read Only',
+                    isWrite ? 'Can Edit' : 'View Only',
                     style: TextStyle(
                       fontSize: 11,
                       color: permissionColor,
@@ -645,7 +710,7 @@ class _CollaboratorsSheetState extends ConsumerState<CollaboratorsSheet> {
                         color: Theme.of(context).colorScheme.primary,
                       ),
                       const SizedBox(width: 12),
-                      Text(isWrite ? 'Change to Read Only' : 'Change to Can Edit'),
+                      Text(isWrite ? 'Change to View Only' : 'Change to Can Edit'),
                     ],
                   ),
                 ),

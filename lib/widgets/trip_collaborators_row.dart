@@ -90,7 +90,7 @@ class TripCollaboratorsRow extends ConsumerWidget {
 
     // Manage mode (owner): header + per-collaborator toggle rows.
     final addButton = Tooltip(
-      message: 'Add collaborators',
+      message: 'Invite travel buddies',
       child: Material(
         color: theme.colorScheme.primary.withValues(alpha: 0.1),
         shape: const CircleBorder(),
@@ -111,7 +111,7 @@ class TripCollaboratorsRow extends ConsumerWidget {
         children: [
           Expanded(
             child: Text(
-              'Plan together — add collaborators',
+              'Plan together — invite travel buddies',
               style: theme.textTheme.bodySmall
                   ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
               maxLines: 1,
