@@ -24,6 +24,7 @@ import '../screens/paywall_screen.dart';
 import '../widgets/logout_confirmation_dialog.dart';
 import '../widgets/delete_account_dialog.dart';
 import '../widgets/pro_feature_gate.dart';
+import '../services/time_saved_ledger_service.dart';
 import 'login_screen.dart';
 import 'profile_screen.dart';
 import 'referral_screen.dart';
@@ -81,6 +82,10 @@ class SettingsScreen extends ConsumerWidget {
           ],
 
           // Preferences Section
+          // Social currency: the compounding lifetime stat. Renders nothing
+          // until the user has actually saved time (no "0m" flex).
+          const _TimeSavedStatTile(),
+
           _buildSectionHeader(context, 'Preferences'),
           _buildThemeTile(context, ref, themeMode),
           const SizedBox(height: 12),
@@ -1357,6 +1362,67 @@ class _TrialStatusTileState extends ConsumerState<_TrialStatusTile> {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Lifetime "time saved with VoyZa" stat — the user's compounding win.
+/// Hidden entirely until at least 5 minutes have accrued, so a fresh install
+/// never shows an empty brag.
+class _TimeSavedStatTile extends StatelessWidget {
+  const _TimeSavedStatTile();
+
+  String _format(Duration d) {
+    final h = d.inHours;
+    final m = d.inMinutes % 60;
+    if (h > 0) return '${h}h ${m}m';
+    return '${m}m';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<Duration>(
+      future: TimeSavedLedgerService.instance.total(),
+      builder: (context, snap) {
+        final total = snap.data ?? Duration.zero;
+        if (total < const Duration(minutes: 5)) {
+          return const SizedBox.shrink();
+        }
+        final primary = Theme.of(context).colorScheme.primary;
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 24),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            decoration: BoxDecoration(
+              color: primary.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: primary.withValues(alpha: 0.3)),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.timer_outlined, color: primary),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    'Time saved with VoyZa',
+                    style: Theme.of(context)
+                        .textTheme
+                        .bodyLarge
+                        ?.copyWith(fontWeight: FontWeight.w600),
+                  ),
+                ),
+                Text(
+                  '~${_format(total)}',
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        color: primary,
+                        fontWeight: FontWeight.w800,
+                      ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 }

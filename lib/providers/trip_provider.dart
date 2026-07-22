@@ -17,6 +17,7 @@ import '../services/anonymous_user_service.dart';
 import '../services/onboarding_service.dart';
 import '../services/review_prompt_service.dart';
 import '../services/storage_service.dart';
+import '../services/time_saved_ledger_service.dart';
 import '../providers/debounced_settings_provider.dart';
 import '../utils/zone_utils.dart';
 import '../utils/geo_utils.dart';
@@ -1327,6 +1328,16 @@ class TripNotifier extends StateNotifier<TripState> {
           state.optimizedLocationsForSelectedDate.length,
           minutesSaved: timeSaved.inMinutes,
         );
+        // Social currency: accrue the lifetime time-saved ledger. Keyed per
+        // trip-day with a max policy, so re-optimizing never double-counts.
+        if (timeSaved > Duration.zero) {
+          final ledgerTripId =
+              _ref.read(realtimeActiveTripProvider).asData?.value?.id ??
+                  'local';
+          final dayIso = selectedDate.toIso8601String().split('T').first;
+          unawaited(TimeSavedLedgerService.instance
+              .credit(dayKey: '$ledgerTripId|$dayIso', saved: timeSaved));
+        }
       }
 
       // Delight moment: a successful optimization. Record the signal, then
