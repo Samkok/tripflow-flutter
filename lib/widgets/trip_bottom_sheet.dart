@@ -5,7 +5,6 @@ import 'package:intl/intl.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:voyza/models/location_model.dart';
 import 'package:voyza/providers/map_ui_state_provider.dart';
-import '../providers/auth_provider.dart';
 import '../providers/trip_listener_provider.dart';
 import '../providers/trip_provider.dart';
 import '../providers/trip_collaborator_provider.dart';
@@ -22,7 +21,6 @@ import 'app_toast.dart';
 import 'optimized_location_card.dart';
 import '../services/csv_service.dart';
 import '../services/places_service.dart';
-import '../services/route_share_card_service.dart';
 
 class TripBottomSheet extends ConsumerStatefulWidget {
   final DraggableScrollableController? sheetController;
@@ -570,8 +568,6 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
 
   Widget _buildDefaultHeader(BuildContext context, WidgetRef ref) {
     // OPTIMIZATION: Read values only when needed, not watched in parent
-    final hasPinnedLocations =
-        ref.watch(tripProvider.select((s) => s.pinnedLocations.isNotEmpty));
     final hasOptimizedRoute =
         ref.watch(tripProvider.select((s) => s.optimizedRoute.isNotEmpty));
 
@@ -609,54 +605,8 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
             //     );
             //   },
             // ),
-            if (hasPinnedLocations) ...[
-              // Clear Route chip — visible whenever there's a live optimized
-              // route, regardless of the selected date. Sits next to the
-              // Re-optimize chip so it's discoverable from the header
-              // without scrolling to the bottom of the list. We still
-              // suppress while the optimizer is mid-run to avoid a
-              // clear-vs-write race.
-              Consumer(builder: (context, ref, _) {
-                final isGenerating = ref.watch(isGeneratingRouteProvider);
-                if (!hasOptimizedRoute || isGenerating) {
-                  return const SizedBox.shrink();
-                }
-                final errorColor = Theme.of(context).colorScheme.error;
-                return Padding(
-                  padding: const EdgeInsets.only(left: 6),
-                  child: Material(
-                    color: errorColor.withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(12),
-                    child: InkWell(
-                      borderRadius: BorderRadius.circular(12),
-                      onTap: () =>
-                          ref.read(tripProvider.notifier).clearOptimizedRoute(),
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 10),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(Icons.clear_all_rounded,
-                                color: errorColor, size: 18),
-                            const SizedBox(width: 6),
-                            Text(
-                              'Clear',
-                              style: TextStyle(
-                                color: errorColor,
-                                fontWeight: FontWeight.bold,
-                                fontSize: 13,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                );
-              }),
-              const SizedBox(width: 8),
-            ],
+            // Clear is available from the map's FAB column — no duplicate in
+            // the header.
             // Optimize affordance — ALWAYS rendered (disabled at 0 places)
             // so brand-new users see the goal from the start and the
             // first-run spotlight tour has an anchor. Formerly inside the
@@ -2031,34 +1981,9 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
           ? _PulsingGlow(glowColor: primaryColor, child: button)
           : button;
 
-      // Clear Route is shown whenever there's a live optimized route and
-      // locations to anchor it — past, today, and future alike. Suppressed
-      // only while the optimizer is mid-run, to avoid a clear-vs-write
-      // race against the in-flight optimization.
-      final showClear = hasRoute && !isGenerating && hasLocations;
-      if (!showClear) return primary;
-
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          primary,
-          const SizedBox(height: 8),
-          OutlinedButton.icon(
-            onPressed: () =>
-                ref.read(tripProvider.notifier).clearOptimizedRoute(),
-            icon: const Icon(Icons.clear_all_rounded, size: 18),
-            label: const Text('Clear Route'),
-            style: OutlinedButton.styleFrom(
-              padding: const EdgeInsets.symmetric(vertical: 14),
-              foregroundColor: Theme.of(context).colorScheme.error,
-              side: BorderSide(
-                color:
-                    Theme.of(context).colorScheme.error.withValues(alpha: 0.5),
-              ),
-            ),
-          ),
-        ],
-      );
+      // Clear is available from the map's FAB column — no duplicate in the
+      // sheet's action area.
+      return primary;
     });
   }
 

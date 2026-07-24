@@ -12,6 +12,7 @@ import 'package:voyza/core/theme.dart';
 import 'package:voyza/screens/location_search_screen.dart';
 import 'package:voyza/screens/login_screen.dart';
 import 'package:voyza/widgets/add_to_trip_sheet.dart';
+import 'package:voyza/widgets/pulsing_glow.dart';
 import 'package:voyza/widgets/review_sentiment_dialog.dart';
 import 'package:voyza/widgets/location_detail_sheet.dart';
 import 'package:uuid/uuid.dart';
@@ -1417,25 +1418,30 @@ class _MapScreenState extends ConsumerState<MapScreen>
                             onPressed: _zoomToFitTrip,
                             child: const Icon(Icons.zoom_out_map),
                           ),
+                        // The share FAB is the growth surface — a pulsing glow
+                        // makes it the standout affordance in the column.
                         if (hasRoute && !isGenerating)
-                          FloatingActionButton(
-                            heroTag: 'shareRouteFab',
-                            mini: true,
-                            backgroundColor:
-                                Theme.of(context).colorScheme.primary,
-                            foregroundColor:
-                                Theme.of(context).colorScheme.onPrimary,
-                            onPressed:
-                                _preparingShare ? null : _shareRouteMapImage,
-                            tooltip: 'Share route',
-                            child: _preparingShare
-                                ? const SizedBox(
-                                    width: 18,
-                                    height: 18,
-                                    child: CircularProgressIndicator(
-                                        strokeWidth: 2, color: Colors.white),
-                                  )
-                                : const Icon(Icons.ios_share_rounded),
+                          PulsingGlow(
+                            glowColor: Theme.of(context).colorScheme.primary,
+                            child: FloatingActionButton(
+                              heroTag: 'shareRouteFab',
+                              mini: true,
+                              backgroundColor:
+                                  Theme.of(context).colorScheme.primary,
+                              foregroundColor:
+                                  Theme.of(context).colorScheme.onPrimary,
+                              onPressed:
+                                  _preparingShare ? null : _shareRouteMapImage,
+                              tooltip: 'Share route',
+                              child: _preparingShare
+                                  ? const SizedBox(
+                                      width: 18,
+                                      height: 18,
+                                      child: CircularProgressIndicator(
+                                          strokeWidth: 2, color: Colors.white),
+                                    )
+                                  : const Icon(Icons.ios_share_rounded),
+                            ),
                           ),
                         if (hasRoute && !isGenerating)
                           FloatingActionButton(
