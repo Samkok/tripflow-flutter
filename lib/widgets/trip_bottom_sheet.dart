@@ -108,7 +108,12 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
   /// Snap targets shared between the drag-handle tap and the sticky-region
   /// drag forwarder below. Mirrors the [DraggableScrollableSheet.snapSizes]
   /// passed to the sheet's builder.
-  static const double _snapCollapsed = 0.23;
+  // 0.25 (not 0.23): once a route exists the pinned header carries the
+  // compact summary strip too, and 0.23 left the fixed content ~7px taller
+  // than the collapsed sheet on some screens (bottom overflow). The extra
+  // ~2% gives the summary room without a perceptible change to the resting
+  // collapsed height.
+  static const double _snapCollapsed = 0.25;
   static const double _snapExpanded = 0.85;
 
   /// Below this many logical pixels of sheet height, the fixed sticky header
@@ -202,9 +207,11 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
       controller: sheetController,
       // Define snap points for a magnetic feel
       snap: true,
-      snapSizes: const [0.23, 0.85],
-      initialChildSize: 0.23, // Start in the collapsed state
-      minChildSize: 0.23, // Collapsed state shows only the header
+      // Must match _snapCollapsed/_snapExpanded and stay within
+      // [minChildSize, maxChildSize] or DraggableScrollableSheet asserts.
+      snapSizes: const [_snapCollapsed, _snapExpanded],
+      initialChildSize: 0.25, // Start in the collapsed state (see _snapCollapsed)
+      minChildSize: 0.25, // Collapsed state shows the header + route summary
       maxChildSize: 0.85, // Expanded state leaves search bar visible
       builder: (context, frameworkScrollController) {
         // Use a private controller for the visible ListView so list
