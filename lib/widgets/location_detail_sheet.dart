@@ -218,33 +218,43 @@ class LocationDetailSheet extends ConsumerWidget {
                         ),
             ),
             const SizedBox(width: 16),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  updatedLocation.isDone
-                      ? 'Done'
-                      : updatedLocation.isSkipped
-                          ? 'Stop'
-                          : 'Stop $number',
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        color: updatedLocation.isDone
-                            ? Colors.green.shade500
-                            : updatedLocation.isSkipped
-                                ? Colors.grey.shade600
-                                : Theme.of(context).colorScheme.primary,
-                        fontWeight: FontWeight.w600,
-                      ),
-                ),
-                Text(
-                  'Planned Stay: ${_formatDuration(updatedLocation.stayDuration)}',
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: Colors.grey[500],
-                      ),
-                ),
-              ],
+            // Flexible so the title/stay column yields (ellipsis) instead of
+            // shoving the fixed action buttons off-screen. A plain Spacer
+            // can't do this — it only shrinks to zero, never negative, so a
+            // long "Planned Stay" line overflowed the row on the right.
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    updatedLocation.isDone
+                        ? 'Done'
+                        : updatedLocation.isSkipped
+                            ? 'Stop'
+                            : 'Stop $number',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          color: updatedLocation.isDone
+                              ? Colors.green.shade500
+                              : updatedLocation.isSkipped
+                                  ? Colors.grey.shade600
+                                  : Theme.of(context).colorScheme.primary,
+                          fontWeight: FontWeight.w600,
+                        ),
+                  ),
+                  Text(
+                    'Stay: ${_formatDuration(updatedLocation.stayDuration)}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Colors.grey[500],
+                        ),
+                  ),
+                ],
+              ),
             ),
-            const Spacer(),
+            const SizedBox(width: 8),
             // Delete button
             GestureDetector(
               onTap: hasWriteAccess
