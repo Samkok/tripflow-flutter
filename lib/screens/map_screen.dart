@@ -292,7 +292,10 @@ class _MapScreenState extends ConsumerState<MapScreen>
   /// markers) and shares it as a branded card — the realistic "route on the
   /// map" image. Frames the route first and lets tiles settle before the
   /// snapshot; falls back to the silhouette card if the snapshot is null.
-  Future<void> _shareRouteMapImage() async {
+  ///
+  /// [archetype]/[roastLine] are supplied by the Plan Card moment so the same
+  /// realistic-map card carries the identity headline + roast line.
+  Future<void> _shareRouteMapImage({String? archetype, String? roastLine}) async {
     if (_preparingShare) return;
     final tripState = ref.read(tripProvider);
     if (tripState.optimizedRoute.isEmpty) {
@@ -330,6 +333,8 @@ class _MapScreenState extends ConsumerState<MapScreen>
                 stops: tripState.optimizedLocationsForSelectedDate.length,
                 timeSaved: tripState.timeSaved,
                 distanceKm: tripState.totalDistance / 1000.0,
+                archetype: archetype,
+                roastLine: roastLine,
               );
         debugPrint('QA_SHARE: rendered card bytes=${cardBytes?.length}');
         if (cardBytes != null && mounted) {
@@ -351,6 +356,8 @@ class _MapScreenState extends ConsumerState<MapScreen>
         timeSaved: tripState.timeSaved,
         distanceKm: tripState.totalDistance / 1000.0,
         anonymous: anonymous,
+        archetype: archetype,
+        roastLine: roastLine,
       );
     } catch (e) {
       debugPrint('_shareRouteMapImage: $e');
@@ -936,13 +943,11 @@ class _MapScreenState extends ConsumerState<MapScreen>
           places: places.length,
           timeSaved: saved,
           roastLine: roast,
-          onShare: (roastEnabled) =>
-              RouteShareCardService.instance.sharePlanCard(
-            tripId: trip.id,
-            tripName: trip.name,
-            places: places,
-            timeSaved: saved,
-            roastEnabled: roastEnabled,
+          // Share the realistic map card (real route + markers) carrying the
+          // identity headline + roast — not the abstract silhouette.
+          onShare: (roastEnabled) => _shareRouteMapImage(
+            archetype: archetype,
+            roastLine: roastEnabled ? roast : null,
           ),
         );
       });

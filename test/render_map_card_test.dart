@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -7,13 +8,13 @@ import 'package:voyza/services/route_share_card_service.dart';
 
 /// Renders the realistic map card over a synthetic "map" image so the
 /// compositing (cover-fit, scrim, headline, stats, wordmark) can be inspected
-/// without a device. Output: build/qa_shots/map_card_preview.png.
+/// without a device. Outputs land in build/qa_shots/.
 /// The real map tiles are supplied on-device by GoogleMapController.takeSnapshot.
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  test('renderMapCard composites branding over a map image', () async {
-    // Fake map: gradient + grid + a fake route line, so cover-fit + scrim show.
+  /// A fake map: gradient + grid + a fake route line, so cover-fit + scrim show.
+  Future<Uint8List> fakeMap() async {
     const w = 900.0, h = 1600.0;
     final rec = ui.PictureRecorder();
     final c = Canvas(rec);
@@ -45,13 +46,22 @@ void main() {
         ..strokeCap = StrokeCap.round,
     );
     final mapImg = await rec.endRecording().toImage(w.toInt(), h.toInt());
-    final mapBytes =
-        (await mapImg.toByteData(format: ui.ImageByteFormat.png))!
-            .buffer
-            .asUint8List();
+    return (await mapImg.toByteData(format: ui.ImageByteFormat.png))!
+        .buffer
+        .asUint8List();
+  }
 
+  Future<void> expect9x16(Uint8List png) async {
+    final decoded = await ui.instantiateImageCodec(png);
+    final frame = await decoded.getNextFrame();
+    expect(frame.image.width, 1080);
+    expect(frame.image.height, 1920);
+  }
+
+  test('renderMapCard composites branding over a map image (route mode)',
+      () async {
     final png = await RouteShareCardService.instance.renderMapCard(
-      mapBytes: mapBytes,
+      mapBytes: await fakeMap(),
       tripName: 'Lisbon',
       stops: 6,
       timeSaved: const Duration(minutes: 24),
@@ -61,11 +71,24 @@ void main() {
     expect(png, isNotNull, reason: 'renderMapCard should produce PNG bytes');
     Directory('build/qa_shots').createSync(recursive: true);
     File('build/qa_shots/map_card_preview.png').writeAsBytesSync(png!);
+    await expect9x16(png);
+  });
 
-    // The card must be a valid PNG at the 9:16 card dimensions.
-    final decoded = await ui.instantiateImageCodec(png);
-    final frame = await decoded.getNextFrame();
-    expect(frame.image.width, 1080);
-    expect(frame.image.height, 1920);
+  test('renderMapCard draws the Plan Card identity layer (plan mode)', () async {
+    // archetype -> headline, trip name -> kicker, roast -> under the stats.
+    final png = await RouteShareCardService.instance.renderMapCard(
+      mapBytes: await fakeMap(),
+      tripName: 'Lisbon',
+      stops: 6,
+      timeSaved: const Duration(minutes: 24),
+      distanceKm: 20.8,
+      archetype: 'THE TASTE ROUTER',
+      roastLine: 'This itinerary has been legally un-zig-zagged.',
+    );
+
+    expect(png, isNotNull, reason: 'plan-mode card should produce PNG bytes');
+    Directory('build/qa_shots').createSync(recursive: true);
+    File('build/qa_shots/plan_map_card_preview.png').writeAsBytesSync(png!);
+    await expect9x16(png);
   });
 }

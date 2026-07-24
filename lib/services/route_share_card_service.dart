@@ -436,12 +436,18 @@ class RouteShareCardService {
   /// Composites branding over a live map snapshot into a 9:16 share image.
   /// Returns PNG bytes, or null on failure so the caller can fall back to the
   /// silhouette card. Pure (no file I/O) so it's unit-testable.
+  /// When [archetype] is supplied (the Plan Card moment) it becomes the
+  /// headline — the identity is the shareable unit — with the trip name as a
+  /// small kicker above it, and [roastLine] (if any) rides under the stats.
+  /// Otherwise the headline is the plain "{TRIP}, OPTIMIZED".
   Future<Uint8List?> renderMapCard({
     required Uint8List mapBytes,
     required String tripName,
     required int stops,
     required Duration timeSaved,
     double distanceKm = 0,
+    String? archetype,
+    String? roastLine,
   }) async {
     try {
       final codec = await ui.instantiateImageCodec(mapBytes);
@@ -477,9 +483,22 @@ class RouteShareCardService {
         Shadow(color: Color(0xCC000000), blurRadius: 14, offset: Offset(0, 2)),
       ];
 
-      final title = tripName.trim().isEmpty
-          ? 'MY DAY, OPTIMIZED'
-          : '${tripName.trim().toUpperCase()}, OPTIMIZED';
+      final planMode = archetype != null && archetype.trim().isNotEmpty;
+      if (planMode && tripName.trim().isNotEmpty) {
+        // Trip name as a small kicker above the identity headline.
+        _drawText(canvas, tripName.trim().toUpperCase(),
+            const Offset(60, _ph - 528),
+            fontSize: 26,
+            weight: FontWeight.w700,
+            color: _subText,
+            maxWidth: 960,
+            shadows: shadow);
+      }
+      final title = planMode
+          ? archetype.trim().toUpperCase()
+          : (tripName.trim().isEmpty
+              ? 'MY DAY, OPTIMIZED'
+              : '${tripName.trim().toUpperCase()}, OPTIMIZED');
       _drawText(canvas, title, const Offset(60, _ph - 470),
           fontSize: 54,
           weight: FontWeight.w800,
@@ -507,6 +526,16 @@ class RouteShareCardService {
             fontSize: 32,
             weight: FontWeight.w700,
             color: _afterLine,
+            shadows: shadow);
+      }
+
+      // The roast line (Plan Card curation control) — self-aware voice.
+      if (roastLine != null && roastLine.trim().isNotEmpty) {
+        _drawText(canvas, '“${roastLine.trim()}”', const Offset(60, _ph - 250),
+            fontSize: 27,
+            weight: FontWeight.w600,
+            color: _text,
+            maxWidth: 960,
             shadows: shadow);
       }
 
@@ -552,6 +581,8 @@ class RouteShareCardService {
     required Duration timeSaved,
     required double distanceKm,
     required bool anonymous,
+    String? archetype,
+    String? roastLine,
   }) async {
     try {
       Uint8List? png;
@@ -562,6 +593,8 @@ class RouteShareCardService {
           stops: optimizedOrder.length,
           timeSaved: timeSaved,
           distanceKm: distanceKm,
+          archetype: archetype,
+          roastLine: roastLine,
         );
       }
       if (png == null) {
@@ -591,9 +624,14 @@ class RouteShareCardService {
       final saved = timeSaved >= const Duration(minutes: 5)
           ? ' · saved ~${_formatDuration(timeSaved)} of backtracking'
           : '';
-      final text =
-          'My ${tripName.trim()} route, optimized — ${optimizedOrder.length} stops, '
-          'zero backtracking$saved.$itinerary\n$link';
+      final planMode = archetype != null && archetype.trim().isNotEmpty;
+      final text = planMode
+          ? 'My ${tripName.trim()} plan is ready — ${archetype.trim()}. '
+              '${optimizedOrder.length} stops, zero backtracking$saved.'
+              '$itinerary\n$link'
+          : 'My ${tripName.trim()} route, optimized — '
+              '${optimizedOrder.length} stops, zero backtracking$saved.'
+              '$itinerary\n$link';
       await Share.shareXFiles([XFile(file.path)], text: text);
       AnalyticsService.instance.routeCardShared(anonymous: anonymous);
     } catch (e) {
