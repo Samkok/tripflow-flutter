@@ -114,6 +114,14 @@ class AnalyticsService {
   void mapTutorialSkipped(int step) =>
       _fire('map_tutorial_skipped', {'step': step});
 
+  /// The Plan Card dialog was shown (plan-complete moment: every trip day
+  /// with places has an optimized route).
+  void planCardShown() => _fire('plan_card_shown');
+
+  /// The Plan Card was shared (the pre-trip social-currency artifact).
+  /// Organic — never imported into Google Ads.
+  void planCardShared() => _fire('plan_card_shared');
+
   /// The post-trip recap dialog was shown (T+1..T+3 after a trip ended).
   void tripRecapShown() => _fire('trip_recap_shown');
 

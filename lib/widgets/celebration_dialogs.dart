@@ -407,3 +407,157 @@ Future<void> showTripRecapDialog(
     },
   );
 }
+
+/// Plan Card moment — the trip's plan just became fully optimized (every day
+/// has a route). The pre-trip social-currency peak: the user is about to
+/// message the group chat anyway; hand them the artifact. [onShare] receives
+/// whether the roast line should be on the card (curation control).
+Future<void> showPlanCardDialog(
+  BuildContext context, {
+  required String tripName,
+  required String archetype,
+  required int days,
+  required int places,
+  required Duration timeSaved,
+  required String roastLine,
+  required void Function(bool roastEnabled) onShare,
+}) {
+  return showDialog<void>(
+    context: context,
+    builder: (ctx) => _PlanCardDialog(
+      tripName: tripName,
+      archetype: archetype,
+      days: days,
+      places: places,
+      timeSaved: timeSaved,
+      roastLine: roastLine,
+      onShare: onShare,
+    ),
+  );
+}
+
+class _PlanCardDialog extends StatefulWidget {
+  final String tripName;
+  final String archetype;
+  final int days;
+  final int places;
+  final Duration timeSaved;
+  final String roastLine;
+  final void Function(bool roastEnabled) onShare;
+
+  const _PlanCardDialog({
+    required this.tripName,
+    required this.archetype,
+    required this.days,
+    required this.places,
+    required this.timeSaved,
+    required this.roastLine,
+    required this.onShare,
+  });
+
+  @override
+  State<_PlanCardDialog> createState() => _PlanCardDialogState();
+}
+
+class _PlanCardDialogState extends State<_PlanCardDialog> {
+  bool _roastEnabled = true;
+
+  String _fmt(Duration d) {
+    final h = d.inHours;
+    final m = d.inMinutes % 60;
+    if (h > 0) return '${h}h ${m}m';
+    return '${m}m';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final primary = theme.colorScheme.primary;
+
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(24, 28, 24, 16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('🏅', style: TextStyle(fontSize: 44)),
+            const SizedBox(height: 10),
+            Text(
+              'Your ${widget.tripName} plan is ready',
+              textAlign: TextAlign.center,
+              style: theme.textTheme.titleLarge
+                  ?.copyWith(fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 14),
+            // The earned identity — the shareable unit.
+            Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              decoration: BoxDecoration(
+                color: primary.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: primary.withValues(alpha: 0.4)),
+              ),
+              child: Text(
+                widget.archetype,
+                style: theme.textTheme.titleMedium?.copyWith(
+                  color: primary,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 1.1,
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              '${widget.days} ${widget.days == 1 ? 'day' : 'days'} · '
+              '${widget.places} places · zero backtracking'
+              '${widget.timeSaved >= const Duration(minutes: 5) ? '\n~${_fmt(widget.timeSaved)} saved vs the chaos version' : ''}',
+              textAlign: TextAlign.center,
+              style: theme.textTheme.bodyMedium
+                  ?.copyWith(fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 10),
+            SwitchListTile(
+              value: _roastEnabled,
+              onChanged: (v) => setState(() => _roastEnabled = v),
+              contentPadding: EdgeInsets.zero,
+              dense: true,
+              title: Text(
+                'Roast me a little',
+                style: theme.textTheme.bodyMedium
+                    ?.copyWith(fontWeight: FontWeight.w600),
+              ),
+              subtitle: Text(
+                '"${widget.roastLine}"',
+                style: theme.textTheme.bodySmall
+                    ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+              ),
+            ),
+            const SizedBox(height: 6),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                onPressed: () {
+                  Navigator.of(context).pop();
+                  widget.onShare(_roastEnabled);
+                },
+                icon: const Icon(Icons.ios_share_rounded, size: 18),
+                label: const Text('Share my plan'),
+                style: FilledButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14)),
+                ),
+              ),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Later'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}

@@ -182,6 +182,251 @@ class RouteShareCardService {
     }
   }
 
+  // ── Plan Card (social-currency flagship) ───────────────────────────────
+  // The pre-trip "my plan is ready" artifact: 9:16, day-loop silhouettes as
+  // the hero, an identity archetype as the headline, stats as garnish, a
+  // roast line for self-aware voice, and the public trip link as the gift.
+  // Research spec: marketing/social-currency-plan-card.md.
+
+  static const double _pw = 1080;
+  static const double _ph = 1920;
+
+  /// Rule-based identity archetype from the plan's own traits. Deterministic,
+  /// client-only — the label is the shareable unit (trait, not number).
+  String planArchetype(List<LocationModel> places, int days) {
+    if (places.isEmpty) return 'THE PLANNER FRIEND';
+    final foodish = RegExp(
+        r'market|caf[eé]|restaurant|food|bar|bakery|coffee|eat|kitchen',
+        caseSensitive: false);
+    final foodCount = places.where((p) => foodish.hasMatch(p.name)).length;
+    if (places.length >= 5 && foodCount / places.length >= 0.4) {
+      return 'THE TASTE ROUTER';
+    }
+
+    final byDay = <String, int>{};
+    for (final p in places) {
+      final d = p.scheduledDate;
+      if (d == null) continue;
+      final key = '${d.year}-${d.month}-${d.day}';
+      byDay[key] = (byDay[key] ?? 0) + 1;
+    }
+    if (byDay.values.any((c) => c >= 6)) return 'THE DAY MAXIMIZER';
+
+    var minLat = double.infinity, maxLat = -double.infinity;
+    var minLng = double.infinity, maxLng = -double.infinity;
+    for (final p in places) {
+      final c = p.coordinates;
+      if (c.latitude < minLat) minLat = c.latitude;
+      if (c.latitude > maxLat) maxLat = c.latitude;
+      if (c.longitude < minLng) minLng = c.longitude;
+      if (c.longitude > maxLng) maxLng = c.longitude;
+    }
+    // ~degrees → km at mid latitudes; spread > ~50km = multi-area trip.
+    final spreadKm = math.sqrt(math.pow((maxLat - minLat) * 111, 2) +
+        math.pow((maxLng - minLng) * 85, 2));
+    if (spreadKm > 50) return 'THE GROUND COVERER';
+
+    if (days >= 4) return 'THE LONG HAULER';
+    return 'THE PLANNER FRIEND';
+  }
+
+  static const _roastBank = <String>[
+    '3 wrong turns will still happen. That\'s on you.',
+    'This itinerary has been legally un-zig-zagged.',
+    'Your past self would\'ve walked this route twice.',
+    'Chaos had a plan. We had a better one.',
+  ];
+
+  /// Deterministic roast line per trip (stable across re-renders).
+  String planRoastLine(String tripId) =>
+      _roastBank[tripId.hashCode.abs() % _roastBank.length];
+
+  /// Greedy nearest-neighbor ordering for a day's silhouette — approximates
+  /// the optimized loop for DISPLAY (per-day optimized order isn't persisted).
+  List<LatLng> _nnOrder(List<LatLng> points) {
+    if (points.length <= 2) return points;
+    final remaining = List<LatLng>.from(points);
+    final ordered = <LatLng>[remaining.removeAt(0)];
+    while (remaining.isNotEmpty) {
+      final last = ordered.last;
+      var bestI = 0;
+      var bestD = double.infinity;
+      for (var i = 0; i < remaining.length; i++) {
+        final d = math.pow(remaining[i].latitude - last.latitude, 2) +
+            math.pow(remaining[i].longitude - last.longitude, 2).toDouble();
+        if (d < bestD) {
+          bestD = d.toDouble();
+          bestI = i;
+        }
+      }
+      ordered.add(remaining.removeAt(bestI));
+    }
+    return ordered;
+  }
+
+  /// Renders the 9:16 Plan Card to a temp PNG. Returns null on any failure.
+  Future<File?> renderPlanCard({
+    required String tripName,
+    required List<LocationModel> places,
+    required String archetype,
+    required Duration timeSaved,
+    String? roastLine,
+  }) async {
+    try {
+      // Group by day (date-only), sorted; skip unscheduled.
+      final byDay = <DateTime, List<LatLng>>{};
+      for (final p in places) {
+        final d = p.scheduledDate;
+        if (d == null) continue;
+        final day = DateTime(d.year, d.month, d.day);
+        byDay.putIfAbsent(day, () => []).add(p.coordinates);
+      }
+      if (byDay.isEmpty) return null;
+      final dayKeys = byDay.keys.toList()..sort();
+
+      final recorder = ui.PictureRecorder();
+      final canvas = Canvas(recorder);
+      canvas.drawRect(
+          const Rect.fromLTWH(0, 0, _pw, _ph), Paint()..color = _bg);
+
+      // Title.
+      final title = tripName.trim().isEmpty
+          ? 'MY TRIP, UNTANGLED'
+          : '${tripName.trim().toUpperCase()}, UNTANGLED';
+      _drawText(canvas, title, const Offset(60, 72),
+          fontSize: 54, weight: FontWeight.w800, color: _text, maxWidth: 960);
+
+      // Day panels — grid sized by day count, capped at 6 tiles.
+      const gridTop = 190.0;
+      const gridH = 950.0;
+      const gridW = _pw - 120.0;
+      final shown = dayKeys.take(6).toList();
+      final cols = shown.length <= 2 ? 1 : 2;
+      final rows = (shown.length + cols - 1) ~/ cols;
+      const gap = 32.0;
+      final cellW = (gridW - gap * (cols - 1)) / cols;
+      final cellH = math.min(
+          (gridH - gap * (rows - 1)) / rows, shown.length == 1 ? 700.0 : 470.0);
+      for (var i = 0; i < shown.length; i++) {
+        final r = i ~/ cols, c = i % cols;
+        final rect = Rect.fromLTWH(60 + c * (cellW + gap),
+            gridTop + r * (cellH + gap), cellW, cellH);
+        _drawPanel(canvas, rect,
+            label: 'DAY ${i + 1}',
+            points: _nnOrder(byDay[shown[i]]!),
+            line: _afterLine,
+            numbered: false);
+      }
+      if (dayKeys.length > 6) {
+        _drawText(canvas, '+${dayKeys.length - 6} more days',
+            Offset(60, gridTop + rows * (cellH + gap) + 4),
+            fontSize: 26, weight: FontWeight.w600, color: _subText);
+      }
+
+      // Identity headline + stats.
+      final placeCount = places.length;
+      _drawText(canvas, archetype, const Offset(60, 1240),
+          fontSize: 52, weight: FontWeight.w800, color: _afterLine,
+          maxWidth: 960);
+      _drawText(
+          canvas,
+          '${dayKeys.length} ${dayKeys.length == 1 ? 'day' : 'days'} · '
+          '$placeCount places · zero backtracking',
+          const Offset(60, 1330),
+          fontSize: 36,
+          weight: FontWeight.w700,
+          color: _text,
+          maxWidth: 960);
+      var y = 1396.0;
+      if (timeSaved >= const Duration(minutes: 5)) {
+        _drawText(canvas,
+            '~${_formatDuration(timeSaved)} saved vs the chaos version',
+            Offset(60, y),
+            fontSize: 32, weight: FontWeight.w700, color: _afterLine);
+        y += 62;
+      }
+      if (roastLine != null && roastLine.isNotEmpty) {
+        _drawText(canvas, roastLine, Offset(60, y),
+            fontSize: 28, weight: FontWeight.w500, color: _subText,
+            maxWidth: 960);
+      }
+
+      // The gift + wordmark.
+      _drawText(canvas, 'STEAL THIS PLAN ▸', const Offset(60, 1720),
+          fontSize: 40, weight: FontWeight.w800, color: _afterLine);
+      _drawText(canvas, 'full itinerary link in the caption',
+          const Offset(60, 1780),
+          fontSize: 26, weight: FontWeight.w500, color: _subText);
+      _drawText(canvas, 'VoyZa', const Offset(_pw - 220, 1712),
+          fontSize: 40, weight: FontWeight.w800, color: _text);
+      _drawText(canvas, 'voyza.xtremon.com', const Offset(_pw - 320, 1772),
+          fontSize: 24, weight: FontWeight.w500, color: _subText);
+
+      final picture = recorder.endRecording();
+      final img = await picture.toImage(_pw.toInt(), _ph.toInt());
+      final bytes = await img.toByteData(format: ui.ImageByteFormat.png);
+      if (bytes == null) return null;
+      final dir = await getTemporaryDirectory();
+      final file = File('${dir.path}/voyza_plan_card.png');
+      await file.writeAsBytes(bytes.buffer.asUint8List(), flush: true);
+      return file;
+    } catch (e) {
+      debugPrint('RouteShareCardService.renderPlanCard: $e');
+      return null;
+    }
+  }
+
+  /// Renders the Plan Card and opens the OS share sheet. Authed active-trip
+  /// flow only (the public itinerary link IS the gift).
+  Future<void> sharePlanCard({
+    required String tripId,
+    required String tripName,
+    required List<LocationModel> places,
+    required Duration timeSaved,
+    required bool roastEnabled,
+  }) async {
+    try {
+      final archetype = planArchetype(
+          places,
+          places
+              .where((p) => p.scheduledDate != null)
+              .map((p) {
+                final d = p.scheduledDate!;
+                return DateTime(d.year, d.month, d.day);
+              })
+              .toSet()
+              .length);
+      final file = await renderPlanCard(
+        tripName: tripName,
+        places: places,
+        archetype: archetype,
+        timeSaved: timeSaved,
+        roastLine: roastEnabled ? planRoastLine(tripId) : null,
+      );
+      if (file == null) return;
+
+      final publicLink = await _getOrCreatePublicLink(tripId);
+      final link = await _audienceLink(anonymous: false);
+      final dayCount = places
+          .where((p) => p.scheduledDate != null)
+          .map((p) {
+            final d = p.scheduledDate!;
+            return DateTime(d.year, d.month, d.day);
+          })
+          .toSet()
+          .length;
+      final steal = publicLink != null ? '\nSteal it: $publicLink' : '';
+      final text =
+          'My ${tripName.trim()} plan is done — $dayCount ${dayCount == 1 ? 'day' : 'days'}, '
+          '${places.length} places, zero backtracking.$steal\n$link';
+
+      await Share.shareXFiles([XFile(file.path)], text: text);
+      AnalyticsService.instance.planCardShared();
+    } catch (e) {
+      debugPrint('RouteShareCardService.sharePlanCard: $e');
+    }
+  }
+
   /// Referral link for authed sharers (the give-a-month offer rides along);
   /// store link for anonymous.
   Future<String> _audienceLink({required bool anonymous}) async {

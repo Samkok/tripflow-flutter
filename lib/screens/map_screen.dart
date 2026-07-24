@@ -16,7 +16,9 @@ import 'package:voyza/widgets/location_detail_sheet.dart';
 import 'package:uuid/uuid.dart';
 import '../models/location_model.dart';
 import '../models/user_profile.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../services/route_share_card_service.dart';
+import '../services/time_saved_ledger_service.dart';
 import '../utils/geo_utils.dart';
 import '../providers/location_provider.dart';
 import '../providers/optimized_map_overlay_provider.dart';
@@ -819,6 +821,62 @@ class _MapScreenState extends ConsumerState<MapScreen>
             tripName:
                 ref.read(realtimeActiveTripProvider).asData?.value?.name,
             tripId: ref.read(realtimeActiveTripProvider).asData?.value?.id,
+          ),
+        );
+      });
+    });
+
+    // Plan Card: the active trip's plan just became fully optimized — the
+    // pre-trip "my plan is ready" social-currency moment. Shown once per
+    // trip; this listener owns the shown flag (celebration pattern).
+    ref.listen<int>(planCardReadyTrigger, (previous, next) {
+      if (next <= (previous ?? 0)) return;
+      Future.delayed(const Duration(milliseconds: 1500), () async {
+        if (!mounted) return;
+        final trip = ref.read(realtimeActiveTripProvider).asData?.value;
+        if (trip == null) return;
+        final prefs = await SharedPreferences.getInstance();
+        final shownKey = 'plan_card_shown_${trip.id}';
+        if (prefs.getBool(shownKey) ?? false) return;
+        if (!mounted || !context.mounted) return;
+
+        final places = ref
+            .read(tripProvider)
+            .pinnedLocations
+            .where((l) => l.scheduledDate != null && !l.isSkipped)
+            .toList();
+        if (places.length < 3) return;
+        final days = places
+            .map((l) {
+              final d = l.scheduledDate!;
+              return DateTime(d.year, d.month, d.day);
+            })
+            .toSet()
+            .length;
+        final saved =
+            await TimeSavedLedgerService.instance.totalForTrip(trip.id);
+        final archetype =
+            RouteShareCardService.instance.planArchetype(places, days);
+        final roast = RouteShareCardService.instance.planRoastLine(trip.id);
+
+        await prefs.setBool(shownKey, true);
+        if (!mounted || !context.mounted) return;
+        AnalyticsService.instance.planCardShown();
+        await showPlanCardDialog(
+          context,
+          tripName: trip.name,
+          archetype: archetype,
+          days: days,
+          places: places.length,
+          timeSaved: saved,
+          roastLine: roast,
+          onShare: (roastEnabled) =>
+              RouteShareCardService.instance.sharePlanCard(
+            tripId: trip.id,
+            tripName: trip.name,
+            places: places,
+            timeSaved: saved,
+            roastEnabled: roastEnabled,
           ),
         );
       });

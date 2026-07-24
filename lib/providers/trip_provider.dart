@@ -4,6 +4,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 import 'package:voyza/providers/map_ui_state_provider.dart';
 import 'package:geolocator/geolocator.dart';
@@ -1370,11 +1371,53 @@ class TripNotifier extends StateNotifier<TripState> {
         if (!celebrationPending) {
           await _maybeSignalReviewPrompt();
         }
+        // Plan Card: once EVERY day of the active trip has been optimized,
+        // the plan is "done" — the pre-trip social-currency moment. Never
+        // stacked on the first-optimize celebration (skipped this run; a
+        // later optimize re-checks and fires it).
+        if (optimizeSucceeded && !celebrationPending) {
+          await _maybeSignalPlanComplete(selectedDate);
+        }
       }());
     } catch (e) {
       log('Error generating route: $e');
     } finally {
       _ref.read(isGeneratingRouteProvider.notifier).state = false;
+    }
+  }
+
+  /// Plan-complete detector for the Plan Card (authed active-trip flow only —
+  /// the public itinerary link is the card's gift). Records the just-optimized
+  /// day in a per-trip SharedPrefs set; when the set covers every day that has
+  /// unskipped places, bumps [planCardReadyTrigger] (map_screen owns the
+  /// shown-once flag, mirroring the celebration pattern).
+  Future<void> _maybeSignalPlanComplete(DateTime selectedDate) async {
+    try {
+      final trip = _ref.read(realtimeActiveTripProvider).asData?.value;
+      if (trip == null) return;
+      final prefs = await SharedPreferences.getInstance();
+      if (prefs.getBool('plan_card_shown_${trip.id}') ?? false) return;
+
+      final dayIso = selectedDate.toIso8601String().split('T').first;
+      final key = 'plan_days_optimized_${trip.id}';
+      final done = (prefs.getStringList(key) ?? <String>[]).toSet()
+        ..add(dayIso);
+      await prefs.setStringList(key, done.toList());
+
+      final tripDays = state.pinnedLocations
+          .where((l) => l.scheduledDate != null && !l.isSkipped)
+          .map((l) {
+        final d = l.scheduledDate!;
+        return DateTime(d.year, d.month, d.day)
+            .toIso8601String()
+            .split('T')
+            .first;
+      }).toSet();
+      if (tripDays.isEmpty || !done.containsAll(tripDays)) return;
+
+      _ref.read(planCardReadyTrigger.notifier).update((s) => s + 1);
+    } catch (e) {
+      debugPrint('TripNotifier._maybeSignalPlanComplete: $e');
     }
   }
 
@@ -1554,6 +1597,11 @@ final reviewPromptTriggerProvider = StateProvider<int>((ref) => 0);
 /// timing-warnings sheet when one is due (leaving the flag unset so the
 /// next optimize celebrates instead), and marks it only on actual show.
 final firstOptimizeCelebrationTrigger = StateProvider<int>((ref) => 0);
+
+/// Bumped when the active trip's plan becomes fully optimized (every day
+/// with places has a route) — map_screen listens and shows the Plan Card
+/// dialog once per trip.
+final planCardReadyTrigger = StateProvider<int>((ref) => 0);
 
 /// A provider that exposes details of the currently selected route leg.
 /// The UI can watch this to show/hide the "Open in Maps" button.
