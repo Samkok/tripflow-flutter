@@ -141,6 +141,22 @@ void main() {
         timeout: const Duration(seconds: 15));
     await shot(tester, '07-route-summary');
 
+    // The persistent "share this route" affordance must be present once a
+    // route exists.
+    expect(find.byTooltip('Share route'), findsWidgets,
+        reason: 'Share-route FAB should appear when an optimized route exists');
+
+    // QA end-to-end: tapping Share must not crash and the map snapshot +
+    // branded card must render. Under --dart-define=QA_NO_SHARE=true the native
+    // share sheet is skipped (it would block the test) and the card is shown in
+    // a full-screen overlay instead. NB: the '08' capture comes out blank —
+    // integration_test's iOS screenshot converts the Flutter surface, which
+    // can't grab the GoogleMap platform view; the real card is verified via a
+    // `flutter run` + host-level `xcrun simctl io screenshot` pass instead.
+    await tester.tap(find.byTooltip('Share route').first, warnIfMissed: false);
+    await tester.pump(const Duration(seconds: 5));
+    await shot(tester, '08-after-share');
+
     // The whole point: an anonymous user reached the aha in two taps.
     expect(sawCelebration || sawSummary, isTrue,
         reason: 'Optimize should produce a route (celebration or summary)');

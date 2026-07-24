@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:math' as math;
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -427,6 +428,179 @@ class RouteShareCardService {
     }
   }
 
+  // ── Realistic map card ─────────────────────────────────────────────────
+  // The share image travelers actually want: the REAL map with the route +
+  // numbered markers (from GoogleMapController.takeSnapshot), not an abstract
+  // silhouette. VoyZa branding + stats are composited over it.
+
+  /// Composites branding over a live map snapshot into a 9:16 share image.
+  /// Returns PNG bytes, or null on failure so the caller can fall back to the
+  /// silhouette card. Pure (no file I/O) so it's unit-testable.
+  Future<Uint8List?> renderMapCard({
+    required Uint8List mapBytes,
+    required String tripName,
+    required int stops,
+    required Duration timeSaved,
+    double distanceKm = 0,
+  }) async {
+    try {
+      final codec = await ui.instantiateImageCodec(mapBytes);
+      final frame = await codec.getNextFrame();
+      final map = frame.image;
+
+      final recorder = ui.PictureRecorder();
+      final canvas = Canvas(recorder);
+      canvas.drawRect(
+          const Rect.fromLTWH(0, 0, _pw, _ph), Paint()..color = _bg);
+
+      // The real map is the hero — cover-fit it across the whole card.
+      _drawImageCover(canvas, map, const Rect.fromLTWH(0, 0, _pw, _ph));
+
+      // Bottom scrim so the branding stays legible over the map. A tall,
+      // three-stop gradient that is already ~85% opaque by the headline line
+      // (the earlier single-stop fade let map labels bleed through the text).
+      final scrim = Rect.fromLTWH(0, _ph - 900, _pw, 900);
+      canvas.drawRect(
+        scrim,
+        Paint()
+          ..shader = ui.Gradient.linear(
+            Offset(0, scrim.top),
+            Offset(0, scrim.bottom),
+            const [Color(0x000E1726), Color(0xD90E1726), Color(0xFA0E1726)],
+            const [0.0, 0.5, 1.0],
+          ),
+      );
+
+      // A soft shadow under every line guarantees contrast even where the map
+      // is bright right up to the scrim.
+      const shadow = [
+        Shadow(color: Color(0xCC000000), blurRadius: 14, offset: Offset(0, 2)),
+      ];
+
+      final title = tripName.trim().isEmpty
+          ? 'MY DAY, OPTIMIZED'
+          : '${tripName.trim().toUpperCase()}, OPTIMIZED';
+      _drawText(canvas, title, const Offset(60, _ph - 470),
+          fontSize: 54,
+          weight: FontWeight.w800,
+          color: _text,
+          maxWidth: 960,
+          shadows: shadow);
+
+      final stat = <String>[
+        '$stops ${stops == 1 ? 'stop' : 'stops'}',
+        if (distanceKm > 0) '${distanceKm.toStringAsFixed(1)} km',
+        'zero backtracking',
+      ].join('  ·  ');
+      _drawText(canvas, stat, const Offset(60, _ph - 388),
+          fontSize: 34,
+          weight: FontWeight.w700,
+          color: _text,
+          maxWidth: 960,
+          shadows: shadow);
+
+      if (timeSaved >= const Duration(minutes: 5)) {
+        _drawText(
+            canvas,
+            '~${_formatDuration(timeSaved)} saved vs the chaos version',
+            const Offset(60, _ph - 326),
+            fontSize: 32,
+            weight: FontWeight.w700,
+            color: _afterLine,
+            shadows: shadow);
+      }
+
+      _drawText(canvas, 'STEAL THIS PLAN ▸', const Offset(60, _ph - 150),
+          fontSize: 38, weight: FontWeight.w800, color: _afterLine,
+          shadows: shadow);
+      _drawText(canvas, 'VoyZa · voyza.xtremon.com', const Offset(60, _ph - 92),
+          fontSize: 26, weight: FontWeight.w600, color: _subText,
+          shadows: shadow);
+
+      final picture = recorder.endRecording();
+      final img = await picture.toImage(_pw.toInt(), _ph.toInt());
+      final bytes = await img.toByteData(format: ui.ImageByteFormat.png);
+      return bytes?.buffer.asUint8List();
+    } catch (e) {
+      debugPrint('RouteShareCardService.renderMapCard: $e');
+      return null;
+    }
+  }
+
+  void _drawImageCover(Canvas canvas, ui.Image image, Rect dst) {
+    final iw = image.width.toDouble();
+    final ih = image.height.toDouble();
+    if (iw <= 0 || ih <= 0) return;
+    final scale = math.max(dst.width / iw, dst.height / ih);
+    final sw = dst.width / scale;
+    final sh = dst.height / scale;
+    final src = Rect.fromLTWH((iw - sw) / 2, (ih - sh) / 2, sw, sh);
+    canvas.drawImageRect(
+        image, src, dst, Paint()..filterQuality = FilterQuality.medium);
+  }
+
+  /// Shares a realistic map card. [mapBytes] = the live map snapshot; when it's
+  /// null or rendering fails, falls back to the silhouette route card so the
+  /// user always gets a shareable image. [tripId] is null for anonymous users
+  /// (no public itinerary link — just the map + store link).
+  Future<void> shareRouteMapCard({
+    required Uint8List? mapBytes,
+    required String? tripId,
+    required String tripName,
+    required List<LocationModel> originalOrder,
+    required List<LocationModel> optimizedOrder,
+    required Duration timeSaved,
+    required double distanceKm,
+    required bool anonymous,
+  }) async {
+    try {
+      Uint8List? png;
+      if (mapBytes != null) {
+        png = await renderMapCard(
+          mapBytes: mapBytes,
+          tripName: tripName,
+          stops: optimizedOrder.length,
+          timeSaved: timeSaved,
+          distanceKm: distanceKm,
+        );
+      }
+      if (png == null) {
+        // Snapshot unavailable — fall back to the silhouette card (it handles
+        // its own file + share) so the button never no-ops.
+        await shareRouteCard(
+          originalOrder: originalOrder,
+          optimizedOrder: optimizedOrder,
+          timeSaved: timeSaved,
+          anonymous: anonymous,
+          tripName: tripName,
+          tripId: tripId,
+        );
+        return;
+      }
+
+      final dir = await getTemporaryDirectory();
+      final file = File('${dir.path}/voyza_route_map_card.png');
+      await file.writeAsBytes(png, flush: true);
+
+      final link = await _audienceLink(anonymous: anonymous);
+      String itinerary = '';
+      if (!anonymous && tripId != null) {
+        final publicLink = await _getOrCreatePublicLink(tripId);
+        if (publicLink != null) itinerary = '\nSteal it: $publicLink';
+      }
+      final saved = timeSaved >= const Duration(minutes: 5)
+          ? ' · saved ~${_formatDuration(timeSaved)} of backtracking'
+          : '';
+      final text =
+          'My ${tripName.trim()} route, optimized — ${optimizedOrder.length} stops, '
+          'zero backtracking$saved.$itinerary\n$link';
+      await Share.shareXFiles([XFile(file.path)], text: text);
+      AnalyticsService.instance.routeCardShared(anonymous: anonymous);
+    } catch (e) {
+      debugPrint('RouteShareCardService.shareRouteMapCard: $e');
+    }
+  }
+
   /// Referral link for authed sharers (the give-a-month offer rides along);
   /// store link for anonymous.
   Future<String> _audienceLink({required bool anonymous}) async {
@@ -691,6 +865,7 @@ class RouteShareCardService {
     required Color color,
     double maxWidth = 600,
     bool centered = false,
+    List<Shadow>? shadows,
   }) {
     final painter = TextPainter(
       text: TextSpan(
@@ -700,6 +875,7 @@ class RouteShareCardService {
           fontSize: fontSize,
           fontWeight: weight,
           height: 1.1,
+          shadows: shadows,
         ),
       ),
       textDirection: TextDirection.ltr,

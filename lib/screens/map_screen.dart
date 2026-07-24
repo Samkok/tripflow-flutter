@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:math' as math;
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -61,6 +62,7 @@ class MapScreen extends ConsumerStatefulWidget {
 class _MapScreenState extends ConsumerState<MapScreen>
     with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   GoogleMapController? _mapController;
+  bool _preparingShare = false;
   DraggableScrollableController? _sheetController;
   bool _isTrackingLocation = false;
   int? _highlightedLocationIndex;
@@ -284,6 +286,77 @@ class _MapScreenState extends ConsumerState<MapScreen>
         debugPrint('Location stream error: $error');
       },
     );
+  }
+
+  /// Captures a live snapshot of the actual map (route polyline + numbered
+  /// markers) and shares it as a branded card — the realistic "route on the
+  /// map" image. Frames the route first and lets tiles settle before the
+  /// snapshot; falls back to the silhouette card if the snapshot is null.
+  Future<void> _shareRouteMapImage() async {
+    if (_preparingShare) return;
+    final tripState = ref.read(tripProvider);
+    if (tripState.optimizedRoute.isEmpty) {
+      if (mounted) {
+        AppToast.info(context, 'Optimize a route first, then share it.');
+      }
+      return;
+    }
+    setState(() => _preparingShare = true);
+    try {
+      // Frame the route and give the map tiles a moment to finish drawing.
+      _zoomToFitTrip();
+      await Future.delayed(const Duration(milliseconds: 900));
+      Uint8List? bytes = await _mapController?.takeSnapshot();
+      if (bytes == null && _mapController != null) {
+        await Future.delayed(const Duration(milliseconds: 700));
+        bytes = await _mapController?.takeSnapshot();
+      }
+      if (!mounted) return;
+      final trip = ref.read(realtimeActiveTripProvider).asData?.value;
+      final anonymous = ref.read(currentUserIdProvider) == null;
+      // QA-only (flutter drive --dart-define=QA_NO_SHARE=true): render the real
+      // card and show it full-screen so the drive can screenshot it, instead of
+      // opening the native share sheet (which would block the test). Inert in
+      // prod builds.
+      const qaNoShare =
+          bool.fromEnvironment('QA_NO_SHARE', defaultValue: false);
+      if (qaNoShare) {
+        debugPrint('QA_SHARE: map snapshot bytes=${bytes?.length}');
+        final cardBytes = bytes == null
+            ? null
+            : await RouteShareCardService.instance.renderMapCard(
+                mapBytes: bytes,
+                tripName: trip?.name ?? 'My route',
+                stops: tripState.optimizedLocationsForSelectedDate.length,
+                timeSaved: tripState.timeSaved,
+                distanceKm: tripState.totalDistance / 1000.0,
+              );
+        debugPrint('QA_SHARE: rendered card bytes=${cardBytes?.length}');
+        if (cardBytes != null && mounted) {
+          Navigator.of(context).push(MaterialPageRoute(
+            builder: (_) => Scaffold(
+              backgroundColor: Colors.black,
+              body: Center(child: Image.memory(cardBytes)),
+            ),
+          ));
+        }
+        return;
+      }
+      await RouteShareCardService.instance.shareRouteMapCard(
+        mapBytes: bytes,
+        tripId: anonymous ? null : trip?.id,
+        tripName: trip?.name ?? 'My route',
+        originalOrder: tripState.originalOrderForSelectedDate,
+        optimizedOrder: tripState.optimizedLocationsForSelectedDate,
+        timeSaved: tripState.timeSaved,
+        distanceKm: tripState.totalDistance / 1000.0,
+        anonymous: anonymous,
+      );
+    } catch (e) {
+      debugPrint('_shareRouteMapImage: $e');
+    } finally {
+      if (mounted) setState(() => _preparingShare = false);
+    }
   }
 
   void _onMapCreated(GoogleMapController controller) async {
@@ -811,17 +884,10 @@ class _MapScreenState extends ConsumerState<MapScreen>
           onInvite: isAnonymous
               ? null
               : () => inviteFriends(context, ref, source: 'celebration'),
-          // Everyone can carry the aha out of the app: the before/after
-          // route card (authed shares ride the referral link).
-          onShare: () => RouteShareCardService.instance.shareRouteCard(
-            originalOrder: tripState.originalOrderForSelectedDate,
-            optimizedOrder: tripState.optimizedLocationsForSelectedDate,
-            timeSaved: tripState.timeSaved,
-            anonymous: isAnonymous,
-            tripName:
-                ref.read(realtimeActiveTripProvider).asData?.value?.name,
-            tripId: ref.read(realtimeActiveTripProvider).asData?.value?.id,
-          ),
+          // Everyone can carry the aha out of the app — as the realistic
+          // map image (route + markers), falling back to the silhouette card
+          // if the snapshot isn't available.
+          onShare: _shareRouteMapImage,
         );
       });
     });
@@ -880,6 +946,13 @@ class _MapScreenState extends ConsumerState<MapScreen>
           ),
         );
       });
+    });
+
+    // Share-route requests from outside this screen (the bottom-sheet summary
+    // button) — capture a live map snapshot for the realistic share image.
+    ref.listen<int>(shareRouteMapTrigger, (previous, next) {
+      if (next <= (previous ?? 0)) return;
+      _shareRouteMapImage();
     });
 
     // Auto-frame the map when the user changes the selected date: zoom to
@@ -1338,6 +1411,26 @@ class _MapScreenState extends ConsumerState<MapScreen>
                             mini: true,
                             onPressed: _zoomToFitTrip,
                             child: const Icon(Icons.zoom_out_map),
+                          ),
+                        if (hasRoute && !isGenerating)
+                          FloatingActionButton(
+                            heroTag: 'shareRouteFab',
+                            mini: true,
+                            backgroundColor:
+                                Theme.of(context).colorScheme.primary,
+                            foregroundColor:
+                                Theme.of(context).colorScheme.onPrimary,
+                            onPressed:
+                                _preparingShare ? null : _shareRouteMapImage,
+                            tooltip: 'Share route',
+                            child: _preparingShare
+                                ? const SizedBox(
+                                    width: 18,
+                                    height: 18,
+                                    child: CircularProgressIndicator(
+                                        strokeWidth: 2, color: Colors.white),
+                                  )
+                                : const Icon(Icons.ios_share_rounded),
                           ),
                         if (hasRoute && !isGenerating)
                           FloatingActionButton(

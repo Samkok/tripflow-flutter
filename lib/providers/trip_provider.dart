@@ -1603,6 +1603,12 @@ final firstOptimizeCelebrationTrigger = StateProvider<int>((ref) => 0);
 /// dialog once per trip.
 final planCardReadyTrigger = StateProvider<int>((ref) => 0);
 
+/// Bumped by "share this route" affordances that live OUTSIDE map_screen
+/// (the bottom-sheet summary button) — map_screen listens, captures a live
+/// map snapshot, and builds the realistic share image. Kept here so any
+/// widget can request a share without holding the map controller.
+final shareRouteMapTrigger = StateProvider<int>((ref) => 0);
+
 /// A provider that exposes details of the currently selected route leg.
 /// The UI can watch this to show/hide the "Open in Maps" button.
 final selectedLegDetailsProvider = Provider<Map<String, dynamic>?>((ref) {

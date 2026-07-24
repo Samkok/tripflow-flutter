@@ -1362,29 +1362,15 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                         // card is the before/after reveal.)
                         if (hasRoute)
                           IconButton.filledTonal(
-                          onPressed: () {
-                            final s = ref.read(tripProvider);
-                            RouteShareCardService.instance.shareRouteCard(
-                              originalOrder: s.originalOrderForSelectedDate,
-                              optimizedOrder:
-                                  s.optimizedLocationsForSelectedDate,
-                              timeSaved: s.timeSaved,
-                              anonymous:
-                                  ref.read(currentUserIdProvider) == null,
-                              tripName: ref
-                                  .read(realtimeActiveTripProvider)
-                                  .asData
-                                  ?.value
-                                  ?.name,
-                              tripId: ref
-                                  .read(realtimeActiveTripProvider)
-                                  .asData
-                                  ?.value
-                                  ?.id,
-                            );
-                          },
+                          // Route the share through map_screen so it captures
+                          // the live map (realistic route image), not the
+                          // silhouette. map_screen falls back to the silhouette
+                          // card if the snapshot is unavailable.
+                          onPressed: () => ref
+                              .read(shareRouteMapTrigger.notifier)
+                              .update((v) => v + 1),
                           icon: const Icon(Icons.ios_share_rounded, size: 20),
-                          tooltip: 'Share route card',
+                          tooltip: 'Share route',
                           style: IconButton.styleFrom(
                             backgroundColor: Theme.of(context)
                                 .colorScheme
