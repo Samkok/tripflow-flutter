@@ -173,6 +173,10 @@ class LocationRepository {
       updatedLocation =
           updatedLocation.copyWith(isDone: updates['is_done'] as bool);
     }
+    if (updates.containsKey('is_accommodation')) {
+      updatedLocation = updatedLocation.copyWith(
+          isAccommodation: updates['is_accommodation'] as bool);
+    }
     if (updates.containsKey('scheduled_date')) {
       final dateStr = updates['scheduled_date'];
       final parsedDate =

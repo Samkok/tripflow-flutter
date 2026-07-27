@@ -3,7 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:intl/intl.dart';
 import 'package:voyza/models/location_model.dart';
-import 'package:voyza/models/saved_location.dart' show OpeningPeriod;
+import 'package:voyza/models/saved_location.dart'
+    show OpeningPeriod, SavedLocation;
 import 'package:voyza/models/trip.dart';
 import 'package:voyza/providers/user_trip_provider.dart';
 import 'package:voyza/services/timing_simulation.dart' show kNeverCloses;
@@ -15,6 +16,7 @@ import 'package:voyza/providers/trip_collaborator_provider.dart';
 import 'package:voyza/utils/date_picker_utils.dart';
 import 'package:voyza/utils/external_app_links.dart';
 import 'package:voyza/utils/trip_date_validator.dart';
+import 'package:voyza/utils/trip_dates.dart';
 
 import '../core/theme.dart';
 import 'app_toast.dart';
@@ -112,6 +114,11 @@ class LocationDetailSheet extends ConsumerWidget {
               _buildHoursSection(context, ref, updatedLocation, isPastDate),
             ],
 
+            // Accommodation section — flag this place as the stay for a day
+            // or the whole trip (one accommodation per day, DB-enforced).
+            const Divider(height: 32),
+            _buildAccommodationSection(context, ref, updatedLocation),
+
             // Multi-day stay section — lets the user mark this location as an
             // accommodation that spans multiple days, with quick actions for
             // single-day / pick-range / entire-trip. Shown for any editable
@@ -129,6 +136,264 @@ class LocationDetailSheet extends ConsumerWidget {
         ),
       ),
     );
+  }
+
+  // ── Accommodation ───────────────────────────────────────────────────────
+  // (Trip scoping reuses the existing [_scopedTrip] helper below.)
+
+  /// The trip's EFFECTIVE day range: its declared start/end dates AND every
+  /// day its locations are scheduled on, gap-filled ([contiguousTripDates]).
+  /// A trip with no declared dates but scheduled places still has a real
+  /// range — the scheduled days ARE the range. Empty only when nothing is
+  /// dated anywhere. Falls back to the active map content when [trip] is
+  /// null (anonymous / no active trip).
+  List<DateTime> _effectiveTripDays(WidgetRef ref, Trip? trip) {
+    final marks = <DateTime?>[trip?.startDate, trip?.endDate];
+    if (trip != null) {
+      final all = ref.read(savedLocationsProvider).asData?.value ??
+          const <SavedLocation>[];
+      for (final l in all) {
+        if (l.tripId != trip.id) continue;
+        marks.add(l.scheduledDate ?? l.createdAt);
+        marks.add(l.scheduledEndDate);
+      }
+    } else {
+      for (final l in ref.read(tripProvider).pinnedLocations) {
+        marks.add(l.scheduledDate ?? l.addedAt);
+        marks.add(l.scheduledEndDate);
+      }
+    }
+    return contiguousTripDates(marks);
+  }
+
+  Widget _buildAccommodationSection(
+      BuildContext context, WidgetRef ref, LocationModel loc) {
+    final theme = Theme.of(context);
+    final hasWriteAccessAsync = tripId != null
+        ? ref.watch(hasWriteAccessProvider(tripId!))
+        : ref.watch(hasActiveTripWriteAccessProvider);
+    final hasWriteAccess =
+        hasWriteAccessAsync.whenOrNull(data: (v) => v) ?? false;
+
+    String rangeLabel = '';
+    if (loc.isAccommodation) {
+      final start = loc.scheduledDate;
+      final end = loc.scheduledEndDate ?? start;
+      if (start != null && end != null) {
+        rangeLabel = start.year == end.year &&
+                start.month == end.month &&
+                start.day == end.day
+            ? DateFormat('MMM d').format(start)
+            : '${DateFormat('MMM d').format(start)} – ${DateFormat('MMM d').format(end)}';
+      }
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(Icons.hotel_outlined,
+                size: 18, color: theme.colorScheme.primary),
+            const SizedBox(width: 8),
+            Text(
+              'Accommodation',
+              style: theme.textTheme.titleMedium?.copyWith(
+                color: theme.colorScheme.primary,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        if (loc.isAccommodation)
+          Row(
+            children: [
+              Expanded(
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.primary.withValues(alpha: 0.10),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                        color:
+                            theme.colorScheme.primary.withValues(alpha: 0.35)),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.night_shelter_outlined,
+                          size: 16, color: theme.colorScheme.primary),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          rangeLabel.isEmpty
+                              ? 'Your stay for this trip'
+                              : 'Your stay · $rangeLabel',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.primary,
+                            fontWeight: FontWeight.w600,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              if (hasWriteAccess) ...[
+                const SizedBox(width: 8),
+                TextButton(
+                  onPressed: () async {
+                    await ref
+                        .read(tripProvider.notifier)
+                        .clearAccommodation(loc.id);
+                    if (context.mounted) {
+                      AppToast.info(context,
+                          '${loc.name} is no longer an accommodation.');
+                    }
+                  },
+                  child: const Text('Remove'),
+                ),
+              ],
+            ],
+          )
+        else
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: hasWriteAccess
+                  ? () => _showAccommodationScopeDialog(context, ref, loc)
+                  : null,
+              icon: const Icon(Icons.hotel_outlined, size: 18),
+              label: const Text('Set as accommodation'),
+            ),
+          ),
+      ],
+    );
+  }
+
+  /// Step 1: entire trip or just this day?
+  Future<void> _showAccommodationScopeDialog(
+      BuildContext context, WidgetRef ref, LocationModel loc) async {
+    final trip = _scopedTrip(ref);
+    final day = _sheetDayKey(ref, loc);
+    // "Entire trip" spans the EFFECTIVE range — the declared dates and/or
+    // the days locations are scheduled on (scheduling places IS the range).
+    final effectiveDays = _effectiveTripDays(ref, trip);
+    final hasRange = effectiveDays.isNotEmpty;
+    final tripStart = hasRange ? effectiveDays.first : null;
+    final tripEnd = hasRange ? effectiveDays.last : null;
+
+    final choice = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Set as accommodation'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.luggage_outlined),
+              title: const Text('Entire trip'),
+              subtitle: Text(hasRange
+                  ? '${DateFormat('MMM d').format(tripStart!)} – ${DateFormat('MMM d').format(tripEnd!)}, every night'
+                  : 'Add trip dates or schedule some places first'),
+              enabled: hasRange,
+              onTap: hasRange ? () => Navigator.of(ctx).pop('trip') : null,
+            ),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.today_outlined),
+              title: const Text('Just this day'),
+              subtitle: Text(DateFormat('EEE, MMM d').format(day)),
+              onTap: () => Navigator.of(ctx).pop('day'),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancel'),
+          ),
+        ],
+      ),
+    );
+    if (choice == null || !context.mounted) return;
+
+    final DateTime start;
+    final DateTime end;
+    if (choice == 'trip') {
+      start = tripStart!;
+      end = tripEnd!;
+    } else {
+      start = day;
+      end = day;
+    }
+    await _applyAccommodation(context, ref, loc, start: start, end: end);
+  }
+
+  /// Step 2: one-per-day conflict check (+replace confirm) then persist.
+  Future<void> _applyAccommodation(
+    BuildContext context,
+    WidgetRef ref,
+    LocationModel loc, {
+    required DateTime start,
+    required DateTime end,
+  }) async {
+    final notifier = ref.read(tripProvider.notifier);
+    final conflicts = notifier.accommodationConflicts(loc.id, start, end);
+
+    var replaceIds = const <String>[];
+    if (conflicts.isNotEmpty) {
+      final names = conflicts.map((c) => c.name).join(', ');
+      final replace = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Text('Replace existing accommodation?'),
+          content: Text(
+              'Only one accommodation is allowed per day. These days already '
+              'have $names — replace with ${loc.name}?'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('Replace'),
+            ),
+          ],
+        ),
+      );
+      if (replace != true || !context.mounted) return;
+      replaceIds = conflicts.map((c) => c.id).toList();
+    }
+
+    final ok = await notifier.setAccommodation(
+      loc.id,
+      start: start,
+      end: end,
+      replaceIds: replaceIds,
+    );
+    if (!context.mounted) return;
+    if (ok) {
+      AppToast.success(context, '${loc.name} set as your accommodation.');
+    } else {
+      AppToast.error(
+          context, 'Couldn\'t set the accommodation. Please try again.');
+    }
+  }
+
+  /// The calendar day this sheet's location belongs to (its own schedule,
+  /// else the map's selected date).
+  DateTime _sheetDayKey(WidgetRef ref, LocationModel loc) {
+    final DateTime raw = loc.scheduledDate ?? ref.read(selectedDateProvider);
+    return DateTime(raw.year, raw.month, raw.day);
   }
 
   /// Horizontal strip of the place's Google photos. Reuses the same
@@ -1066,8 +1331,11 @@ class LocationDetailSheet extends ConsumerWidget {
       }
     }
     scopedTrip ??= ref.watch(realtimeActiveTripProvider).asData?.value;
-    final tripStart = scopedTrip?.startDate;
-    final tripEnd = scopedTrip?.endDate;
+    // Effective range: declared dates and/or scheduled-location days — a
+    // trip whose places are dated has a range even without explicit dates.
+    final effectiveDays = _effectiveTripDays(ref, scopedTrip);
+    final tripStart = effectiveDays.isNotEmpty ? effectiveDays.first : null;
+    final tripEnd = effectiveDays.isNotEmpty ? effectiveDays.last : null;
     final tripHasRange = tripStart != null && tripEnd != null;
 
     String statusLabel;

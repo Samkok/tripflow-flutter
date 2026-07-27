@@ -6,6 +6,49 @@ part of 'saved_location.dart';
 // TypeAdapterGenerator
 // **************************************************************************
 
+class OpeningPeriodAdapter extends TypeAdapter<OpeningPeriod> {
+  @override
+  final int typeId = 2;
+
+  @override
+  OpeningPeriod read(BinaryReader reader) {
+    final numOfFields = reader.readByte();
+    final fields = <int, dynamic>{
+      for (int i = 0; i < numOfFields; i++) reader.readByte(): reader.read(),
+    };
+    return OpeningPeriod(
+      openDay: fields[0] as int,
+      openMinutes: fields[1] as int,
+      closeDay: fields[2] as int?,
+      closeMinutes: fields[3] as int?,
+    );
+  }
+
+  @override
+  void write(BinaryWriter writer, OpeningPeriod obj) {
+    writer
+      ..writeByte(4)
+      ..writeByte(0)
+      ..write(obj.openDay)
+      ..writeByte(1)
+      ..write(obj.openMinutes)
+      ..writeByte(2)
+      ..write(obj.closeDay)
+      ..writeByte(3)
+      ..write(obj.closeMinutes);
+  }
+
+  @override
+  int get hashCode => typeId.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is OpeningPeriodAdapter &&
+          runtimeType == other.runtimeType &&
+          typeId == other.typeId;
+}
+
 class SavedLocationAdapter extends TypeAdapter<SavedLocation> {
   @override
   final int typeId = 1;
@@ -28,26 +71,27 @@ class SavedLocationAdapter extends TypeAdapter<SavedLocation> {
       source: fields[8] as String,
       fingerprint: fields[9] as String,
       isSkipped: fields[10] as bool,
-      isDone: fields[16] == null ? false : fields[16] as bool,
+      isDone: fields[16] as bool,
       stayDuration: fields[11] as int,
       scheduledDate: fields[12] as DateTime?,
       tripId: fields[13] as String?,
       photoReference: fields[14] as String?,
-      photoAttributions: (fields[15] as List?)?.cast<String>(),
       photoReferences: (fields[17] as List?)?.cast<String>(),
+      photoAttributions: (fields[15] as List?)?.cast<String>(),
       placeId: fields[18] as String?,
       originalName: fields[19] as String?,
       googleOpeningHours: (fields[20] as List?)?.cast<OpeningPeriod>(),
       userClosingMinuteOverride: fields[21] as int?,
       hoursLastRefreshedAt: fields[22] as DateTime?,
       scheduledEndDate: fields[23] as DateTime?,
+      isAccommodation: fields[24] == null ? false : fields[24] as bool,
     );
   }
 
   @override
   void write(BinaryWriter writer, SavedLocation obj) {
     writer
-      ..writeByte(24)
+      ..writeByte(25)
       ..writeByte(0)
       ..write(obj.id)
       ..writeByte(1)
@@ -95,7 +139,9 @@ class SavedLocationAdapter extends TypeAdapter<SavedLocation> {
       ..writeByte(22)
       ..write(obj.hoursLastRefreshedAt)
       ..writeByte(23)
-      ..write(obj.scheduledEndDate);
+      ..write(obj.scheduledEndDate)
+      ..writeByte(24)
+      ..write(obj.isAccommodation);
   }
 
   @override
@@ -105,49 +151,6 @@ class SavedLocationAdapter extends TypeAdapter<SavedLocation> {
   bool operator ==(Object other) =>
       identical(this, other) ||
       other is SavedLocationAdapter &&
-          runtimeType == other.runtimeType &&
-          typeId == other.typeId;
-}
-
-class OpeningPeriodAdapter extends TypeAdapter<OpeningPeriod> {
-  @override
-  final int typeId = 2;
-
-  @override
-  OpeningPeriod read(BinaryReader reader) {
-    final numOfFields = reader.readByte();
-    final fields = <int, dynamic>{
-      for (int i = 0; i < numOfFields; i++) reader.readByte(): reader.read(),
-    };
-    return OpeningPeriod(
-      openDay: fields[0] as int,
-      openMinutes: fields[1] as int,
-      closeDay: fields[2] as int?,
-      closeMinutes: fields[3] as int?,
-    );
-  }
-
-  @override
-  void write(BinaryWriter writer, OpeningPeriod obj) {
-    writer
-      ..writeByte(4)
-      ..writeByte(0)
-      ..write(obj.openDay)
-      ..writeByte(1)
-      ..write(obj.openMinutes)
-      ..writeByte(2)
-      ..write(obj.closeDay)
-      ..writeByte(3)
-      ..write(obj.closeMinutes);
-  }
-
-  @override
-  int get hashCode => typeId.hashCode;
-
-  @override
-  bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is OpeningPeriodAdapter &&
           runtimeType == other.runtimeType &&
           typeId == other.typeId;
 }

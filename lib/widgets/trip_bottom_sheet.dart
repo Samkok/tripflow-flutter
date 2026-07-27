@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:voyza/models/location_model.dart';
+import 'package:voyza/providers/all_days_route_provider.dart';
 import 'package:voyza/providers/map_ui_state_provider.dart';
 import '../providers/trip_listener_provider.dart';
 import '../providers/trip_provider.dart';
@@ -86,6 +87,21 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
   });
 
   DraggableScrollableController? get sheetController => widget.sheetController;
+
+  /// Collapses the trip-plan sheet so the map (the thing a day/All chip just
+  /// changed) is actually visible. No-op when the sheet is already at or
+  /// below the collapsed size.
+  void _collapseSheetForMapView() {
+    final ctrl = sheetController;
+    if (ctrl == null || !ctrl.isAttached) return;
+    if (ctrl.size <= 0.13) return;
+    ctrl.animateTo(
+      0.12,
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeInOut,
+    );
+  }
+
   Function(LatLng)? get onLocationTap => widget.onLocationTap;
   VoidCallback? get onShowZoneSettings => widget.onShowZoneSettings;
 
@@ -208,7 +224,8 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
       // Must match _snapCollapsed/_snapExpanded and stay within
       // [minChildSize, maxChildSize] or DraggableScrollableSheet asserts.
       snapSizes: const [_snapCollapsed, _snapExpanded],
-      initialChildSize: 0.25, // Start in the collapsed state (see _snapCollapsed)
+      initialChildSize:
+          0.25, // Start in the collapsed state (see _snapCollapsed)
       minChildSize: 0.25, // Collapsed state shows the header + route summary
       maxChildSize: 0.85, // Expanded state leaves search bar visible
       builder: (context, frameworkScrollController) {
@@ -617,14 +634,17 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                   ref.watch(locationsForSelectedDateProvider);
               final count = locationsForDate.length;
               final hasLocations = count > 0;
-              final canTap = hasLocations && !isGenerating;
+              // Optimization is a per-day operation — disabled while the
+              // All-days overview owns the map (pick a day first).
+              final allDaysMode = ref.watch(allDaysModeProvider);
+              final canTap = hasLocations && !isGenerating && !allDaysMode;
               final primaryColor = Theme.of(context).colorScheme.primary;
               // Past days are read-only (the history banner says so) — never
               // coach adding places there.
               final nudgeDate = ref.watch(selectedDateProvider);
               final nudgeNow = DateTime.now();
-              final isPastDate = nudgeDate
-                  .isBefore(DateTime(nudgeNow.year, nudgeNow.month, nudgeNow.day));
+              final isPastDate = nudgeDate.isBefore(
+                  DateTime(nudgeNow.year, nudgeNow.month, nudgeNow.day));
 
               // Goal-gradient nudge: route optimization only pays off at 3+
               // stops, so below that we coach toward the "aha" instead of
@@ -1043,18 +1063,66 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
     // "live/current" and doesn't collide with the brand primary.
     final todayAccent = Colors.green.shade600;
 
+    final allDaysMode = ref.watch(allDaysModeProvider);
+    final dayColors = ref.watch(tripDayColorsProvider);
+
     return SizedBox(
       height: 34,
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: 12),
-        itemCount: days.length,
+        // Index 0 is the "All" chip; day chips follow, shifted by one.
+        itemCount: days.length + 1,
         separatorBuilder: (_, __) => const SizedBox(width: 6),
         itemBuilder: (context, index) {
-          final day = days[index];
-          final isSelected = day.isAtSameMomentAs(selected);
-          final isToday = day.isAtSameMomentAs(today);
           final primary = theme.colorScheme.primary;
+
+          // ── "All" chip — every day's route at once, each in its color. ──
+          // Deliberately styled apart from the date chips (solid fill +
+          // layers icon vs their outline look) so it reads as a MODE, not
+          // another date.
+          if (index == 0) {
+            final fg = allDaysMode ? theme.colorScheme.onPrimary : primary;
+            return TextButton(
+              onPressed: () {
+                ref.read(allDaysModeProvider.notifier).state = true;
+                _collapseSheetForMapView();
+              },
+              style: TextButton.styleFrom(
+                minimumSize: Size.zero,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                foregroundColor: fg,
+                backgroundColor:
+                    allDaysMode ? primary : primary.withValues(alpha: 0.14),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                  side: BorderSide(
+                    color:
+                        allDaysMode ? primary : primary.withValues(alpha: 0.55),
+                    width: allDaysMode ? 1.6 : 1,
+                  ),
+                ),
+                textStyle: theme.textTheme.labelMedium
+                    ?.copyWith(fontWeight: FontWeight.w800),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.layers_rounded, size: 14, color: fg),
+                  const SizedBox(width: 5),
+                  const Text('All'),
+                ],
+              ),
+            );
+          }
+
+          final day = days[index - 1];
+          // While All-days mode is on, the mode owns the selection — no
+          // individual day renders as selected.
+          final isSelected = !allDaysMode && day.isAtSameMomentAs(selected);
+          final isToday = day.isAtSameMomentAs(today);
 
           // Color resolution: "selected" wins on the fill/border (primary
           // tint), "today (unselected)" gets its own accent treatment, and
@@ -1080,9 +1148,17 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
 
           final dateLabel = isToday ? 'Today' : DateFormat('MMM d').format(day);
 
+          // Each day's route color, shown as a leading dot — doubles as the
+          // legend for All-days mode and stays consistent because the same
+          // provider colors the map polylines.
+          final routeColor = dayColors[day];
+
           return TextButton(
             onPressed: () {
+              // Picking a specific day always leaves All-days mode.
+              ref.read(allDaysModeProvider.notifier).state = false;
               ref.read(selectedDateProvider.notifier).state = day;
+              _collapseSheetForMapView();
             },
             style: TextButton.styleFrom(
               minimumSize: Size.zero,
@@ -1102,7 +1178,18 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text('${index + 1} · $dateLabel'),
+                if (routeColor != null) ...[
+                  Container(
+                    width: 8,
+                    height: 8,
+                    decoration: BoxDecoration(
+                      color: routeColor,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                  const SizedBox(width: 5),
+                ],
+                Text('$index · $dateLabel'),
                 if (isToday) ...[
                   const SizedBox(width: 6),
                   Container(
@@ -1254,13 +1341,9 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
     );
   }
 
-  Widget _buildTripSummary(
-      BuildContext context,
-      Duration totalTravelTime,
-      double totalDistance,
-      int totalStopsForDate,
-      {required bool hasRoute,
-      required bool hideEta}) {
+  Widget _buildTripSummary(BuildContext context, Duration totalTravelTime,
+      double totalDistance, int totalStopsForDate,
+      {required bool hasRoute, required bool hideEta}) {
     final estimatedArrival = DateTime.now().add(totalTravelTime);
 
     return Container(
@@ -1312,25 +1395,25 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                         // card is the before/after reveal.)
                         if (hasRoute)
                           IconButton.filledTonal(
-                          // Route the share through map_screen so it captures
-                          // the live map (realistic route image), not the
-                          // silhouette. map_screen falls back to the silhouette
-                          // card if the snapshot is unavailable.
-                          onPressed: () => ref
-                              .read(shareRouteMapTrigger.notifier)
-                              .update((v) => v + 1),
-                          icon: const Icon(Icons.ios_share_rounded, size: 20),
-                          tooltip: 'Share route',
-                          style: IconButton.styleFrom(
-                            backgroundColor: Theme.of(context)
-                                .colorScheme
-                                .primary
-                                .withValues(alpha: 0.15),
-                            foregroundColor:
-                                Theme.of(context).colorScheme.primary,
-                            padding: const EdgeInsets.all(8),
+                            // Route the share through map_screen so it captures
+                            // the live map (realistic route image), not the
+                            // silhouette. map_screen falls back to the silhouette
+                            // card if the snapshot is unavailable.
+                            onPressed: () => ref
+                                .read(shareRouteMapTrigger.notifier)
+                                .update((v) => v + 1),
+                            icon: const Icon(Icons.ios_share_rounded, size: 20),
+                            tooltip: 'Share route',
+                            style: IconButton.styleFrom(
+                              backgroundColor: Theme.of(context)
+                                  .colorScheme
+                                  .primary
+                                  .withValues(alpha: 0.15),
+                              foregroundColor:
+                                  Theme.of(context).colorScheme.primary,
+                              padding: const EdgeInsets.all(8),
+                            ),
                           ),
-                        ),
                         if (hasRoute) const SizedBox(width: 8),
                         IconButton.filledTonal(
                           onPressed: () => _openGoogleMaps(context, ref),
@@ -1917,7 +2000,13 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
       String buttonText;
       VoidCallback? onPressedAction;
 
-      if (isGenerating) {
+      final allDaysMode = ref.watch(allDaysModeProvider);
+      if (allDaysMode) {
+        // Optimization is a per-day operation — disabled while the All-days
+        // overview owns the map. Tapping a day chip re-enables it.
+        buttonText = 'Optimize Route';
+        onPressedAction = null;
+      } else if (isGenerating) {
         buttonText = 'Optimizing...';
         onPressedAction = null;
       } else if (isViewingHistory) {
@@ -1950,8 +2039,8 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
         onPressedAction = null; // disabled — no locations for this date
       } else {
         buttonText = hasRoute ? 'Re-optimize Route' : 'Optimize Route';
-        onPressedAction = () =>
-            _onOptimizePressed(context, ref, isReoptimizing: hasRoute);
+        onPressedAction =
+            () => _onOptimizePressed(context, ref, isReoptimizing: hasRoute);
       }
 
       final canGlow = onPressedAction != null && !isGenerating;
@@ -2040,6 +2129,13 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
   /// stop). Start-point choice stays discoverable on every re-optimize.
   Future<void> _onOptimizePressed(BuildContext context, WidgetRef ref,
       {required bool isReoptimizing}) async {
+    // Defense-in-depth: both optimize buttons are disabled in All-days mode,
+    // but any future caller lands here too. Optimization is per-day — the
+    // user picks a day first.
+    if (ref.read(allDaysModeProvider)) {
+      AppToast.info(context, 'Pick a day first — optimization works per day.');
+      return;
+    }
     if (!isReoptimizing) {
       final lifetimeOptimizes =
           await ReviewPromptService.instance.getSuccessfulOptimizeCount();
@@ -2380,10 +2476,15 @@ class _StartPointSheetState extends ConsumerState<_StartPointSheet> {
     final dayStops = tripState.pinnedLocations
         .where((loc) => loc.isActiveOnDate(selectedDate))
         .toList();
-    final activeStops =
-        dayStops.where((l) => !l.isSkipped && !l.isDone).toList();
-    final inactiveStops =
-        dayStops.where((l) => l.isSkipped || l.isDone).toList();
+    // The day's accommodation gets its own section (and is the default
+    // anchor — days naturally start from where you slept).
+    final dayAccommodations = dayStops.where((l) => l.isAccommodation).toList();
+    final activeStops = dayStops
+        .where((l) => !l.isSkipped && !l.isDone && !l.isAccommodation)
+        .toList();
+    final inactiveStops = dayStops
+        .where((l) => (l.isSkipped || l.isDone) && !l.isAccommodation)
+        .toList();
     final hasCurrentLocation = tripState.currentLocation != null;
 
     // Kick off a one-shot reverse geocode the moment we know the trip has
@@ -2414,25 +2515,31 @@ class _StartPointSheetState extends ConsumerState<_StartPointSheet> {
     final currentLocationDisabled =
         hasCurrentLocation && currentLocationMismatch;
 
-    // Default selection on first build — runs once. Don't preselect the
-    // device GPS if we already know it's in the wrong country.
+    // Default selection on first build — runs once. The day's accommodation
+    // wins (routes naturally start from where you're staying); then the
+    // device GPS unless it's known to be in the wrong country; then stops.
     if (!_initialized) {
       _initialized = true;
       final canPreselectCurrent =
           hasCurrentLocation && !currentLocationDisabled;
-      _selectedStartId = canPreselectCurrent
-          ? 'current_location'
-          : (activeStops.isNotEmpty
-              ? activeStops.first.id
-              : (inactiveStops.isNotEmpty ? inactiveStops.first.id : null));
+      _selectedStartId = dayAccommodations.isNotEmpty
+          ? dayAccommodations.first.id
+          : canPreselectCurrent
+              ? 'current_location'
+              : (activeStops.isNotEmpty
+                  ? activeStops.first.id
+                  : (inactiveStops.isNotEmpty ? inactiveStops.first.id : null));
     } else if (currentLocationDisabled &&
         _selectedStartId == 'current_location') {
       // The country lookup landed AFTER the first build and invalidated
-      // the device-GPS preselection — swap to the first usable stop so
-      // the Optimize button doesn't fire with a now-disabled anchor.
-      _selectedStartId = activeStops.isNotEmpty
-          ? activeStops.first.id
-          : (inactiveStops.isNotEmpty ? inactiveStops.first.id : null);
+      // the device-GPS preselection — swap to the accommodation / first
+      // usable stop so the Optimize button doesn't fire with a
+      // now-disabled anchor.
+      _selectedStartId = dayAccommodations.isNotEmpty
+          ? dayAccommodations.first.id
+          : activeStops.isNotEmpty
+              ? activeStops.first.id
+              : (inactiveStops.isNotEmpty ? inactiveStops.first.id : null);
     }
 
     return DraggableScrollableSheet(
@@ -2501,6 +2608,20 @@ class _StartPointSheetState extends ConsumerState<_StartPointSheet> {
                   children: [
                     _buildStartAtCard(context),
                     const SizedBox(height: 16),
+                    if (dayAccommodations.isNotEmpty) ...[
+                      _sectionLabel(context, 'Accommodation'),
+                      ...dayAccommodations.map((loc) => _StartPointTile(
+                            leading: Icon(Icons.hotel_outlined,
+                                color: theme.colorScheme.primary),
+                            title: loc.name,
+                            subtitle: 'Your stay — start the day from here',
+                            value: loc.id,
+                            groupValue: _selectedStartId,
+                            onChanged: (v) =>
+                                setState(() => _selectedStartId = v),
+                          )),
+                      const SizedBox(height: 16),
+                    ],
                     if (hasCurrentLocation) ...[
                       _sectionLabel(context, 'My location'),
                       _StartPointTile(

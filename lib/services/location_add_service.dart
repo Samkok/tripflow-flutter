@@ -18,6 +18,7 @@ import '../services/onboarding_service.dart';
 import '../services/places_service.dart';
 import '../services/subscription_limit_service.dart';
 import '../utils/trip_date_validator.dart';
+import '../widgets/accommodation_prompts.dart';
 import '../widgets/app_toast.dart';
 
 /// Central service for adding locations.
@@ -81,8 +82,7 @@ class LocationAddService {
         final isFirstEver = !await service.hasCelebrated(
             userId, OnboardingMilestone.firstPlace);
         if (isFirstEver) {
-          await service.markCelebrated(
-              userId, OnboardingMilestone.firstPlace);
+          await service.markCelebrated(userId, OnboardingMilestone.firstPlace);
         }
         // The warm "unlock Optimize" nudge only fits when this is genuinely
         // their first place on the board — a sample-trip user already has 5,
@@ -99,6 +99,7 @@ class LocationAddService {
   }
 
   Future<void> _persistTripDateExtension(
+    BuildContext context,
     Trip trip,
     TripDateConfirmResult result,
   ) async {
@@ -114,6 +115,19 @@ class LocationAddService {
       // Refresh anything reading trip data so the extended range shows up
       // immediately on cards and detail headers.
       _ref.invalidate(userTripsProvider);
+
+      // The trip just grew — ask where they're staying on the new day(s).
+      // (Self-gating: no-ops when the trip has no accommodations yet, isn't
+      // the active trip, or nothing actually extended.)
+      if (context.mounted) {
+        await maybePromptAccommodationForNewDays(
+          context,
+          _ref,
+          trip: trip,
+          newStart: newStart,
+          newEnd: newEnd,
+        );
+      }
     } catch (_) {
       // The location add still proceeds even if the trip update fails — the
       // user already confirmed the intent and we don't want to block the add.
@@ -152,8 +166,7 @@ class LocationAddService {
     final canAdd = await SubscriptionLimitService(_ref).canAddPlace(context);
     if (!canAdd) return false;
 
-    final activeTrip =
-        _ref.read(realtimeActiveTripProvider).asData?.value;
+    final activeTrip = _ref.read(realtimeActiveTripProvider).asData?.value;
 
     if (!context.mounted) return false;
     final countryOk = await assertLocationInTripCountry(
@@ -185,7 +198,7 @@ class LocationAddService {
     await _ref.read(tripProvider.notifier).addLocation(location);
 
     if (activeTrip != null && result.didExtend) {
-      await _persistTripDateExtension(activeTrip, result);
+      await _persistTripDateExtension(context, activeTrip, result);
     }
     if (context.mounted) _afterSuccessfulNewPlace(context, usedAfter);
     return true;
@@ -231,7 +244,7 @@ class LocationAddService {
     await _ref.read(locationRepositoryProvider).addLocation(location);
 
     if (trip != null && result.didExtend) {
-      await _persistTripDateExtension(trip, result);
+      await _persistTripDateExtension(context, trip, result);
     }
     if (context.mounted) _afterSuccessfulNewPlace(context, usedAfter);
     return true;
@@ -287,7 +300,7 @@ class LocationAddService {
         .updateLocation(location.id, {'trip_id': targetTrip.id});
 
     if (result.didExtend) {
-      await _persistTripDateExtension(targetTrip, result);
+      await _persistTripDateExtension(context, targetTrip, result);
     }
     return true;
   }
@@ -342,7 +355,7 @@ class LocationAddService {
         .addLocationsToTrip(picks.map((p) => p.id).toList(), targetTrip.id);
 
     if (dateConfirm.didExtend) {
-      await _persistTripDateExtension(targetTrip, dateConfirm);
+      await _persistTripDateExtension(context, targetTrip, dateConfirm);
     }
 
     return true;
@@ -396,14 +409,12 @@ class LocationAddService {
     if (outsideCount == 0) return TripDateConfirmResult.allowed;
 
     // Compute the proposed extended range.
-    final newStart =
-        (tripStart == null || earliestOutside!.isBefore(tripStart))
-            ? earliestOutside
-            : tripStart;
-    final newEnd =
-        (tripEnd == null || latestOutside!.isAfter(tripEnd))
-            ? latestOutside
-            : tripEnd;
+    final newStart = (tripStart == null || earliestOutside!.isBefore(tripStart))
+        ? earliestOutside
+        : tripStart;
+    final newEnd = (tripEnd == null || latestOutside!.isAfter(tripEnd))
+        ? latestOutside
+        : tripEnd;
 
     final fmt = DateFormat('MMM d, y');
     final currentRange = (tripStart != null && tripEnd != null)

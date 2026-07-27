@@ -13,35 +13,48 @@ class LocationModel {
   final Duration stayDuration;
   final bool isSkipped;
   final bool isDone;
+
   /// Cover photo reference. Equal to the first item of [photoReferences]
   /// when any photos are present.
   final String? photoReference;
+
   /// Up to 5 photo references for the in-card gallery.
   final List<String> photoReferences;
   final List<String>? photoAttributions;
+
   /// Google Places place_id. See [SavedLocation.placeId] — used for the
   /// external-app handoff so renamed entries still resolve to the exact
   /// Google place.
   final String? placeId;
+
   /// Original Google name at add time. Preserved across in-app renames so
   /// external handoff doesn't lose the canonical label.
   final String? originalName;
+
   /// Per-day opening periods. See [SavedLocation.googleOpeningHours].
   final List<OpeningPeriod>? googleOpeningHours;
+
   /// User-supplied closing time, in minutes since midnight (0–1439).
   /// See [SavedLocation.userClosingMinuteOverride].
   final int? userClosingMinuteOverride;
+
   /// When [googleOpeningHours] was last fetched.
   final DateTime? hoursLastRefreshedAt;
+
   /// Last day this location is active on the trip — inclusive, paired with
   /// [scheduledDate]. Null = single-day stop (default). When set, the
   /// location appears on every day in `[scheduledDate..scheduledEndDate]`.
   final DateTime? scheduledEndDate;
+
   /// Trip id this location is attached to (null = unassigned). Mirrors
   /// [SavedLocation.tripId] and propagates through the sync listener so
   /// UIs (e.g. the "Remove from trip" affordance in LocationDetailSheet)
   /// can read it without doing their own Hive lookup.
   final String? tripId;
+
+  /// True when this location is the accommodation for the day(s) it spans.
+  /// Mirrors [SavedLocation.isAccommodation]; at most one per trip-day.
+  final bool isAccommodation;
 
   LocationModel({
     required this.id,
@@ -65,6 +78,7 @@ class LocationModel {
     this.hoursLastRefreshedAt,
     this.scheduledEndDate,
     this.tripId,
+    this.isAccommodation = false,
   }) : photoReferences = photoReferences ??
             (photoReference != null && photoReference.isNotEmpty
                 ? [photoReference]
@@ -89,12 +103,12 @@ class LocationModel {
       'photoAttributions': photoAttributions,
       'placeId': placeId,
       'originalName': originalName,
-      'googleOpeningHours':
-          googleOpeningHours?.map((p) => p.toJson()).toList(),
+      'googleOpeningHours': googleOpeningHours?.map((p) => p.toJson()).toList(),
       'userClosingMinuteOverride': userClosingMinuteOverride,
       'hoursLastRefreshedAt': hoursLastRefreshedAt?.toIso8601String(),
       'scheduledEndDate': scheduledEndDate?.toIso8601String(),
       'tripId': tripId,
+      'isAccommodation': isAccommodation,
     };
   }
 
@@ -136,6 +150,7 @@ class LocationModel {
           ? DateTime.parse(json['scheduledEndDate'])
           : null,
       tripId: json['tripId'] as String?,
+      isAccommodation: json['isAccommodation'] ?? false,
     );
   }
 
@@ -165,6 +180,7 @@ class LocationModel {
     DateTime? hoursLastRefreshedAt,
     Object? scheduledEndDate = _unset,
     Object? tripId = _unset,
+    bool? isAccommodation,
   }) {
     return LocationModel(
       id: id ?? this.id,
@@ -172,7 +188,8 @@ class LocationModel {
       address: address ?? this.address,
       coordinates: coordinates ?? this.coordinates,
       addedAt: addedAt ?? this.addedAt,
-      travelTimeFromPrevious: travelTimeFromPrevious ?? this.travelTimeFromPrevious,
+      travelTimeFromPrevious:
+          travelTimeFromPrevious ?? this.travelTimeFromPrevious,
       distanceFromPrevious: distanceFromPrevious ?? this.distanceFromPrevious,
       stayDuration: stayDuration ?? this.stayDuration,
       isSkipped: isSkipped ?? this.isSkipped,
@@ -191,6 +208,7 @@ class LocationModel {
           ? this.scheduledEndDate
           : scheduledEndDate as DateTime?,
       tripId: identical(tripId, _unset) ? this.tripId : tripId as String?,
+      isAccommodation: isAccommodation ?? this.isAccommodation,
     );
   }
 
@@ -209,10 +227,10 @@ class LocationModel {
   /// True iff this location explicitly spans more than one day.
   bool get isMultiDay {
     if (scheduledEndDate == null || scheduledDate == null) return false;
-    final s = DateTime(scheduledDate!.year, scheduledDate!.month,
-        scheduledDate!.day);
-    final e = DateTime(scheduledEndDate!.year, scheduledEndDate!.month,
-        scheduledEndDate!.day);
+    final s =
+        DateTime(scheduledDate!.year, scheduledDate!.month, scheduledDate!.day);
+    final e = DateTime(
+        scheduledEndDate!.year, scheduledEndDate!.month, scheduledEndDate!.day);
     return e.isAfter(s);
   }
 
@@ -221,9 +239,7 @@ class LocationModel {
   /// over [name] (which the user may have renamed). Falls back to [name]
   /// for legacy rows that don't have an originalName recorded.
   String get externalHandoffName =>
-      (originalName != null && originalName!.isNotEmpty)
-          ? originalName!
-          : name;
+      (originalName != null && originalName!.isNotEmpty) ? originalName! : name;
 }
 
 /// Converts a [SavedLocation] (Hive/Supabase storage type) to an in-memory
@@ -253,6 +269,7 @@ extension ToLocationModel on SavedLocation {
       hoursLastRefreshedAt: hoursLastRefreshedAt,
       scheduledEndDate: scheduledEndDate,
       tripId: tripId,
+      isAccommodation: isAccommodation,
     );
   }
 }

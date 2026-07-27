@@ -149,6 +149,13 @@ class SavedLocation extends HiveObject {
   @HiveField(23)
   final DateTime? scheduledEndDate;
 
+  /// True when this location is the accommodation (hotel/stay) for the
+  /// day(s) it spans. Business rule: at most ONE accommodation per trip-day —
+  /// enforced client-side with a replace flow and by the DB exclusion
+  /// constraint `locations_one_accommodation_per_day`.
+  @HiveField(24, defaultValue: false)
+  final bool isAccommodation;
+
   SavedLocation({
     required this.id,
     required this.userId,
@@ -174,6 +181,7 @@ class SavedLocation extends HiveObject {
     this.userClosingMinuteOverride,
     this.hoursLastRefreshedAt,
     this.scheduledEndDate,
+    this.isAccommodation = false,
   });
 
   /// Effective gallery list: prefers [photoReferences]; falls back to a
@@ -218,6 +226,7 @@ class SavedLocation extends HiveObject {
     Object? userClosingMinuteOverride = _unset,
     DateTime? hoursLastRefreshedAt,
     Object? scheduledEndDate = _unset,
+    bool? isAccommodation,
   }) {
     return SavedLocation(
       id: id ?? this.id,
@@ -248,6 +257,7 @@ class SavedLocation extends HiveObject {
       scheduledEndDate: identical(scheduledEndDate, _unset)
           ? this.scheduledEndDate
           : scheduledEndDate as DateTime?,
+      isAccommodation: isAccommodation ?? this.isAccommodation,
     );
   }
 
@@ -260,14 +270,18 @@ class SavedLocation extends HiveObject {
       lat: (json['lat'] as num).toDouble(),
       lng: (json['lng'] as num).toDouble(),
       createdAt: DateTime.parse(json['created_at']),
-      lastSyncedAt: json['last_synced_at'] != null ? DateTime.parse(json['last_synced_at']) : null,
+      lastSyncedAt: json['last_synced_at'] != null
+          ? DateTime.parse(json['last_synced_at'])
+          : null,
       isSynced: json['is_synced'] ?? true, // Assume synced if from remote
       source: json['source'] ?? 'synced',
       fingerprint: json['fingerprint'] ?? '',
       isSkipped: json['is_skipped'] ?? false,
       isDone: json['is_done'] ?? false,
       stayDuration: json['stay_duration'] ?? 0,
-      scheduledDate: json['scheduled_date'] != null ? DateTime.parse(json['scheduled_date']) : null,
+      scheduledDate: json['scheduled_date'] != null
+          ? DateTime.parse(json['scheduled_date'])
+          : null,
       tripId: json['trip_id'],
       photoReference: json['photo_reference'],
       photoReferences: refs is List ? List<String>.from(refs) : null,
@@ -286,6 +300,7 @@ class SavedLocation extends HiveObject {
       scheduledEndDate: json['scheduled_end_date'] != null
           ? DateTime.parse(json['scheduled_end_date'])
           : null,
+      isAccommodation: json['is_accommodation'] ?? false,
     );
   }
 
@@ -316,6 +331,7 @@ class SavedLocation extends HiveObject {
       'user_closing_minute_override': userClosingMinuteOverride,
       'hours_last_refreshed_at': hoursLastRefreshedAt?.toIso8601String(),
       'scheduled_end_date': scheduledEndDate?.toIso8601String(),
+      'is_accommodation': isAccommodation,
     };
   }
 
@@ -335,10 +351,10 @@ class SavedLocation extends HiveObject {
   /// True iff the location explicitly spans more than one day.
   bool get isMultiDay {
     if (scheduledEndDate == null || scheduledDate == null) return false;
-    final s = DateTime(scheduledDate!.year, scheduledDate!.month,
-        scheduledDate!.day);
-    final e = DateTime(scheduledEndDate!.year, scheduledEndDate!.month,
-        scheduledEndDate!.day);
+    final s =
+        DateTime(scheduledDate!.year, scheduledDate!.month, scheduledDate!.day);
+    final e = DateTime(
+        scheduledEndDate!.year, scheduledEndDate!.month, scheduledEndDate!.day);
     return e.isAfter(s);
   }
 }

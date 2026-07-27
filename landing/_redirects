@@ -1,0 +1,10 @@
+# Netlify redirect rules for voyza.xtremon.com
+# (drop this file at the site root; other hosts: see README.md)
+
+# Referral invite pages — serve the self-contained page for any code path.
+/r/*  /r/index.html  200
+
+# Public trip links — BRANDED wrapper over the Supabase public-trip function.
+# Must be a server-side redirect (301/302), NOT a rewrite/JS redirect: chat
+# unfurlers follow it to the function's OG tags for link previews.
+/t/*  https://dkbibfjszsohtixjxlle.supabase.co/functions/v1/public-trip?t=:splat  302

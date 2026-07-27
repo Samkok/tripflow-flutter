@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:path_provider/path_provider.dart';
@@ -54,17 +55,17 @@ class RouteShareCardService {
   }) async {
     try {
       if (optimizedOrder.length < 2) return null;
-      final before = (originalOrder.length >= 2 ? originalOrder : optimizedOrder)
-          .map((l) => l.coordinates)
-          .toList();
+      final before =
+          (originalOrder.length >= 2 ? originalOrder : optimizedOrder)
+              .map((l) => l.coordinates)
+              .toList();
       final after = optimizedOrder.map((l) => l.coordinates).toList();
 
       final recorder = ui.PictureRecorder();
       final canvas = Canvas(recorder);
 
       // Background.
-      canvas.drawRect(
-          const Rect.fromLTWH(0, 0, _w, _h), Paint()..color = _bg);
+      canvas.drawRect(const Rect.fromLTWH(0, 0, _w, _h), Paint()..color = _bg);
 
       // Title.
       final stops = optimizedOrder.length;
@@ -310,8 +311,8 @@ class RouteShareCardService {
           (gridH - gap * (rows - 1)) / rows, shown.length == 1 ? 700.0 : 470.0);
       for (var i = 0; i < shown.length; i++) {
         final r = i ~/ cols, c = i % cols;
-        final rect = Rect.fromLTWH(60 + c * (cellW + gap),
-            gridTop + r * (cellH + gap), cellW, cellH);
+        final rect = Rect.fromLTWH(
+            60 + c * (cellW + gap), gridTop + r * (cellH + gap), cellW, cellH);
         _drawPanel(canvas, rect,
             label: 'DAY ${i + 1}',
             points: _nnOrder(byDay[shown[i]]!),
@@ -327,7 +328,9 @@ class RouteShareCardService {
       // Identity headline + stats.
       final placeCount = places.length;
       _drawText(canvas, archetype, const Offset(60, 1240),
-          fontSize: 52, weight: FontWeight.w800, color: _afterLine,
+          fontSize: 52,
+          weight: FontWeight.w800,
+          color: _afterLine,
           maxWidth: 960);
       _drawText(
           canvas,
@@ -340,23 +343,28 @@ class RouteShareCardService {
           maxWidth: 960);
       var y = 1396.0;
       if (timeSaved >= const Duration(minutes: 5)) {
-        _drawText(canvas,
+        _drawText(
+            canvas,
             '~${_formatDuration(timeSaved)} saved vs the chaos version',
             Offset(60, y),
-            fontSize: 32, weight: FontWeight.w700, color: _afterLine);
+            fontSize: 32,
+            weight: FontWeight.w700,
+            color: _afterLine);
         y += 62;
       }
       if (roastLine != null && roastLine.isNotEmpty) {
         _drawText(canvas, roastLine, Offset(60, y),
-            fontSize: 28, weight: FontWeight.w500, color: _subText,
+            fontSize: 28,
+            weight: FontWeight.w500,
+            color: _subText,
             maxWidth: 960);
       }
 
       // The gift + wordmark.
       _drawText(canvas, 'STEAL THIS PLAN ▸', const Offset(60, 1720),
           fontSize: 40, weight: FontWeight.w800, color: _afterLine);
-      _drawText(canvas, 'full itinerary link in the caption',
-          const Offset(60, 1780),
+      _drawText(
+          canvas, 'full itinerary link in the caption', const Offset(60, 1780),
           fontSize: 26, weight: FontWeight.w500, color: _subText);
       _drawText(canvas, 'VoyZa', const Offset(_pw - 220, 1712),
           fontSize: 40, weight: FontWeight.w800, color: _text);
@@ -448,6 +456,9 @@ class RouteShareCardService {
     double distanceKm = 0,
     String? archetype,
     String? roastLine,
+    // All-days mode: the card frames the WHOLE trip, so the stat line reads
+    // "N days · M places" instead of the single-day stop count.
+    int? daysCount,
   }) async {
     try {
       final codec = await ui.instantiateImageCodec(mapBytes);
@@ -486,8 +497,8 @@ class RouteShareCardService {
       final planMode = archetype != null && archetype.trim().isNotEmpty;
       if (planMode && tripName.trim().isNotEmpty) {
         // Trip name as a small kicker above the identity headline.
-        _drawText(canvas, tripName.trim().toUpperCase(),
-            const Offset(60, _ph - 528),
+        _drawText(
+            canvas, tripName.trim().toUpperCase(), const Offset(60, _ph - 528),
             fontSize: 26,
             weight: FontWeight.w700,
             color: _subText,
@@ -507,7 +518,10 @@ class RouteShareCardService {
           shadows: shadow);
 
       final stat = <String>[
-        '$stops ${stops == 1 ? 'stop' : 'stops'}',
+        if (daysCount != null) '$daysCount ${daysCount == 1 ? 'day' : 'days'}',
+        daysCount != null
+            ? '$stops ${stops == 1 ? 'place' : 'places'}'
+            : '$stops ${stops == 1 ? 'stop' : 'stops'}',
         if (distanceKm > 0) '${distanceKm.toStringAsFixed(1)} km',
         'zero backtracking',
       ].join('  ·  ');
@@ -540,10 +554,14 @@ class RouteShareCardService {
       }
 
       _drawText(canvas, 'STEAL THIS PLAN ▸', const Offset(60, _ph - 150),
-          fontSize: 38, weight: FontWeight.w800, color: _afterLine,
+          fontSize: 38,
+          weight: FontWeight.w800,
+          color: _afterLine,
           shadows: shadow);
       _drawText(canvas, 'VoyZa · voyza.xtremon.com', const Offset(60, _ph - 92),
-          fontSize: 26, weight: FontWeight.w600, color: _subText,
+          fontSize: 26,
+          weight: FontWeight.w600,
+          color: _subText,
           shadows: shadow);
 
       final picture = recorder.endRecording();
@@ -583,18 +601,26 @@ class RouteShareCardService {
     required bool anonymous,
     String? archetype,
     String? roastLine,
+    // All-days mode: whole-trip framing. [daysCount]/[totalPlaces] replace
+    // the single-day stop count on both the card and the caption.
+    int? daysCount,
+    int? totalPlaces,
   }) async {
     try {
+      final allTrip = daysCount != null && totalPlaces != null;
+      final statCount = allTrip ? totalPlaces : optimizedOrder.length;
+
       Uint8List? png;
       if (mapBytes != null) {
         png = await renderMapCard(
           mapBytes: mapBytes,
           tripName: tripName,
-          stops: optimizedOrder.length,
+          stops: statCount,
           timeSaved: timeSaved,
           distanceKm: distanceKm,
           archetype: archetype,
           roastLine: roastLine,
+          daysCount: daysCount,
         );
       }
       if (png == null) {
@@ -625,14 +651,31 @@ class RouteShareCardService {
           ? ' · saved ~${_formatDuration(timeSaved)} of backtracking'
           : '';
       final planMode = archetype != null && archetype.trim().isNotEmpty;
-      final text = planMode
-          ? 'My ${tripName.trim()} plan is ready — ${archetype.trim()}. '
-              '${optimizedOrder.length} stops, zero backtracking$saved.'
-              '$itinerary\n$link'
-          : 'My ${tripName.trim()} route, optimized — '
-              '${optimizedOrder.length} stops, zero backtracking$saved.'
-              '$itinerary\n$link';
-      await Share.shareXFiles([XFile(file.path)], text: text);
+      final String text;
+      if (allTrip) {
+        text = 'My ${tripName.trim()} plan — $daysCount '
+            '${daysCount == 1 ? 'day' : 'days'}, $totalPlaces '
+            '${totalPlaces == 1 ? 'place' : 'places'}, zero backtracking$saved.'
+            '$itinerary\n$link';
+      } else if (planMode) {
+        text = 'My ${tripName.trim()} plan is ready — ${archetype.trim()}. '
+            '${optimizedOrder.length} stops, zero backtracking$saved.'
+            '$itinerary\n$link';
+      } else {
+        text = 'My ${tripName.trim()} route, optimized — '
+            '${optimizedOrder.length} stops, zero backtracking$saved.'
+            '$itinerary\n$link';
+      }
+
+      // Share the IMAGE alone and put the caption (with its links) on the
+      // clipboard instead of in the intent. Targets like Facebook treat a
+      // share carrying both a file and URL-bearing text as a LINK post — the
+      // image never loads. File-only guarantees the card image lands
+      // everywhere; the caption is one paste away (FB strips prefilled
+      // captions by policy anyway, so nothing of value is lost there).
+      await Clipboard.setData(ClipboardData(text: text));
+      await Share.shareXFiles([XFile(file.path)],
+          subject: '${tripName.trim()} — planned with VoyZa');
       AnalyticsService.instance.routeCardShared(anonymous: anonymous);
     } catch (e) {
       debugPrint('RouteShareCardService.shareRouteMapCard: $e');
@@ -660,8 +703,7 @@ class RouteShareCardService {
     try {
       final recorder = ui.PictureRecorder();
       final canvas = Canvas(recorder);
-      canvas.drawRect(
-          const Rect.fromLTWH(0, 0, _w, _h), Paint()..color = _bg);
+      canvas.drawRect(const Rect.fromLTWH(0, 0, _w, _h), Paint()..color = _bg);
 
       _drawText(canvas, tripName.trim().isEmpty ? 'My trip' : tripName.trim(),
           const Offset(48, 48),
@@ -689,8 +731,7 @@ class RouteShareCardService {
             fontSize: 26, weight: FontWeight.w600, color: _subText);
       }
 
-      _drawText(canvas, 'Planned & optimized with VoyZa',
-          const Offset(48, 520),
+      _drawText(canvas, 'Planned & optimized with VoyZa', const Offset(48, 520),
           fontSize: 30, weight: FontWeight.w700, color: _afterLine);
 
       _drawText(canvas, 'VoyZa', const Offset(_w - 260, 516),
@@ -805,9 +846,14 @@ class RouteShareCardService {
     }
   }
 
-  /// One-line flip once the voyza.xtremon.com `/t/*` redirect is live:
-  /// set to 'https://voyza.xtremon.com/t/'.
-  static const String? _brandedPublicTripBase = null;
+  /// Branded public-trip links. REQUIRES the voyza.xtremon.com `/t/*`
+  /// server-side redirect rule to be deployed (see landing/_redirects) —
+  /// without it these links 404. Flipped from the raw
+  /// `$SUPABASE_URL/functions/v1/public-trip?t=` form: no security change
+  /// (the token was always the capability; the project ref ships in the app
+  /// binary), but a branded domain earns the click instead of reading as
+  /// phishing.
+  static const String? _brandedPublicTripBase = 'https://voyza.xtremon.com/t/';
 
   static String get _storeLink => Platform.isAndroid
       ? 'https://play.google.com/store/apps/details?id=com.superiordev.voyza'
@@ -830,8 +876,8 @@ class RouteShareCardService {
         fontSize: 20, weight: FontWeight.w700, color: _subText);
 
     // Project lat/lng into the panel's plot area (padding for dots/labels).
-    final plot = Rect.fromLTRB(rect.left + 56, rect.top + 72, rect.right - 56,
-        rect.bottom - 44);
+    final plot = Rect.fromLTRB(
+        rect.left + 56, rect.top + 72, rect.right - 56, rect.bottom - 44);
     final projected = _project(points, plot);
 
     final linePaint = Paint()
@@ -858,10 +904,7 @@ class RouteShareCardService {
             ..strokeWidth = 3);
       if (numbered) {
         _drawText(canvas, '${i + 1}', Offset(p.dx, p.dy),
-            fontSize: 17,
-            weight: FontWeight.w800,
-            color: _bg,
-            centered: true);
+            fontSize: 17, weight: FontWeight.w800, color: _bg, centered: true);
       }
     }
   }
@@ -879,8 +922,7 @@ class RouteShareCardService {
     }
     final latExtent = math.max(maxLat - minLat, 1e-6);
     final lngExtent = math.max(maxLng - minLng, 1e-6);
-    final scale =
-        math.min(plot.width / lngExtent, plot.height / latExtent);
+    final scale = math.min(plot.width / lngExtent, plot.height / latExtent);
     final drawnW = lngExtent * scale;
     final drawnH = latExtent * scale;
     final ox = plot.left + (plot.width - drawnW) / 2;

@@ -27,6 +27,7 @@ import '../providers/optimized_map_overlay_provider.dart';
 import '../providers/trip_provider.dart';
 import '../providers/trip_simulation_provider.dart';
 import '../providers/theme_provider.dart';
+import '../providers/all_days_route_provider.dart';
 import '../providers/map_ui_state_provider.dart';
 import '../providers/debounced_settings_provider.dart';
 import '../providers/trip_collaborator_provider.dart';
@@ -278,6 +279,11 @@ class _MapScreenState extends ConsumerState<MapScreen>
         // OPTIMIZATION: Only update if app is in foreground to prevent background processing
         if (mounted && _lastLifecycleState == AppLifecycleState.resumed) {
           ref.read(tripProvider.notifier).updateCurrentLocation(location);
+          // FOREGROUND-ONLY by construction: this stream only runs while the
+          // app is active (no background modes are declared on either
+          // platform) AND this branch is additionally gated on
+          // AppLifecycleState.resumed. No background location anywhere.
+          _maybePromptArrival(location);
         }
         // Location tracking without automatic camera animation
         // Camera only moves when user explicitly requests it
@@ -289,6 +295,83 @@ class _MapScreenState extends ConsumerState<MapScreen>
     );
   }
 
+  /// Arrival detection: when the device is within [_arrivalRadiusMeters] of
+  /// one of TODAY's not-yet-done stops on the active trip, offer to mark it
+  /// done. Prompted at most once per stop per session (declining doesn't
+  /// nag again), and never while another arrival dialog is up.
+  static const double _arrivalRadiusMeters = 10;
+  final Set<String> _arrivalPromptedIds = {};
+  bool _arrivalDialogOpen = false;
+
+  Future<void> _maybePromptArrival(LatLng position) async {
+    if (_arrivalDialogOpen || !mounted) return;
+    if (_lastLifecycleState != null &&
+        _lastLifecycleState != AppLifecycleState.resumed) {
+      return;
+    }
+    final activeTrip = ref.read(realtimeActiveTripProvider).asData?.value;
+    if (activeTrip == null) return;
+
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    LocationModel? hit;
+    var best = double.infinity;
+    for (final loc in ref.read(tripProvider).pinnedLocations) {
+      if (loc.isDone || loc.isSkipped) continue;
+      if (_arrivalPromptedIds.contains(loc.id)) continue;
+      if (!loc.isActiveOnDate(today)) continue;
+      final d = _metersBetween(position, loc.coordinates);
+      if (d <= _arrivalRadiusMeters && d < best) {
+        best = d;
+        hit = loc;
+      }
+    }
+    if (hit == null) return;
+    final arrived = hit;
+
+    _arrivalPromptedIds.add(arrived.id);
+    _arrivalDialogOpen = true;
+    try {
+      final markDone = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          icon: Icon(Icons.place_rounded,
+              color: Theme.of(ctx).colorScheme.primary, size: 34),
+          title: Text('You\'re at ${arrived.name}!'),
+          content: const Text('Looks like you\'ve arrived. Mark this stop as '
+              'done so your route stays up to date?'),
+          actionsAlignment: MainAxisAlignment.center,
+          actions: [
+            // The primary action is deliberately the big, filled, full-width
+            // one — marking done should be the obvious tap.
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                onPressed: () => Navigator.of(ctx).pop(true),
+                icon: const Icon(Icons.check_circle_outline),
+                label: const Text('Mark as done'),
+              ),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Not yet'),
+            ),
+          ],
+        ),
+      );
+      if (markDone == true && mounted) {
+        await ref.read(tripProvider.notifier).markLocationsAsDone({arrived.id});
+        if (mounted) {
+          AppToast.success(context, '${arrived.name} marked as done ✓');
+        }
+      }
+    } finally {
+      _arrivalDialogOpen = false;
+    }
+  }
+
   /// Captures a live snapshot of the actual map (route polyline + numbered
   /// markers) and shares it as a branded card — the realistic "route on the
   /// map" image. Frames the route first and lets tiles settle before the
@@ -296,10 +379,23 @@ class _MapScreenState extends ConsumerState<MapScreen>
   ///
   /// [archetype]/[roastLine] are supplied by the Plan Card moment so the same
   /// realistic-map card carries the identity headline + roast line.
-  Future<void> _shareRouteMapImage({String? archetype, String? roastLine}) async {
+  Future<void> _shareRouteMapImage(
+      {String? archetype, String? roastLine}) async {
     if (_preparingShare) return;
     final tripState = ref.read(tripProvider);
-    if (tripState.optimizedRoute.isEmpty) {
+    final allDaysMode = ref.read(allDaysModeProvider);
+    if (allDaysMode) {
+      // All-days share: needs the whole-trip overlays, not the selected-date
+      // optimized route.
+      final routes = ref.read(allDayRoutesProvider).valueOrNull ?? const {};
+      if (routes.isEmpty) {
+        if (mounted) {
+          AppToast.info(
+              context, 'Your day routes are still loading — try again.');
+        }
+        return;
+      }
+    } else if (tripState.optimizedRoute.isEmpty) {
       if (mounted) {
         AppToast.info(context, 'Optimize a route first, then share it.');
       }
@@ -308,6 +404,8 @@ class _MapScreenState extends ConsumerState<MapScreen>
     setState(() => _preparingShare = true);
     try {
       // Frame the route and give the map tiles a moment to finish drawing.
+      // (_zoomToFitTrip redirects to the fit-every-day framing in All-days
+      // mode, so the snapshot captures ALL the colored day routes.)
       _zoomToFitTrip();
       await Future.delayed(const Duration(milliseconds: 900));
       Uint8List? bytes = await _mapController?.takeSnapshot();
@@ -318,6 +416,19 @@ class _MapScreenState extends ConsumerState<MapScreen>
       if (!mounted) return;
       final trip = ref.read(realtimeActiveTripProvider).asData?.value;
       final anonymous = ref.read(currentUserIdProvider) == null;
+      // All-days mode: the card frames the whole trip, so its stats must be
+      // whole-trip numbers (every location, every day) — not the selected
+      // day's optimized-route count (which is 0 unless that day was just
+      // optimized).
+      final int? shareDaysCount;
+      final int? shareTotalPlaces;
+      if (allDaysMode) {
+        shareDaysCount = ref.read(activeTripDayAxisProvider).length;
+        shareTotalPlaces = ref.read(tripProvider).pinnedLocations.length;
+      } else {
+        shareDaysCount = null;
+        shareTotalPlaces = null;
+      }
       // QA-only (flutter drive --dart-define=QA_NO_SHARE=true): render the real
       // card and show it full-screen so the drive can screenshot it, instead of
       // opening the native share sheet (which would block the test). Inert in
@@ -331,11 +442,13 @@ class _MapScreenState extends ConsumerState<MapScreen>
             : await RouteShareCardService.instance.renderMapCard(
                 mapBytes: bytes,
                 tripName: trip?.name ?? 'My route',
-                stops: tripState.optimizedLocationsForSelectedDate.length,
-                timeSaved: tripState.timeSaved,
-                distanceKm: tripState.totalDistance / 1000.0,
+                stops: shareTotalPlaces ??
+                    tripState.optimizedLocationsForSelectedDate.length,
+                timeSaved: allDaysMode ? Duration.zero : tripState.timeSaved,
+                distanceKm: allDaysMode ? 0 : tripState.totalDistance / 1000.0,
                 archetype: archetype,
                 roastLine: roastLine,
+                daysCount: shareDaysCount,
               );
         debugPrint('QA_SHARE: rendered card bytes=${cardBytes?.length}');
         if (cardBytes != null && mounted) {
@@ -354,12 +467,21 @@ class _MapScreenState extends ConsumerState<MapScreen>
         tripName: trip?.name ?? 'My route',
         originalOrder: tripState.originalOrderForSelectedDate,
         optimizedOrder: tripState.optimizedLocationsForSelectedDate,
-        timeSaved: tripState.timeSaved,
-        distanceKm: tripState.totalDistance / 1000.0,
+        timeSaved: allDaysMode ? Duration.zero : tripState.timeSaved,
+        distanceKm: allDaysMode ? 0 : tripState.totalDistance / 1000.0,
         anonymous: anonymous,
         archetype: archetype,
         roastLine: roastLine,
+        daysCount: shareDaysCount,
+        totalPlaces: shareTotalPlaces,
       );
+      // The caption (with the itinerary/referral links) rides the clipboard
+      // now — the image is shared alone so targets like Facebook can't
+      // downgrade it to a link post. Tell the user the paste is ready.
+      if (mounted) {
+        AppToast.info(
+            context, 'Caption with your links copied — paste it in your post.');
+      }
     } catch (e) {
       debugPrint('_shareRouteMapImage: $e');
     } finally {
@@ -511,8 +633,23 @@ class _MapScreenState extends ConsumerState<MapScreen>
 
   void _onMarkerTapped(LocationModel location) {
     // Find the index of the tapped location in the list for the currently selected date.
-    final locationsForDate = ref.read(locationsForSelectedDateProvider);
-    final indexInList = locationsForDate.indexWhere((l) => l.id == location.id);
+    var locationsForDate = ref.read(locationsForSelectedDateProvider);
+    var indexInList = locationsForDate.indexWhere((l) => l.id == location.id);
+
+    // All-days mode: the tapped pin may belong to any day, so resolve its
+    // number (and the sibling list for the sheet's From/To picker) from the
+    // day group that contains it instead of the selected date's list.
+    if (ref.read(allDaysModeProvider)) {
+      final stopsByDay = ref.read(allDayStopsProvider);
+      for (final stops in stopsByDay.values) {
+        final i = stops.indexWhere((l) => l.id == location.id);
+        if (i != -1) {
+          locationsForDate = stops;
+          indexInList = i;
+          break;
+        }
+      }
+    }
 
     // The stop number is the index + 1. If not found, default to 0.
     final stopNumber = indexInList != -1 ? indexInList + 1 : 0;
@@ -535,6 +672,11 @@ class _MapScreenState extends ConsumerState<MapScreen>
         parentScrollController: dummyScrollController,
         parentSheetController: _sheetController,
         onLocationTap: _zoomToLocation,
+        // All-days mode: give the sheet the tapped pin's own day group so
+        // its From/To picker doesn't show the (unrelated) selected date's
+        // stops. Null in single-day mode = existing behavior.
+        locationsForDate:
+            ref.read(allDaysModeProvider) ? locationsForDate : null,
       ),
     );
 
@@ -967,8 +1109,38 @@ class _MapScreenState extends ConsumerState<MapScreen>
     // is enough — pinnedLocations is already correct.
     ref.listen<DateTime>(selectedDateProvider, (previous, next) {
       if (previous == null || previous == next) return;
+      // All-days mode owns the camera — don't re-frame per selected date.
+      if (ref.read(allDaysModeProvider)) return;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _updateCameraForCurrentDate();
+      });
+    });
+
+    // Entering All-days mode frames the whole trip; leaving it restores the
+    // selected day's framing.
+    ref.listen<bool>(allDaysModeProvider, (previous, next) {
+      if (previous == next) return;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        if (next) {
+          _zoomToFitAllDays();
+        } else {
+          _updateCameraForCurrentDate();
+        }
+      });
+    });
+
+    // Day routes stream in asynchronously after the mode flips on (Directions
+    // per day). Re-fit when they land so long road detours aren't cropped —
+    // the initial fit only knew the stop coordinates.
+    ref.listen<AsyncValue<Map<DateTime, List<LatLng>>>>(allDayRoutesProvider,
+        (previous, next) {
+      final routes = next.valueOrNull;
+      if (routes == null || routes.isEmpty) return;
+      if (!ref.read(allDaysModeProvider)) return;
+      if (identical(previous?.valueOrNull, routes)) return;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _zoomToFitAllDays();
       });
     });
 
@@ -980,6 +1152,11 @@ class _MapScreenState extends ConsumerState<MapScreen>
     ref.listen<String?>(localActiveTripIdProvider, (previous, next) {
       if (previous == next) return;
       _pendingTripCameraMove = true;
+      // All-days mode belongs to the trip it was opened for. On switch or
+      // deactivation the day chips (its only exit affordance) change or
+      // vanish, so drop back to single-day mode rather than stranding the
+      // map in a stale overlay.
+      ref.read(allDaysModeProvider.notifier).state = false;
     });
 
     ref.listen<List<LocationModel>>(
@@ -1391,8 +1568,17 @@ class _MapScreenState extends ConsumerState<MapScreen>
                     builder: (context, ref, _) {
                       final locationsForDate =
                           ref.watch(locationsForSelectedDateProvider);
-                      final hasRoute = ref.watch(tripProvider
+                      final hasSelectedDayRoute = ref.watch(tripProvider
                           .select((s) => s.optimizedRoute.isNotEmpty));
+                      // In All-days mode the share/fit affordances key off the
+                      // whole-trip overlays instead of the selected-date route.
+                      final allDaysActive = ref.watch(allDaysModeProvider) &&
+                          (ref
+                                  .watch(allDayRoutesProvider)
+                                  .valueOrNull
+                                  ?.isNotEmpty ??
+                              false);
+                      final hasRoute = hasSelectedDayRoute || allDaysActive;
                       final isGenerating = ref.watch(isGeneratingRouteProvider);
                       final currentUserId = ref.watch(currentUserIdProvider);
                       final allSaved =
@@ -1443,7 +1629,10 @@ class _MapScreenState extends ConsumerState<MapScreen>
                                   : const Icon(Icons.ios_share_rounded),
                             ),
                           ),
-                        if (hasRoute && !isGenerating)
+                        // Clearing operates on the SELECTED day's optimized
+                        // route — in pure All-days viewing there's nothing to
+                        // clear, so key this off the day route only.
+                        if (hasSelectedDayRoute && !isGenerating)
                           FloatingActionButton(
                             heroTag: 'clearRouteFab',
                             mini: true,
@@ -1752,6 +1941,14 @@ class _MapScreenState extends ConsumerState<MapScreen>
   void _zoomToFitTrip() {
     if (_mapController == null) return;
 
+    // In All-days mode the whole trip is on screen, so every "fit the route"
+    // request (FAB, optimize flow, share) means "fit every day", not the
+    // selected date.
+    if (ref.read(allDaysModeProvider)) {
+      _zoomToFitAllDays();
+      return;
+    }
+
     final locations = ref.read(locationsForSelectedDateProvider);
     final includeCurrent = ref.read(includeCurrentInFitProvider);
     final currentLocation = ref.read(tripProvider).currentLocation;
@@ -1831,6 +2028,42 @@ class _MapScreenState extends ConsumerState<MapScreen>
       }
       return;
     }
+
+    _animateToFitPoints(points);
+  }
+
+  /// Fits every day of the active trip at once: all stops plus every day's
+  /// route geometry (so a long detour on any day stays in frame). Used by
+  /// All-days mode for the fit FAB, the mode-entry zoom, and the share
+  /// capture. The device location is deliberately excluded — the whole-trip
+  /// overview frames the trip, not the viewer.
+  void _zoomToFitAllDays() {
+    if (_mapController == null) return;
+
+    final stopsByDay = ref.read(allDayStopsProvider);
+    final routes = ref.read(allDayRoutesProvider).valueOrNull ?? const {};
+
+    final points = <LatLng>[
+      for (final stops in stopsByDay.values)
+        for (final loc in stops) loc.coordinates,
+      for (final route in routes.values) ...route,
+    ];
+
+    if (points.length < 2) {
+      if (points.isNotEmpty) {
+        _zoomToLocation(points.first);
+      }
+      return;
+    }
+
+    _animateToFitPoints(points);
+  }
+
+  /// Shared camera-fit tail: frames [points] with edge-aware padding that
+  /// keeps markers clear of the search bar, active-trip banner, FAB column,
+  /// and the collapsed bottom sheet.
+  void _animateToFitPoints(List<LatLng> points) {
+    if (_mapController == null || points.isEmpty) return;
 
     double minLat = points.first.latitude;
     double maxLat = points.first.latitude;

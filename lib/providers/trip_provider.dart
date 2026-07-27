@@ -263,6 +263,7 @@ class TripNotifier extends StateNotifier<TripState> {
                 saved.scheduledDate ?? _ref.read(selectedDateProvider),
             isSkipped: saved.isSkipped,
             isDone: saved.isDone,
+            isAccommodation: saved.isAccommodation,
             stayDuration: Duration(seconds: saved.stayDuration),
             photoReference: saved.photoReference,
             photoReferences: refs.isEmpty ? null : refs,
@@ -331,6 +332,7 @@ class TripNotifier extends StateNotifier<TripState> {
         stayDuration: locationWithDate.stayDuration.inSeconds,
         isSkipped: locationWithDate.isSkipped,
         isDone: locationWithDate.isDone,
+        isAccommodation: locationWithDate.isAccommodation,
         // IMPORTANT: Set tripId if a trip is active, null if no trip is active
         tripId: activeTrip?.id,
         // userId and fingerprint will be handled by repository based on auth state
@@ -831,6 +833,100 @@ class TripNotifier extends StateNotifier<TripState> {
     }
   }
 
+  // ── Accommodation (one per trip-day) ──────────────────────────────────
+
+  /// Other accommodations whose day range overlaps [start..end] — the rows
+  /// that would break the one-accommodation-per-day rule if [locationId]
+  /// became the accommodation for that range.
+  List<LocationModel> accommodationConflicts(
+      String locationId, DateTime start, DateTime end) {
+    final s = DateTime(start.year, start.month, start.day);
+    final e = DateTime(end.year, end.month, end.day);
+    return state.pinnedLocations.where((loc) {
+      if (loc.id == locationId || !loc.isAccommodation) return false;
+      final oRaw = loc.scheduledDate ?? loc.addedAt;
+      final oS = DateTime(oRaw.year, oRaw.month, oRaw.day);
+      final oERaw = loc.scheduledEndDate ?? oRaw;
+      final oE = DateTime(oERaw.year, oERaw.month, oERaw.day);
+      return !(oE.isBefore(s) || oS.isAfter(e));
+    }).toList();
+  }
+
+  /// Flags [locationId] as the accommodation for [start..end] (inclusive),
+  /// first un-flagging every id in [replaceIds] (conflicts the user approved
+  /// replacing). Callers must pass the current [accommodationConflicts] as
+  /// [replaceIds]; the replaced rows are cleared FIRST because the DB's
+  /// exclusion constraint (`locations_one_accommodation_per_day`) rejects an
+  /// overlapping accommodation range. If a concurrent collaborator write
+  /// still trips the constraint, this returns false and the optimistic
+  /// state heals on the next realtime sync.
+  Future<bool> setAccommodation(
+    String locationId, {
+    required DateTime start,
+    required DateTime end,
+    List<String> replaceIds = const [],
+  }) async {
+    final hasAccess = await _hasWriteAccess();
+    if (!hasAccess) {
+      debugPrint('setAccommodation: Permission denied');
+      return false;
+    }
+
+    final startKey = DateTime(start.year, start.month, start.day);
+    final endKeyRaw = DateTime(end.year, end.month, end.day);
+    final DateTime? endKey = endKeyRaw.isAfter(startKey) ? endKeyRaw : null;
+
+    // Optimistic local update (target flagged + dated, conflicts cleared).
+    final updated = state.pinnedLocations.map((loc) {
+      if (loc.id == locationId) {
+        return loc.copyWith(
+          isAccommodation: true,
+          scheduledDate: startKey,
+          scheduledEndDate: endKey,
+        );
+      }
+      if (replaceIds.contains(loc.id)) {
+        return loc.copyWith(isAccommodation: false);
+      }
+      return loc;
+    }).toList();
+    state = state.copyWith(pinnedLocations: updated);
+
+    final repo = _ref.read(locationRepositoryProvider);
+    try {
+      for (final id in replaceIds) {
+        await repo.updateLocation(id, {'is_accommodation': false});
+      }
+      await repo.updateLocation(locationId, {
+        'is_accommodation': true,
+        'scheduled_date': startKey.toIso8601String(),
+        'scheduled_end_date': endKey?.toIso8601String(),
+      });
+      return true;
+    } catch (e) {
+      log('Error setting accommodation: $e');
+      return false;
+    }
+  }
+
+  /// Removes the accommodation flag (the place itself stays on the trip).
+  Future<void> clearAccommodation(String locationId) async {
+    final hasAccess = await _hasWriteAccess();
+    if (!hasAccess) return;
+    final updated = state.pinnedLocations
+        .map((loc) =>
+            loc.id == locationId ? loc.copyWith(isAccommodation: false) : loc)
+        .toList();
+    state = state.copyWith(pinnedLocations: updated);
+    try {
+      await _ref
+          .read(locationRepositoryProvider)
+          .updateLocation(locationId, {'is_accommodation': false});
+    } catch (e) {
+      log('Error clearing accommodation: $e');
+    }
+  }
+
   /// Sets (or clears) the user-supplied closing-time override for a single
   /// location. Pass [minutes] = `null` to clear (the simulation will then
   /// fall back to Google's hours).
@@ -954,6 +1050,7 @@ class TripNotifier extends StateNotifier<TripState> {
             lng: loc.coordinates.longitude,
             isSkipped: loc.isSkipped,
             isDone: loc.isDone,
+            isAccommodation: loc.isAccommodation,
             stayDuration: loc.stayDuration.inSeconds,
             scheduledDate: loc.scheduledDate,
             createdAt: loc.addedAt,
