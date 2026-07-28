@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:voyza/providers/auth_provider.dart';
 import 'package:voyza/providers/location_provider.dart';
 import 'package:voyza/providers/onboarding_provider.dart';
+import 'package:voyza/providers/local_active_trip_provider.dart';
 import 'dart:ui';
 import 'package:voyza/screens/trip_screen.dart';
 import 'package:voyza/screens/map_screen.dart';
@@ -34,6 +35,16 @@ class _MainScreenState extends ConsumerState<MainScreen> {
     // After sync completes, set initialSyncCompleteProvider so the map screen
     // can hide its loading overlay once marker bitmaps are also ready.
     WidgetsBinding.instance.addPostFrameCallback((_) async {
+      // An ACTIVE trip means the user is mid-trip — open straight onto the
+      // map where that trip lives, whatever their auth state. (Post-frame:
+      // the active-trip id loads from SharedPrefsCache, which is guaranteed
+      // ready by now — see the first-frame cache race note in memory.)
+      if (ref.read(localActiveTripIdProvider) != null &&
+          _selectedIndex != 1 &&
+          mounted) {
+        setState(() => _selectedIndex = 1);
+      }
+
       // Publish the initial tab so offstage IndexedStack children (MapScreen)
       // know whether they're actually visible. Post-frame: providers must
       // not be mutated during build/init.
@@ -177,10 +188,11 @@ class _MainScreenState extends ConsumerState<MainScreen> {
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
               children: [
-                _buildNavItem(0, Icons.trip_origin_outlined, Icons.trip_origin_rounded, 'Trips'),
+                _buildNavItem(0, Icons.trip_origin_outlined,
+                    Icons.trip_origin_rounded, 'Trips'),
                 _buildNavItem(1, Icons.map_outlined, Icons.map_rounded, 'Map'),
-                _buildNavItem(2, Icons.settings_outlined, Icons.settings_rounded,
-                    'Settings'),
+                _buildNavItem(2, Icons.settings_outlined,
+                    Icons.settings_rounded, 'Settings'),
               ],
             ),
           ),
@@ -203,7 +215,10 @@ class _MainScreenState extends ConsumerState<MainScreen> {
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
         decoration: isSelected
             ? BoxDecoration(
-                color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.2),
+                color: Theme.of(context)
+                    .colorScheme
+                    .primary
+                    .withValues(alpha: 0.2),
                 borderRadius: BorderRadius.circular(25),
               )
             : BoxDecoration(
@@ -216,7 +231,9 @@ class _MainScreenState extends ConsumerState<MainScreen> {
               isSelected ? activeIcon : icon,
               color: isSelected
                   ? Theme.of(context).colorScheme.primary
-                  : (isDark ? Colors.white.withValues(alpha: 0.6) : Colors.black.withValues(alpha: 0.6)),
+                  : (isDark
+                      ? Colors.white.withValues(alpha: 0.6)
+                      : Colors.black.withValues(alpha: 0.6)),
               size: 24,
             ),
             if (isSelected) ...[

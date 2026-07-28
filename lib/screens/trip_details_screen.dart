@@ -24,6 +24,7 @@ import 'package:voyza/widgets/location_detail_sheet.dart';
 import 'package:voyza/widgets/location_photo_gallery.dart';
 import 'package:voyza/providers/local_active_trip_provider.dart';
 import 'package:voyza/providers/trip_provider.dart';
+import 'package:voyza/widgets/accommodation_prompts.dart';
 import 'package:voyza/utils/trip_dates.dart';
 
 class TripDetailsScreen extends ConsumerStatefulWidget {
@@ -486,11 +487,6 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
         debugPrint(
             'Trip details - Total locations in stream: ${allLocations.length}');
 
-        if (allLocations.isEmpty) {
-          debugPrint('Trip details - No locations in stream');
-          return _buildEmptyState(true);
-        }
-
         // Filter by trip ID
         var tripLocations =
             allLocations.where((loc) => loc.tripId == widget.trip.id).toList();
@@ -500,18 +496,19 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
           tripLocations = tripLocations
               .where((loc) => loc.name.toLowerCase().contains(_searchQuery))
               .toList();
+          // A search with no hits keeps the plain empty state — day slots
+          // full of empty groups would read as "no results" badly.
+          if (tripLocations.isEmpty) return _buildEmptyState(false);
         }
 
         debugPrint('Trip details - Trip ID: ${widget.trip.id}');
         debugPrint(
             'Trip details - Filtered locations: ${tripLocations.length}');
-        debugPrint(
-            'Trip details - Location details: ${allLocations.map((l) => '${l.name}(tripId=${l.tripId})').join(", ")}');
 
-        if (tripLocations.isEmpty) {
-          debugPrint('Trip details - No locations match this trip');
-          return _buildEmptyState(false);
-        }
+        // NO empty-list early return here: a trip with a date range but no
+        // locations yet must still render its per-day slots (with the
+        // per-date add affordances). _buildLocationsList falls back to the
+        // empty state itself when the trip has no dates either.
 
         // Keep a reference so the selection-mode AppBar can select all
         if (_currentTripLocations != tripLocations) {
@@ -1024,6 +1021,14 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
   Future<void> _moveLocationToDate(
       SavedLocation location, DateTime newDay) async {
     try {
+      // Captured before the write: dragging onto a previously-empty day
+      // materializes a new trip day → ask about accommodation after.
+      // (Active-trip data; the prompt self-skips for non-active trips.)
+      final dayKey = DateTime(newDay.year, newDay.month, newDay.day);
+      final dayWasEmpty = !ref
+          .read(tripProvider)
+          .pinnedLocations
+          .any((l) => l.isActiveOnDate(dayKey));
       await ref.read(locationRepositoryProvider).updateLocation(
         location.id,
         {'scheduled_date': newDay.toIso8601String()},
@@ -1033,6 +1038,14 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
         context,
         'Moved ${location.name} to ${DateFormat('MMM d').format(newDay)}',
       );
+      if (dayWasEmpty && mounted) {
+        await maybePromptAccommodationForNewDays(
+          context,
+          ref,
+          trip: widget.trip,
+          newDays: [dayKey],
+        );
+      }
     } catch (e) {
       if (!mounted) return;
       AppToast.error(context, 'Could not move location: $e');
@@ -1755,6 +1768,28 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
     return false;
   }
 
+  /// The day a place added through this sheet lands on.
+  ///
+  /// Per-date adds use their explicit day. The general add defaults to
+  /// today — but unlike the map screen, the trip-details flow does NOT
+  /// bother the user with the "Outside trip dates" dialog: when today is
+  /// before the trip's range even starts, the place simply lands on the
+  /// trip's FIRST day. (Today after the range is left to the existing
+  /// confirm dialog, which offers extending the trip — silently dropping
+  /// the place on a past first day would collide with the past-date lock.)
+  DateTime _effectiveScheduledDate() {
+    final explicit = widget.scheduledDate;
+    if (explicit != null) return explicit;
+    final now = DateTime.now();
+    final start = widget.trip.startDate;
+    if (start != null) {
+      final today = DateTime(now.year, now.month, now.day);
+      final startDay = DateTime(start.year, start.month, start.day);
+      if (today.isBefore(startDay)) return startDay;
+    }
+    return now;
+  }
+
   Future<void> _processGoogleMapsUrl(String text) async {
     if (_isPastingUrl || _isAddingPlace) return;
     if (_blockIfScheduledDateInPast()) return;
@@ -1846,7 +1881,7 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
         lng: placeDetails.coordinates.longitude,
         isSkipped: false,
         stayDuration: 1800,
-        scheduledDate: widget.scheduledDate ?? DateTime.now(),
+        scheduledDate: _effectiveScheduledDate(),
         createdAt: DateTime.now(),
         tripId: widget.tripId,
         photoReference: placeDetails.photoReference,
@@ -1947,7 +1982,7 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
         lng: placeDetails.coordinates.longitude,
         isSkipped: false,
         stayDuration: 1800, // 30 minutes default
-        scheduledDate: widget.scheduledDate ?? DateTime.now(),
+        scheduledDate: _effectiveScheduledDate(),
         createdAt: DateTime.now(),
         tripId: widget.tripId, // Assign to this trip
         photoReference: placeDetails.photoReference,

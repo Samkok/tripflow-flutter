@@ -71,17 +71,17 @@ final tripDayColorsProvider = Provider<Map<DateTime, Color>>((ref) {
   };
 });
 
-/// The active trip's routable stops grouped per day (skipped/done excluded —
-/// same rule as route optimization). Multi-day stays appear on every day they
-/// span.
+/// The active trip's stops grouped per day. ONLY skipped stops are excluded —
+/// a done stop is still part of the trip's story, so the whole-trip overview
+/// keeps showing it (on the map and in its day's route). Multi-day stays
+/// appear on every day they span.
 final allDayStopsProvider = Provider<Map<DateTime, List<LocationModel>>>((ref) {
   final axis = ref.watch(activeTripDayAxisProvider);
   final locations = ref.watch(tripProvider.select((s) => s.pinnedLocations));
   final byDay = <DateTime, List<LocationModel>>{};
   for (final day in axis) {
-    final stops = locations
-        .where((l) => !l.isSkipped && !l.isDone && l.isActiveOnDate(day))
-        .toList();
+    final stops =
+        locations.where((l) => !l.isSkipped && l.isActiveOnDate(day)).toList();
     if (stops.isNotEmpty) byDay[day] = stops;
   }
   return byDay;
@@ -242,17 +242,21 @@ final allDaysMarkersProvider = FutureProvider<Set<Marker>>((ref) async {
     final color = colors[day] ?? kDayRouteColors.first;
     final dayIndex = axis.indexOf(day) + 1;
     final dayLabel = 'Day $dayIndex · ${DateFormat('MMM d').format(day)}';
-    for (var i = 0; i < entry.value.length; i++) {
-      final loc = entry.value[i];
+    // Done stops render with the done treatment (marker number -2, matching
+    // the single-day map) and don't consume a sequence number, so the
+    // remaining stops still read 1..n.
+    var seq = 0;
+    for (final loc in entry.value) {
+      if (!loc.isDone) seq++;
       final result = await markerCache.getNumberedMarker(
         isStart: false,
-        number: i + 1,
+        number: loc.isDone ? -2 : seq,
         name: loc.name,
         backgroundColor: color,
         textColor: Colors.white,
         isDarkMode: isDarkMode,
         isSkipped: false,
-        isDone: false,
+        isDone: loc.isDone,
       );
       markers.add(Marker(
         markerId: MarkerId('$kAllDaysMarkerIdPrefix${day.toIso8601String()}'

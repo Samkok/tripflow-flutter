@@ -9,44 +9,25 @@ import '../providers/trip_provider.dart';
 import '../screens/location_search_screen.dart';
 import 'app_toast.dart';
 
-/// After a trip's date range grows (a location confirmed onto a day outside
-/// the old range), asks where the user is staying on the newly added day(s):
-/// pick one of the trip's EXISTING accommodations (its stay range is extended
-/// to cover the new days) or add a different place (opens search pre-scheduled
-/// to the first new day).
+/// Asks where the user is staying on newly materialized trip day(s) — days
+/// that just received their FIRST location (via add, move, or copy — however
+/// a new date comes into existence). Offers the trip's EXISTING
+/// accommodations (the chosen one's stay range is extended to cover the new
+/// days) or adding a different place (opens search pre-scheduled to the
+/// first new day).
 ///
-/// Silently no-ops when there's nothing to ask about: no previous range to
-/// compare, no new days, the trip isn't the active one (accommodations are
-/// read from the active trip's state), or the trip has no accommodations yet.
+/// Silently no-ops when there's nothing to ask: no new days, the trip isn't
+/// the active one (accommodations are read from the active trip's state),
+/// the trip has no accommodations yet, or every new day is already covered
+/// by an accommodation's span.
 Future<void> maybePromptAccommodationForNewDays(
   BuildContext context,
   WidgetRef ref, {
   required Trip trip,
-  required DateTime? newStart,
-  required DateTime? newEnd,
+  required List<DateTime> newDays,
 }) async {
   DateTime day(DateTime d) => DateTime(d.year, d.month, d.day);
 
-  final oldStart = trip.startDate;
-  final oldEnd = trip.endDate;
-  if (oldStart == null || oldEnd == null) return;
-
-  // Newly added days = outside the old [start..end] range.
-  final newDays = <DateTime>[];
-  if (newStart != null) {
-    for (var d = day(newStart);
-        d.isBefore(day(oldStart));
-        d = DateTime(d.year, d.month, d.day + 1)) {
-      newDays.add(d);
-    }
-  }
-  if (newEnd != null) {
-    for (var d = DateTime(oldEnd.year, oldEnd.month, oldEnd.day + 1);
-        !d.isAfter(day(newEnd));
-        d = DateTime(d.year, d.month, d.day + 1)) {
-      newDays.add(d);
-    }
-  }
   if (newDays.isEmpty) return;
 
   // Accommodations come from the ACTIVE trip's in-memory state — bail for
@@ -61,10 +42,20 @@ Future<void> maybePromptAccommodationForNewDays(
       .toList();
   if (accommodations.isEmpty) return;
 
+  // Only ask about days no accommodation already covers (a hotel spanning
+  // the whole trip means there's nothing to decide).
+  final uncovered = newDays
+      .map(day)
+      .toSet()
+      .where((d) => !accommodations.any((a) => a.isActiveOnDate(d)))
+      .toList()
+    ..sort();
+  if (uncovered.isEmpty) return;
+
   if (!context.mounted) return;
-  final firstNewDay = newDays.first;
-  final lastNewDay = newDays.last;
-  final newDaysLabel = newDays.length == 1
+  final firstNewDay = uncovered.first;
+  final lastNewDay = uncovered.last;
+  final newDaysLabel = uncovered.length == 1
       ? DateFormat('EEE, MMM d').format(firstNewDay)
       : '${DateFormat('MMM d').format(firstNewDay)} – ${DateFormat('MMM d').format(lastNewDay)}';
 
@@ -80,7 +71,7 @@ Future<void> maybePromptAccommodationForNewDays(
           children: [
             Text(
               'Your trip now includes $newDaysLabel. Keep one of your '
-              'accommodations for the new ${newDays.length == 1 ? 'day' : 'days'}?',
+              'accommodations for the new ${uncovered.length == 1 ? 'day' : 'days'}?',
               style: Theme.of(ctx).textTheme.bodyMedium,
             ),
             const SizedBox(height: 8),
@@ -156,7 +147,7 @@ Future<void> maybePromptAccommodationForNewDays(
   if (!context.mounted) return;
   if (ok) {
     AppToast.success(context,
-        '${acc.name} now covers the new ${newDays.length == 1 ? 'day' : 'days'}.');
+        '${acc.name} now covers the new ${uncovered.length == 1 ? 'day' : 'days'}.');
   } else {
     AppToast.error(context, 'Couldn\'t update the accommodation.');
   }

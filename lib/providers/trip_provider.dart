@@ -833,6 +833,105 @@ class TripNotifier extends StateNotifier<TripState> {
     }
   }
 
+  /// Removes [locationId] from [day] ONLY. Single-day rows are deleted
+  /// outright; a multi-day row (e.g. an accommodation spanning the trip)
+  /// keeps its other days — an edge day shrinks the range, a middle day
+  /// SPLITS the row into two ranges around it. Falls back to a full delete
+  /// when [day] isn't inside the row's span.
+  Future<void> removeLocationFromDay(String locationId, DateTime day) async {
+    final idx = state.pinnedLocations.indexWhere((l) => l.id == locationId);
+    if (idx == -1) {
+      await removeLocation(locationId);
+      return;
+    }
+    final loc = state.pinnedLocations[idx];
+    final startRaw = loc.scheduledDate ?? loc.addedAt;
+    final start = DateTime(startRaw.year, startRaw.month, startRaw.day);
+    final endRaw = loc.scheduledEndDate ?? startRaw;
+    final end = DateTime(endRaw.year, endRaw.month, endRaw.day);
+    final d = DateTime(day.year, day.month, day.day);
+
+    // Single-day row, or the day isn't inside the span → full delete.
+    if (!end.isAfter(start) || d.isBefore(start) || d.isAfter(end)) {
+      await removeLocation(locationId);
+      return;
+    }
+
+    final hasAccess = await _hasWriteAccess();
+    if (!hasAccess) {
+      debugPrint('removeLocationFromDay: Permission denied');
+      return;
+    }
+
+    if (d == start) {
+      await setLocationDateRange(
+          locationId, DateTime(d.year, d.month, d.day + 1), end);
+      return;
+    }
+    if (d == end) {
+      await setLocationDateRange(
+          locationId, start, DateTime(d.year, d.month, d.day - 1));
+      return;
+    }
+
+    // Middle day: shrink the original to [start .. day-1], then clone the
+    // row for [day+1 .. end]. Shrink FIRST — for accommodations the DB's
+    // one-per-day exclusion constraint would reject an overlapping clone.
+    await setLocationDateRange(
+        locationId, start, DateTime(d.year, d.month, d.day - 1));
+
+    final tailStart = DateTime(d.year, d.month, d.day + 1);
+    final DateTime? tailEnd = end.isAfter(tailStart) ? end : null;
+    final clone = loc.copyWith(
+      id: const Uuid().v4(),
+      scheduledDate: tailStart,
+      scheduledEndDate: tailEnd,
+      travelTimeFromPrevious: null,
+      distanceFromPrevious: null,
+    );
+    state = state.copyWith(pinnedLocations: [...state.pinnedLocations, clone]);
+    try {
+      final savedLoc = SavedLocation(
+        id: clone.id,
+        userId: '',
+        fingerprint: '',
+        name: clone.name,
+        lat: clone.coordinates.latitude,
+        lng: clone.coordinates.longitude,
+        isSkipped: clone.isSkipped,
+        isDone: clone.isDone,
+        isAccommodation: clone.isAccommodation,
+        stayDuration: clone.stayDuration.inSeconds,
+        scheduledDate: tailStart,
+        scheduledEndDate: tailEnd,
+        createdAt: clone.addedAt,
+        tripId: loc.tripId,
+        photoReference: clone.photoReference,
+        photoReferences:
+            clone.photoReferences.isEmpty ? null : clone.photoReferences,
+        photoAttributions: clone.photoAttributions,
+        placeId: clone.placeId,
+        originalName: clone.originalName,
+        googleOpeningHours: clone.googleOpeningHours,
+        userClosingMinuteOverride: clone.userClosingMinuteOverride,
+        hoursLastRefreshedAt: clone.hoursLastRefreshedAt,
+      );
+      await _ref.read(locationRepositoryProvider).addLocation(savedLoc);
+    } catch (e) {
+      log('Error splitting multi-day location $locationId: $e');
+    }
+  }
+
+  /// Bulk variant of [removeLocationFromDay] — used by selection-mode
+  /// delete so a spanning accommodation caught in the selection only loses
+  /// the day being viewed.
+  Future<void> removeLocationsFromDay(
+      Set<String> locationIds, DateTime day) async {
+    for (final id in locationIds) {
+      await removeLocationFromDay(id, day);
+    }
+  }
+
   // ── Accommodation (one per trip-day) ──────────────────────────────────
 
   /// Other accommodations whose day range overlaps [start..end] — the rows

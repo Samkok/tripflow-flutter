@@ -9,6 +9,7 @@ import '../models/saved_location.dart';
 import '../models/trip.dart';
 import '../providers/auth_provider.dart';
 import '../providers/location_provider.dart';
+import '../providers/map_ui_state_provider.dart';
 import '../providers/subscription_provider.dart';
 import '../providers/trip_provider.dart';
 import '../providers/trip_listener_provider.dart';
@@ -99,7 +100,6 @@ class LocationAddService {
   }
 
   Future<void> _persistTripDateExtension(
-    BuildContext context,
     Trip trip,
     TripDateConfirmResult result,
   ) async {
@@ -115,23 +115,47 @@ class LocationAddService {
       // Refresh anything reading trip data so the extended range shows up
       // immediately on cards and detail headers.
       _ref.invalidate(userTripsProvider);
-
-      // The trip just grew — ask where they're staying on the new day(s).
-      // (Self-gating: no-ops when the trip has no accommodations yet, isn't
-      // the active trip, or nothing actually extended.)
-      if (context.mounted) {
-        await maybePromptAccommodationForNewDays(
-          context,
-          _ref,
-          trip: trip,
-          newStart: newStart,
-          newEnd: newEnd,
-        );
-      }
+      // (The "where are you staying on the new day?" prompt fires from the
+      // add/attach/move/copy sites via _daysWithoutLocations — a day is
+      // "new" when it gains its FIRST location, which also covers trips
+      // whose range is purely location-derived.)
     } catch (_) {
       // The location add still proceeds even if the trip update fails — the
       // user already confirmed the intent and we don't want to block the add.
     }
+  }
+
+  /// Days in `[start..end]` (inclusive, day-keyed) that currently have NO
+  /// location on the ACTIVE trip. Captured BEFORE a write; if the write
+  /// lands locations on any of them, those days just materialized and the
+  /// accommodation prompt should ask about them.
+  List<DateTime> _daysWithoutLocations(DateTime start, DateTime? end) {
+    final pinned = _ref.read(tripProvider).pinnedLocations;
+    final out = <DateTime>[];
+    var d = DateTime(start.year, start.month, start.day);
+    final last = end == null ? d : DateTime(end.year, end.month, end.day);
+    while (!d.isAfter(last)) {
+      if (!pinned.any((l) => l.isActiveOnDate(d))) out.add(d);
+      d = DateTime(d.year, d.month, d.day + 1);
+    }
+    return out;
+  }
+
+  /// Fires the new-day accommodation prompt when [newDays] is non-empty.
+  /// Self-gating beyond that (active-trip match, accommodations exist,
+  /// coverage filter) lives in the prompt itself.
+  Future<void> _promptAccommodationIfDaysMaterialized(
+    BuildContext context,
+    Trip? trip,
+    List<DateTime> newDays,
+  ) async {
+    if (trip == null || newDays.isEmpty || !context.mounted) return;
+    await maybePromptAccommodationForNewDays(
+      context,
+      _ref,
+      trip: trip,
+      newDays: newDays,
+    );
   }
 
   /// Best-effort lookup of a location's ISO-2 country code, used by the
@@ -189,6 +213,14 @@ class LocationAddService {
     // Own places only — collaborators' shared-trip rows don't count.
     final usedAfter = SubscriptionLimitService.ownPlaceCount(_ref) + 1;
 
+    // Captured before the write: the day(s) this location lands on that had
+    // no locations yet — if any, a new trip day is materializing and the
+    // accommodation prompt should ask about it after the add.
+    final DateTime addStart =
+        location.scheduledDate ?? _ref.read(selectedDateProvider);
+    final newDays =
+        _daysWithoutLocations(addStart, location.scheduledEndDate ?? addStart);
+
     // Add the location BEFORE persisting any trip-date extension. The
     // extension invalidates userTripsProvider, which cascades through
     // localActiveTripProvider into realtimeActiveTripProvider — leaving it
@@ -198,9 +230,13 @@ class LocationAddService {
     await _ref.read(tripProvider.notifier).addLocation(location);
 
     if (activeTrip != null && result.didExtend) {
-      await _persistTripDateExtension(context, activeTrip, result);
+      await _persistTripDateExtension(activeTrip, result);
     }
     if (context.mounted) _afterSuccessfulNewPlace(context, usedAfter);
+    if (context.mounted) {
+      await _promptAccommodationIfDaysMaterialized(
+          context, activeTrip, newDays);
+    }
     return true;
   }
 
@@ -238,15 +274,23 @@ class LocationAddService {
     // Own places only — collaborators' shared-trip rows don't count.
     final usedAfter = SubscriptionLimitService.ownPlaceCount(_ref) + 1;
 
+    // Captured before the write — see beforeAddingLocation.
+    final addStart = location.scheduledDate ?? DateTime.now();
+    final newDays =
+        _daysWithoutLocations(addStart, location.scheduledEndDate ?? addStart);
+
     // Same ordering rule as [addLocation]: persist the location first so
     // the subsequent userTripsProvider invalidation can't strand it
     // mid-write.
     await _ref.read(locationRepositoryProvider).addLocation(location);
 
     if (trip != null && result.didExtend) {
-      await _persistTripDateExtension(context, trip, result);
+      await _persistTripDateExtension(trip, result);
     }
     if (context.mounted) _afterSuccessfulNewPlace(context, usedAfter);
+    if (context.mounted) {
+      await _promptAccommodationIfDaysMaterialized(context, trip, newDays);
+    }
     return true;
   }
 
@@ -292,6 +336,11 @@ class LocationAddService {
     );
     if (!result.proceed) return false;
 
+    // Captured before the write — see beforeAddingLocation.
+    final attachStart = location.scheduledDate ?? location.createdAt;
+    final newDays = _daysWithoutLocations(
+        attachStart, location.scheduledEndDate ?? attachStart);
+
     // Attach first — userTripsProvider invalidation from the date extension
     // would otherwise put the trip in a transient loading state and could
     // race the repository write.
@@ -300,7 +349,11 @@ class LocationAddService {
         .updateLocation(location.id, {'trip_id': targetTrip.id});
 
     if (result.didExtend) {
-      await _persistTripDateExtension(context, targetTrip, result);
+      await _persistTripDateExtension(targetTrip, result);
+    }
+    if (context.mounted) {
+      await _promptAccommodationIfDaysMaterialized(
+          context, targetTrip, newDays);
     }
     return true;
   }
@@ -350,14 +403,28 @@ class LocationAddService {
     final dateConfirm = await _confirmBulkDateRange(context, targetTrip, picks);
     if (!dateConfirm.proceed) return false;
 
+    // Captured before the write: union of every pick's days that have no
+    // locations yet — any of them materializing triggers the accommodation
+    // prompt below.
+    final newDaySet = <DateTime>{};
+    for (final pick in picks) {
+      final start = pick.scheduledDate ?? pick.createdAt;
+      newDaySet
+          .addAll(_daysWithoutLocations(start, pick.scheduledEndDate ?? start));
+    }
+
     await _ref
         .read(tripProvider.notifier)
         .addLocationsToTrip(picks.map((p) => p.id).toList(), targetTrip.id);
 
     if (dateConfirm.didExtend) {
-      await _persistTripDateExtension(context, targetTrip, dateConfirm);
+      await _persistTripDateExtension(targetTrip, dateConfirm);
     }
 
+    if (context.mounted) {
+      await _promptAccommodationIfDaysMaterialized(
+          context, targetTrip, newDaySet.toList()..sort());
+    }
     return true;
   }
 

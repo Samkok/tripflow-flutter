@@ -16,6 +16,32 @@ import 'referral_service.dart';
 import 'supabase_service.dart';
 import 'time_saved_ledger_service.dart';
 
+/// Destination formats for the realistic map card. Instagram center-crops
+/// feed posts to ~4:5 (Stories are full-bleed 9:16), so one render cannot
+/// serve both surfaces — the share flow renders per destination instead
+/// (the Strava pattern: per-surface assets, never one image cropped by the
+/// platform).
+enum ShareCardFormat {
+  /// 9:16 full-bleed — Stories / Reels / WhatsApp status.
+  story(1080, 1920, 300),
+
+  /// 4:5 — Instagram & Facebook feed posts, shown uncropped.
+  post(1080, 1350, 90);
+
+  const ShareCardFormat(this.width, this.height, this.bottomReserve);
+  final double width;
+  final double height;
+
+  /// Clear space kept below the text block. For [story] it is a real safe
+  /// zone: 300px keeps every line inside a 4:5 feed center-crop (which
+  /// keeps y 285–1635 of a 1920 canvas) AND above Instagram's ~250px
+  /// story chrome (reply bar). For [post] it's just an aesthetic margin.
+  final double bottomReserve;
+
+  /// width : height — the shape the map capture window must match.
+  double get aspect => width / height;
+}
+
 /// Renders and shares the branded before/after route card — the artifact that
 /// lets the optimize "aha" leave the app (Contagious: observable usage +
 /// behavioral residue). Stylized polyline diagrams, not map tiles: offline-safe,
@@ -42,6 +68,23 @@ class RouteShareCardService {
   static const _afterLine = Color(0xFF00D4FF); // AppTheme.primaryColor
   static const _text = Color(0xFFF3F6FB);
   static const _subText = Color(0xFF9AA7BD);
+
+  // ── Brand display type ────────────────────────────────────────────────
+  // No font file is bundled (keeps the binary lean and avoids licensing),
+  // so the wordmark uses a PLATFORM STACK: the engine takes the first
+  // family that exists on the device and silently falls back to the system
+  // face if none do — never a missing-glyph box. These are condensed /
+  // geometric grotesques: distinctive enough to read as a logotype, still
+  // perfectly legible at card sizes. Paired with w900 + wide letterSpacing
+  // at the call site, which is what actually makes it look designed.
+  static const String _displayFont = 'Avenir Next Condensed'; // iOS/macOS
+  static const List<String> _displayFontFallback = <String>[
+    'AvenirNextCondensed-Heavy', // iOS PostScript name
+    'Futura', // iOS
+    'sans-serif-condensed', // Android → Roboto Condensed
+    'Roboto Condensed', // Android (explicit)
+    'Helvetica Neue', // last resort before the system default
+  ];
 
   /// Renders the card to a temp PNG. Returns null on any failure.
   /// [lifetimeSaved] adds the compounding all-time footer when it's
@@ -118,8 +161,13 @@ class RouteShareCardService {
       }
 
       // Wordmark + link.
-      _drawText(canvas, 'VoyZa', const Offset(_w - 260, 516),
-          fontSize: 34, weight: FontWeight.w800, color: _text);
+      _drawText(canvas, 'VOYZA', const Offset(_w - 260, 516),
+          fontSize: 34,
+          weight: FontWeight.w900,
+          color: _text,
+          fontFamily: _displayFont,
+          fontFamilyFallback: _displayFontFallback,
+          letterSpacing: 3);
       _drawText(canvas, 'voyza.xtremon.com', const Offset(_w - 260, 560),
           fontSize: 20, weight: FontWeight.w500, color: _subText);
 
@@ -366,8 +414,13 @@ class RouteShareCardService {
       _drawText(
           canvas, 'full itinerary link in the caption', const Offset(60, 1780),
           fontSize: 26, weight: FontWeight.w500, color: _subText);
-      _drawText(canvas, 'VoyZa', const Offset(_pw - 220, 1712),
-          fontSize: 40, weight: FontWeight.w800, color: _text);
+      _drawText(canvas, 'VOYZA', const Offset(_pw - 220, 1712),
+          fontSize: 40,
+          weight: FontWeight.w900,
+          color: _text,
+          fontFamily: _displayFont,
+          fontFamilyFallback: _displayFontFallback,
+          letterSpacing: 4);
       _drawText(canvas, 'voyza.xtremon.com', const Offset(_pw - 320, 1772),
           fontSize: 24, weight: FontWeight.w500, color: _subText);
 
@@ -441,7 +494,8 @@ class RouteShareCardService {
   // numbered markers (from GoogleMapController.takeSnapshot), not an abstract
   // silhouette. VoyZa branding + stats are composited over it.
 
-  /// Composites branding over a live map snapshot into a 9:16 share image.
+  /// Composites branding over a live map snapshot into a share image shaped
+  /// by [format] (9:16 story, 4:5 feed post).
   /// Returns PNG bytes, or null on failure so the caller can fall back to the
   /// silhouette card. Pure (no file I/O) so it's unit-testable.
   /// When [archetype] is supplied (the Plan Card moment) it becomes the
@@ -459,24 +513,44 @@ class RouteShareCardService {
     // All-days mode: the card frames the WHOLE trip, so the stat line reads
     // "N days · M places" instead of the single-day stop count.
     int? daysCount,
+    ShareCardFormat format = ShareCardFormat.story,
   }) async {
     try {
+      final pw = format.width;
+      final ph = format.height;
       final codec = await ui.instantiateImageCodec(mapBytes);
       final frame = await codec.getNextFrame();
       final map = frame.image;
 
       final recorder = ui.PictureRecorder();
       final canvas = Canvas(recorder);
-      canvas.drawRect(
-          const Rect.fromLTWH(0, 0, _pw, _ph), Paint()..color = _bg);
+      canvas.drawRect(Rect.fromLTWH(0, 0, pw, ph), Paint()..color = _bg);
 
       // The real map is the hero — cover-fit it across the whole card.
-      _drawImageCover(canvas, map, const Rect.fromLTWH(0, 0, _pw, _ph));
+      _drawImageCover(canvas, map, Rect.fromLTWH(0, 0, pw, ph));
 
-      // Bottom scrim so the branding stays legible over the map. A tall,
-      // three-stop gradient that is already ~85% opaque by the headline line
-      // (the earlier single-stop fade let map labels bleed through the text).
-      final scrim = Rect.fromLTWH(0, _ph - 900, _pw, 900);
+      // The text block is BOTTOM-ANCHORED: its last line always ends exactly
+      // at ph - bottomReserve, whichever optional lines exist. For the story
+      // format that reserve is the safe zone that survives Instagram's 4:5
+      // feed center-crop and stays above the Stories reply bar. Line heights
+      // are fontSize × 1.1 (the height multiplier in _drawText), exact for
+      // these single-line painters, so the stack can be sized before drawing.
+      double lineH(double fontSize) => fontSize * 1.1;
+      final planMode = archetype != null && archetype.trim().isNotEmpty;
+      final hasKicker = planMode && tripName.trim().isNotEmpty;
+      final hasSaved = timeSaved >= const Duration(minutes: 5);
+      final hasRoast = roastLine != null && roastLine.trim().isNotEmpty;
+      double stack = lineH(54) + 22 + lineH(34) + 14 + lineH(46);
+      if (hasKicker) stack += lineH(26) + 29;
+      if (hasSaved) stack += 20 + lineH(32);
+      if (hasRoast) stack += 16 + lineH(27);
+      var y = ph - format.bottomReserve - stack;
+
+      // Bottom scrim so the branding stays legible over the map, sized so the
+      // gradient hits its ~85%-opaque midpoint right where the text begins
+      // (scrimTop = 2·blockTop − ph puts blockTop at the 0.5 stop).
+      final scrimTop = math.max(0.0, 2 * y - ph);
+      final scrim = Rect.fromLTWH(0, scrimTop, pw, ph - scrimTop);
       canvas.drawRect(
         scrim,
         Paint()
@@ -494,28 +568,28 @@ class RouteShareCardService {
         Shadow(color: Color(0xCC000000), blurRadius: 14, offset: Offset(0, 2)),
       ];
 
-      final planMode = archetype != null && archetype.trim().isNotEmpty;
-      if (planMode && tripName.trim().isNotEmpty) {
+      if (hasKicker) {
         // Trip name as a small kicker above the identity headline.
-        _drawText(
-            canvas, tripName.trim().toUpperCase(), const Offset(60, _ph - 528),
-            fontSize: 26,
-            weight: FontWeight.w700,
-            color: _subText,
-            maxWidth: 960,
-            shadows: shadow);
+        y += 29 +
+            _drawText(canvas, tripName.trim().toUpperCase(), Offset(60, y),
+                fontSize: 26,
+                weight: FontWeight.w700,
+                color: _subText,
+                maxWidth: 960,
+                shadows: shadow);
       }
       final title = planMode
           ? archetype.trim().toUpperCase()
           : (tripName.trim().isEmpty
-              ? 'MY DAY, OPTIMIZED'
-              : '${tripName.trim().toUpperCase()}, OPTIMIZED');
-      _drawText(canvas, title, const Offset(60, _ph - 470),
-          fontSize: 54,
-          weight: FontWeight.w800,
-          color: _text,
-          maxWidth: 960,
-          shadows: shadow);
+              ? 'MY DAY'
+              : tripName.trim().toUpperCase());
+      y += 22 +
+          _drawText(canvas, title, Offset(60, y),
+              fontSize: 54,
+              weight: FontWeight.w800,
+              color: _text,
+              maxWidth: 960,
+              shadows: shadow);
 
       final stat = <String>[
         if (daysCount != null) '$daysCount ${daysCount == 1 ? 'day' : 'days'}',
@@ -525,27 +599,43 @@ class RouteShareCardService {
         if (distanceKm > 0) '${distanceKm.toStringAsFixed(1)} km',
         'zero backtracking',
       ].join('  ·  ');
-      _drawText(canvas, stat, const Offset(60, _ph - 388),
+      y += _drawText(canvas, stat, Offset(60, y),
           fontSize: 34,
           weight: FontWeight.w700,
           color: _text,
           maxWidth: 960,
           shadows: shadow);
 
-      if (timeSaved >= const Duration(minutes: 5)) {
-        _drawText(
+      // Wordmark, right beneath the stat: display face + heavy weight + wide
+      // tracking so it reads as a logotype rather than body copy.
+      y += 14;
+      y += _drawText(canvas, 'VOYZA', Offset(60, y),
+          fontSize: 46,
+          weight: FontWeight.w900,
+          color: _afterLine,
+          maxWidth: 960,
+          shadows: shadow,
+          fontFamily: _displayFont,
+          fontFamilyFallback: _displayFontFallback,
+          letterSpacing: 5);
+
+      if (hasSaved) {
+        y += 20;
+        y += _drawText(
             canvas,
             '~${_formatDuration(timeSaved)} saved vs the chaos version',
-            const Offset(60, _ph - 326),
+            Offset(60, y),
             fontSize: 32,
             weight: FontWeight.w700,
             color: _afterLine,
+            maxWidth: 960,
             shadows: shadow);
       }
 
       // The roast line (Plan Card curation control) — self-aware voice.
-      if (roastLine != null && roastLine.trim().isNotEmpty) {
-        _drawText(canvas, '“${roastLine.trim()}”', const Offset(60, _ph - 250),
+      if (hasRoast) {
+        y += 16;
+        _drawText(canvas, '“${roastLine.trim()}”', Offset(60, y),
             fontSize: 27,
             weight: FontWeight.w600,
             color: _text,
@@ -553,19 +643,8 @@ class RouteShareCardService {
             shadows: shadow);
       }
 
-      _drawText(canvas, 'STEAL THIS PLAN ▸', const Offset(60, _ph - 150),
-          fontSize: 38,
-          weight: FontWeight.w800,
-          color: _afterLine,
-          shadows: shadow);
-      _drawText(canvas, 'VoyZa · voyza.xtremon.com', const Offset(60, _ph - 92),
-          fontSize: 26,
-          weight: FontWeight.w600,
-          color: _subText,
-          shadows: shadow);
-
       final picture = recorder.endRecording();
-      final img = await picture.toImage(_pw.toInt(), _ph.toInt());
+      final img = await picture.toImage(pw.toInt(), ph.toInt());
       final bytes = await img.toByteData(format: ui.ImageByteFormat.png);
       return bytes?.buffer.asUint8List();
     } catch (e) {
@@ -605,6 +684,7 @@ class RouteShareCardService {
     // the single-day stop count on both the card and the caption.
     int? daysCount,
     int? totalPlaces,
+    ShareCardFormat format = ShareCardFormat.story,
   }) async {
     try {
       final allTrip = daysCount != null && totalPlaces != null;
@@ -621,6 +701,7 @@ class RouteShareCardService {
           archetype: archetype,
           roastLine: roastLine,
           daysCount: daysCount,
+          format: format,
         );
       }
       if (png == null) {
@@ -638,7 +719,7 @@ class RouteShareCardService {
       }
 
       final dir = await getTemporaryDirectory();
-      final file = File('${dir.path}/voyza_route_map_card.png');
+      final file = File('${dir.path}/voyza_route_map_card_${format.name}.png');
       await file.writeAsBytes(png, flush: true);
 
       final link = await _audienceLink(anonymous: anonymous);
@@ -676,7 +757,8 @@ class RouteShareCardService {
       await Clipboard.setData(ClipboardData(text: text));
       await Share.shareXFiles([XFile(file.path)],
           subject: '${tripName.trim()} — planned with VoyZa');
-      AnalyticsService.instance.routeCardShared(anonymous: anonymous);
+      AnalyticsService.instance
+          .routeCardShared(anonymous: anonymous, format: format.name);
     } catch (e) {
       debugPrint('RouteShareCardService.shareRouteMapCard: $e');
     }
@@ -734,8 +816,13 @@ class RouteShareCardService {
       _drawText(canvas, 'Planned & optimized with VoyZa', const Offset(48, 520),
           fontSize: 30, weight: FontWeight.w700, color: _afterLine);
 
-      _drawText(canvas, 'VoyZa', const Offset(_w - 260, 516),
-          fontSize: 34, weight: FontWeight.w800, color: _text);
+      _drawText(canvas, 'VOYZA', const Offset(_w - 260, 516),
+          fontSize: 34,
+          weight: FontWeight.w900,
+          color: _text,
+          fontFamily: _displayFont,
+          fontFamilyFallback: _displayFontFallback,
+          letterSpacing: 3);
       _drawText(canvas, 'voyza.xtremon.com', const Offset(_w - 260, 560),
           fontSize: 20, weight: FontWeight.w500, color: _subText);
 
@@ -936,7 +1023,13 @@ class RouteShareCardService {
         .toList();
   }
 
-  void _drawText(
+  /// Draws one line and RETURNS its laid-out height, so callers can flow
+  /// stacked lines instead of hardcoding every y offset.
+  ///
+  /// [fontFamily] / [fontFamilyFallback] pick a typeface (see
+  /// [_displayFont] for the brand display stack); [letterSpacing] gives
+  /// wordmarks their tracking.
+  double _drawText(
     Canvas canvas,
     String text,
     Offset at, {
@@ -946,6 +1039,9 @@ class RouteShareCardService {
     double maxWidth = 600,
     bool centered = false,
     List<Shadow>? shadows,
+    String? fontFamily,
+    List<String>? fontFamilyFallback,
+    double? letterSpacing,
   }) {
     final painter = TextPainter(
       text: TextSpan(
@@ -956,6 +1052,9 @@ class RouteShareCardService {
           fontWeight: weight,
           height: 1.1,
           shadows: shadows,
+          fontFamily: fontFamily,
+          fontFamilyFallback: fontFamilyFallback,
+          letterSpacing: letterSpacing,
         ),
       ),
       textDirection: TextDirection.ltr,
@@ -966,6 +1065,7 @@ class RouteShareCardService {
         ? Offset(at.dx - painter.width / 2, at.dy - painter.height / 2)
         : at;
     painter.paint(canvas, offset);
+    return painter.height;
   }
 
   String _formatDuration(Duration d) {

@@ -19,6 +19,7 @@ import 'package:voyza/utils/trip_date_validator.dart';
 import 'package:voyza/utils/trip_dates.dart';
 
 import '../core/theme.dart';
+import 'accommodation_prompts.dart';
 import 'app_toast.dart';
 import 'location_photo_gallery.dart';
 
@@ -664,10 +665,26 @@ class LocationDetailSheet extends ConsumerWidget {
                           actionLabel: 'Save anyway',
                         );
                         if (!allowed) return;
-                        ref
+                        // Captured before the write: rescheduling onto a
+                        // previously-empty day materializes a new trip day
+                        // → ask about accommodation after.
+                        final dayWasEmpty = !ref
+                            .read(tripProvider)
+                            .pinnedLocations
+                            .any((l) => l.isActiveOnDate(normalized));
+                        await ref
                             .read(tripProvider.notifier)
                             .updateLocationScheduledDate(
                                 updatedLocation.id, normalized);
+                        final scoped = _scopedTrip(ref);
+                        if (dayWasEmpty && scoped != null && context.mounted) {
+                          await maybePromptAccommodationForNewDays(
+                            context,
+                            ref,
+                            trip: scoped,
+                            newDays: [normalized],
+                          );
+                        }
                       }
                     : null,
                 style: OutlinedButton.styleFrom(
@@ -1987,6 +2004,22 @@ class LocationDetailSheet extends ConsumerWidget {
 
   void _showDeleteConfirmationDialog(
       BuildContext context, WidgetRef ref, LocationModel location) {
+    // Multi-day rows viewed on one of their days (active-trip context only —
+    // the day-aware shrink/split goes through tripProvider, whose access
+    // check is tied to the active trip): offer "remove from this day" so a
+    // spanning accommodation isn't wiped from the whole trip.
+    final day = _sheetDayKey(ref, location);
+    final startRaw = location.scheduledDate ?? location.addedAt;
+    final start = DateTime(startRaw.year, startRaw.month, startRaw.day);
+    final endRaw = location.scheduledEndDate ?? startRaw;
+    final end = DateTime(endRaw.year, endRaw.month, endRaw.day);
+    final isActiveTripContext = tripId == null ||
+        ref.read(realtimeActiveTripProvider).asData?.value?.id == tripId;
+    final spansHere = isActiveTripContext &&
+        end.isAfter(start) &&
+        !day.isBefore(start) &&
+        !day.isAfter(end);
+
     showDialog(
       context: context,
       builder: (dialogContext) {
@@ -1994,9 +2027,12 @@ class LocationDetailSheet extends ConsumerWidget {
           backgroundColor: Theme.of(context).cardColor,
           shape:
               RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: const Text('Delete Location'),
-          content: Text(
-              'Are you sure you want to delete "${location.name}"? This action cannot be undone.'),
+          title: Text(spansHere ? 'Remove Location' : 'Delete Location'),
+          content: Text(spansHere
+              ? '"${location.name}" spans '
+                  '${DateFormat('MMM d').format(start)} – ${DateFormat('MMM d').format(end)}. '
+                  'Remove it from this day only, or delete it from every day?'
+              : 'Are you sure you want to delete "${location.name}"? This action cannot be undone.'),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(dialogContext).pop(),
@@ -2004,29 +2040,60 @@ class LocationDetailSheet extends ConsumerWidget {
                   style: TextStyle(
                       color: Theme.of(context).textTheme.bodyMedium?.color)),
             ),
-            ElevatedButton(
-              onPressed: () {
-                // Pop both the dialog and the detail sheet
-                Navigator.of(dialogContext).pop();
-                Navigator.of(context).pop();
-
-                // Perform the deletion directly via repository (bypasses
-                // tripProvider's access-check which is tied to the active map
-                // trip, not the trip being viewed in trip details).
-                ref
-                    .read(locationRepositoryProvider)
-                    .deleteLocation(location.id);
-
-                if (context.mounted) {
-                  AppToast.error(context, 'Deleted ${location.name}');
-                }
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Theme.of(context).colorScheme.error,
-                foregroundColor: Theme.of(context).colorScheme.onError,
+            if (spansHere) ...[
+              TextButton(
+                onPressed: () {
+                  Navigator.of(dialogContext).pop();
+                  Navigator.of(context).pop();
+                  ref
+                      .read(locationRepositoryProvider)
+                      .deleteLocation(location.id);
+                  if (context.mounted) {
+                    AppToast.error(context, 'Deleted ${location.name}');
+                  }
+                },
+                child: Text('Delete everywhere',
+                    style:
+                        TextStyle(color: Theme.of(context).colorScheme.error)),
               ),
-              child: const Text('Delete'),
-            ),
+              FilledButton(
+                onPressed: () {
+                  Navigator.of(dialogContext).pop();
+                  Navigator.of(context).pop();
+                  ref
+                      .read(tripProvider.notifier)
+                      .removeLocationFromDay(location.id, day);
+                  if (context.mounted) {
+                    AppToast.success(context,
+                        '${location.name} removed from ${DateFormat('MMM d').format(day)}');
+                  }
+                },
+                child: const Text('Remove from this day'),
+              ),
+            ] else
+              ElevatedButton(
+                onPressed: () {
+                  // Pop both the dialog and the detail sheet
+                  Navigator.of(dialogContext).pop();
+                  Navigator.of(context).pop();
+
+                  // Perform the deletion directly via repository (bypasses
+                  // tripProvider's access-check which is tied to the active map
+                  // trip, not the trip being viewed in trip details).
+                  ref
+                      .read(locationRepositoryProvider)
+                      .deleteLocation(location.id);
+
+                  if (context.mounted) {
+                    AppToast.error(context, 'Deleted ${location.name}');
+                  }
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Theme.of(context).colorScheme.error,
+                  foregroundColor: Theme.of(context).colorScheme.onError,
+                ),
+                child: const Text('Delete'),
+              ),
           ],
         );
       },

@@ -4,17 +4,20 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/trip_collaborator.dart';
 import '../repositories/trip_collaborator_repository.dart';
 import '../services/collaborator_realtime_service.dart';
+import '../services/supabase_service.dart';
 import 'trip_listener_provider.dart';
 import 'local_active_trip_provider.dart';
 import 'auth_provider.dart';
 
 /// Provider for the TripCollaboratorRepository
-final tripCollaboratorRepositoryProvider = Provider<TripCollaboratorRepository>((ref) {
+final tripCollaboratorRepositoryProvider =
+    Provider<TripCollaboratorRepository>((ref) {
   return TripCollaboratorRepository();
 });
 
 /// Provider for the CollaboratorRealtimeService singleton
-final collaboratorRealtimeServiceProvider = Provider<CollaboratorRealtimeService>((ref) {
+final collaboratorRealtimeServiceProvider =
+    Provider<CollaboratorRealtimeService>((ref) {
   return CollaboratorRealtimeService();
 });
 
@@ -61,42 +64,92 @@ class CollaboratorRealtimeNotifier extends StateNotifier<int> {
   void _handleEvent(CollaboratorEvent event) {
     debugPrint('CollaboratorRealtimeNotifier: Handling event - $event');
 
+    // The subscription is UNFILTERED (so owners hear about other members'
+    // rows too — that's how a leave shows up live). Events about MY own row
+    // trigger the me-specific reactions below; events about other members
+    // only need the refresh-counter bump the stream listener already did,
+    // which refetches any watched collaborator list.
+    final myUserId = SupabaseService.instance.client.auth.currentUser?.id;
+    final isOwnRow = event.userId != null && event.userId == myUserId;
+
     if (event.type == CollaboratorEventType.removed) {
-      // User was removed from a trip
-      // Check if the removed collaborator is for the currently active trip
-      final activeTripAsync = _ref.read(realtimeActiveTripProvider);
-      final activeTrip = activeTripAsync.asData?.value;
-
-      if (activeTrip != null && event.tripId == activeTrip.id) {
-        debugPrint('CollaboratorRealtimeNotifier: ⚠️ User removed from active trip ${activeTrip.name}, deactivating...');
-        _ref.read(localActiveTripIdProvider.notifier).deactivateTrip();
+      // DELETE payloads on RLS tables are PK-only (see CollaboratorEvent
+      // .tripId) — we usually can't tell WHOSE row vanished or from which
+      // trip. The counter bump above already refetches every watched
+      // collaborator list (that's how the owner's sheet updates live);
+      // here we re-verify the things that depend on MY OWN membership.
+      if (event.tripId == null || event.userId == null) {
+        _ref.invalidate(sharedTripsProvider);
+        unawaited(_recheckActiveTripMembership());
+      } else if (isOwnRow) {
+        // Full payload (possible only when RLS is off / future server
+        // changes): my removal, handled directly.
+        final activeTrip = _ref.read(realtimeActiveTripProvider).asData?.value;
+        if (activeTrip != null && event.tripId == activeTrip.id) {
+          debugPrint(
+              'CollaboratorRealtimeNotifier: ⚠️ Removed from active trip ${activeTrip.name}, deactivating...');
+          _ref.read(localActiveTripIdProvider.notifier).deactivateTrip();
+        }
+        _ref.invalidate(sharedTripsProvider);
       }
-
-      // Invalidate shared trips to refresh the list
-      _ref.invalidate(sharedTripsProvider);
-
+      // Full payload about someone ELSE: nothing beyond the counter bump —
+      // and NEVER deactivate the trip over another member leaving.
     } else if (event.type == CollaboratorEventType.updated) {
       // Permission changed - this is the MOST COMMON case
-      debugPrint('CollaboratorRealtimeNotifier: 🔄 Permission updated for trip ${event.tripId}');
-      debugPrint('CollaboratorRealtimeNotifier: New permission: ${event.permission}');
+      debugPrint(
+          'CollaboratorRealtimeNotifier: 🔄 Permission updated for trip ${event.tripId}');
+      debugPrint(
+          'CollaboratorRealtimeNotifier: New permission: ${event.permission}');
 
       // CRITICAL: Only invalidate the specific trip's permission providers
       // This ensures fresh data is fetched WITHOUT disrupting other trips or UI
-      _ref.invalidate(hasWriteAccessProvider(event.tripId));
-      _ref.invalidate(userTripPermissionProvider(event.tripId));
+      final updatedTripId = event.tripId;
+      if (updatedTripId != null) {
+        _ref.invalidate(hasWriteAccessProvider(updatedTripId));
+        _ref.invalidate(userTripPermissionProvider(updatedTripId));
+      }
 
       // Increment counter to signal permission change
       // Riverpod's caching will ensure widgets only rebuild if the actual VALUE changes
       _ref.read(_collaboratorRefreshCounterProvider.notifier).state++;
 
-      debugPrint('CollaboratorRealtimeNotifier: ✅ Permission providers invalidated, UI will update smoothly');
-
+      debugPrint(
+          'CollaboratorRealtimeNotifier: ✅ Permission providers invalidated, UI will update smoothly');
     } else if (event.type == CollaboratorEventType.added) {
-      // New trip shared with user
-      debugPrint('CollaboratorRealtimeNotifier: ➕ New trip shared: ${event.tripId}');
+      if (isOwnRow) {
+        // New trip shared with ME — refresh my shared-trips list.
+        debugPrint(
+            'CollaboratorRealtimeNotifier: ➕ New trip shared: ${event.tripId}');
+        _ref.invalidate(sharedTripsProvider);
+      }
+      // Someone joining a trip I own/view: the counter bump already
+      // refetches the collaborator list.
+    }
+  }
 
-      // Refresh shared trips list to show the new trip
-      _ref.invalidate(sharedTripsProvider);
+  /// A collaborator row was deleted somewhere and the PK-only payload can't
+  /// say whose. If a SHARED trip is currently active, re-query my own
+  /// membership — if my row is the one that vanished, deactivate the trip
+  /// (the same behavior the old direct check intended, now grounded in a
+  /// fresh RLS-gated query instead of an event payload that never arrives).
+  Future<void> _recheckActiveTripMembership() async {
+    try {
+      final activeTrip = _ref.read(realtimeActiveTripProvider).asData?.value;
+      if (activeTrip == null) return;
+
+      final repository = _ref.read(tripCollaboratorRepositoryProvider);
+      if (await repository.isOwner(activeTrip.id)) return; // owners stay
+
+      final permission = await repository.getUserPermission(activeTrip.id);
+      if (permission == null) {
+        debugPrint(
+            'CollaboratorRealtimeNotifier: ⚠️ No longer a member of active '
+            'trip ${activeTrip.name}, deactivating...');
+        _ref.read(localActiveTripIdProvider.notifier).deactivateTrip();
+      }
+    } catch (e) {
+      debugPrint(
+          'CollaboratorRealtimeNotifier: membership re-check failed: $e');
     }
   }
 
@@ -109,12 +162,19 @@ class CollaboratorRealtimeNotifier extends StateNotifier<int> {
 
 /// Provider for the collaborator realtime notifier
 /// Watch this in your root widget to initialize realtime subscriptions
-final collaboratorRealtimeInitProvider = StateNotifierProvider<CollaboratorRealtimeNotifier, int>((ref) {
+final collaboratorRealtimeInitProvider =
+    StateNotifierProvider<CollaboratorRealtimeNotifier, int>((ref) {
   return CollaboratorRealtimeNotifier(ref);
 });
 
-/// Provider for getting collaborators of a specific trip
-final tripCollaboratorsProvider = FutureProvider.family<List<TripCollaborator>, String>((ref, tripId) async {
+/// Provider for getting collaborators of a specific trip.
+///
+/// autoDispose: the cache dies with its last watcher (the collaborators
+/// sheet / trip row), so REOPENING the sheet always refetches — a missed
+/// realtime event (socket down, app backgrounded) can no longer pin a
+/// stale list for the rest of the app session.
+final tripCollaboratorsProvider = FutureProvider.autoDispose
+    .family<List<TripCollaborator>, String>((ref, tripId) async {
   // Watch auth state — re-fetches on login/logout so the list is never stuck
   // showing a stale cached result from an unauthenticated context.
   final authState = ref.watch(authStateProvider);
@@ -130,10 +190,11 @@ final tripCollaboratorsProvider = FutureProvider.family<List<TripCollaborator>, 
 });
 
 /// Provider for shared trips (trips where current user is a collaborator)
-final sharedTripsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
+final sharedTripsProvider =
+    FutureProvider<List<Map<String, dynamic>>>((ref) async {
   // Watch auth state to trigger refresh on sign in/out
   final authState = ref.watch(authStateProvider);
-  
+
   // Watch refresh counter to trigger rebuild on collaborator changes
   ref.watch(_collaboratorRefreshCounterProvider);
 
@@ -141,7 +202,7 @@ final sharedTripsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) asy
   return authState.when(
     data: (state) {
       if (state.session == null) return [];
-      
+
       final repository = ref.watch(tripCollaboratorRepositoryProvider);
       return repository.getSharedTrips();
     },
@@ -151,13 +212,15 @@ final sharedTripsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) asy
 });
 
 /// Provider to check if user is the owner of a trip
-final isTripOwnerProvider = FutureProvider.family<bool, String>((ref, tripId) async {
+final isTripOwnerProvider =
+    FutureProvider.family<bool, String>((ref, tripId) async {
   final repository = ref.watch(tripCollaboratorRepositoryProvider);
   return repository.isOwner(tripId);
 });
 
 /// Provider to get user's permission on a trip
-final userTripPermissionProvider = FutureProvider.family<String?, String>((ref, tripId) async {
+final userTripPermissionProvider =
+    FutureProvider.family<String?, String>((ref, tripId) async {
   // Watch refresh counter to trigger rebuild on permission changes
   ref.watch(_collaboratorRefreshCounterProvider);
 
@@ -166,7 +229,8 @@ final userTripPermissionProvider = FutureProvider.family<String?, String>((ref, 
 });
 
 /// Provider to check if user has write access to a trip
-final hasWriteAccessProvider = FutureProvider.family<bool, String>((ref, tripId) async {
+final hasWriteAccessProvider =
+    FutureProvider.family<bool, String>((ref, tripId) async {
   // Watch refresh counter to trigger rebuild on permission changes
   ref.watch(_collaboratorRefreshCounterProvider);
 
@@ -205,7 +269,8 @@ final hasActiveTripWriteAccessProvider = FutureProvider<bool>((ref) async {
 
       // Fetch the LATEST write access for the active trip
       // This ensures we always have fresh permission data from Supabase
-      final writeAccess = await ref.watch(hasWriteAccessProvider(activeTrip.id).future);
+      final writeAccess =
+          await ref.watch(hasWriteAccessProvider(activeTrip.id).future);
       return writeAccess;
     },
     loading: () async => false, // Loading state - deny access to be safe
@@ -215,7 +280,8 @@ final hasActiveTripWriteAccessProvider = FutureProvider<bool>((ref) async {
 
 /// Provider to check if user is still a collaborator on the active trip
 /// Used to detect when user has been removed and should deactivate the trip
-final isStillCollaboratorProvider = FutureProvider.family<bool, String>((ref, tripId) async {
+final isStillCollaboratorProvider =
+    FutureProvider.family<bool, String>((ref, tripId) async {
   // Watch refresh counter
   ref.watch(_collaboratorRefreshCounterProvider);
 

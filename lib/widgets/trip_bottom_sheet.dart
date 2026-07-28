@@ -18,6 +18,7 @@ import '../utils/external_app_links.dart';
 import '../utils/trip_date_validator.dart';
 import '../utils/trip_dates.dart';
 import '../core/theme.dart';
+import 'accommodation_prompts.dart';
 import 'app_toast.dart';
 import 'optimized_location_card.dart';
 import '../services/csv_service.dart';
@@ -47,6 +48,11 @@ class TripBottomSheet extends ConsumerStatefulWidget {
   /// [SubscriptionLimitService.freePlaceAllowance] (the paywall cap of 5) — 3
   /// unlocks Optimize, 5 hits the wall.
   static const int ahaThreshold = 3;
+
+  /// Collapsed-state height as a fraction of the screen. PUBLIC because the
+  /// map's zoom-to-fit window must know exactly where the sheet's top edge
+  /// sits — hardcoding a stale copy there put fitted stops behind the sheet.
+  static const double collapsedSize = 0.25;
 
   // A simple provider to signal when the "View Route" button is tapped for a historical trip.
   static final viewHistoricalRouteProvider =
@@ -127,7 +133,7 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
   // than the collapsed sheet on some screens (bottom overflow). The extra
   // ~2% gives the summary room without a perceptible change to the resting
   // collapsed height.
-  static const double _snapCollapsed = 0.25;
+  static const double _snapCollapsed = TripBottomSheet.collapsedSize;
   static const double _snapExpanded = 0.85;
 
   /// Below this many logical pixels of sheet height, the fixed sticky header
@@ -2183,9 +2189,11 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
             ElevatedButton(
               onPressed: () {
                 final selectedIds = ref.read(selectedLocationsProvider);
-                ref
-                    .read(tripProvider.notifier)
-                    .removeMultipleLocations(selectedIds);
+                // Day-aware: a multi-day row (e.g. a spanning accommodation)
+                // caught in the selection only loses the day being viewed —
+                // its other days survive. Single-day rows delete outright.
+                ref.read(tripProvider.notifier).removeLocationsFromDay(
+                    selectedIds, ref.read(selectedDateProvider));
                 // Exit selection mode after action
                 ref.read(isSelectionModeProvider.notifier).state = false;
                 ref.read(selectedLocationsProvider.notifier).state = {};
@@ -2231,6 +2239,13 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
       if (!allowed) return;
 
       final selectedIds = ref.read(selectedLocationsProvider);
+      // Captured before the write: copying onto a previously-empty day
+      // materializes a new trip day → ask about accommodation after.
+      final dayKey = DateTime(newDate.year, newDate.month, newDate.day);
+      final dayWasEmpty = !ref
+          .read(tripProvider)
+          .pinnedLocations
+          .any((l) => l.isActiveOnDate(dayKey));
       await ref
           .read(tripProvider.notifier)
           .copyMultipleLocationsToDate(selectedIds, newDate);
@@ -2241,6 +2256,18 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
 
       // Switch the view to the new date to show the copied items
       ref.read(selectedDateProvider.notifier).state = newDate;
+
+      // NOTE: use the STATE's context/ref, not the parameters — the caller's
+      // context belongs to the selection action bar, which unmounts when
+      // selection mode exits above, silently skipping the prompt.
+      if (dayWasEmpty && activeTrip != null && mounted) {
+        await maybePromptAccommodationForNewDays(
+          this.context,
+          this.ref,
+          trip: activeTrip,
+          newDays: [dayKey],
+        );
+      }
     }
   }
 
@@ -2270,6 +2297,13 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
       if (!allowed) return;
 
       final selectedIds = ref.read(selectedLocationsProvider);
+      // Captured before the write: moving onto a previously-empty day
+      // materializes a new trip day → ask about accommodation after.
+      final dayKey = DateTime(newDate.year, newDate.month, newDate.day);
+      final dayWasEmpty = !ref
+          .read(tripProvider)
+          .pinnedLocations
+          .any((l) => l.isActiveOnDate(dayKey));
       await ref
           .read(tripProvider.notifier)
           .updateMultipleLocationsScheduledDate(selectedIds, newDate);
@@ -2280,6 +2314,18 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
 
       // Optionally, switch the view to the new date
       ref.read(selectedDateProvider.notifier).state = newDate;
+
+      // NOTE: use the STATE's context/ref, not the parameters — the caller's
+      // context belongs to the selection action bar, which unmounts when
+      // selection mode exits above, silently skipping the prompt.
+      if (dayWasEmpty && activeTrip != null && mounted) {
+        await maybePromptAccommodationForNewDays(
+          this.context,
+          this.ref,
+          trip: activeTrip,
+          newDays: [dayKey],
+        );
+      }
     }
   }
 

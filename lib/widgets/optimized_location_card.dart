@@ -9,6 +9,7 @@ import 'package:voyza/providers/trip_provider.dart';
 import 'package:voyza/providers/trip_collaborator_provider.dart';
 import 'package:voyza/providers/trip_simulation_provider.dart';
 import 'package:voyza/services/timing_simulation.dart';
+import 'package:voyza/widgets/accommodation_prompts.dart';
 import 'package:voyza/widgets/location_detail_sheet.dart';
 import 'package:voyza/widgets/location_photo_gallery.dart';
 import 'package:voyza/utils/date_picker_utils.dart';
@@ -675,21 +676,56 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
       );
       if (!allowed) return;
 
+      // Moving/copying onto a previously-empty day materializes a new trip
+      // day → ask about accommodation. Asked BEFORE the write on this
+      // surface: a MOVE removes this card from the current date's list and
+      // unmounts it, so its context/ref wouldn't survive to prompt after.
+      // The notifiers are captured up-front for the same reason — the
+      // prompt's "add a different place" branch switches the selected date,
+      // which can unmount this card mid-flow, and the user's move/copy must
+      // still complete.
+      final tripNotifier = ref.read(tripProvider.notifier);
+      final dateNotifier = ref.read(selectedDateProvider.notifier);
+      final dayKey = DateTime(newDate.year, newDate.month, newDate.day);
+      final dayWasEmpty = !ref
+          .read(tripProvider)
+          .pinnedLocations
+          .any((l) => l.isActiveOnDate(dayKey));
+      if (dayWasEmpty && activeTrip != null && context.mounted) {
+        await maybePromptAccommodationForNewDays(
+          context,
+          ref,
+          trip: activeTrip,
+          newDays: [dayKey],
+        );
+      }
+
       final selectedIds = {location.id};
       if (isCopy) {
-        await ref
-            .read(tripProvider.notifier)
-            .copyMultipleLocationsToDate(selectedIds, newDate);
+        await tripNotifier.copyMultipleLocationsToDate(selectedIds, newDate);
       } else {
-        await ref
-            .read(tripProvider.notifier)
-            .updateMultipleLocationsScheduledDate(selectedIds, newDate);
+        await tripNotifier.updateMultipleLocationsScheduledDate(
+            selectedIds, newDate);
       }
-      ref.read(selectedDateProvider.notifier).state = newDate;
+      dateNotifier.state = newDate;
     }
   }
 
   void _showDeleteConfirmationDialog(BuildContext context, WidgetRef ref) {
+    // A multi-day row (e.g. an accommodation spanning the trip) viewed on
+    // one of its days: deleting must NOT wipe the whole span. Offer
+    // "remove from this day" (shrinks/splits the range) as the primary
+    // action, with delete-everywhere as the explicit destructive choice.
+    final selectedDate = ref.read(selectedDateProvider);
+    final day =
+        DateTime(selectedDate.year, selectedDate.month, selectedDate.day);
+    final startRaw = location.scheduledDate ?? location.addedAt;
+    final start = DateTime(startRaw.year, startRaw.month, startRaw.day);
+    final endRaw = location.scheduledEndDate ?? startRaw;
+    final end = DateTime(endRaw.year, endRaw.month, endRaw.day);
+    final spansHere =
+        end.isAfter(start) && !day.isBefore(start) && !day.isAfter(end);
+
     showDialog(
       context: context,
       builder: (dialogContext) {
@@ -697,9 +733,12 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
           backgroundColor: Theme.of(context).cardColor,
           shape:
               RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: const Text('Delete Location'),
-          content: Text(
-              'Are you sure you want to delete "${location.name}"? This action cannot be undone.'),
+          title: Text(spansHere ? 'Remove Location' : 'Delete Location'),
+          content: Text(spansHere
+              ? '"${location.name}" spans '
+                  '${DateFormat('MMM d').format(start)} – ${DateFormat('MMM d').format(end)}. '
+                  'Remove it from this day only, or delete it from every day?'
+              : 'Are you sure you want to delete "${location.name}"? This action cannot be undone.'),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(dialogContext).pop(),
@@ -707,18 +746,41 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
                   style: TextStyle(
                       color: Theme.of(context).textTheme.bodyMedium?.color)),
             ),
-            ElevatedButton(
-              onPressed: () {
-                Navigator.of(dialogContext).pop();
-                ref.read(tripProvider.notifier).removeLocation(location.id);
-                AppToast.error(context, 'Deleted ${location.name}');
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Theme.of(context).colorScheme.error,
-                foregroundColor: Theme.of(context).colorScheme.onError,
+            if (spansHere) ...[
+              TextButton(
+                onPressed: () {
+                  Navigator.of(dialogContext).pop();
+                  ref.read(tripProvider.notifier).removeLocation(location.id);
+                  AppToast.error(context, 'Deleted ${location.name}');
+                },
+                child: Text('Delete everywhere',
+                    style:
+                        TextStyle(color: Theme.of(context).colorScheme.error)),
               ),
-              child: const Text('Delete'),
-            ),
+              FilledButton(
+                onPressed: () {
+                  Navigator.of(dialogContext).pop();
+                  ref
+                      .read(tripProvider.notifier)
+                      .removeLocationFromDay(location.id, day);
+                  AppToast.success(context,
+                      '${location.name} removed from ${DateFormat('MMM d').format(day)}');
+                },
+                child: const Text('Remove from this day'),
+              ),
+            ] else
+              ElevatedButton(
+                onPressed: () {
+                  Navigator.of(dialogContext).pop();
+                  ref.read(tripProvider.notifier).removeLocation(location.id);
+                  AppToast.error(context, 'Deleted ${location.name}');
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Theme.of(context).colorScheme.error,
+                  foregroundColor: Theme.of(context).colorScheme.onError,
+                ),
+                child: const Text('Delete'),
+              ),
           ],
         );
       },

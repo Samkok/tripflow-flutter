@@ -13,7 +13,14 @@ enum CollaboratorEventType {
 /// Event class for collaborator changes
 class CollaboratorEvent {
   final CollaboratorEventType type;
-  final String tripId;
+
+  /// Null for [CollaboratorEventType.removed]: Supabase strips DELETE
+  /// payloads on RLS-enabled tables down to the PRIMARY KEY ONLY (RLS can't
+  /// be checked against a row that no longer exists, so the full old row is
+  /// never broadcast — even with REPLICA IDENTITY FULL). A removal therefore
+  /// tells us only *a* collaborator row vanished, not whose or which trip's;
+  /// consumers must re-query for the specifics.
+  final String? tripId;
   final String? collaboratorId;
   final String? userId;
   final String? permission;
@@ -21,7 +28,7 @@ class CollaboratorEvent {
 
   CollaboratorEvent({
     required this.type,
-    required this.tripId,
+    this.tripId,
     this.collaboratorId,
     this.userId,
     this.permission,
@@ -54,7 +61,19 @@ class CollaboratorRealtimeService {
   int _retryAttempt = 0;
   bool _teardownInProgress = false;
 
-  /// Subscribe to collaborator changes for the current user.
+  /// Subscribe to collaborator changes relevant to the current user.
+  ///
+  /// UNFILTERED on purpose: the old `user_id=eq.{me}` filter meant a user
+  /// only heard about their OWN collaborator row — so when a collaborator
+  /// left a trip (their row deleted), the owner's device never received the
+  /// event and kept showing the stale list until app restart. Without the
+  /// filter:
+  ///   * INSERT/UPDATE events are still RLS-gated server-side, so each
+  ///     subscriber only receives rows they can SELECT (their own rows +
+  ///     all rows of trips they own/are members of).
+  ///   * DELETE events can't be RLS-checked (the row is gone); they carry
+  ///     the full old row because `trip_collaborators` has REPLICA IDENTITY
+  ///     FULL, and the provider decides relevance client-side.
   ///
   /// Self-healing: join failures (channelError / timedOut / unexpected close)
   /// schedule an exponential-backoff retry that rebuilds the channel from
@@ -89,11 +108,6 @@ class CollaboratorRealtimeService {
             event: PostgresChangeEvent.all,
             schema: 'public',
             table: 'trip_collaborators',
-            filter: PostgresChangeFilter(
-              type: PostgresChangeFilterType.eq,
-              column: 'user_id',
-              value: userId,
-            ),
             callback: (payload) {
               debugPrint(
                   'CollaboratorRealtimeService: 📨 Received ${payload.eventType} event');
@@ -200,10 +214,16 @@ class CollaboratorRealtimeService {
           }
           break;
         case PostgresChangeEvent.delete:
+          // On RLS-enabled tables Supabase sends DELETE old records with
+          // the PRIMARY KEY ONLY (deletes can't be policy-checked, so the
+          // full row is withheld — REPLICA IDENTITY FULL notwithstanding).
+          // trip_id/user_id are therefore expected to be null here; the
+          // event is still emitted because "some collaborator row was
+          // deleted" is enough for consumers to re-query the truth.
           if (oldRecord.isNotEmpty) {
             event = CollaboratorEvent(
               type: CollaboratorEventType.removed,
-              tripId: oldRecord['trip_id'] as String,
+              tripId: oldRecord['trip_id'] as String?,
               collaboratorId: oldRecord['id'] as String?,
               userId: oldRecord['user_id'] as String?,
               data: oldRecord,

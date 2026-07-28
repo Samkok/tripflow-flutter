@@ -53,8 +53,8 @@ class AnalyticsService {
   /// THE ACTIVATION AHA: a multi-stop route was optimized. [stops] = stop
   /// count; [minutesSaved] = travel time saved vs the user's original order
   /// (0 = no saving or baseline unavailable).
-  void routeOptimized(int stops, {int minutesSaved = 0}) => _fire(
-      'route_optimized', {'stops': stops, 'minutes_saved': minutesSaved});
+  void routeOptimized(int stops, {int minutesSaved = 0}) =>
+      _fire('route_optimized', {'stops': stops, 'minutes_saved': minutesSaved});
 
   /// A free trial was started.
   void trialStarted(String product) =>
@@ -149,6 +149,7 @@ class AnalyticsService {
 
   /// The before/after route card was shared (share sheet opened). The
   /// artifact that carries the aha outside the app. Organic — never Ads.
-  void routeCardShared({required bool anonymous}) => _fire(
-      'route_card_shared', {'anonymous': anonymous ? 'yes' : 'no'});
+  void routeCardShared({required bool anonymous, String format = 'story'}) =>
+      _fire('route_card_shared',
+          {'anonymous': anonymous ? 'yes' : 'no', 'format': format});
 }

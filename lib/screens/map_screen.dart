@@ -112,6 +112,11 @@ class _MapScreenState extends ConsumerState<MapScreen>
     // provider event, so check once after the first frame.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _maybeStartMapTutorial();
+      // Arrival polling runs for the life of this screen while the app is
+      // foregrounded (lifecycle callbacks pause/resume it). Started here so
+      // opening the app while already standing at a stop is noticed —
+      // didChangeAppLifecycleState only fires on later transitions.
+      _startArrivalPolling();
     });
   }
 
@@ -122,9 +127,12 @@ class _MapScreenState extends ConsumerState<MapScreen>
     if (state == AppLifecycleState.paused) {
       // App is backgrounded - stop location tracking to save battery
       _locationSubscription?.pause();
+      // …and stop arrival polling entirely (no background location, ever).
+      _stopArrivalPolling();
     } else if (state == AppLifecycleState.resumed) {
       // App is resumed - resume location tracking
       _locationSubscription?.resume();
+      _startArrivalPolling();
     }
   }
 
@@ -141,6 +149,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
 
     // PERFORMANCE: Cancel location stream to prevent memory leaks and battery drain
     _locationSubscription?.cancel();
+    _stopArrivalPolling();
 
     // OPTIMIZATION: Dispose map controller if still active
     _mapController = null;
@@ -302,6 +311,64 @@ class _MapScreenState extends ConsumerState<MapScreen>
   static const double _arrivalRadiusMeters = 10;
   final Set<String> _arrivalPromptedIds = {};
   bool _arrivalDialogOpen = false;
+  Timer? _arrivalPollTimer;
+  bool _arrivalCheckInFlight = false;
+
+  /// Dedicated arrival poll. The movement stream can't drive this: it has a
+  /// 50m distanceFilter (plus a 30m state filter), so walking the last few
+  /// metres to a stop emits NO event inside the 10m arrival ring — the
+  /// detection could essentially never fire. A slow timer taking its own
+  /// fix is the only reliable trigger.
+  ///
+  /// FOREGROUND-ONLY, by three independent guards: the timer is started on
+  /// resume and cancelled on pause/dispose, each tick re-checks
+  /// AppLifecycleState.resumed, and no background location mode is declared
+  /// on either platform. Ticks are cheap and skipped entirely when there's
+  /// nothing to detect (no active trip, or every stop already prompted).
+  static const Duration _arrivalPollInterval = Duration(seconds: 20);
+
+  void _startArrivalPolling() {
+    _arrivalPollTimer?.cancel();
+    _arrivalPollTimer =
+        Timer.periodic(_arrivalPollInterval, (_) => _pollArrival());
+    // Also check immediately — arriving while the app was closed should be
+    // noticed on the first foreground frame, not 20s later.
+    _pollArrival();
+  }
+
+  void _stopArrivalPolling() {
+    _arrivalPollTimer?.cancel();
+    _arrivalPollTimer = null;
+  }
+
+  Future<void> _pollArrival() async {
+    if (!mounted || _arrivalCheckInFlight || _arrivalDialogOpen) return;
+    if (_lastLifecycleState != null &&
+        _lastLifecycleState != AppLifecycleState.resumed) {
+      return;
+    }
+    // Cheap pre-checks before spending a GPS fix.
+    if (ref.read(realtimeActiveTripProvider).asData?.value == null) return;
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final candidates = ref.read(tripProvider).pinnedLocations.where((l) =>
+        !l.isDone &&
+        !l.isSkipped &&
+        !_arrivalPromptedIds.contains(l.id) &&
+        l.isActiveOnDate(today));
+    if (candidates.isEmpty) return;
+
+    _arrivalCheckInFlight = true;
+    try {
+      final fix = await LocationService.getCurrentLocation();
+      if (fix == null || !mounted) return;
+      await _maybePromptArrival(fix);
+    } catch (e) {
+      debugPrint('arrival poll: $e');
+    } finally {
+      _arrivalCheckInFlight = false;
+    }
+  }
 
   Future<void> _maybePromptArrival(LatLng position) async {
     if (_arrivalDialogOpen || !mounted) return;
@@ -401,12 +468,26 @@ class _MapScreenState extends ConsumerState<MapScreen>
       }
       return;
     }
+    // Instagram center-crops feed posts to ~4:5 while Stories are full-bleed
+    // 9:16 — one image cannot serve both, so the user picks the destination
+    // shape and both the camera fit and the card render match it. QA drives
+    // skip the picker (no one to tap it) and test the story render.
+    const qaNoShare = bool.fromEnvironment('QA_NO_SHARE', defaultValue: false);
+    ShareCardFormat format = ShareCardFormat.story;
+    if (!qaNoShare) {
+      final picked = await _pickShareFormat();
+      if (picked == null || !mounted) {
+        return; // dismissed — don't hijack the camera
+      }
+      format = picked;
+    }
     setState(() => _preparingShare = true);
     try {
-      // Frame the route and give the map tiles a moment to finish drawing.
-      // (_zoomToFitTrip redirects to the fit-every-day framing in All-days
-      // mode, so the snapshot captures ALL the colored day routes.)
-      _zoomToFitTrip();
+      // Frame for the CAPTURE, not for browsing: the snapshot is the raw map
+      // layer (no search bar / FABs / sheet), and the share card center-crops
+      // it to the chosen format's window — so fit every location + route into
+      // that window as large as possible, mode-aware (all days vs selected).
+      _zoomToFitForShare(format.aspect);
       await Future.delayed(const Duration(milliseconds: 900));
       Uint8List? bytes = await _mapController?.takeSnapshot();
       if (bytes == null && _mapController != null) {
@@ -414,6 +495,9 @@ class _MapScreenState extends ConsumerState<MapScreen>
         bytes = await _mapController?.takeSnapshot();
       }
       if (!mounted) return;
+      // Frame captured — restore the normal north-up browsing camera so the
+      // user isn't left on a rotated map behind the share sheet.
+      _zoomToFitTrip();
       final trip = ref.read(realtimeActiveTripProvider).asData?.value;
       final anonymous = ref.read(currentUserIdProvider) == null;
       // All-days mode: the card frames the whole trip, so its stats must be
@@ -433,8 +517,6 @@ class _MapScreenState extends ConsumerState<MapScreen>
       // card and show it full-screen so the drive can screenshot it, instead of
       // opening the native share sheet (which would block the test). Inert in
       // prod builds.
-      const qaNoShare =
-          bool.fromEnvironment('QA_NO_SHARE', defaultValue: false);
       if (qaNoShare) {
         debugPrint('QA_SHARE: map snapshot bytes=${bytes?.length}');
         final cardBytes = bytes == null
@@ -449,6 +531,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
                 archetype: archetype,
                 roastLine: roastLine,
                 daysCount: shareDaysCount,
+                format: format,
               );
         debugPrint('QA_SHARE: rendered card bytes=${cardBytes?.length}');
         if (cardBytes != null && mounted) {
@@ -474,6 +557,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
         roastLine: roastLine,
         daysCount: shareDaysCount,
         totalPlaces: shareTotalPlaces,
+        format: format,
       );
       // The caption (with the itinerary/referral links) rides the clipboard
       // now — the image is shared alone so targets like Facebook can't
@@ -2029,7 +2113,19 @@ class _MapScreenState extends ConsumerState<MapScreen>
       return;
     }
 
-    _animateToFitPoints(points);
+    // Same leading-vector framing as the share capture, constrained to the
+    // BROWSING window (below the search bar, above the collapsed sheet).
+    // Route geometry rides in the extents so the drawn road never clips.
+    final tripState = ref.read(tripProvider);
+    _fitPointsLeadingVector(
+      orientStops: locations.map((l) => l.coordinates).toList(),
+      extents: [
+        ...points,
+        for (final leg in tripState.legPolylines) ...leg,
+      ],
+      window: _browsingFitWindow(),
+      instant: false,
+    );
   }
 
   /// Fits every day of the active trip at once: all stops plus every day's
@@ -2043,9 +2139,12 @@ class _MapScreenState extends ConsumerState<MapScreen>
     final stopsByDay = ref.read(allDayStopsProvider);
     final routes = ref.read(allDayRoutesProvider).valueOrNull ?? const {};
 
+    final stops = <LatLng>[
+      for (final dayStops in stopsByDay.values)
+        for (final loc in dayStops) loc.coordinates,
+    ];
     final points = <LatLng>[
-      for (final stops in stopsByDay.values)
-        for (final loc in stops) loc.coordinates,
+      ...stops,
       for (final route in routes.values) ...route,
     ];
 
@@ -2056,118 +2155,282 @@ class _MapScreenState extends ConsumerState<MapScreen>
       return;
     }
 
-    _animateToFitPoints(points);
+    _fitPointsLeadingVector(
+      orientStops: stops,
+      extents: points,
+      window: _browsingFitWindow(),
+      instant: false,
+    );
   }
 
-  /// Shared camera-fit tail: frames [points] with edge-aware padding that
-  /// keeps markers clear of the search bar, active-trip banner, FAB column,
-  /// and the collapsed bottom sheet.
-  void _animateToFitPoints(List<LatLng> points) {
-    if (_mapController == null || points.isEmpty) return;
+  /// Share-capture framing. Unlike the browsing fits, this ignores every
+  /// piece of on-screen chrome — `takeSnapshot()` returns only the map
+  /// layer, so content "under" the search bar or FABs is fully visible in
+  /// the capture. What DOES matter is the share card's cover-crop: the
+  /// snapshot is center-cropped to the chosen format's portrait canvas
+  /// ([cardAspect] = width:height, 9:16 story or 4:5 post), so all points
+  /// (stops + full route geometry, all days in All-days mode) are fitted
+  /// into that central vertical window with only a slim margin — far-flung
+  /// stops fill the tall card instead of huddling in a padded corner.
+  void _zoomToFitForShare(double cardAspect) {
+    if (_mapController == null) return;
 
-    double minLat = points.first.latitude;
-    double maxLat = points.first.latitude;
-    double minLng = points.first.longitude;
-    double maxLng = points.first.longitude;
-
-    for (final point in points) {
-      minLat = math.min(minLat, point.latitude);
-      maxLat = math.max(maxLat, point.latitude);
-      minLng = math.min(minLng, point.longitude);
-      maxLng = math.max(maxLng, point.longitude);
+    // Stops drive the ORIENTATION (the "leading vector" is fitted through
+    // the plotted locations); stops + route geometry drive the EXTENTS so
+    // no road bulge gets cropped.
+    final List<LatLng> stops;
+    final List<LatLng> points;
+    if (ref.read(allDaysModeProvider)) {
+      final stopsByDay = ref.read(allDayStopsProvider);
+      final routes = ref.read(allDayRoutesProvider).valueOrNull ?? const {};
+      stops = <LatLng>[
+        for (final dayStops in stopsByDay.values)
+          for (final loc in dayStops) loc.coordinates,
+      ];
+      points = <LatLng>[
+        ...stops,
+        for (final route in routes.values) ...route,
+      ];
+    } else {
+      final tripState = ref.read(tripProvider);
+      stops = ref
+          .read(locationsForSelectedDateProvider)
+          .map((loc) => loc.coordinates)
+          .toList();
+      points = <LatLng>[
+        ...stops,
+        for (final leg in tripState.legPolylines) ...leg,
+      ];
     }
 
-    // OPTIMIZATION: Calculate padding for each edge to fit all UI elements
-    final screenHeight = MediaQuery.of(context).size.height;
+    if (stops.length < 2 || points.length < 2) {
+      // Nothing meaningful to frame tightly — fall back to the normal fit.
+      _zoomToFitTrip();
+      return;
+    }
 
-    // Check if active trip banner is shown
-    final activeTripAsync = ref.read(realtimeActiveTripProvider);
-    final hasActiveTrip = activeTripAsync.asData?.value != null;
+    _fitPointsLeadingVector(
+      orientStops: stops,
+      extents: points,
+      window: _shareCropWindow(cardAspect),
+      // moveCamera (NOT animate): an animated sweep could still be
+      // mid-flight when the snapshot fires — the "locations cut off"
+      // failure mode.
+      instant: true,
+    );
+  }
 
-    // Calculate top safe area padding
+  /// Small pre-share chooser: which destination shape to render. Returns
+  /// null when dismissed.
+  Future<ShareCardFormat?> _pickShareFormat() {
+    return showModalBottomSheet<ShareCardFormat>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
+              child: Text('Share your route as…',
+                  style: Theme.of(ctx).textTheme.titleMedium),
+            ),
+            ListTile(
+              leading: const Icon(Icons.smartphone),
+              title: const Text('Story'),
+              subtitle: const Text(
+                  '9:16 full screen — Instagram/Facebook Stories, WhatsApp status'),
+              onTap: () => Navigator.of(ctx).pop(ShareCardFormat.story),
+            ),
+            ListTile(
+              leading: const Icon(Icons.grid_on),
+              title: const Text('Post'),
+              subtitle: const Text(
+                  '4:5 — fits Instagram & Facebook feed posts without cropping'),
+              onTap: () => Navigator.of(ctx).pop(ShareCardFormat.post),
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// The on-screen region fitted content should occupy while BROWSING:
+  /// below the search bar (and the active-trip banner when shown), above
+  /// the collapsed trip sheet, clear of the FAB column.
+  Rect _browsingFitWindow() {
+    final size = MediaQuery.of(context).size;
     final topSafePadding = MediaQuery.of(context).padding.top;
-
-    // UI elements heights and widths:
-    // Top UI elements:
-    // - Status bar: included in topSafePadding
-    // - Top margin: 50px (from map_screen.dart line 621)
-    // - Active Trip Banner (if shown): ~72px
-    // - Spacing after banner: ~12px
-    // - Search bar container: ~60px
+    final hasActiveTrip =
+        ref.read(realtimeActiveTripProvider).asData?.value != null;
     const topMargin = 50.0;
-    final activeTripBannerHeight = hasActiveTrip ? 72.0 : 0.0;
-    final spacingAfterBanner = hasActiveTrip ? 12.0 : 0.0;
+    final bannerH = hasActiveTrip ? 72.0 + 12.0 : 0.0;
     const searchBarHeight = 60.0;
+    const buffer = 20.0;
+    final top = topSafePadding + topMargin + bannerH + searchBarHeight + buffer;
+    // The sheet's top edge is exactly collapsedSize of the screen up from the
+    // bottom — use the sheet's own constant (a stale hardcoded fraction here
+    // is why fitted stops used to hide behind it), plus a slightly larger
+    // buffer so pins never kiss the sheet's rounded corner.
+    final bottom = size.height -
+        (size.height * TripBottomSheet.collapsedSize + buffer + 8.0);
+    const left = 16.0 + buffer;
+    final right = size.width - (40.0 + 16.0 + 40.0); // FAB + margin + buffer
+    return Rect.fromLTRB(
+        left, top, math.max(right, left + 1), math.max(bottom, top + 1));
+  }
 
-    final topUIHeight = topSafePadding +
-        topMargin +
-        activeTripBannerHeight +
-        spacingAfterBanner +
-        searchBarHeight;
+  /// The centered window (of [cardAspect] = width:height, e.g. 9:16 story or
+  /// 4:5 post) the share card keeps after cover-cropping the snapshot, inset
+  /// by a slim margin. Chrome is irrelevant here — the snapshot is the raw
+  /// map layer.
+  Rect _shareCropWindow(double cardAspect) {
+    final size = MediaQuery.of(context).size;
+    double cropW = size.width;
+    double cropH = size.height;
+    if (size.width / size.height < cardAspect) {
+      // Screen taller/narrower than 9:16 (every modern phone) → the card
+      // keeps full width and crops top/bottom.
+      cropH = size.width / cardAspect;
+    } else {
+      cropW = size.height * cardAspect;
+    }
+    const innerMargin = 28.0;
+    final left = (size.width - cropW) / 2 + innerMargin;
+    final top = (size.height - cropH) / 2 + innerMargin;
+    return Rect.fromLTRB(left, top, size.width - left, size.height - top);
+  }
 
-    // Bottom UI: Bottom sheet in collapsed state takes 23% of screen height
-    final bottomSheetCollapsedHeight = screenHeight * 0.23;
+  /// Leading-vector camera fit — the one framing algorithm behind BOTH the
+  /// zoom-to-fit affordances and the share capture.
+  ///
+  /// Treats [orientStops] as points in the (Web-Mercator) plane, fits the
+  /// invisible best-fit line through them (principal axis), and rotates the
+  /// camera so that axis runs along [window]'s TALL dimension; then picks
+  /// the maximum zoom that keeps every point of [extents] (stops + route
+  /// geometry) inside [window]. Off-center windows — the browsing frame
+  /// sits high because of the collapsed sheet — are compensated by shifting
+  /// the camera target so content centers in the WINDOW, not the screen.
+  ///
+  /// [instant] uses moveCamera, required before a snapshot so the capture
+  /// can never race an animation; browsing fits animate.
+  void _fitPointsLeadingVector({
+    required List<LatLng> orientStops,
+    required List<LatLng> extents,
+    required Rect window,
+    required bool instant,
+  }) {
+    if (_mapController == null || extents.isEmpty) return;
+    final size = MediaQuery.of(context).size;
+    final availW = math.max(window.width, 1.0);
+    final availH = math.max(window.height, 1.0);
 
-    // Right UI: FAB buttons column
-    // - 4 mini FABs (40px each) = 160px
-    // - 3 spacings between them (12px each) = 36px
-    // - Right margin: 16px
-    // Total width from right edge: 40px (FAB) + 16px (margin) = 56px
-    // Add extra buffer for marker visibility
-    const fabWidth = 40.0;
-    const fabRightMargin = 16.0;
-    const rightUIWidth = fabWidth + fabRightMargin;
+    // Planar coords: x east (0..1), n north (mercator, flipped north-positive).
+    double mercYOf(double latDeg) {
+      final s = math.sin(latDeg * math.pi / 180).clamp(-0.9999999, 0.9999999);
+      return 0.5 - math.log((1 + s) / (1 - s)) / (4 * math.pi);
+    }
 
-    // Left UI: minimal margin
-    const leftMargin = 16.0;
+    (double, double) plane(LatLng p) =>
+        ((p.longitude + 180) / 360.0, -mercYOf(p.latitude));
 
-    // Add buffer padding for visual comfort
-    const bufferPadding = 20.0;
-    const rightBufferPadding = 40.0; // Extra buffer for right side due to FABs
+    // Principal axis of the stops via the 2x2 covariance eigenvector. A
+    // round blob (no dominant axis) stays north-up — rotation buys nothing.
+    double bearingDeg = 0;
+    final stopPts = orientStops.map(plane).toList(growable: false);
+    var mx = 0.0, mn = 0.0;
+    if (stopPts.isNotEmpty) {
+      for (final (x, n) in stopPts) {
+        mx += x;
+        mn += n;
+      }
+      mx /= stopPts.length;
+      mn /= stopPts.length;
+    }
+    if (stopPts.length >= 2) {
+      var sxx = 0.0, snn = 0.0, sxn = 0.0;
+      for (final (x, n) in stopPts) {
+        final dx = x - mx, dn = n - mn;
+        sxx += dx * dx;
+        snn += dn * dn;
+        sxn += dx * dn;
+      }
+      final tr = sxx + snn;
+      final det =
+          math.sqrt(math.max((sxx - snn) * (sxx - snn) + 4 * sxn * sxn, 0.0));
+      final l1 = (tr + det) / 2, l2 = (tr - det) / 2;
+      if (l2 <= 1e-24 || l1 / math.max(l2, 1e-24) > 1.4) {
+        // Compass bearing of the major axis = atan2(east, north), folded to
+        // (-90, 90] — an axis has no direction, prefer least rotation.
+        final phi = 0.5 * math.atan2(2 * sxn, sxx - snn);
+        bearingDeg = math.atan2(math.cos(phi), math.sin(phi)) * 180 / math.pi;
+        while (bearingDeg > 90) {
+          bearingDeg -= 180;
+        }
+        while (bearingDeg <= -90) {
+          bearingDeg += 180;
+        }
+      }
+    }
+    final br = bearingDeg * math.pi / 180;
+    // With bearing b the compass direction b points UP on screen.
+    final ux = math.sin(br), un = math.cos(br);
+    final rx = math.cos(br), rn = -math.sin(br);
 
-    // Calculate edge-specific padding
-    final topPadding = topUIHeight + bufferPadding;
-    final bottomPadding = bottomSheetCollapsedHeight + bufferPadding;
-    const rightPadding =
-        rightUIWidth + rightBufferPadding; // Use larger buffer for right
-    const leftPadding = leftMargin + bufferPadding;
+    // Extents in the ROTATED screen frame.
+    var minV = double.infinity, maxV = -double.infinity;
+    var minH = double.infinity, maxH = -double.infinity;
+    for (final p in extents) {
+      final (x, n) = plane(p);
+      final dx = x - mx, dn = n - mn;
+      final v = dx * ux + dn * un; // along screen-up
+      final h = dx * rx + dn * rn; // along screen-right
+      minV = math.min(minV, v);
+      maxV = math.max(maxV, v);
+      minH = math.min(minH, h);
+      maxH = math.max(maxH, h);
+    }
+    final spanV = math.max(maxV - minV, 1e-12);
+    final spanH = math.max(maxH - minH, 1e-12);
 
-    // Create expanded bounds that account for asymmetric padding
-    // We need to expand the bounds to ensure all markers fit within the visible area
-    // after accounting for UI elements
+    // Max zoom fitting the rotated box: world-units × 256·2^z = px.
+    const tileSize = 256.0;
+    final zoomForV = math.log(availH / (tileSize * spanV)) / math.ln2;
+    final zoomForH = math.log(availW / (tileSize * spanH)) / math.ln2;
+    final zoom = math.min(zoomForV, zoomForH).clamp(2.0, 17.5).toDouble();
+    final scale = tileSize * math.pow(2.0, zoom).toDouble();
 
-    final latSpan = maxLat - minLat;
-    final lngSpan = maxLng - minLng;
+    // Content center in world coords…
+    final midV = (minV + maxV) / 2, midH = (minH + maxH) / 2;
+    final cxw = mx + ux * midV + rx * midH;
+    final cnw = mn + un * midV + rn * midH;
+    // …then shift the camera target so that center lands at the WINDOW
+    // center rather than the screen center (T = C − r·Δx/s + u·Δy/s, with
+    // Δ = windowCenter − screenCenter in screen px, +y down).
+    final dxPx = window.center.dx - size.width / 2;
+    final dyPx = window.center.dy - size.height / 2;
+    final tx = cxw - rx * (dxPx / scale) + ux * (dyPx / scale);
+    final tn = cnw - rn * (dxPx / scale) + un * (dyPx / scale);
 
-    // Calculate the visible area dimensions
-    final visibleHeight = screenHeight - topPadding - bottomPadding;
+    final ty = -tn; // back to mercator-y (south-positive)
+    final targetLat =
+        (2 * math.atan(math.exp((0.5 - ty) * 2 * math.pi)) - math.pi / 2) *
+            180 /
+            math.pi;
+    final targetLng = tx * 360.0 - 180.0;
 
-    // Calculate how much to expand the bounds on each side
-    // This ensures the actual locations fit within the visible area
-    final verticalExpansionTop = (topPadding / visibleHeight) * latSpan;
-    final verticalExpansionBottom = (bottomPadding / visibleHeight) * latSpan;
-    final horizontalExpansionLeft = (leftPadding / screenHeight) *
-        lngSpan; // Use screenHeight as approximation for aspect ratio
-    final horizontalExpansionRight = (rightPadding / screenHeight) * lngSpan;
-
-    // Create expanded bounds
-    final expandedBounds = LatLngBounds(
-      southwest: LatLng(
-        minLat - verticalExpansionBottom,
-        minLng - horizontalExpansionLeft,
-      ),
-      northeast: LatLng(
-        maxLat + verticalExpansionTop,
-        maxLng + horizontalExpansionRight,
-      ),
+    final camera = CameraPosition(
+      target: LatLng(targetLat, targetLng),
+      zoom: zoom,
+      bearing: (bearingDeg + 360) % 360,
     );
-
-    // Animate to the expanded bounds with minimal padding
-    // This ensures all original markers are visible within the UI-free area
-    _mapController!.animateCamera(
-      CameraUpdate.newLatLngBounds(
-          expandedBounds, 20.0), // Small uniform padding for safety
-    );
+    if (instant) {
+      _mapController!.moveCamera(CameraUpdate.newCameraPosition(camera));
+    } else {
+      _mapController!.animateCamera(CameraUpdate.newCameraPosition(camera));
+    }
   }
 
   void _zoomToLocation(LatLng coordinates) {
