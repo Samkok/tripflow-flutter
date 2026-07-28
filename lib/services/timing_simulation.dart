@@ -13,8 +13,10 @@ const kNeverCloses = 1440;
 @immutable
 class StopTiming {
   final String locationId;
+
   /// Wall-clock time the user is expected to arrive at the stop.
   final DateTime arrival;
+
   /// Wall-clock time the user leaves. Equal to [arrival] + the stop's
   /// `stayDuration`. The simulation does NOT auto-shift to opening time
   /// when a place isn't open yet — it surfaces a warning instead and lets
@@ -51,13 +53,16 @@ enum WarningKind {
 @immutable
 class TimingWarning {
   final WarningKind kind;
+
   /// Short human-readable summary suitable for a per-card badge or
   /// row in the warnings sheet. Callers may compose their own copy from
   /// [kind] + [overrun] / [wait] when they need richer formatting.
   final String message;
+
   /// How far past close the planned stay extends. Set only when
   /// [kind] is [WarningKind.willOverrunClose].
   final Duration? overrun;
+
   /// How long the user would wait if they didn't move on. Set only when
   /// [kind] is [WarningKind.notOpenYet].
   final Duration? wait;
@@ -139,8 +144,7 @@ TimingSimulationResult simulateTrip({
     if (i > 0) {
       final leg = i - 1 < legDetails.length ? legDetails[i - 1] : null;
       final travel = leg?['duration'];
-      cursor = cursor
-          .add(travel is Duration ? travel : Duration.zero);
+      cursor = cursor.add(travel is Duration ? travel : Duration.zero);
     }
 
     final stop = orderedStops[i];
@@ -196,8 +200,7 @@ List<TimingWarning> _evaluateStop(
         return [
           TimingWarning(
             kind: WarningKind.willOverrunClose,
-            message:
-                'Stay overruns closing by ${_formatDuration(overrun)}',
+            message: 'Stay overruns closing by ${_formatDuration(overrun)}',
             overrun: overrun,
           ),
         ];
@@ -239,14 +242,14 @@ List<TimingWarning> _evaluateStop(
 ///   - An empty list when there's a constraint but no period covers this
 ///     day (closed all day).
 ///   - A list of one or more intervals otherwise.
-List<_Interval>? _buildIntervalsForDate(
-    LocationModel loc, DateTime arrival) {
+List<_Interval>? _buildIntervalsForDate(LocationModel loc, DateTime arrival) {
   final override = loc.userClosingMinuteOverride;
   final hours = loc.googleOpeningHours;
   final dateOnly = DateTime(arrival.year, arrival.month, arrival.day);
 
   if (override != null) {
-    if (override == kNeverCloses) return null; // "Never closes" — no constraint.
+    if (override == kNeverCloses)
+      return null; // "Never closes" — no constraint.
 
     // User says "treat closing as this time on the planned day". Open from
     // the first Google opening for the day if available, else from 00:00 —
@@ -274,7 +277,8 @@ List<_Interval>? _buildIntervalsForDate(
   // Periods opening today (may close today or any later day).
   for (final p in hours) {
     if (p.openDay != googleDay) continue;
-    if (p.closeMinutes == null || p.closeDay == null) continue; // skip open-ended
+    if (p.closeMinutes == null || p.closeDay == null)
+      continue; // skip open-ended
     final dayOffset = ((p.closeDay! - p.openDay) % 7 + 7) % 7;
     final open = dateOnly.add(Duration(minutes: p.openMinutes));
     final close =

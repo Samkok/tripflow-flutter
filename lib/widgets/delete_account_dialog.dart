@@ -6,7 +6,8 @@ class DeleteAccountDialog extends ConsumerStatefulWidget {
   const DeleteAccountDialog({super.key});
 
   @override
-  ConsumerState<DeleteAccountDialog> createState() => _DeleteAccountDialogState();
+  ConsumerState<DeleteAccountDialog> createState() =>
+      _DeleteAccountDialogState();
 }
 
 class _DeleteAccountDialogState extends ConsumerState<DeleteAccountDialog> {
@@ -71,10 +72,13 @@ class _DeleteAccountDialogState extends ConsumerState<DeleteAccountDialog> {
                 ],
               ),
               const SizedBox(height: 12),
-              _buildDataItem(theme, Icons.location_on, 'All your saved locations'),
-              _buildDataItem(theme, Icons.map, 'All your trips and itineraries'),
+              _buildDataItem(
+                  theme, Icons.location_on, 'All your saved locations'),
+              _buildDataItem(
+                  theme, Icons.map, 'All your trips and itineraries'),
               _buildDataItem(theme, Icons.people, 'Your trip collaborations'),
-              _buildDataItem(theme, Icons.person, 'Your profile and account data'),
+              _buildDataItem(
+                  theme, Icons.person, 'Your profile and account data'),
               const SizedBox(height: 12),
               Text(
                 '⚠️ This action cannot be undone. All data will be permanently lost.',
@@ -250,7 +254,7 @@ class _DeleteAccountDialogState extends ConsumerState<DeleteAccountDialog> {
       final userEmail = user?.email ?? '';
       final enteredEmail = _emailController.text.trim();
       final emailMatches = enteredEmail.isNotEmpty &&
-                           enteredEmail.toLowerCase() == userEmail.toLowerCase();
+          enteredEmail.toLowerCase() == userEmail.toLowerCase();
 
       return [
         TextButton(

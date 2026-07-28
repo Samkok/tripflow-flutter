@@ -28,11 +28,8 @@ class TripRepository {
         'is_active': false,
       };
 
-      final response = await _supabase
-          .from(_tableName)
-          .insert(data)
-          .select()
-          .single();
+      final response =
+          await _supabase.from(_tableName).insert(data).select().single();
 
       return Trip.fromJson(response);
     } catch (e) {
@@ -148,7 +145,8 @@ class TripRepository {
   /// Pass [clearDates] = true to explicitly clear start_date and end_date back
   /// to NULL — distinct from passing null for [startDate]/[endDate], which
   /// leaves the existing values untouched.
-  Future<Trip> updateTrip(String tripId, {
+  Future<Trip> updateTrip(
+    String tripId, {
     String? name,
     String? description,
     DateTime? startDate,

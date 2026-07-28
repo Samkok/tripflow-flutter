@@ -47,8 +47,10 @@ class AuthService {
   static const String _passwordSavePromptedEmailsKey =
       'password_save_prompted_emails';
 
-  AuthService(this._locationRepository, [UserProfileRepository? userProfileRepository])
-      : _userProfileRepository = userProfileRepository ?? UserProfileRepository();
+  AuthService(this._locationRepository,
+      [UserProfileRepository? userProfileRepository])
+      : _userProfileRepository =
+            userProfileRepository ?? UserProfileRepository();
 
   User? get currentUser => _supabase.auth.currentUser;
 
@@ -84,8 +86,7 @@ class AuthService {
                     : null,
                 revenueCatAppUserId: customerInfo.originalAppUserId,
               );
-              debugPrint(
-                  'AuthService: ✅ Synced subscription on sign-in');
+              debugPrint('AuthService: ✅ Synced subscription on sign-in');
             }
           } catch (e) {
             debugPrint(
@@ -105,7 +106,8 @@ class AuthService {
 
         // Check if there are local locations before syncing
         await _locationRepository.init();
-        final localLocationCount = await _locationRepository.getLocalLocationCount();
+        final localLocationCount =
+            await _locationRepository.getLocalLocationCount();
         return localLocationCount;
       }
       return 0;
@@ -240,9 +242,8 @@ class AuthService {
       // AuthException.
       final user = response.user;
       final identities = user?.identities;
-      final looksLikeDuplicate = user == null ||
-          identities == null ||
-          identities.isEmpty;
+      final looksLikeDuplicate =
+          user == null || identities == null || identities.isEmpty;
       if (looksLikeDuplicate) {
         throw EmailAlreadyRegisteredException(email);
       }
@@ -268,8 +269,7 @@ class AuthService {
           try {
             final revenuecat = RevenueCatService();
             final customerInfo = await revenuecat.getCustomerInfo();
-            final entitlement =
-                customerInfo.entitlements.active['premium'];
+            final entitlement = customerInfo.entitlements.active['premium'];
             if (entitlement != null) {
               await _userProfileRepository.syncTrialSubscription(
                 userId: response.user!.id,
@@ -442,18 +442,12 @@ class AuthService {
 
       // Step 1: Delete all user's locations
       debugPrint('AuthService: Deleting user locations...');
-      await _supabase
-          .from('locations')
-          .delete()
-          .eq('user_id', user.id);
+      await _supabase.from('locations').delete().eq('user_id', user.id);
       debugPrint('AuthService: User locations deleted');
 
       // Step 2: Delete all trips owned by user
       debugPrint('AuthService: Deleting user trips...');
-      await _supabase
-          .from('trips')
-          .delete()
-          .eq('user_id', user.id);
+      await _supabase.from('trips').delete().eq('user_id', user.id);
       debugPrint('AuthService: User trips deleted');
 
       // Step 3: Delete user profile (this will CASCADE delete subscriptions and collaborations)

@@ -116,8 +116,7 @@ class _ReviewSentimentDialog extends StatelessWidget {
             SizedBox(
               width: double.infinity,
               child: ElevatedButton(
-                onPressed: () =>
-                    Navigator.of(context).pop(_Sentiment.positive),
+                onPressed: () => Navigator.of(context).pop(_Sentiment.positive),
                 child: const Text('Yes, loving it'),
               ),
             ),
@@ -125,8 +124,7 @@ class _ReviewSentimentDialog extends StatelessWidget {
             SizedBox(
               width: double.infinity,
               child: TextButton(
-                onPressed: () =>
-                    Navigator.of(context).pop(_Sentiment.negative),
+                onPressed: () => Navigator.of(context).pop(_Sentiment.negative),
                 child: const Text('Not really'),
               ),
             ),

@@ -17,8 +17,7 @@ class SyncService {
     );
 
     return remoteLocations.any((remote) =>
-        remote.fingerprint == localFp &&
-        remote.fingerprint.isNotEmpty);
+        remote.fingerprint == localFp && remote.fingerprint.isNotEmpty);
   }
 
   /// Get unique locations from local that don't exist in remote
@@ -36,8 +35,7 @@ class SyncService {
 
       // Check if this fingerprint exists in remote
       final exists = remoteLocations.any((remote) =>
-          remote.fingerprint == localFp &&
-          remote.fingerprint.isNotEmpty);
+          remote.fingerprint == localFp && remote.fingerprint.isNotEmpty);
 
       return !exists;
     }).toList();
@@ -51,7 +49,8 @@ class SyncService {
     required Function(String)? onError,
   }) async {
     final syncResult = SyncResult();
-    final uniqueLocations = getUniqueLocalLocations(localLocations, remoteLocations);
+    final uniqueLocations =
+        getUniqueLocalLocations(localLocations, remoteLocations);
 
     log('Starting sync: ${uniqueLocations.length} unique locations to upload');
 
@@ -78,7 +77,7 @@ class SyncResult {
   List<String> errors = [];
 
   bool get isSuccess => errors.isEmpty;
-  
+
   @override
   String toString() =>
       'Uploaded: $uploadedCount, Skipped: $skippedCount, Errors: ${errors.length}';

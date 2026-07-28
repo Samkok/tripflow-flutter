@@ -84,7 +84,7 @@ class CollaboratorRealtimeNotifier extends StateNotifier<int> {
       } else if (isOwnRow) {
         // Full payload (possible only when RLS is off / future server
         // changes): my removal, handled directly.
-        final activeTrip = _ref.read(realtimeActiveTripProvider).asData?.value;
+        final activeTrip = _ref.read(realtimeActiveTripProvider).valueOrNull;
         if (activeTrip != null && event.tripId == activeTrip.id) {
           debugPrint(
               'CollaboratorRealtimeNotifier: ⚠️ Removed from active trip ${activeTrip.name}, deactivating...');
@@ -134,7 +134,7 @@ class CollaboratorRealtimeNotifier extends StateNotifier<int> {
   /// fresh RLS-gated query instead of an event payload that never arrives).
   Future<void> _recheckActiveTripMembership() async {
     try {
-      final activeTrip = _ref.read(realtimeActiveTripProvider).asData?.value;
+      final activeTrip = _ref.read(realtimeActiveTripProvider).valueOrNull;
       if (activeTrip == null) return;
 
       final repository = _ref.read(tripCollaboratorRepositoryProvider);
@@ -260,22 +260,22 @@ final hasActiveTripWriteAccessProvider = FutureProvider<bool>((ref) async {
 
   final activeTripAsync = ref.watch(realtimeActiveTripProvider);
 
-  return await activeTripAsync.when(
-    data: (activeTrip) async {
-      if (activeTrip == null) {
-        // No active trip - user can edit their own non-trip locations
-        return true;
-      }
+  // RETAIN through reloads: `when(loading:)` resolved to false on every
+  // realtimeActiveTripProvider reload (which every add/remove-day
+  // invalidation triggers), momentarily hiding write-gated controls — the
+  // half-reload flicker on the very button just pressed. Only a true first
+  // load (no previous value) denies access defensively.
+  if (activeTripAsync.hasError) return false;
+  if (activeTripAsync.isLoading && !activeTripAsync.hasValue) return false;
+  final activeTrip = activeTripAsync.valueOrNull;
+  if (activeTrip == null) {
+    // No active trip - user can edit their own non-trip locations
+    return true;
+  }
 
-      // Fetch the LATEST write access for the active trip
-      // This ensures we always have fresh permission data from Supabase
-      final writeAccess =
-          await ref.watch(hasWriteAccessProvider(activeTrip.id).future);
-      return writeAccess;
-    },
-    loading: () async => false, // Loading state - deny access to be safe
-    error: (e, st) async => false, // Error state - deny access to be safe
-  );
+  // Fetch the LATEST write access for the active trip
+  // This ensures we always have fresh permission data from Supabase
+  return await ref.watch(hasWriteAccessProvider(activeTrip.id).future);
 });
 
 /// Provider to check if user is still a collaborator on the active trip

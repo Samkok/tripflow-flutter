@@ -86,9 +86,7 @@ class _NearbyPlacesPickerSheetState extends State<NearbyPlacesPickerSheet> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          places.isEmpty
-                              ? 'No places found'
-                              : 'Nearby places',
+                          places.isEmpty ? 'No places found' : 'Nearby places',
                           style: theme.textTheme.titleLarge?.copyWith(
                             fontWeight: FontWeight.bold,
                           ),
@@ -167,8 +165,7 @@ class _NearbyPlacesPickerSheetState extends State<NearbyPlacesPickerSheet> {
                               _buildPlaceTile(context, visible[i]),
                         ),
             ),
-            if (places.isNotEmpty)
-              _buildBottomBar(context, scrollController),
+            if (places.isNotEmpty) _buildBottomBar(context, scrollController),
           ],
         );
       },
@@ -231,8 +228,7 @@ class _NearbyPlacesPickerSheetState extends State<NearbyPlacesPickerSheet> {
                   width: 56,
                   height: 56,
                   decoration: BoxDecoration(
-                    color:
-                        theme.colorScheme.primary.withValues(alpha: 0.12),
+                    color: theme.colorScheme.primary.withValues(alpha: 0.12),
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Icon(

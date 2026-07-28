@@ -43,7 +43,7 @@ const kDayRouteColors = <Color>[
 /// surface uses ([contiguousTripDates]), derived from the trip's declared
 /// range plus every location's scheduled dates.
 final activeTripDayAxisProvider = Provider<List<DateTime>>((ref) {
-  final trip = ref.watch(realtimeActiveTripProvider).asData?.value;
+  final trip = ref.watch(realtimeActiveTripProvider).valueOrNull;
   final locations = ref.watch(tripProvider.select((s) => s.pinnedLocations));
   if (trip == null && locations.isEmpty) return const <DateTime>[];
   return contiguousTripDates([

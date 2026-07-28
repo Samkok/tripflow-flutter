@@ -86,8 +86,7 @@ class _SyncAnonymousLocationsDialogState
 
     try {
       // Get anonymous locations
-      final anonLocations =
-          await ref.read(anonymousLocationsProvider.future);
+      final anonLocations = await ref.read(anonymousLocationsProvider.future);
 
       if (anonLocations.isEmpty) {
         // No locations to sync
@@ -160,8 +159,7 @@ class LoginSyncListener extends ConsumerWidget {
         if (syncDecision != null) return; // Already decided
 
         // Check if there are anonymous locations
-        final anonLocations =
-            await ref.read(anonymousLocationsProvider.future);
+        final anonLocations = await ref.read(anonymousLocationsProvider.future);
         if (anonLocations.isNotEmpty && context.mounted) {
           // Show sync dialog
           showDialog(

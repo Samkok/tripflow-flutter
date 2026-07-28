@@ -182,7 +182,8 @@ class MarkerUtils {
     const double paddingBelowCircle = 16.0; // Increased padding
     final double totalWidth =
         namePainter.width > size ? namePainter.width : size;
-    final double totalHeight = size + paddingBelowCircle + namePainter.height + shadowRadius;
+    final double totalHeight =
+        size + paddingBelowCircle + namePainter.height + shadowRadius;
     final double canvasCenterX = totalWidth / 2;
 
     final Canvas canvas = Canvas(pictureRecorder);
@@ -192,10 +193,26 @@ class MarkerUtils {
     // Apply grayscale filter if skipped
     if (isSkipped) {
       const ColorFilter greyscaleFilter = ColorFilter.matrix(<double>[
-        0.2126, 0.7152, 0.0722, 0, 0,
-        0.2126, 0.7152, 0.0722, 0, 0,
-        0.2126, 0.7152, 0.0722, 0, 0,
-        0, 0, 0, 1, 0,
+        0.2126,
+        0.7152,
+        0.0722,
+        0,
+        0,
+        0.2126,
+        0.7152,
+        0.0722,
+        0,
+        0,
+        0.2126,
+        0.7152,
+        0.0722,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
       ]);
       canvas.saveLayer(null, Paint()..colorFilter = greyscaleFilter);
     }
@@ -208,8 +225,8 @@ class MarkerUtils {
       ..color = Colors.black.withValues(alpha: 0.1)
       ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8);
 
-    canvas.drawCircle(
-        Offset(canvasCenterX, circleRadius + 2), circleRadius + 1, shadowPaint2);
+    canvas.drawCircle(Offset(canvasCenterX, circleRadius + 2), circleRadius + 1,
+        shadowPaint2);
     canvas.drawCircle(
         Offset(canvasCenterX, circleRadius + 1), circleRadius, shadowPaint1);
 
@@ -237,10 +254,8 @@ class MarkerUtils {
       ..color = Colors.white.withValues(alpha: 0.3)
       ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2);
 
-    canvas.drawCircle(
-        Offset(canvasCenterX, circleRadius - circleRadius * 0.3),
-        circleRadius * 0.4,
-        highlightPaint);
+    canvas.drawCircle(Offset(canvasCenterX, circleRadius - circleRadius * 0.3),
+        circleRadius * 0.4, highlightPaint);
 
     // Draw the number/icon inside the circle
     contentPainter.paint(
@@ -280,7 +295,8 @@ class MarkerUtils {
   /// Creates a combined distance label + Open Maps button as one bitmap.
   /// Draws: [ distance chip ] on top, [ OPEN MAPS button ] below, with a gap.
   /// Anchor is set to bottom-center so the whole stack sits above the midpoint.
-  static Future<MarkerBitmapResult> getDistanceAndMapsMarker(String distanceLabel) async {
+  static Future<MarkerBitmapResult> getDistanceAndMapsMarker(
+      String distanceLabel) async {
     final ui.PictureRecorder pictureRecorder = ui.PictureRecorder();
     final Canvas canvas = Canvas(pictureRecorder);
 
@@ -295,7 +311,8 @@ class MarkerUtils {
     final distText = TextPainter(
       text: TextSpan(
         text: distanceLabel,
-        style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600),
+        style: const TextStyle(
+            color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600),
       ),
       textDirection: TextDirection.ltr,
     )..layout();
@@ -307,7 +324,8 @@ class MarkerUtils {
     final mapsIconPainter = TextPainter(
       text: TextSpan(
         text: String.fromCharCode(mapsIcon.codePoint),
-        style: TextStyle(fontSize: 14, fontFamily: mapsIcon.fontFamily, color: Colors.white),
+        style: TextStyle(
+            fontSize: 14, fontFamily: mapsIcon.fontFamily, color: Colors.white),
       ),
       textDirection: TextDirection.ltr,
     )..layout();
@@ -315,12 +333,14 @@ class MarkerUtils {
     final mapsTextPainter = TextPainter(
       text: const TextSpan(
         text: 'OPEN MAPS',
-        style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
+        style: TextStyle(
+            color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
       ),
       textDirection: TextDirection.ltr,
     )..layout();
 
-    final double btnContentWidth = mapsIconPainter.width + 4 + mapsTextPainter.width;
+    final double btnContentWidth =
+        mapsIconPainter.width + 4 + mapsTextPainter.width;
     final double btnWidth = btnHPad * 2 + btnContentWidth;
 
     // Canvas width = widest of the two elements
@@ -330,10 +350,14 @@ class MarkerUtils {
 
     // --- Draw distance chip ---
     canvas.drawShadow(
-      Path()..addRRect(RRect.fromRectAndRadius(
-          Rect.fromLTWH((totalWidth - chipWidth) / 2, 2, chipWidth, chipHeight),
-          const Radius.circular(12))),
-      Colors.black.withValues(alpha: 0.35), 3.0, true,
+      Path()
+        ..addRRect(RRect.fromRectAndRadius(
+            Rect.fromLTWH(
+                (totalWidth - chipWidth) / 2, 2, chipWidth, chipHeight),
+            const Radius.circular(12))),
+      Colors.black.withValues(alpha: 0.35),
+      3.0,
+      true,
     );
     canvas.drawRRect(
       RRect.fromRectAndRadius(
@@ -350,10 +374,13 @@ class MarkerUtils {
     final double btnTop = chipHeight + gap;
     final double btnLeft = (totalWidth - btnWidth) / 2;
     canvas.drawShadow(
-      Path()..addRRect(RRect.fromRectAndRadius(
-          Rect.fromLTWH(btnLeft, btnTop + 2, btnWidth, btnHeight),
-          const Radius.circular(14))),
-      Colors.black.withValues(alpha: 0.3), 4.0, true,
+      Path()
+        ..addRRect(RRect.fromRectAndRadius(
+            Rect.fromLTWH(btnLeft, btnTop + 2, btnWidth, btnHeight),
+            const Radius.circular(14))),
+      Colors.black.withValues(alpha: 0.3),
+      4.0,
+      true,
     );
     canvas.drawRRect(
       RRect.fromRectAndRadius(
@@ -362,8 +389,14 @@ class MarkerUtils {
       Paint()..color = const Color(0xFF4285F4),
     );
     final double contentStartX = btnLeft + (btnWidth - btnContentWidth) / 2;
-    mapsIconPainter.paint(canvas, Offset(contentStartX, btnTop + (btnHeight - mapsIconPainter.height) / 2));
-    mapsTextPainter.paint(canvas, Offset(contentStartX + mapsIconPainter.width + 4, btnTop + (btnHeight - mapsTextPainter.height) / 2));
+    mapsIconPainter.paint(
+        canvas,
+        Offset(
+            contentStartX, btnTop + (btnHeight - mapsIconPainter.height) / 2));
+    mapsTextPainter.paint(
+        canvas,
+        Offset(contentStartX + mapsIconPainter.width + 4,
+            btnTop + (btnHeight - mapsTextPainter.height) / 2));
 
     // --- Convert ---
     final ui.Image img = await pictureRecorder
@@ -372,7 +405,8 @@ class MarkerUtils {
     final ByteData? data = await img.toByteData(format: ui.ImageByteFormat.png);
 
     if (data == null) {
-      return MarkerBitmapResult(BitmapDescriptor.defaultMarker, const Offset(0.5, 1.0));
+      return MarkerBitmapResult(
+          BitmapDescriptor.defaultMarker, const Offset(0.5, 1.0));
     }
 
     // Anchor at bottom-center so the entire stack renders above the map position
@@ -394,7 +428,8 @@ class MarkerUtils {
     final iconPainter = TextPainter(
       text: TextSpan(
         text: String.fromCharCode(grabIcon.codePoint),
-        style: TextStyle(fontSize: 14, fontFamily: grabIcon.fontFamily, color: Colors.white),
+        style: TextStyle(
+            fontSize: 14, fontFamily: grabIcon.fontFamily, color: Colors.white),
       ),
       textDirection: TextDirection.ltr,
     )..layout();
@@ -402,7 +437,8 @@ class MarkerUtils {
     final textPainter = TextPainter(
       text: const TextSpan(
         text: 'OPEN GRAB',
-        style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
+        style: TextStyle(
+            color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
       ),
       textDirection: TextDirection.ltr,
     )..layout();
@@ -411,9 +447,13 @@ class MarkerUtils {
     final double totalWidth = padding * 2 + contentWidth;
 
     canvas.drawShadow(
-      Path()..addRRect(RRect.fromRectAndRadius(
-          Rect.fromLTWH(0, 2, totalWidth, height), const Radius.circular(14))),
-      Colors.black.withValues(alpha: 0.3), 4.0, true,
+      Path()
+        ..addRRect(RRect.fromRectAndRadius(
+            Rect.fromLTWH(0, 2, totalWidth, height),
+            const Radius.circular(14))),
+      Colors.black.withValues(alpha: 0.3),
+      4.0,
+      true,
     );
     canvas.drawRRect(
       RRect.fromRectAndRadius(
@@ -422,8 +462,12 @@ class MarkerUtils {
     );
 
     final double startX = (totalWidth - contentWidth) / 2;
-    iconPainter.paint(canvas, Offset(startX, (height - iconPainter.height) / 2));
-    textPainter.paint(canvas, Offset(startX + iconPainter.width + 4, (height - textPainter.height) / 2));
+    iconPainter.paint(
+        canvas, Offset(startX, (height - iconPainter.height) / 2));
+    textPainter.paint(
+        canvas,
+        Offset(
+            startX + iconPainter.width + 4, (height - textPainter.height) / 2));
 
     final ui.Image img = await pictureRecorder
         .endRecording()
@@ -431,12 +475,13 @@ class MarkerUtils {
     final ByteData? data = await img.toByteData(format: ui.ImageByteFormat.png);
 
     if (data == null) {
-      return MarkerBitmapResult(BitmapDescriptor.defaultMarker, const Offset(0.5, 0.5));
+      return MarkerBitmapResult(
+          BitmapDescriptor.defaultMarker, const Offset(0.5, 0.5));
     }
 
     // Anchor at top-center so it renders below the map position
-    return MarkerBitmapResult(
-        BitmapDescriptor.bytes(data.buffer.asUint8List()), const Offset(0.5, 0.0));
+    return MarkerBitmapResult(BitmapDescriptor.bytes(data.buffer.asUint8List()),
+        const Offset(0.5, 0.0));
   }
 
   /// Creates a custom bitmap for leg start/end markers.

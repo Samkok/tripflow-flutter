@@ -96,11 +96,8 @@ class TripCollaboratorRepository {
         'invited_at': DateTime.now().toUtc().toIso8601String(),
       };
 
-      final response = await _supabase
-          .from(_tableName)
-          .insert(data)
-          .select()
-          .single();
+      final response =
+          await _supabase.from(_tableName).insert(data).select().single();
 
       return AddCollaboratorResult(
         success: true,
@@ -147,7 +144,8 @@ class TripCollaboratorRepository {
           .order('created_at', ascending: true);
 
       return (response as List)
-          .map((data) => TripCollaborator.fromJson(data as Map<String, dynamic>))
+          .map(
+              (data) => TripCollaborator.fromJson(data as Map<String, dynamic>))
           .toList();
     } catch (e) {
       debugPrint('Error getting collaborators: $e');
@@ -161,13 +159,10 @@ class TripCollaboratorRepository {
     required String permission,
   }) async {
     try {
-      await _supabase
-          .from(_tableName)
-          .update({
-            'permission': permission,
-            'updated_at': DateTime.now().toUtc().toIso8601String(),
-          })
-          .eq('id', collaboratorId);
+      await _supabase.from(_tableName).update({
+        'permission': permission,
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      }).eq('id', collaboratorId);
 
       return true;
     } catch (e) {
@@ -179,10 +174,7 @@ class TripCollaboratorRepository {
   /// Remove a collaborator from a trip
   Future<bool> removeCollaborator(String collaboratorId) async {
     try {
-      await _supabase
-          .from(_tableName)
-          .delete()
-          .eq('id', collaboratorId);
+      await _supabase.from(_tableName).delete().eq('id', collaboratorId);
 
       return true;
     } catch (e) {
@@ -217,9 +209,7 @@ class TripCollaboratorRepository {
       if (userId == null) return [];
 
       // Get collaborator records with trip details
-      final response = await _supabase
-          .from(_tableName)
-          .select('''
+      final response = await _supabase.from(_tableName).select('''
             *,
             trips:trip_id (
               id,
@@ -236,19 +226,16 @@ class TripCollaboratorRepository {
               created_at,
               updated_at
             )
-          ''')
-          .eq('user_id', userId);
+          ''').eq('user_id', userId);
 
       // Filter out trips where the current user is the owner
       // (they should only appear in "My Trips", not "Shared With You")
-      final filteredResponse = (response as List)
-          .where((item) {
-            final trip = item['trips'] as Map<String, dynamic>?;
-            if (trip == null) return false;
-            final tripOwnerId = trip['user_id'] as String?;
-            return tripOwnerId != userId;
-          })
-          .toList();
+      final filteredResponse = (response as List).where((item) {
+        final trip = item['trips'] as Map<String, dynamic>?;
+        if (trip == null) return false;
+        final tripOwnerId = trip['user_id'] as String?;
+        return tripOwnerId != userId;
+      }).toList();
 
       return filteredResponse.cast<Map<String, dynamic>>();
     } catch (e) {

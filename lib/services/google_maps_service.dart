@@ -19,7 +19,10 @@ class GoogleMapsService {
     List<LocationModel> waypoints = const [],
     bool optimizeWaypoints = true,
   }) async {
-    final allDestinations = [...waypoints, if (destination != null) destination];
+    final allDestinations = [
+      ...waypoints,
+      if (destination != null) destination
+    ];
     if (allDestinations.isEmpty) {
       return {
         'routePoints': <LatLng>[],
@@ -42,15 +45,18 @@ class GoogleMapsService {
       } else {
         // Multiple destinations
         final waypointsString = waypoints
-            .map((loc) => '${loc.coordinates.latitude},${loc.coordinates.longitude}')
+            .map((loc) =>
+                '${loc.coordinates.latitude},${loc.coordinates.longitude}')
             .join('|');
-        
-       final waypointParam = optimizeWaypoints ? 'optimize:true|$waypointsString' : waypointsString;
-       
+
+        final waypointParam = optimizeWaypoints
+            ? 'optimize:true|$waypointsString'
+            : waypointsString;
+
         url = 'https://maps.googleapis.com/maps/api/directions/json'
             '?origin=${origin.latitude},${origin.longitude}'
             '&destination=${finalDestination.latitude},${finalDestination.longitude}'
-           '&waypoints=$waypointParam'
+            '&waypoints=$waypointParam'
             '&key=$_apiKey';
       }
 
@@ -67,13 +73,15 @@ class GoogleMapsService {
       final List<Map<String, dynamic>> legDetails = [];
 
       // Extract waypoint order for multiple destinations
-     if (waypoints.isNotEmpty && route['waypoint_order'] != null && optimizeWaypoints) {
+      if (waypoints.isNotEmpty &&
+          route['waypoint_order'] != null &&
+          optimizeWaypoints) {
         waypointOrder.addAll((route['waypoint_order'] as List).cast<int>());
-     } else if (waypoints.isNotEmpty) {
-       // For custom ordering, waypoint order is sequential
-       for (int i = 0; i < waypoints.length; i++) {
-         waypointOrder.add(i);
-       }
+      } else if (waypoints.isNotEmpty) {
+        // For custom ordering, waypoint order is sequential
+        for (int i = 0; i < waypoints.length; i++) {
+          waypointOrder.add(i);
+        }
       } else if (destination != null) {
         // For single destination, there are no waypoints, so order is empty or just [0] if it's treated as one.
         waypointOrder.add(0);
@@ -89,7 +97,8 @@ class GoogleMapsService {
 
       // Extract complete polylines for each leg and flatten them for the overall route.
       final extractedLegPolylines = _extractLegPolylines(legs);
-      final List<LatLng> fullRoutePoints = extractedLegPolylines.expand((leg) => leg).toList();
+      final List<LatLng> fullRoutePoints =
+          extractedLegPolylines.expand((leg) => leg).toList();
 
       return {
         'routePoints': fullRoutePoints,
@@ -110,26 +119,27 @@ class GoogleMapsService {
 
   static List<List<LatLng>> _extractLegPolylines(List legs) {
     final List<List<LatLng>> legPolylines = [];
-    
+
     for (final leg in legs) {
       final List<LatLng> legPoints = [];
       final steps = leg['steps'] as List;
 
       // The start of the first step is the start of the leg.
-      legPoints.add(LatLng(leg['start_location']['lat'], leg['start_location']['lng']));
+      legPoints.add(
+          LatLng(leg['start_location']['lat'], leg['start_location']['lng']));
 
       for (final step in steps) {
         final polyline = step['polyline']['points'];
         final decodedPoints = _decodePolyline(polyline);
         legPoints.addAll(decodedPoints);
       }
-      
+
       // The decoded polyline doesn't always include the very last point. Add it explicitly.
       // legPoints.add(LatLng(leg['end_location']['lat'], leg['end_location']['lng']));
 
       legPolylines.add(legPoints);
     }
-    
+
     return legPolylines;
   }
 

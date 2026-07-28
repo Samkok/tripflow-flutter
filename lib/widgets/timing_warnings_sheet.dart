@@ -67,8 +67,7 @@ class _TimingWarningsSheetState extends ConsumerState<TimingWarningsSheet> {
   void initState() {
     super.initState();
     final result = ref.read(tripSimulationProvider);
-    final ordered =
-        ref.read(tripProvider).optimizedLocationsForSelectedDate;
+    final ordered = ref.read(tripProvider).optimizedLocationsForSelectedDate;
     final byId = {for (final l in ordered) l.id: l};
 
     _problems = result == null
@@ -140,8 +139,7 @@ class _TimingWarningsSheetState extends ConsumerState<TimingWarningsSheet> {
     // are unioned (not replaced) so prior acknowledgements persist
     // across multiple confirm cycles in the same session.
     if (goAnyway.isNotEmpty) {
-      final notifier =
-          ref.read(acknowledgedTimingWarningsProvider.notifier);
+      final notifier = ref.read(acknowledgedTimingWarningsProvider.notifier);
       notifier.state = {...notifier.state, ...goAnyway};
     }
 
@@ -198,8 +196,7 @@ class _TimingWarningsSheetState extends ConsumerState<TimingWarningsSheet> {
         return Container(
           decoration: BoxDecoration(
             color: theme.scaffoldBackgroundColor,
-            borderRadius:
-                const BorderRadius.vertical(top: Radius.circular(20)),
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
           ),
           child: Column(
             children: [
@@ -230,8 +227,8 @@ class _TimingWarningsSheetState extends ConsumerState<TimingWarningsSheet> {
                             totalCount == 1
                                 ? '1 stop has a timing issue'
                                 : '$totalCount stops have timing issues',
-                            style: theme.textTheme.titleLarge?.copyWith(
-                                fontWeight: FontWeight.bold),
+                            style: theme.textTheme.titleLarge
+                                ?.copyWith(fontWeight: FontWeight.bold),
                           ),
                           const SizedBox(height: 2),
                           Text(
@@ -270,8 +267,8 @@ class _TimingWarningsSheetState extends ConsumerState<TimingWarningsSheet> {
               Expanded(
                 child: ListView.separated(
                   controller: scrollController,
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 12, vertical: 8),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   itemCount: _problems.length,
                   separatorBuilder: (_, __) => const SizedBox(height: 4),
                   itemBuilder: (context, i) {
@@ -282,8 +279,7 @@ class _TimingWarningsSheetState extends ConsumerState<TimingWarningsSheet> {
                       staged: _staged[entry.location.id],
                       onStage: _applying
                           ? null
-                          : (action) =>
-                              _stage(entry.location.id, action),
+                          : (action) => _stage(entry.location.id, action),
                     );
                   },
                 ),
@@ -292,8 +288,7 @@ class _TimingWarningsSheetState extends ConsumerState<TimingWarningsSheet> {
               SafeArea(
                 top: false,
                 child: Padding(
-                  padding:
-                      const EdgeInsets.fromLTRB(16, 12, 16, 12),
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
                   child: Row(
                     children: [
                       Expanded(
@@ -302,8 +297,7 @@ class _TimingWarningsSheetState extends ConsumerState<TimingWarningsSheet> {
                               ? null
                               : () => Navigator.of(context).pop(),
                           style: OutlinedButton.styleFrom(
-                            padding:
-                                const EdgeInsets.symmetric(vertical: 14),
+                            padding: const EdgeInsets.symmetric(vertical: 14),
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(12),
                             ),
@@ -320,8 +314,7 @@ class _TimingWarningsSheetState extends ConsumerState<TimingWarningsSheet> {
                           style: FilledButton.styleFrom(
                             backgroundColor: theme.colorScheme.primary,
                             foregroundColor: Colors.black,
-                            padding:
-                                const EdgeInsets.symmetric(vertical: 14),
+                            padding: const EdgeInsets.symmetric(vertical: 14),
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(12),
                             ),
@@ -377,8 +370,8 @@ class _WarningRow extends StatelessWidget {
     final theme = Theme.of(context);
     // The simulation guarantees at least one warning per row in this sheet —
     // pick the most severe (highest enum index per WarningKind ordering).
-    final warning = stop.warnings
-        .reduce((a, b) => a.kind.index >= b.kind.index ? a : b);
+    final warning =
+        stop.warnings.reduce((a, b) => a.kind.index >= b.kind.index ? a : b);
 
     final tone = _toneFor(warning.kind, theme);
     final resolved = staged != null;
@@ -412,8 +405,7 @@ class _WarningRow extends StatelessWidget {
                       color: tone.background,
                       borderRadius: BorderRadius.circular(8),
                     ),
-                    child: Icon(tone.icon,
-                        color: tone.foreground, size: 18),
+                    child: Icon(tone.icon, color: tone.foreground, size: 18),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
@@ -546,8 +538,7 @@ class _ChoiceButton extends StatelessWidget {
           backgroundColor: primary,
           foregroundColor: Colors.black,
           visualDensity: VisualDensity.compact,
-          padding:
-              const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
         ),
       );
     }

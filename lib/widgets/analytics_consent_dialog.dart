@@ -15,8 +15,7 @@ Future<void> maybeShowAnalyticsConsent(BuildContext context) async {
     builder: (ctx) {
       final theme = Theme.of(ctx);
       return AlertDialog(
-        shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         title: Row(
           children: [
             Icon(Icons.insights_rounded, color: theme.colorScheme.primary),

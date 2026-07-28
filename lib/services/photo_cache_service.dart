@@ -84,10 +84,8 @@ class PhotoCacheService {
   // Clear expired entries from disk
   Future<void> cleanupExpiredCache() async {
     final prefs = await SharedPreferences.getInstance();
-    final keys = prefs
-        .getKeys()
-        .where((k) => k.startsWith(_diskCachePrefix))
-        .toList();
+    final keys =
+        prefs.getKeys().where((k) => k.startsWith(_diskCachePrefix)).toList();
 
     for (final key in keys) {
       final cached = prefs.getString(key);

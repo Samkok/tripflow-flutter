@@ -6,13 +6,16 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:voyza/models/location_model.dart';
 import 'package:voyza/providers/all_days_route_provider.dart';
 import 'package:voyza/providers/map_ui_state_provider.dart';
+import '../models/trip.dart';
 import '../providers/trip_listener_provider.dart';
 import '../providers/trip_provider.dart';
 import '../providers/trip_collaborator_provider.dart';
 import '../providers/trip_simulation_provider.dart';
 import '../utils/date_picker_utils.dart';
 import '../utils/geo_utils.dart';
+import '../utils/same_day_place_guard.dart';
 import '../services/review_prompt_service.dart';
+import '../services/trip_day_service.dart';
 import 'timing_warnings_sheet.dart';
 import '../utils/external_app_links.dart';
 import '../utils/trip_date_validator.dart';
@@ -1004,6 +1007,7 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                   lastDate: DateTime.now().add(
                       const Duration(days: 365 * 5)), // 5 years in the future
                   highlightedDates: highlightedDates,
+                  highlightRange: activeTripDateRange(ref),
                 );
 
                 if (newDate != null) {
@@ -1043,9 +1047,49 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
   /// empty interstitial day (e.g. Jan 2 between stops on Jan 1 and Jan 3)
   /// still gets a chip. Returns an empty widget only when the trip touches
   /// no dates at all.
+  /// Adds one day via the shared [TripDayService], then jumps the map's
+  /// selection to the new day so the add is immediately visible.
+  Future<void> _addTripDay(BuildContext context, WidgetRef ref, Trip trip,
+      List<DateTime> days) async {
+    final range = await TripDayService.addDayAtEnd(
+      context,
+      ref,
+      trip: trip,
+      days: days,
+    );
+    if (range != null) {
+      ref.read(allDaysModeProvider.notifier).state = false;
+      ref.read(selectedDateProvider.notifier).state = range.changedDay;
+    }
+  }
+
+  /// Removes the trip's last day via the shared [TripDayService] flow
+  /// (delete-or-move dialog when the day has places). Keeps the selected
+  /// day valid afterwards.
+  Future<void> _removeTripDay(BuildContext context, WidgetRef ref, Trip trip,
+      List<DateTime> days) async {
+    final range = await TripDayService.removeLastDay(
+      context,
+      ref,
+      trip: trip,
+      days: days,
+    );
+    if (range != null) {
+      final selected = ref.read(selectedDateProvider);
+      final selKey = DateTime(selected.year, selected.month, selected.day);
+      if (selKey.isAtSameMomentAs(range.changedDay)) {
+        ref.read(selectedDateProvider.notifier).state = range.end;
+      }
+    }
+  }
+
   Widget _buildTripDayChips(BuildContext context, WidgetRef ref) {
+    // valueOrNull (not asData): during a userTripsProvider refresh these
+    // providers pass through a loading state that RETAINS the previous
+    // value — asData would blank the strip for a frame on every add/remove
+    // day, which read as a full page reload.
     final activeTripAsync = ref.watch(realtimeActiveTripProvider);
-    final trip = activeTripAsync.asData?.value;
+    final trip = activeTripAsync.valueOrNull;
     final locations = ref.watch(tripProvider.select((s) => s.pinnedLocations));
 
     final days = contiguousTripDates([
@@ -1072,16 +1116,90 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
     final allDaysMode = ref.watch(allDaysModeProvider);
     final dayColors = ref.watch(tripDayColorsProvider);
 
+    // Trailing "+ Add day" box: extends the trip by one day after the last.
+    // Needs a persisted trip (the new day lives in the trip's date range)
+    // and write access.
+    final canAddDay = trip != null &&
+        (ref.watch(hasActiveTripWriteAccessProvider).valueOrNull ?? false);
+
     return SizedBox(
       height: 34,
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: 12),
-        // Index 0 is the "All" chip; day chips follow, shifted by one.
-        itemCount: days.length + 1,
+        // Index 0 is the "All" chip; day chips follow, shifted by one; then
+        // the optional add-day box, then (multi-day trips) the remove box.
+        itemCount: days.length +
+            1 +
+            (canAddDay ? 1 : 0) +
+            ((canAddDay && days.length > 1) ? 1 : 0),
         separatorBuilder: (_, __) => const SizedBox(width: 6),
         itemBuilder: (context, index) {
           final primary = theme.colorScheme.primary;
+
+          // ── "−" remove-last-day box — quiet counterpart of Add day. ──
+          if (canAddDay && days.length > 1 && index == days.length + 2) {
+            final fg =
+                theme.textTheme.bodyMedium?.color?.withValues(alpha: 0.6) ??
+                    theme.colorScheme.onSurface;
+            return TextButton(
+              onPressed: () => _removeTripDay(context, ref, trip, days),
+              style: TextButton.styleFrom(
+                minimumSize: Size.zero,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                foregroundColor: fg,
+                backgroundColor: Colors.transparent,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  side: BorderSide(
+                      color: theme.dividerColor.withValues(alpha: 0.7),
+                      width: 1.2),
+                ),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.remove_rounded, size: 15, color: fg),
+                  const SizedBox(width: 4),
+                  Text('Remove day',
+                      style: theme.textTheme.labelMedium
+                          ?.copyWith(fontWeight: FontWeight.w600, color: fg)),
+                ],
+              ),
+            );
+          }
+
+          // ── "+ Add day" box — framed, transparent body. ──
+          if (canAddDay && index == days.length + 1) {
+            return TextButton(
+              onPressed: () => _addTripDay(context, ref, trip, days),
+              style: TextButton.styleFrom(
+                minimumSize: Size.zero,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                foregroundColor: primary,
+                backgroundColor: Colors.transparent,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  side: BorderSide(
+                      color: primary.withValues(alpha: 0.55), width: 1.2),
+                ),
+                textStyle: theme.textTheme.labelMedium
+                    ?.copyWith(fontWeight: FontWeight.w700),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.add_rounded, size: 15, color: primary),
+                  const SizedBox(width: 4),
+                  const Text('Add day'),
+                ],
+              ),
+            );
+          }
 
           // ── "All" chip — every day's route at once, each in its color. ──
           // Deliberately styled apart from the date chips (solid fill +
@@ -1420,21 +1538,6 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                               padding: const EdgeInsets.all(8),
                             ),
                           ),
-                        if (hasRoute) const SizedBox(width: 8),
-                        IconButton.filledTonal(
-                          onPressed: () => _openGoogleMaps(context, ref),
-                          icon: const Icon(Icons.directions, size: 20),
-                          tooltip: 'Open in Google Maps',
-                          style: IconButton.styleFrom(
-                            backgroundColor: Theme.of(context)
-                                .colorScheme
-                                .primary
-                                .withValues(alpha: 0.15),
-                            foregroundColor:
-                                Theme.of(context).colorScheme.primary,
-                            padding: const EdgeInsets.all(8),
-                          ),
-                        ),
                       ],
                     );
                   },
@@ -1789,7 +1892,7 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
     // (declared range + scheduled locations, gaps filled) with the group keys
     // so nothing is orphaned. Same helper as the day-chip strip and the trip
     // detail page, so all three surfaces show identical days.
-    final trip = ref.watch(realtimeActiveTripProvider).asData?.value;
+    final trip = ref.watch(realtimeActiveTripProvider).valueOrNull;
     final span = contiguousTripDates([
       trip?.startDate,
       trip?.endDate,
@@ -2213,6 +2316,46 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
     );
   }
 
+  /// Shared same-day gate for the bulk move/copy dialogs — one body so the
+  /// two can't drift. Returns the ids that may proceed (null = everything
+  /// blocked; caller bails), toasting whatever was skipped. [copy] uses
+  /// copy semantics: the source rows COUNT as occupants, so copying a place
+  /// onto the day it already occupies is blocked (move's self-exclusion
+  /// would wave it through and duplicate it). Occupancy counts scheduled
+  /// rows only.
+  Set<String>? _dedupeForDay(
+    BuildContext context,
+    WidgetRef ref,
+    Set<String> selectedIds,
+    DateTime dayKey, {
+    required bool copy,
+    required String verb,
+  }) {
+    final pinned = ref.read(tripProvider).pinnedLocations;
+    final dup = filterSameDayDuplicates(
+      moving:
+          pinned.where((l) => selectedIds.contains(l.id)).map(placeKeyOfModel),
+      occupantsOnDay: pinned
+          .where((l) =>
+              (copy || !selectedIds.contains(l.id)) &&
+              l.scheduledDate != null &&
+              l.isActiveOnDate(dayKey))
+          .map(placeKeyOfModel),
+    );
+    if (dup.allowedIds.isEmpty) {
+      if (context.mounted) {
+        AppToast.warning(context,
+            'Already on ${DateFormat('MMM d').format(dayKey)} — nothing to $verb.');
+      }
+      return null;
+    }
+    if (dup.blockedNames.isNotEmpty && context.mounted) {
+      AppToast.info(
+          context, 'Skipped ${dup.blockedNames.length} already on that day');
+    }
+    return dup.allowedIds;
+  }
+
   void _showCopyLocationsDialog(BuildContext context, WidgetRef ref) async {
     final highlightedDates = ref.read(datesWithLocationsProvider);
     final earliestDate = highlightedDates.isNotEmpty
@@ -2225,10 +2368,11 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
       firstDate: earliestDate,
       lastDate: DateTime.now().add(const Duration(days: 365 * 5)),
       highlightedDates: highlightedDates,
+      highlightRange: activeTripDateRange(ref),
     );
 
     if (newDate != null) {
-      final activeTrip = ref.read(realtimeActiveTripProvider).asData?.value;
+      final activeTrip = ref.read(realtimeActiveTripProvider).valueOrNull;
       if (!context.mounted) return;
       final allowed = await ensureScheduledDateAllowed(
         context,
@@ -2246,9 +2390,12 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
           .read(tripProvider)
           .pinnedLocations
           .any((l) => l.isActiveOnDate(dayKey));
+      final allowedIds = _dedupeForDay(context, ref, selectedIds, dayKey,
+          copy: true, verb: 'copy');
+      if (allowedIds == null) return;
       await ref
           .read(tripProvider.notifier)
-          .copyMultipleLocationsToDate(selectedIds, newDate);
+          .copyMultipleLocationsToDate(allowedIds, newDate);
 
       // Exit selection mode and clear selections
       ref.read(isSelectionModeProvider.notifier).state = false;
@@ -2283,10 +2430,11 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
       firstDate: earliestDate,
       lastDate: DateTime.now().add(const Duration(days: 365 * 5)),
       highlightedDates: highlightedDates,
+      highlightRange: activeTripDateRange(ref),
     );
 
     if (newDate != null) {
-      final activeTrip = ref.read(realtimeActiveTripProvider).asData?.value;
+      final activeTrip = ref.read(realtimeActiveTripProvider).valueOrNull;
       if (!context.mounted) return;
       final allowed = await ensureScheduledDateAllowed(
         context,
@@ -2304,9 +2452,12 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
           .read(tripProvider)
           .pinnedLocations
           .any((l) => l.isActiveOnDate(dayKey));
+      final allowedIds = _dedupeForDay(context, ref, selectedIds, dayKey,
+          copy: false, verb: 'move');
+      if (allowedIds == null) return;
       await ref
           .read(tripProvider.notifier)
-          .updateMultipleLocationsScheduledDate(selectedIds, newDate);
+          .updateMultipleLocationsScheduledDate(allowedIds, newDate);
 
       // Exit selection mode and clear selections
       ref.read(isSelectionModeProvider.notifier).state = false;
@@ -2514,7 +2665,7 @@ class _StartPointSheetState extends ConsumerState<_StartPointSheet> {
     final theme = Theme.of(context);
     final tripState = ref.watch(tripProvider);
     final selectedDate = ref.watch(selectedDateProvider);
-    final activeTrip = ref.watch(realtimeActiveTripProvider).asData?.value;
+    final activeTrip = ref.watch(realtimeActiveTripProvider).valueOrNull;
     final tripCountry = activeTrip?.countryCode?.toUpperCase();
 
     // Day's stops — including skipped/done, since those can serve as

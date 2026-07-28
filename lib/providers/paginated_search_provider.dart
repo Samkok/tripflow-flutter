@@ -78,9 +78,8 @@ class PaginatedSearchNotifier extends StateNotifier<PaginatedSearchState> {
       final hasMore = newResults.length >= _pageSize;
 
       // Append new results to existing ones (for pagination)
-      final allResults = _currentOffset == 0
-          ? newResults
-          : [...state.results, ...newResults];
+      final allResults =
+          _currentOffset == 0 ? newResults : [...state.results, ...newResults];
 
       _currentOffset = _currentOffset + newResults.length;
 

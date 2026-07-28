@@ -128,8 +128,8 @@ class _ReferralScreenState extends ConsumerState<ReferralScreen> {
                   Text(
                     'Friends who join with your code get 1 month of VoyZa Pro '
                     'free. When they start using it, you get a free month too.',
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant),
+                    style: theme.textTheme.bodyMedium
+                        ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
                   ),
                   const SizedBox(height: 18),
                   codeAsync.when(
@@ -169,8 +169,7 @@ class _ReferralScreenState extends ConsumerState<ReferralScreen> {
                                             .withValues(alpha: 0.4)),
                                   ),
                                   child: Row(
-                                    mainAxisAlignment:
-                                        MainAxisAlignment.center,
+                                    mainAxisAlignment: MainAxisAlignment.center,
                                     children: [
                                       Text(
                                         code,
@@ -199,15 +198,14 @@ class _ReferralScreenState extends ConsumerState<ReferralScreen> {
                                       size: 20),
                                   label: const Text(
                                     'Share your invite',
-                                    style: TextStyle(
-                                        fontWeight: FontWeight.w700),
+                                    style:
+                                        TextStyle(fontWeight: FontWeight.w700),
                                   ),
                                   style: FilledButton.styleFrom(
                                     padding: const EdgeInsets.symmetric(
                                         vertical: 14),
                                     shape: RoundedRectangleBorder(
-                                      borderRadius:
-                                          BorderRadius.circular(12),
+                                      borderRadius: BorderRadius.circular(12),
                                     ),
                                   ),
                                 ),
@@ -270,8 +268,7 @@ class _ReferralScreenState extends ConsumerState<ReferralScreen> {
                         Expanded(
                           child: TextField(
                             controller: _codeController,
-                            textCapitalization:
-                                TextCapitalization.characters,
+                            textCapitalization: TextCapitalization.characters,
                             decoration: const InputDecoration(
                               hintText: 'VOYZA-XXXXXX',
                               isDense: true,
@@ -286,8 +283,8 @@ class _ReferralScreenState extends ConsumerState<ReferralScreen> {
                               ? const SizedBox(
                                   width: 16,
                                   height: 16,
-                                  child: CircularProgressIndicator(
-                                      strokeWidth: 2),
+                                  child:
+                                      CircularProgressIndicator(strokeWidth: 2),
                                 )
                               : const Text('Redeem'),
                         ),
@@ -368,8 +365,7 @@ class _ReferralTile extends StatelessWidget {
       ),
       child: Row(
         children: [
-          Icon(Icons.person_rounded,
-              color: theme.colorScheme.onSurfaceVariant),
+          Icon(Icons.person_rounded, color: theme.colorScheme.onSurfaceVariant),
           const SizedBox(width: 12),
           Expanded(
             child: Text(

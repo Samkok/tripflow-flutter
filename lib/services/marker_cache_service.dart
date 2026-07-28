@@ -171,7 +171,8 @@ class MarkerCacheService {
     return result;
   }
 
-  Future<MarkerBitmapResult> getDistanceAndMapsMarker(String distanceLabel) async {
+  Future<MarkerBitmapResult> getDistanceAndMapsMarker(
+      String distanceLabel) async {
     final key = 'distance_maps_$distanceLabel';
     if (_cache.containsKey(key)) {
       return _cache[key]!;

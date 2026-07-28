@@ -6,7 +6,8 @@ import 'package:voyza/providers/auth_provider.dart';
 import 'package:voyza/widgets/app_toast.dart';
 
 // Provider to fetch and cache the current user's profile
-final userProfileProvider = FutureProvider.autoDispose<UserProfile?>((ref) async {
+final userProfileProvider =
+    FutureProvider.autoDispose<UserProfile?>((ref) async {
   final user = ref.watch(currentUserProvider);
   if (user == null) return null;
   final repo = ref.read(userProfileRepositoryProvider);
@@ -46,8 +47,8 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
   }
 
   void _onFieldChanged() {
-    final changed =
-        _firstNameController.text.trim() != (_originalProfile?.firstName ?? '') ||
+    final changed = _firstNameController.text.trim() !=
+            (_originalProfile?.firstName ?? '') ||
         _lastNameController.text.trim() != (_originalProfile?.lastName ?? '');
     if (changed != _hasChanges) setState(() => _hasChanges = changed);
   }
@@ -77,8 +78,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
       }
     } catch (e) {
       if (mounted) {
-        AppToast.error(
-            context, 'Failed to update profile. Please try again.');
+        AppToast.error(context, 'Failed to update profile. Please try again.');
       }
     } finally {
       if (mounted) setState(() => _isSaving = false);
@@ -273,7 +273,9 @@ class _InfoTile extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceContainerHighest
+        color: Theme.of(context)
+            .colorScheme
+            .surfaceContainerHighest
             .withValues(alpha: 0.5),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(

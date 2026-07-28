@@ -16,7 +16,7 @@ class StorageService {
     try {
       final prefs = await SharedPreferences.getInstance();
       final tripsJson = prefs.getStringList(_tripsKey) ?? [];
-      
+
       return tripsJson
           .map((tripStr) => TripModel.fromJson(jsonDecode(tripStr)))
           .toList();
@@ -30,11 +30,11 @@ class StorageService {
     try {
       final prefs = await SharedPreferences.getInstance();
       final trips = await getSavedTrips();
-      
+
       // Remove existing trip with same ID
       trips.removeWhere((t) => t.id == trip.id);
       trips.add(trip);
-      
+
       final tripsJson = trips.map((t) => jsonEncode(t.toJson())).toList();
       await prefs.setStringList(_tripsKey, tripsJson);
     } catch (e) {
@@ -46,7 +46,7 @@ class StorageService {
     try {
       final prefs = await SharedPreferences.getInstance();
       final locationsJson = prefs.getStringList(_locationsKey) ?? [];
-      
+
       return locationsJson
           .map((locationStr) => LocationModel.fromJson(jsonDecode(locationStr)))
           .toList();
@@ -59,7 +59,8 @@ class StorageService {
   static Future<void> savePinnedLocations(List<LocationModel> locations) async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final locationsJson = locations.map((l) => jsonEncode(l.toJson())).toList();
+      final locationsJson =
+          locations.map((l) => jsonEncode(l.toJson())).toList();
       await prefs.setStringList(_locationsKey, locationsJson);
     } catch (e) {
       debugPrint('Error saving pinned locations: $e');
@@ -67,7 +68,7 @@ class StorageService {
   }
 
   // Hive-based storage for anonymous and offline locations
-  
+
   /// Get or initialize Hive box for locations
   static Future<Box<SavedLocation>> getHiveBox() async {
     try {
@@ -107,9 +108,7 @@ class StorageService {
   static Future<List<SavedLocation>> getHiveLocations(String userId) async {
     try {
       final box = await getHiveBox();
-      return box.values
-          .where((loc) => loc.userId == userId)
-          .toList();
+      return box.values.where((loc) => loc.userId == userId).toList();
     } catch (e) {
       log('Error getting Hive locations: $e');
       return [];
@@ -131,13 +130,13 @@ class StorageService {
     try {
       final box = await getHiveBox();
       final keysToDelete = <String>[];
-      
+
       for (final location in box.values) {
         if (location.userId == userId) {
           keysToDelete.add(location.id);
         }
       }
-      
+
       for (final key in keysToDelete) {
         await box.delete(key);
       }

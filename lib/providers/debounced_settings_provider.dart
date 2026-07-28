@@ -2,7 +2,6 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:voyza/main.dart';
 
-
 class DebouncedProximityThreshold {
   final double previewValue;
   final double committedValue;
@@ -27,9 +26,11 @@ class DebouncedProximityThreshold {
   }
 }
 
-class DebouncedProximityThresholdNotifier extends StateNotifier<DebouncedProximityThreshold> {
+class DebouncedProximityThresholdNotifier
+    extends StateNotifier<DebouncedProximityThreshold> {
   DebouncedProximityThresholdNotifier()
-      : super(const DebouncedProximityThreshold(previewValue: 1000.0, committedValue: 1000.0)) {
+      : super(const DebouncedProximityThreshold(
+            previewValue: 1000.0, committedValue: 1000.0)) {
     _loadProximityThreshold();
   }
 
@@ -90,19 +91,22 @@ class DebouncedProximityThresholdNotifier extends StateNotifier<DebouncedProximi
   }
 }
 
-final debouncedProximityThresholdProvider =
-    StateNotifierProvider<DebouncedProximityThresholdNotifier, DebouncedProximityThreshold>((ref) {
+final debouncedProximityThresholdProvider = StateNotifierProvider<
+    DebouncedProximityThresholdNotifier, DebouncedProximityThreshold>((ref) {
   return DebouncedProximityThresholdNotifier();
 });
 
 final proximityThresholdPreviewProvider = Provider<double>((ref) {
-  return ref.watch(debouncedProximityThresholdProvider.select((state) => state.previewValue));
+  return ref.watch(debouncedProximityThresholdProvider
+      .select((state) => state.previewValue));
 });
 
 final proximityThresholdCommittedProvider = Provider<double>((ref) {
-  return ref.watch(debouncedProximityThresholdProvider.select((state) => state.committedValue));
+  return ref.watch(debouncedProximityThresholdProvider
+      .select((state) => state.committedValue));
 });
 
 final isProximityThresholdDebouncingProvider = Provider<bool>((ref) {
-  return ref.watch(debouncedProximityThresholdProvider.select((state) => state.isDebouncing));
+  return ref.watch(debouncedProximityThresholdProvider
+      .select((state) => state.isDebouncing));
 });

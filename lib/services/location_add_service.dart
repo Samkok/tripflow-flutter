@@ -32,7 +32,7 @@ import '../widgets/app_toast.dart';
 ///
 /// The free-place paywall gate applies only to paths that CREATE a new
 /// saved place ([beforeAddingLocation], [addSavedLocation]). The attach
-/// paths ([attachExistingLocationToTrip], [attachLocationsToTrip]) only
+/// paths ([attachLocationsToTrip]) only
 /// re-tag rows that already exist and count against the allowance, so
 /// they are not gated — otherwise a free user at the limit couldn't
 /// organize their own places into trips.
@@ -190,7 +190,7 @@ class LocationAddService {
     final canAdd = await SubscriptionLimitService(_ref).canAddPlace(context);
     if (!canAdd) return false;
 
-    final activeTrip = _ref.read(realtimeActiveTripProvider).asData?.value;
+    final activeTrip = _ref.read(realtimeActiveTripProvider).valueOrNull;
 
     if (!context.mounted) return false;
     final countryOk = await assertLocationInTripCountry(
@@ -294,70 +294,6 @@ class LocationAddService {
     return true;
   }
 
-  /// Attaches an already-persisted [location] to [targetTrip]. Used by
-  /// the trip-details "Add existing location" flow, where the user is
-  /// looking at a specific (often non-active) trip and wants to move an
-  /// unassigned location into it.
-  ///
-  /// Takes the [Trip] object directly rather than looking it up by id.
-  /// userTripsProvider only returns trips OWNED by the user (`.eq('user_id'…)`)
-  /// — collaborator trips aren't in it, and even owner trips may be in a
-  /// transient loading state. Either case would cause `_findTripById` to
-  /// return null and silently skip the date check. The caller in
-  /// trip_details_screen already has [widget.trip], so this signature
-  /// removes that footgun entirely.
-  ///
-  /// Behavior on confirmation:
-  ///   - User cancels → returns false, nothing changes.
-  ///   - User confirms with "Add anyway" and the date is out of range →
-  ///     extends the target trip's start/end to fit, then attaches.
-  ///   - In-range or trip has no range → attaches immediately.
-  Future<bool> attachExistingLocationToTrip(
-    BuildContext context,
-    SavedLocation location,
-    Trip targetTrip, {
-    String? locationCountryCode,
-  }) async {
-    // No paywall gate: attaching re-tags an existing place; it doesn't
-    // consume the free-place allowance.
-    final countryOk = await assertLocationInTripCountry(
-      context,
-      targetTrip,
-      locationCountryCode,
-    );
-    if (!countryOk) return false;
-
-    if (!context.mounted) return false;
-    final result = await confirmScheduledDate(
-      context,
-      targetTrip,
-      location.scheduledDate,
-      allowExtension: true,
-    );
-    if (!result.proceed) return false;
-
-    // Captured before the write — see beforeAddingLocation.
-    final attachStart = location.scheduledDate ?? location.createdAt;
-    final newDays = _daysWithoutLocations(
-        attachStart, location.scheduledEndDate ?? attachStart);
-
-    // Attach first — userTripsProvider invalidation from the date extension
-    // would otherwise put the trip in a transient loading state and could
-    // race the repository write.
-    await _ref
-        .read(locationRepositoryProvider)
-        .updateLocation(location.id, {'trip_id': targetTrip.id});
-
-    if (result.didExtend) {
-      await _persistTripDateExtension(targetTrip, result);
-    }
-    if (context.mounted) {
-      await _promptAccommodationIfDaysMaterialized(
-          context, targetTrip, newDays);
-    }
-    return true;
-  }
-
   /// Bulk path used by AddToTripSheet. Resolves each pick's country on the
   /// fly (since SavedLocation doesn't store one), runs the strict country
   /// guard against [targetTrip]'s tagged country, then attaches every pick
@@ -370,7 +306,7 @@ class LocationAddService {
   /// dates before the attach lands.
   ///
   /// Takes [targetTrip] as a [Trip] object rather than an id — same reason
-  /// as [attachExistingLocationToTrip]: userTripsProvider doesn't include
+  /// before: userTripsProvider doesn't include
   /// collaborator trips, so an id-based lookup silently skipped both the
   /// country and date checks for shared trips.
   ///

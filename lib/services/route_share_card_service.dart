@@ -6,6 +6,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:gal/gal.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
@@ -23,19 +24,20 @@ import 'time_saved_ledger_service.dart';
 /// platform).
 enum ShareCardFormat {
   /// 9:16 full-bleed — Stories / Reels / WhatsApp status.
-  story(1080, 1920, 300),
+  story(1080, 1920, 140),
 
   /// 4:5 — Instagram & Facebook feed posts, shown uncropped.
-  post(1080, 1350, 90);
+  post(1080, 1350, 80);
 
   const ShareCardFormat(this.width, this.height, this.bottomReserve);
   final double width;
   final double height;
 
-  /// Clear space kept below the text block. For [story] it is a real safe
-  /// zone: 300px keeps every line inside a 4:5 feed center-crop (which
-  /// keeps y 285–1635 of a 1920 canvas) AND above Instagram's ~250px
-  /// story chrome (reply bar). For [post] it's just an aesthetic margin.
+  /// Bottom margin under the text block. Deliberately snug (owner's call:
+  /// the text hugs the bottom-left corner so the route image dominates).
+  /// NOTE this sits inside Instagram's ~250px advisory story-chrome zone
+  /// and a 4:5 feed crop of the story render WILL clip it — feed posts are
+  /// what the [post] format is for.
   final double bottomReserve;
 
   /// width : height — the shape the map capture window must match.
@@ -49,7 +51,7 @@ enum ShareCardFormat {
 ///
 /// Layout (1200×630, social-preview ratio):
 ///   [ BEFORE panel ]  [ AFTER panel ]
-///   headline stat ("~1h 40m of backtracking saved") + VoyZa wordmark/link
+///   headline stat ("~1h 40m of travel time saved") + VoyZa wordmark/link
 ///
 /// Follows the marker_utils PictureRecorder→toImage pattern and the
 /// csv_service temp-file→Share.shareXFiles pattern. Never throws into callers.
@@ -77,6 +79,19 @@ class RouteShareCardService {
   // geometric grotesques: distinctive enough to read as a logotype, still
   // perfectly legible at card sizes. Paired with w900 + wide letterSpacing
   // at the call site, which is what actually makes it look designed.
+  // Map-card treatment: a light gaussian blur (sigma in card pixels — the
+  // 1080-wide card shows at ~390pt, so this reads as roughly a third of
+  // the value) + a uniform low-alpha navy veil. Tuned to keep routes and
+  // markers clearly visible while giving text reliable contrast anywhere.
+  static const double _mapBlurSigma =
+      0.8; // tuned to keep routes/markers readable
+  static const Color _mapVeil = Color(0x260E1726); // _bg at ~15%
+
+  // Map-card text is drawn slightly soft (~15% of glyph size as gaussian
+  // sigma): de-emphasizes the caption layer so the route image reads as
+  // the hero, while every line stays comfortably legible.
+  static const double _textBlurFactor = 0.045;
+
   static const String _displayFont = 'Avenir Next Condensed'; // iOS/macOS
   static const List<String> _displayFontFallback = <String>[
     'AvenirNextCondensed-Heavy', // iOS PostScript name
@@ -142,8 +157,8 @@ class RouteShareCardService {
 
       // Headline stat.
       final stat = timeSaved >= const Duration(minutes: 5)
-          ? '~${_formatDuration(timeSaved)} of backtracking saved'
-          : '$stops stops, zero backtracking';
+          ? '~${_formatDuration(timeSaved)} of travel time saved'
+          : '$stops ${stops == 1 ? 'stop' : 'stops'}';
       _drawText(canvas, stat, const Offset(48, 520),
           fontSize: 40, weight: FontWeight.w800, color: _afterLine);
 
@@ -220,7 +235,7 @@ class RouteShareCardService {
       }
 
       final saved = timeSaved >= const Duration(minutes: 5)
-          ? ' and saved ~${_formatDuration(timeSaved)} of backtracking'
+          ? ' and saved ~${_formatDuration(timeSaved)} of travel time'
           : '';
       final text =
           'VoyZa put my ${optimizedOrder.length} stops in the smartest order$saved.$itinerary\n$link';
@@ -383,7 +398,7 @@ class RouteShareCardService {
       _drawText(
           canvas,
           '${dayKeys.length} ${dayKeys.length == 1 ? 'day' : 'days'} · '
-          '$placeCount places · zero backtracking',
+          '$placeCount places',
           const Offset(60, 1330),
           fontSize: 36,
           weight: FontWeight.w700,
@@ -391,13 +406,9 @@ class RouteShareCardService {
           maxWidth: 960);
       var y = 1396.0;
       if (timeSaved >= const Duration(minutes: 5)) {
-        _drawText(
-            canvas,
-            '~${_formatDuration(timeSaved)} saved vs the chaos version',
+        _drawText(canvas, '~${_formatDuration(timeSaved)} of travel time saved',
             Offset(60, y),
-            fontSize: 32,
-            weight: FontWeight.w700,
-            color: _afterLine);
+            fontSize: 32, weight: FontWeight.w700, color: _afterLine);
         y += 62;
       }
       if (roastLine != null && roastLine.isNotEmpty) {
@@ -480,7 +491,7 @@ class RouteShareCardService {
       final steal = publicLink != null ? '\nSteal it: $publicLink' : '';
       final text =
           'My ${tripName.trim()} plan is done — $dayCount ${dayCount == 1 ? 'day' : 'days'}, '
-          '${places.length} places, zero backtracking.$steal\n$link';
+          '${places.length} places.$steal\n$link';
 
       await Share.shareXFiles([XFile(file.path)], text: text);
       AnalyticsService.instance.planCardShared();
@@ -526,8 +537,15 @@ class RouteShareCardService {
       final canvas = Canvas(recorder);
       canvas.drawRect(Rect.fromLTWH(0, 0, pw, ph), Paint()..color = _bg);
 
-      // The real map is the hero — cover-fit it across the whole card.
-      _drawImageCover(canvas, map, Rect.fromLTWH(0, 0, pw, ph));
+      // The real map is the hero — cover-fit it across the whole card, with
+      // a UNIFORM whisper of treatment (owner-tuned): a light global blur +
+      // a ~15% brand-navy veil over the entire image. Enough for the white
+      // text to pop anywhere, while routes and markers stay clearly
+      // readable — deliberately NOT the old bottom gradient band, which
+      // read as a smeared frame.
+      _drawImageCover(canvas, map, Rect.fromLTWH(0, 0, pw, ph),
+          blurSigma: _mapBlurSigma);
+      canvas.drawRect(Rect.fromLTWH(0, 0, pw, ph), Paint()..color = _mapVeil);
 
       // The text block is BOTTOM-ANCHORED: its last line always ends exactly
       // at ph - bottomReserve, whichever optional lines exist. For the story
@@ -535,61 +553,50 @@ class RouteShareCardService {
       // feed center-crop and stays above the Stories reply bar. Line heights
       // are fontSize × 1.1 (the height multiplier in _drawText), exact for
       // these single-line painters, so the stack can be sized before drawing.
+      // Sizes deliberately small and the whole block bottom-left-hugging:
+      // the route image is the hero, the caption is a quiet signature.
       double lineH(double fontSize) => fontSize * 1.1;
+      double soft(double fontSize) => fontSize * _textBlurFactor;
       final planMode = archetype != null && archetype.trim().isNotEmpty;
       final hasKicker = planMode && tripName.trim().isNotEmpty;
       final hasSaved = timeSaved >= const Duration(minutes: 5);
       final hasRoast = roastLine != null && roastLine.trim().isNotEmpty;
-      double stack = lineH(54) + 22 + lineH(34) + 14 + lineH(46);
-      if (hasKicker) stack += lineH(26) + 29;
-      if (hasSaved) stack += 20 + lineH(32);
-      if (hasRoast) stack += 16 + lineH(27);
+      double stack = lineH(38) + 14 + lineH(26) + 22 + lineH(34);
+      if (hasKicker) stack += lineH(20) + 20;
+      if (hasSaved) stack += 14 + lineH(24);
+      if (hasRoast) stack += 12 + lineH(22);
       var y = ph - format.bottomReserve - stack;
 
-      // Bottom scrim so the branding stays legible over the map, sized so the
-      // gradient hits its ~85%-opaque midpoint right where the text begins
-      // (scrimTop = 2·blockTop − ph puts blockTop at the 0.5 stop).
-      final scrimTop = math.max(0.0, 2 * y - ph);
-      final scrim = Rect.fromLTWH(0, scrimTop, pw, ph - scrimTop);
-      canvas.drawRect(
-        scrim,
-        Paint()
-          ..shader = ui.Gradient.linear(
-            Offset(0, scrim.top),
-            Offset(0, scrim.bottom),
-            const [Color(0x000E1726), Color(0xD90E1726), Color(0xFA0E1726)],
-            const [0.0, 0.5, 1.0],
-          ),
-      );
-
-      // A soft shadow under every line guarantees contrast even where the map
-      // is bright right up to the scrim.
+      // Per-glyph shadows on top of the global veil above — no bottom
+      // gradient band (it read as a smeared frame).
       const shadow = [
         Shadow(color: Color(0xCC000000), blurRadius: 14, offset: Offset(0, 2)),
       ];
 
       if (hasKicker) {
         // Trip name as a small kicker above the identity headline.
-        y += 29 +
+        y += 20 +
             _drawText(canvas, tripName.trim().toUpperCase(), Offset(60, y),
-                fontSize: 26,
+                fontSize: 20,
                 weight: FontWeight.w700,
                 color: _subText,
                 maxWidth: 960,
-                shadows: shadow);
+                shadows: shadow,
+                blurSigma: soft(20));
       }
       final title = planMode
           ? archetype.trim().toUpperCase()
           : (tripName.trim().isEmpty
               ? 'MY DAY'
               : tripName.trim().toUpperCase());
-      y += 22 +
+      y += 14 +
           _drawText(canvas, title, Offset(60, y),
-              fontSize: 54,
+              fontSize: 38,
               weight: FontWeight.w800,
               color: _text,
               maxWidth: 960,
-              shadows: shadow);
+              shadows: shadow,
+              blurSigma: soft(38));
 
       final stat = <String>[
         if (daysCount != null) '$daysCount ${daysCount == 1 ? 'day' : 'days'}',
@@ -597,50 +604,54 @@ class RouteShareCardService {
             ? '$stops ${stops == 1 ? 'place' : 'places'}'
             : '$stops ${stops == 1 ? 'stop' : 'stops'}',
         if (distanceKm > 0) '${distanceKm.toStringAsFixed(1)} km',
-        'zero backtracking',
       ].join('  ·  ');
       y += _drawText(canvas, stat, Offset(60, y),
-          fontSize: 34,
+          fontSize: 26,
           weight: FontWeight.w700,
           color: _text,
           maxWidth: 960,
-          shadows: shadow);
+          shadows: shadow,
+          blurSigma: soft(26));
 
-      // Wordmark, right beneath the stat: display face + heavy weight + wide
-      // tracking so it reads as a logotype rather than body copy.
-      y += 14;
+      // Wordmark beneath the stat — white, with a touch more air above it so
+      // it reads as a signature rather than another stat row. Display face +
+      // heavy weight + wide tracking keep it a logotype, not body copy.
+      y += 22;
       y += _drawText(canvas, 'VOYZA', Offset(60, y),
-          fontSize: 46,
+          fontSize: 34,
           weight: FontWeight.w900,
-          color: _afterLine,
+          color: _text,
           maxWidth: 960,
           shadows: shadow,
           fontFamily: _displayFont,
           fontFamilyFallback: _displayFontFallback,
-          letterSpacing: 5);
+          letterSpacing: 4,
+          blurSigma: soft(34));
 
       if (hasSaved) {
-        y += 20;
+        y += 14;
         y += _drawText(
             canvas,
-            '~${_formatDuration(timeSaved)} saved vs the chaos version',
+            '~${_formatDuration(timeSaved)} of travel time saved',
             Offset(60, y),
-            fontSize: 32,
+            fontSize: 24,
             weight: FontWeight.w700,
             color: _afterLine,
             maxWidth: 960,
-            shadows: shadow);
+            shadows: shadow,
+            blurSigma: soft(24));
       }
 
       // The roast line (Plan Card curation control) — self-aware voice.
       if (hasRoast) {
-        y += 16;
+        y += 12;
         _drawText(canvas, '“${roastLine.trim()}”', Offset(60, y),
-            fontSize: 27,
+            fontSize: 22,
             weight: FontWeight.w600,
             color: _text,
             maxWidth: 960,
-            shadows: shadow);
+            shadows: shadow,
+            blurSigma: soft(22));
       }
 
       final picture = recorder.endRecording();
@@ -653,7 +664,11 @@ class RouteShareCardService {
     }
   }
 
-  void _drawImageCover(Canvas canvas, ui.Image image, Rect dst) {
+  /// Cover-fits [image] into [dst]. [blurSigma] > 0 applies a gaussian blur
+  /// while drawing (sigma in destination pixels; clamped tiling so edges
+  /// don't fringe).
+  void _drawImageCover(Canvas canvas, ui.Image image, Rect dst,
+      {double blurSigma = 0}) {
     final iw = image.width.toDouble();
     final ih = image.height.toDouble();
     if (iw <= 0 || ih <= 0) return;
@@ -661,62 +676,39 @@ class RouteShareCardService {
     final sw = dst.width / scale;
     final sh = dst.height / scale;
     final src = Rect.fromLTWH((iw - sw) / 2, (ih - sh) / 2, sw, sh);
-    canvas.drawImageRect(
-        image, src, dst, Paint()..filterQuality = FilterQuality.medium);
+    final paint = Paint()..filterQuality = FilterQuality.medium;
+    if (blurSigma > 0) {
+      paint.imageFilter = ui.ImageFilter.blur(
+          sigmaX: blurSigma, sigmaY: blurSigma, tileMode: TileMode.clamp);
+    }
+    canvas.drawImageRect(image, src, dst, paint);
   }
 
   /// Shares a realistic map card. [mapBytes] = the live map snapshot; when it's
   /// null or rendering fails, falls back to the silhouette route card so the
   /// user always gets a shareable image. [tripId] is null for anonymous users
   /// (no public itinerary link — just the map + store link).
-  Future<void> shareRouteMapCard({
-    required Uint8List? mapBytes,
+  /// Shares an ALREADY-RENDERED map card (the preview-confirmed bytes — what
+  /// the user approved is byte-for-byte what ships). Writes the temp file,
+  /// puts the caption on the clipboard, opens the OS share sheet.
+  /// [stopCount] is the single-day stop count used by the caption when not
+  /// in all-days mode.
+  Future<void> shareRenderedMapCard({
+    required Uint8List png,
     required String? tripId,
     required String tripName,
-    required List<LocationModel> originalOrder,
-    required List<LocationModel> optimizedOrder,
+    required int stopCount,
     required Duration timeSaved,
-    required double distanceKm,
     required bool anonymous,
     String? archetype,
-    String? roastLine,
     // All-days mode: whole-trip framing. [daysCount]/[totalPlaces] replace
-    // the single-day stop count on both the card and the caption.
+    // the single-day stop count in the caption.
     int? daysCount,
     int? totalPlaces,
     ShareCardFormat format = ShareCardFormat.story,
   }) async {
     try {
       final allTrip = daysCount != null && totalPlaces != null;
-      final statCount = allTrip ? totalPlaces : optimizedOrder.length;
-
-      Uint8List? png;
-      if (mapBytes != null) {
-        png = await renderMapCard(
-          mapBytes: mapBytes,
-          tripName: tripName,
-          stops: statCount,
-          timeSaved: timeSaved,
-          distanceKm: distanceKm,
-          archetype: archetype,
-          roastLine: roastLine,
-          daysCount: daysCount,
-          format: format,
-        );
-      }
-      if (png == null) {
-        // Snapshot unavailable — fall back to the silhouette card (it handles
-        // its own file + share) so the button never no-ops.
-        await shareRouteCard(
-          originalOrder: originalOrder,
-          optimizedOrder: optimizedOrder,
-          timeSaved: timeSaved,
-          anonymous: anonymous,
-          tripName: tripName,
-          tripId: tripId,
-        );
-        return;
-      }
 
       final dir = await getTemporaryDirectory();
       final file = File('${dir.path}/voyza_route_map_card_${format.name}.png');
@@ -729,22 +721,22 @@ class RouteShareCardService {
         if (publicLink != null) itinerary = '\nSteal it: $publicLink';
       }
       final saved = timeSaved >= const Duration(minutes: 5)
-          ? ' · saved ~${_formatDuration(timeSaved)} of backtracking'
+          ? ' · ~${_formatDuration(timeSaved)} of travel time saved'
           : '';
       final planMode = archetype != null && archetype.trim().isNotEmpty;
       final String text;
       if (allTrip) {
         text = 'My ${tripName.trim()} plan — $daysCount '
             '${daysCount == 1 ? 'day' : 'days'}, $totalPlaces '
-            '${totalPlaces == 1 ? 'place' : 'places'}, zero backtracking$saved.'
+            '${totalPlaces == 1 ? 'place' : 'places'}$saved.'
             '$itinerary\n$link';
       } else if (planMode) {
         text = 'My ${tripName.trim()} plan is ready — ${archetype.trim()}. '
-            '${optimizedOrder.length} stops, zero backtracking$saved.'
+            '$stopCount ${stopCount == 1 ? 'stop' : 'stops'}$saved.'
             '$itinerary\n$link';
       } else {
         text = 'My ${tripName.trim()} route, optimized — '
-            '${optimizedOrder.length} stops, zero backtracking$saved.'
+            '$stopCount ${stopCount == 1 ? 'stop' : 'stops'}$saved.'
             '$itinerary\n$link';
       }
 
@@ -760,7 +752,52 @@ class RouteShareCardService {
       AnalyticsService.instance
           .routeCardShared(anonymous: anonymous, format: format.name);
     } catch (e) {
-      debugPrint('RouteShareCardService.shareRouteMapCard: $e');
+      debugPrint('RouteShareCardService.shareRenderedMapCard: $e');
+    }
+  }
+
+  /// Saves ALREADY-RENDERED card bytes (the preview-confirmed image) to
+  /// the device's photo library. Returns true on success; false covers
+  /// GalException (e.g. photo-library access denied) and I/O failures.
+  Future<bool> saveRenderedMapCard(
+    Uint8List png, {
+    ShareCardFormat format = ShareCardFormat.story,
+  }) async {
+    try {
+      // Android 7–9 need the runtime storage grant and get NO prompt from
+      // putImage itself — without this request the save button was a
+      // permanent dead end there.
+      if (!await Gal.hasAccess()) {
+        final granted = await Gal.requestAccess();
+        if (!granted) return false;
+      }
+      final dir = await getTemporaryDirectory();
+      final file = File(
+          '${dir.path}/voyza_card_${DateTime.now().millisecondsSinceEpoch}.png');
+      await file.writeAsBytes(png, flush: true);
+      await Gal.putImage(file.path);
+      AnalyticsService.instance.routeCardSaved(format: format.name);
+      return true;
+    } catch (e) {
+      debugPrint('RouteShareCardService.saveRenderedMapCard: $e');
+      return false;
+    }
+  }
+
+  /// Saves an already-written image file to the photo library (used by the
+  /// silhouette fallback when the live map snapshot fails). Same permission
+  /// handling as [saveRenderedMapCard].
+  Future<bool> saveImageFileToPhotos(File file) async {
+    try {
+      if (!await Gal.hasAccess()) {
+        final granted = await Gal.requestAccess();
+        if (!granted) return false;
+      }
+      await Gal.putImage(file.path);
+      return true;
+    } catch (e) {
+      debugPrint('RouteShareCardService.saveImageFileToPhotos: $e');
+      return false;
     }
   }
 
@@ -798,7 +835,7 @@ class RouteShareCardService {
         ('$days', days == 1 ? 'day' : 'days'),
         ('$places', places == 1 ? 'place' : 'places'),
         if (timeSaved >= const Duration(minutes: 5))
-          ('~${_formatDuration(timeSaved)}', 'backtracking saved'),
+          ('~${_formatDuration(timeSaved)}', 'travel time saved'),
       ];
       final colW = (_w - 96) / stats.length;
       for (var i = 0; i < stats.length; i++) {
@@ -869,7 +906,7 @@ class RouteShareCardService {
       }
 
       final saved = timeSaved >= const Duration(minutes: 5)
-          ? ' · ~${_formatDuration(timeSaved)} of backtracking saved'
+          ? ' · ~${_formatDuration(timeSaved)} of travel time saved'
           : '';
       final text =
           '$tripName, by the numbers — $days ${days == 1 ? 'day' : 'days'} · '
@@ -1042,12 +1079,21 @@ class RouteShareCardService {
     String? fontFamily,
     List<String>? fontFamilyFallback,
     double? letterSpacing,
+    // > 0 softens the glyphs with a gaussian blur of that sigma (px). Done
+    // via a foreground paint because TextStyle forbids color+foreground
+    // together — the paint carries the color instead.
+    double blurSigma = 0,
   }) {
     final painter = TextPainter(
       text: TextSpan(
         text: text,
         style: TextStyle(
-          color: color,
+          color: blurSigma > 0 ? null : color,
+          foreground: blurSigma > 0
+              ? (Paint()
+                ..color = color
+                ..maskFilter = MaskFilter.blur(BlurStyle.normal, blurSigma))
+              : null,
           fontSize: fontSize,
           fontWeight: weight,
           height: 1.1,

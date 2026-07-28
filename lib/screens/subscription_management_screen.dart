@@ -245,7 +245,6 @@ class _SubscriptionManagementScreenState
     );
   }
 
-
   // Widget _buildCustomerCenterButton(BuildContext context) {
   //   final theme = Theme.of(context);
 

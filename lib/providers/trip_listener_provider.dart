@@ -24,7 +24,7 @@ class TripSyncService {
   Future<Trip?> watchActiveTrip(String userId) async {
     try {
       final activeTrip = await _tripRepository.getActiveTrip(userId);
-      
+
       if (activeTrip != null) {
         developer.log(
           'TripSyncService: Active trip detected - ${activeTrip.id}',
@@ -32,7 +32,7 @@ class TripSyncService {
         );
         _eventService.notifyTripActivated(activeTrip);
       }
-      
+
       return activeTrip;
     } catch (e) {
       developer.log(
@@ -81,9 +81,11 @@ final realtimeActiveTripProvider = StreamProvider<Trip?>((ref) async* {
   // This emits whenever the locally stored active trip ID changes
   final localActiveTripAsync = ref.watch(localActiveTripProvider);
 
-  final activeTrip = localActiveTripAsync.asData?.value;
+  // valueOrNull: keep the previous trip through localActiveTripProvider
+  // refreshes instead of yielding null for a frame.
+  final activeTrip = localActiveTripAsync.valueOrNull;
   debugPrint(
-    'realtimeActiveTripProvider: Local active trip - ${activeTrip?.id}');
+      'realtimeActiveTripProvider: Local active trip - ${activeTrip?.id}');
 
   yield activeTrip;
 
@@ -91,3 +93,18 @@ final realtimeActiveTripProvider = StreamProvider<Trip?>((ref) async* {
   // since those are now purely local operations
   // The localActiveTripProvider will automatically update when changed
 });
+
+/// The active trip's declared start→end as a day-normalized range (null
+/// when either end is missing). THE one source for the calendar band in
+/// every date picker — a copy of this logic in one picker and not another
+/// gave different calendars different bands.
+DateTimeRange? activeTripDateRange(WidgetRef ref) {
+  final trip = ref.read(realtimeActiveTripProvider).valueOrNull;
+  final start = trip?.startDate;
+  final end = trip?.endDate;
+  if (start == null || end == null) return null;
+  final s = DateTime(start.year, start.month, start.day);
+  final e = DateTime(end.year, end.month, end.day);
+  if (s.isAfter(e)) return null; // never hand DateTimeRange an inversion
+  return DateTimeRange(start: s, end: e);
+}

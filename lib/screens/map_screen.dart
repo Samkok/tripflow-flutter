@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'dart:ui';
@@ -348,7 +349,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
       return;
     }
     // Cheap pre-checks before spending a GPS fix.
-    if (ref.read(realtimeActiveTripProvider).asData?.value == null) return;
+    if (ref.read(realtimeActiveTripProvider).valueOrNull == null) return;
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
     final candidates = ref.read(tripProvider).pinnedLocations.where((l) =>
@@ -376,7 +377,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
         _lastLifecycleState != AppLifecycleState.resumed) {
       return;
     }
-    final activeTrip = ref.read(realtimeActiveTripProvider).asData?.value;
+    final activeTrip = ref.read(realtimeActiveTripProvider).valueOrNull;
     if (activeTrip == null) return;
 
     final now = DateTime.now();
@@ -474,12 +475,14 @@ class _MapScreenState extends ConsumerState<MapScreen>
     // skip the picker (no one to tap it) and test the story render.
     const qaNoShare = bool.fromEnvironment('QA_NO_SHARE', defaultValue: false);
     ShareCardFormat format = ShareCardFormat.story;
+    var saveToPhotos = false;
     if (!qaNoShare) {
       final picked = await _pickShareFormat();
       if (picked == null || !mounted) {
         return; // dismissed — don't hijack the camera
       }
-      format = picked;
+      format = picked.$1;
+      saveToPhotos = picked.$2;
     }
     setState(() => _preparingShare = true);
     try {
@@ -498,7 +501,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
       // Frame captured — restore the normal north-up browsing camera so the
       // user isn't left on a rotated map behind the share sheet.
       _zoomToFitTrip();
-      final trip = ref.read(realtimeActiveTripProvider).asData?.value;
+      final trip = ref.read(realtimeActiveTripProvider).valueOrNull;
       final anonymous = ref.read(currentUserIdProvider) == null;
       // All-days mode: the card frames the whole trip, so its stats must be
       // whole-trip numbers (every location, every day) — not the selected
@@ -517,44 +520,103 @@ class _MapScreenState extends ConsumerState<MapScreen>
       // card and show it full-screen so the drive can screenshot it, instead of
       // opening the native share sheet (which would block the test). Inert in
       // prod builds.
+      final tripName = trip?.name ?? 'My route';
+      final stopCount = tripState.optimizedLocationsForSelectedDate.length;
+      final shareTimeSaved = allDaysMode ? Duration.zero : tripState.timeSaved;
+
+      // Render ONCE — QA, preview, share and save all consume these bytes,
+      // so the QA screenshot is provably the production card.
+      Uint8List? cardPng;
+      if (bytes != null) {
+        cardPng = await RouteShareCardService.instance.renderMapCard(
+          mapBytes: bytes,
+          tripName: tripName,
+          stops: shareTotalPlaces ?? stopCount,
+          timeSaved: shareTimeSaved,
+          distanceKm: allDaysMode ? 0 : tripState.totalDistance / 1000.0,
+          archetype: archetype,
+          roastLine: roastLine,
+          daysCount: shareDaysCount,
+          format: format,
+        );
+      }
       if (qaNoShare) {
-        debugPrint('QA_SHARE: map snapshot bytes=${bytes?.length}');
-        final cardBytes = bytes == null
-            ? null
-            : await RouteShareCardService.instance.renderMapCard(
-                mapBytes: bytes,
-                tripName: trip?.name ?? 'My route',
-                stops: shareTotalPlaces ??
-                    tripState.optimizedLocationsForSelectedDate.length,
-                timeSaved: allDaysMode ? Duration.zero : tripState.timeSaved,
-                distanceKm: allDaysMode ? 0 : tripState.totalDistance / 1000.0,
-                archetype: archetype,
-                roastLine: roastLine,
-                daysCount: shareDaysCount,
-                format: format,
-              );
-        debugPrint('QA_SHARE: rendered card bytes=${cardBytes?.length}');
-        if (cardBytes != null && mounted) {
+        debugPrint('QA_SHARE: map snapshot bytes=${bytes?.length}, '
+            'card bytes=${cardPng?.length}');
+        final qaBytes = cardPng;
+        if (qaBytes != null && mounted) {
           Navigator.of(context).push(MaterialPageRoute(
             builder: (_) => Scaffold(
               backgroundColor: Colors.black,
-              body: Center(child: Image.memory(cardBytes)),
+              body: Center(child: Image.memory(qaBytes)),
             ),
           ));
         }
         return;
       }
-      await RouteShareCardService.instance.shareRouteMapCard(
-        mapBytes: bytes,
+      if (cardPng == null) {
+        // Snapshot/render unavailable — fall back to the silhouette card so
+        // NEITHER button dead-ends (snapshot flakiness is routine enough
+        // that the share path retries it once already).
+        final silhouette = await RouteShareCardService.instance.renderCard(
+          originalOrder: tripState.originalOrderForSelectedDate,
+          optimizedOrder: tripState.optimizedLocationsForSelectedDate,
+          timeSaved: shareTimeSaved,
+          tripName: tripName,
+        );
+        if (saveToPhotos) {
+          final ok = silhouette != null &&
+              await RouteShareCardService.instance
+                  .saveImageFileToPhotos(silhouette);
+          if (mounted) {
+            if (ok) {
+              AppToast.success(
+                  context, 'Map unavailable — saved the route card instead.');
+            } else {
+              AppToast.error(context,
+                  'Couldn\'t capture the map — try again in a moment.');
+            }
+          }
+          return;
+        }
+        await RouteShareCardService.instance.shareRouteCard(
+          originalOrder: tripState.originalOrderForSelectedDate,
+          optimizedOrder: tripState.optimizedLocationsForSelectedDate,
+          timeSaved: shareTimeSaved,
+          anonymous: anonymous,
+          tripName: tripName,
+          tripId: anonymous ? null : trip?.id,
+        );
+        return;
+      }
+
+      if (!mounted) return;
+      final confirmed =
+          await _showCardPreview(cardPng, saveToPhotos: saveToPhotos);
+      if (confirmed != true || !mounted) return;
+
+      if (saveToPhotos) {
+        final saved = await RouteShareCardService.instance
+            .saveRenderedMapCard(cardPng, format: format);
+        if (mounted) {
+          if (saved) {
+            AppToast.success(context, 'Route card saved to Photos.');
+          } else {
+            AppToast.error(context,
+                'Couldn\'t save the card — allow photo access and try again.');
+          }
+        }
+        return;
+      }
+
+      await RouteShareCardService.instance.shareRenderedMapCard(
+        png: cardPng,
         tripId: anonymous ? null : trip?.id,
-        tripName: trip?.name ?? 'My route',
-        originalOrder: tripState.originalOrderForSelectedDate,
-        optimizedOrder: tripState.optimizedLocationsForSelectedDate,
-        timeSaved: allDaysMode ? Duration.zero : tripState.timeSaved,
-        distanceKm: allDaysMode ? 0 : tripState.totalDistance / 1000.0,
+        tripName: tripName,
+        stopCount: stopCount,
+        timeSaved: shareTimeSaved,
         anonymous: anonymous,
         archetype: archetype,
-        roastLine: roastLine,
         daysCount: shareDaysCount,
         totalPlaces: shareTotalPlaces,
         format: format,
@@ -571,6 +633,63 @@ class _MapScreenState extends ConsumerState<MapScreen>
     } finally {
       if (mounted) setState(() => _preparingShare = false);
     }
+  }
+
+  /// Full-screen preview of the rendered card — exactly the bytes that will
+  /// be shared/saved. Pops true on confirm, false/null on cancel or
+  /// barrier dismiss.
+  Future<bool?> _showCardPreview(Uint8List png, {required bool saveToPhotos}) {
+    return showDialog<bool>(
+      context: context,
+      builder: (ctx) => Dialog.fullscreen(
+        backgroundColor: Colors.black,
+        child: SafeArea(
+          child: Column(
+            children: [
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                  child: Center(
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(16),
+                      child: Image.memory(png, fit: BoxFit.contain),
+                    ),
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 4, 20, 12),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: () => Navigator.of(ctx).pop(false),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: Colors.white,
+                          side: const BorderSide(color: Color(0x66FFFFFF)),
+                        ),
+                        child: const Text('Cancel'),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      flex: 2,
+                      child: FilledButton.icon(
+                        onPressed: () => Navigator.of(ctx).pop(true),
+                        icon: Icon(saveToPhotos
+                            ? Icons.download_rounded
+                            : Icons.ios_share_rounded),
+                        label: Text(saveToPhotos ? 'Save to Photos' : 'Share'),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   void _onMapCreated(GoogleMapController controller) async {
@@ -1133,7 +1252,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
       if (next <= (previous ?? 0)) return;
       Future.delayed(const Duration(milliseconds: 1500), () async {
         if (!mounted) return;
-        final trip = ref.read(realtimeActiveTripProvider).asData?.value;
+        final trip = ref.read(realtimeActiveTripProvider).valueOrNull;
         if (trip == null) return;
         final prefs = await SharedPreferences.getInstance();
         final shownKey = 'plan_card_shown_${trip.id}';
@@ -2049,7 +2168,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
     // to a phone in Cambodia. This OVERRIDES the "include current location"
     // preference, which only makes sense within a single country.
     final tripCountry =
-        ref.read(realtimeActiveTripProvider).asData?.value?.countryCode;
+        ref.read(realtimeActiveTripProvider).valueOrNull?.countryCode;
     final currentCountry = _currentLocationCountry;
     final bool crossCountry;
     if (tripCountry != null) {
@@ -2220,10 +2339,33 @@ class _MapScreenState extends ConsumerState<MapScreen>
     );
   }
 
-  /// Small pre-share chooser: which destination shape to render. Returns
-  /// null when dismissed.
-  Future<ShareCardFormat?> _pickShareFormat() {
-    return showModalBottomSheet<ShareCardFormat>(
+  /// Small pre-share chooser: which destination shape to render. Tapping a
+  /// row opens the OS share sheet — on iOS that sheet natively contains
+  /// "Save Image" (it appears now that NSPhotoLibraryAddUsageDescription is
+  /// declared; iOS hides the action without it). Android's system sheet
+  /// can't host custom actions, so ONLY there each row keeps a download
+  /// button that saves the card straight to the gallery. Returns null when
+  /// dismissed.
+  Future<(ShareCardFormat, bool)?> _pickShareFormat() {
+    final androidSaveButton = defaultTargetPlatform == TargetPlatform.android;
+    Widget option(BuildContext ctx, ShareCardFormat format, IconData icon,
+        String title, String subtitle) {
+      return ListTile(
+        leading: Icon(icon),
+        title: Text(title),
+        subtitle: Text(subtitle),
+        onTap: () => Navigator.of(ctx).pop((format, false)),
+        trailing: androidSaveButton
+            ? IconButton(
+                icon: const Icon(Icons.download_rounded),
+                tooltip: 'Save to gallery',
+                onPressed: () => Navigator.of(ctx).pop((format, true)),
+              )
+            : null,
+      );
+    }
+
+    return showModalBottomSheet<(ShareCardFormat, bool)>(
       context: context,
       showDragHandle: true,
       builder: (ctx) => SafeArea(
@@ -2236,20 +2378,10 @@ class _MapScreenState extends ConsumerState<MapScreen>
               child: Text('Share your route as…',
                   style: Theme.of(ctx).textTheme.titleMedium),
             ),
-            ListTile(
-              leading: const Icon(Icons.smartphone),
-              title: const Text('Story'),
-              subtitle: const Text(
-                  '9:16 full screen — Instagram/Facebook Stories, WhatsApp status'),
-              onTap: () => Navigator.of(ctx).pop(ShareCardFormat.story),
-            ),
-            ListTile(
-              leading: const Icon(Icons.grid_on),
-              title: const Text('Post'),
-              subtitle: const Text(
-                  '4:5 — fits Instagram & Facebook feed posts without cropping'),
-              onTap: () => Navigator.of(ctx).pop(ShareCardFormat.post),
-            ),
+            option(ctx, ShareCardFormat.story, Icons.smartphone, 'Story',
+                '9:16 full screen — Instagram/Facebook Stories, WhatsApp status'),
+            option(ctx, ShareCardFormat.post, Icons.grid_on, 'Post',
+                '4:5 — fits Instagram & Facebook feed posts without cropping'),
             const SizedBox(height: 8),
           ],
         ),
@@ -2264,7 +2396,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
     final size = MediaQuery.of(context).size;
     final topSafePadding = MediaQuery.of(context).padding.top;
     final hasActiveTrip =
-        ref.read(realtimeActiveTripProvider).asData?.value != null;
+        ref.read(realtimeActiveTripProvider).valueOrNull != null;
     const topMargin = 50.0;
     final bannerH = hasActiveTrip ? 72.0 + 12.0 : 0.0;
     const searchBarHeight = 60.0;

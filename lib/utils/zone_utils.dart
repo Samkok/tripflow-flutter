@@ -61,7 +61,7 @@ class ZoneUtils {
       bool foundNewLocation = true;
       while (foundNewLocation) {
         foundNewLocation = false;
-        
+
         for (final unprocessedLocation in locations) {
           if (processedIds.contains(unprocessedLocation.id)) continue;
 
@@ -108,7 +108,6 @@ class ZoneUtils {
     return LatLng(sumLat / cluster.length, sumLng / cluster.length);
   }
 
-
   /// Creates a circle that encloses a cluster of locations.
   static Circle? _createZoneCircle(List<LocationModel> cluster, int index) {
     if (cluster.isEmpty) return null;
@@ -144,7 +143,8 @@ class ZoneUtils {
   }
 
   /// Converts a Circle's center and radius into a list of LatLng points for a Polygon.
-  static List<LatLng> circleToPolygon(LatLng center, double radius, {int points = 64}) {
+  static List<LatLng> circleToPolygon(LatLng center, double radius,
+      {int points = 64}) {
     final List<LatLng> polygonPoints = [];
     const double earthRadius = 6378137.0; // Earth's radius in meters
 
@@ -156,12 +156,17 @@ class ZoneUtils {
       final double angle = (i / points) * 2 * math.pi;
 
       // Calculate the new point's coordinates
-      final double pointLat = math.asin(math.sin(lat) * math.cos(radius / earthRadius) +
-          math.cos(lat) * math.sin(radius / earthRadius) * math.cos(angle));
-      final double pointLng = lng + math.atan2(math.sin(angle) * math.sin(radius / earthRadius) * math.cos(lat),
-          math.cos(radius / earthRadius) - math.sin(lat) * math.sin(pointLat));
+      final double pointLat = math.asin(
+          math.sin(lat) * math.cos(radius / earthRadius) +
+              math.cos(lat) * math.sin(radius / earthRadius) * math.cos(angle));
+      final double pointLng = lng +
+          math.atan2(
+              math.sin(angle) * math.sin(radius / earthRadius) * math.cos(lat),
+              math.cos(radius / earthRadius) -
+                  math.sin(lat) * math.sin(pointLat));
 
-      polygonPoints.add(LatLng(pointLat * (180 / math.pi), pointLng * (180 / math.pi)));
+      polygonPoints
+          .add(LatLng(pointLat * (180 / math.pi), pointLng * (180 / math.pi)));
     }
     return polygonPoints;
   }

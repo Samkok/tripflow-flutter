@@ -261,8 +261,8 @@ class _AppToastState extends State<_AppToast>
                           ),
                           visualDensity: VisualDensity.compact,
                           padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(
-                              minWidth: 32, minHeight: 32),
+                          constraints:
+                              const BoxConstraints(minWidth: 32, minHeight: 32),
                           onPressed: startReverse,
                         ),
                       ],

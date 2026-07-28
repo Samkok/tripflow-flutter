@@ -24,7 +24,7 @@ class IsolateUtils {
   ) {
     // Perform the clustering computation
     final clusters = ZoneUtils.clusterLocations(locations, proximityThreshold);
-    
+
     // Return the clusters as a serializable format
     return {
       'clusterCount': clusters.length,

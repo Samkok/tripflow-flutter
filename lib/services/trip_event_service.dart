@@ -24,7 +24,8 @@ class TripEvent {
   }) : timestamp = DateTime.now();
 
   @override
-  String toString() => 'TripEvent(type: $type, tripId: ${trip?.id}, time: $timestamp)';
+  String toString() =>
+      'TripEvent(type: $type, tripId: ${trip?.id}, time: $timestamp)';
 }
 
 /// Pub/Sub service for trip state changes

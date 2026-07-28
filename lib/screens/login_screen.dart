@@ -61,8 +61,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
       // to the device's password manager, then commit the autofill
       // context with their answer. Logic lives in the shared helper
       // so signup and signin behave identically.
-      await promptSavePasswordIfNeeded(
-          context, _emailController.text.trim());
+      await promptSavePasswordIfNeeded(context, _emailController.text.trim());
       if (!mounted) return;
 
       // If there are local locations, ask user if they want to sync
@@ -136,6 +135,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
         navigator.pushReplacementNamed('/home_anonymous');
       }
     }
+
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, _) {
@@ -143,165 +143,166 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
         dismiss();
       },
       child: Scaffold(
-      body: SafeArea(
-        child: Stack(
-          children: [
-            Center(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.all(24.0),
-                child: Form(
-                  key: _formKey,
-                  // AutofillGroup pairs the email + password fields as
-                  // one credential, so the platform autofill picker
-                  // (iOS Passwords AutoFill / Android Google Password
-                  // Manager / etc.) fills both at once when the user
-                  // picks a saved login.
-                  child: AutofillGroup(
-                    child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Image.asset(
-                        'assets/images/logo.png',
-                        width: 100,
-                        height: 100,
-                      ),
-                      const SizedBox(height: 16),
-                      Text(
-                        'Welcome Back',
-                        textAlign: TextAlign.center,
-                        style: theme.textTheme.headlineMedium?.copyWith(
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Sign in to continue your journey',
-                        textAlign: TextAlign.center,
-                        style: theme.textTheme.titleMedium?.copyWith(
-                            color: theme.colorScheme.onSurfaceVariant),
-                      ),
-                      const SizedBox(height: 40),
-                      TextFormField(
-                        controller: _emailController,
-                        keyboardType: TextInputType.emailAddress,
-                        // username + email pair maximises coverage: iOS
-                        // matches saved logins by `username`, Android
-                        // by `email`. The Passwords / yellow-key bar
-                        // above the keyboard appears once the field
-                        // focuses.
-                        autofillHints: const [
-                          AutofillHints.username,
-                          AutofillHints.email,
-                        ],
-                        textInputAction: TextInputAction.next,
-                        decoration: const InputDecoration(
-                          labelText: 'Email',
-                          prefixIcon: Icon(Icons.email_outlined),
-                        ),
-                        validator: (val) {
-                          if (val == null ||
-                              val.isEmpty ||
-                              !val.contains('@')) {
-                            return 'Please enter a valid email';
-                          }
-                          return null;
-                        },
-                      ),
-                      const SizedBox(height: 20),
-                      TextFormField(
-                        controller: _passwordController,
-                        obscureText: !_isPasswordVisible,
-                        autofillHints: const [AutofillHints.password],
-                        textInputAction: TextInputAction.done,
-                        onFieldSubmitted: (_) {
-                          if (!_isLoading) _signIn();
-                        },
-                        decoration: InputDecoration(
-                          labelText: 'Password',
-                          prefixIcon: const Icon(Icons.lock_outline),
-                          suffixIcon: IconButton(
-                            icon: Icon(
-                              _isPasswordVisible
-                                  ? Icons.visibility_off_outlined
-                                  : Icons.visibility_outlined,
+        body: SafeArea(
+          child: Stack(
+            children: [
+              Center(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(24.0),
+                  child: Form(
+                    key: _formKey,
+                    // AutofillGroup pairs the email + password fields as
+                    // one credential, so the platform autofill picker
+                    // (iOS Passwords AutoFill / Android Google Password
+                    // Manager / etc.) fills both at once when the user
+                    // picks a saved login.
+                    child: AutofillGroup(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Image.asset(
+                            'assets/images/logo.png',
+                            width: 100,
+                            height: 100,
+                          ),
+                          const SizedBox(height: 16),
+                          Text(
+                            'Welcome Back',
+                            textAlign: TextAlign.center,
+                            style: theme.textTheme.headlineMedium?.copyWith(
+                              fontWeight: FontWeight.bold,
                             ),
-                            onPressed: () {
-                              setState(() {
-                                _isPasswordVisible = !_isPasswordVisible;
-                              });
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            'Sign in to continue your journey',
+                            textAlign: TextAlign.center,
+                            style: theme.textTheme.titleMedium?.copyWith(
+                                color: theme.colorScheme.onSurfaceVariant),
+                          ),
+                          const SizedBox(height: 40),
+                          TextFormField(
+                            controller: _emailController,
+                            keyboardType: TextInputType.emailAddress,
+                            // username + email pair maximises coverage: iOS
+                            // matches saved logins by `username`, Android
+                            // by `email`. The Passwords / yellow-key bar
+                            // above the keyboard appears once the field
+                            // focuses.
+                            autofillHints: const [
+                              AutofillHints.username,
+                              AutofillHints.email,
+                            ],
+                            textInputAction: TextInputAction.next,
+                            decoration: const InputDecoration(
+                              labelText: 'Email',
+                              prefixIcon: Icon(Icons.email_outlined),
+                            ),
+                            validator: (val) {
+                              if (val == null ||
+                                  val.isEmpty ||
+                                  !val.contains('@')) {
+                                return 'Please enter a valid email';
+                              }
+                              return null;
                             },
                           ),
-                        ),
-                        validator: (val) => val == null || val.isEmpty
-                            ? 'Please enter your password'
-                            : null,
-                      ),
-                      const SizedBox(height: 8),
-                      Row(
-                        children: [
-                          Checkbox(
-                            value: _rememberMe,
-                            onChanged: (val) =>
-                                setState(() => _rememberMe = val ?? true),
-                            activeColor: theme.colorScheme.primary,
+                          const SizedBox(height: 20),
+                          TextFormField(
+                            controller: _passwordController,
+                            obscureText: !_isPasswordVisible,
+                            autofillHints: const [AutofillHints.password],
+                            textInputAction: TextInputAction.done,
+                            onFieldSubmitted: (_) {
+                              if (!_isLoading) _signIn();
+                            },
+                            decoration: InputDecoration(
+                              labelText: 'Password',
+                              prefixIcon: const Icon(Icons.lock_outline),
+                              suffixIcon: IconButton(
+                                icon: Icon(
+                                  _isPasswordVisible
+                                      ? Icons.visibility_off_outlined
+                                      : Icons.visibility_outlined,
+                                ),
+                                onPressed: () {
+                                  setState(() {
+                                    _isPasswordVisible = !_isPasswordVisible;
+                                  });
+                                },
+                              ),
+                            ),
+                            validator: (val) => val == null || val.isEmpty
+                                ? 'Please enter your password'
+                                : null,
                           ),
-                          const Text('Remember Me'),
+                          const SizedBox(height: 8),
+                          Row(
+                            children: [
+                              Checkbox(
+                                value: _rememberMe,
+                                onChanged: (val) =>
+                                    setState(() => _rememberMe = val ?? true),
+                                activeColor: theme.colorScheme.primary,
+                              ),
+                              const Text('Remember Me'),
+                            ],
+                          ),
+                          const SizedBox(height: 16),
+                          ElevatedButton(
+                            onPressed: _isLoading ? null : _signIn,
+                            child: _isLoading
+                                ? const SizedBox(
+                                    height: 24,
+                                    width: 24,
+                                    child: CircularProgressIndicator(
+                                        strokeWidth: 3),
+                                  )
+                                : const Text('Sign In'),
+                          ),
+                          const SizedBox(height: 24),
+                          TextButton(
+                            onPressed: () {
+                              Navigator.of(context).push(MaterialPageRoute(
+                                  builder: (_) => const SignupScreen()));
+                            },
+                            child: const Text("Don't have an account? Sign Up"),
+                          ),
+                          const SizedBox(height: 8),
+                          TextButton(
+                            onPressed: () {
+                              Navigator.of(context).push(MaterialPageRoute(
+                                  builder: (_) =>
+                                      const ForgotPasswordScreen()));
+                            },
+                            child: const Text('Forgot Password?'),
+                          ),
+                          if (isRootRoute) ...[
+                            const SizedBox(height: 8),
+                            TextButton(
+                              onPressed: dismiss,
+                              child: const Text('Continue as guest'),
+                            ),
+                          ],
                         ],
                       ),
-                      const SizedBox(height: 16),
-                      ElevatedButton(
-                        onPressed: _isLoading ? null : _signIn,
-                        child: _isLoading
-                            ? const SizedBox(
-                                height: 24,
-                                width: 24,
-                                child:
-                                    CircularProgressIndicator(strokeWidth: 3),
-                              )
-                            : const Text('Sign In'),
-                      ),
-                      const SizedBox(height: 24),
-                      TextButton(
-                        onPressed: () {
-                          Navigator.of(context).push(MaterialPageRoute(
-                              builder: (_) => const SignupScreen()));
-                        },
-                        child: const Text("Don't have an account? Sign Up"),
-                      ),
-                      const SizedBox(height: 8),
-                      TextButton(
-                        onPressed: () {
-                          Navigator.of(context).push(MaterialPageRoute(
-                              builder: (_) => const ForgotPasswordScreen()));
-                        },
-                        child: const Text('Forgot Password?'),
-                      ),
-                      if (isRootRoute) ...[
-                        const SizedBox(height: 8),
-                        TextButton(
-                          onPressed: dismiss,
-                          child: const Text('Continue as guest'),
-                        ),
-                      ],
-                    ],
-                  ),
+                    ),
                   ),
                 ),
               ),
-            ),
-            Positioned(
-              top: 8,
-              right: 8,
-              child: IconButton(
-                icon: const Icon(Icons.close),
-                onPressed: dismiss,
-                tooltip: isRootRoute ? 'Continue as guest' : 'Dismiss',
+              Positioned(
+                top: 8,
+                right: 8,
+                child: IconButton(
+                  icon: const Icon(Icons.close),
+                  onPressed: dismiss,
+                  tooltip: isRootRoute ? 'Continue as guest' : 'Dismiss',
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
-      ),
       ),
     );
   }

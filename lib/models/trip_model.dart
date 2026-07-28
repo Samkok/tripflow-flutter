@@ -25,10 +25,12 @@ class TripModel {
       'id': id,
       'name': name,
       'locations': locations.map((l) => l.toJson()).toList(),
-      'optimizedRoute': optimizedRoute.map((point) => {
-        'latitude': point.latitude,
-        'longitude': point.longitude,
-      }).toList(),
+      'optimizedRoute': optimizedRoute
+          .map((point) => {
+                'latitude': point.latitude,
+                'longitude': point.longitude,
+              })
+          .toList(),
       'totalDurationMinutes': totalDuration.inMinutes,
       'totalDistance': totalDistance,
       'createdAt': createdAt.toIso8601String(),

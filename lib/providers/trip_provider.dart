@@ -27,6 +27,8 @@ import '../models/saved_location.dart';
 import 'auth_provider.dart';
 import 'location_provider.dart';
 import 'trip_listener_provider.dart';
+import '../utils/same_day_place_guard.dart';
+import '../utils/trip_dates.dart';
 import 'trip_collaborator_provider.dart';
 
 class TripState {
@@ -188,7 +190,7 @@ class TripNotifier extends StateNotifier<TripState> {
   /// or if user is owner/has write permission on the active trip
   Future<bool> _hasWriteAccess() async {
     final activeTripAsync = _ref.read(realtimeActiveTripProvider);
-    final activeTrip = activeTripAsync.asData?.value;
+    final activeTrip = activeTripAsync.valueOrNull;
 
     // No active trip - user can edit their own non-trip locations
     if (activeTrip == null) return true;
@@ -770,9 +772,25 @@ class TripNotifier extends StateNotifier<TripState> {
     }
 
     final locations = state.pinnedLocations;
+    // Same-day duplicate choke point (move semantics: the row itself is
+    // excluded — moving onto a day you already occupy is a no-op).
+    final allowed = _allowedForDay({locationId}, newDate, excludeMoving: true);
+    if (!allowed.contains(locationId)) {
+      debugPrint('updateLocationScheduledDate: blocked — same place already '
+          'on that day');
+      return;
+    }
+    DateTime? movedSpanEnd;
     final updatedLocations = locations.map((loc) {
       if (loc.id == locationId) {
-        return loc.copyWith(scheduledDate: newDate);
+        // A stay range moves WHOLE — see shiftedSpanEnd.
+        movedSpanEnd = shiftedSpanEnd(
+          oldStart: loc.scheduledDate ?? loc.addedAt,
+          oldEnd: loc.scheduledEndDate,
+          newStart: newDate,
+        );
+        return loc.copyWith(
+            scheduledDate: newDate, scheduledEndDate: movedSpanEnd);
       }
       return loc;
     }).toList();
@@ -781,11 +799,39 @@ class TripNotifier extends StateNotifier<TripState> {
 
     // Sync with Repository
     try {
-      await _ref.read(locationRepositoryProvider).updateLocation(
-          locationId, {'scheduled_date': newDate.toIso8601String()});
+      await _ref.read(locationRepositoryProvider).updateLocation(locationId, {
+        'scheduled_date': newDate.toIso8601String(),
+        'scheduled_end_date': movedSpanEnd?.toIso8601String(),
+      });
     } catch (e) {
       log('Error updating scheduled date in repository: $e');
     }
+  }
+
+  /// THE write-path same-day duplicate gate: of [candidateIds] (rows about
+  /// to be scheduled onto [day]), returns the subset that may proceed.
+  /// [excludeMoving] = move semantics (the rows themselves don't count as
+  /// occupants); copies keep them counted, so copying a place onto its own
+  /// day is blocked. Occupancy counts SCHEDULED rows only — unscheduled
+  /// rows phantom-occupy their creation day via the createdAt fallback.
+  Set<String> _allowedForDay(Set<String> candidateIds, DateTime day,
+      {required bool excludeMoving}) {
+    final dayK = DateTime(day.year, day.month, day.day);
+    final pinned = state.pinnedLocations;
+    final moving = pinned
+        .where((l) => candidateIds.contains(l.id))
+        .map(placeKeyOfModel)
+        .toList();
+    final occupants = pinned
+        .where((l) =>
+            (!excludeMoving || !candidateIds.contains(l.id)) &&
+            l.scheduledDate != null &&
+            l.isActiveOnDate(dayK))
+        .map(placeKeyOfModel);
+    return filterSameDayDuplicates(
+      moving: moving,
+      occupantsOnDay: occupants,
+    ).allowedIds;
   }
 
   /// Sets a location's stay range. Pass [end] = null (default) to clear the
@@ -975,6 +1021,32 @@ class TripNotifier extends StateNotifier<TripState> {
     final endKeyRaw = DateTime(end.year, end.month, end.day);
     final DateTime? endKey = endKeyRaw.isAfter(startKey) ? endKeyRaw : null;
 
+    // Same-day duplicate choke point across the whole covered range.
+    final target =
+        state.pinnedLocations.where((l) => l.id == locationId).toList();
+    if (target.isNotEmpty) {
+      final movingKey = placeKeyOfModel(target.first);
+      for (var d = startKey;
+          !d.isAfter(endKey ?? startKey);
+          d = DateTime(d.year, d.month, d.day + 1)) {
+        final occupants = state.pinnedLocations
+            .where((l) =>
+                l.id != locationId &&
+                !replaceIds.contains(l.id) &&
+                l.scheduledDate != null &&
+                l.isActiveOnDate(d))
+            .map(placeKeyOfModel);
+        final ok = filterSameDayDuplicates(
+                moving: [movingKey], occupantsOnDay: occupants)
+            .allowedIds;
+        if (ok.isEmpty) {
+          debugPrint('setAccommodation: blocked — same place already '
+              'scheduled on ${d.toIso8601String()}');
+          return false;
+        }
+      }
+    }
+
     // Optimistic local update (target flagged + dated, conflicts cleared).
     final updated = state.pinnedLocations.map((loc) {
       if (loc.id == locationId) {
@@ -1084,10 +1156,29 @@ class TripNotifier extends StateNotifier<TripState> {
       return;
     }
 
+    // Same-day duplicate choke point (move semantics).
+    final locationIdsAllowed =
+        _allowedForDay(locationIds, newDate, excludeMoving: true);
+    if (locationIdsAllowed.isEmpty) {
+      debugPrint(
+          'updateMultipleLocationsScheduledDate: all blocked — same place '
+          'already on that day');
+      return;
+    }
+    locationIds = locationIdsAllowed;
+
+    // Stay ranges move WHOLE — see shiftedSpanEnd (start-only writes left
+    // start > end and the rows vanished from every day list).
+    final spanEnds = <String, DateTime?>{};
     final updatedLocations = state.pinnedLocations.map((loc) {
       if (locationIds.contains(loc.id)) {
-        // Return a new LocationModel with the updated scheduled date
-        return loc.copyWith(scheduledDate: newDate);
+        final newEnd = shiftedSpanEnd(
+          oldStart: loc.scheduledDate ?? loc.addedAt,
+          oldEnd: loc.scheduledEndDate,
+          newStart: newDate,
+        );
+        spanEnds[loc.id] = newEnd;
+        return loc.copyWith(scheduledDate: newDate, scheduledEndDate: newEnd);
       }
       return loc;
     }).toList();
@@ -1096,14 +1187,16 @@ class TripNotifier extends StateNotifier<TripState> {
 
     // Sync multiple updates with Repository
     final repository = _ref.read(locationRepositoryProvider);
-    for (final id in locationIds) {
+    await Future.wait(locationIds.map((id) async {
       try {
-        await repository
-            .updateLocation(id, {'scheduled_date': newDate.toIso8601String()});
+        await repository.updateLocation(id, {
+          'scheduled_date': newDate.toIso8601String(),
+          'scheduled_end_date': spanEnds[id]?.toIso8601String(),
+        });
       } catch (e) {
         log('Error updating scheduled date for id $id: $e');
       }
-    }
+    }));
   }
 
   Future<void> copyMultipleLocationsToDate(
@@ -1116,13 +1209,23 @@ class TripNotifier extends StateNotifier<TripState> {
       return;
     }
 
+    // Same-day duplicate choke point (copy semantics: the source rows DO
+    // count as occupants — copying a place onto the day it already
+    // occupies duplicates it).
+    final locationIdsAllowed =
+        _allowedForDay(locationIds, newDate, excludeMoving: false);
+    if (locationIdsAllowed.isEmpty) {
+      debugPrint('copyMultipleLocationsToDate: all blocked — same place '
+          'already on that day');
+      return;
+    }
     final locationsToCopy = state.pinnedLocations
-        .where((loc) => locationIds.contains(loc.id))
+        .where((loc) => locationIdsAllowed.contains(loc.id))
         .toList();
 
     // Get the REALTIME active trip to associate copied locations with it
     final activeTripAsync = _ref.read(realtimeActiveTripProvider);
-    final activeTrip = activeTripAsync.asData?.value;
+    final activeTrip = activeTripAsync.valueOrNull;
 
     final newLocations = locationsToCopy.map((loc) {
       // Create a new location with a new ID and the new date.
@@ -1529,8 +1632,7 @@ class TripNotifier extends StateNotifier<TripState> {
         // trip-day with a max policy, so re-optimizing never double-counts.
         if (timeSaved > Duration.zero) {
           final ledgerTripId =
-              _ref.read(realtimeActiveTripProvider).asData?.value?.id ??
-                  'local';
+              _ref.read(realtimeActiveTripProvider).valueOrNull?.id ?? 'local';
           final dayIso = selectedDate.toIso8601String().split('T').first;
           unawaited(TimeSavedLedgerService.instance
               .credit(dayKey: '$ledgerTripId|$dayIso', saved: timeSaved));
@@ -1589,7 +1691,7 @@ class TripNotifier extends StateNotifier<TripState> {
   /// shown-once flag, mirroring the celebration pattern).
   Future<void> _maybeSignalPlanComplete(DateTime selectedDate) async {
     try {
-      final trip = _ref.read(realtimeActiveTripProvider).asData?.value;
+      final trip = _ref.read(realtimeActiveTripProvider).valueOrNull;
       if (trip == null) return;
       final prefs = await SharedPreferences.getInstance();
       if (prefs.getBool('plan_card_shown_${trip.id}') ?? false) return;

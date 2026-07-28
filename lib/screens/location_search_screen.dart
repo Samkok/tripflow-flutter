@@ -93,8 +93,7 @@ class _LocationSearchScreenState extends ConsumerState<LocationSearchScreen> {
     if (_focusRequested) return;
     _focusRequested = true;
     final animation = ModalRoute.of(context)?.animation;
-    if (animation == null ||
-        animation.status == AnimationStatus.completed) {
+    if (animation == null || animation.status == AnimationStatus.completed) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) _focusNode.requestFocus();
       });
@@ -106,6 +105,7 @@ class _LocationSearchScreenState extends ConsumerState<LocationSearchScreen> {
         if (mounted) _focusNode.requestFocus();
       }
     }
+
     animation.addStatusListener(onStatus);
   }
 
@@ -448,8 +448,7 @@ class _LocationSearchScreenState extends ConsumerState<LocationSearchScreen> {
                           const SizedBox(
                             width: 22,
                             height: 22,
-                            child:
-                                CircularProgressIndicator(strokeWidth: 2.4),
+                            child: CircularProgressIndicator(strokeWidth: 2.4),
                           ),
                           const SizedBox(width: 14),
                           Text(
@@ -534,8 +533,7 @@ class _LocationSearchScreenState extends ConsumerState<LocationSearchScreen> {
 
     return ListView.separated(
       controller: _scrollController,
-      itemCount:
-          searchState.results.length + (searchState.hasMore ? 1 : 0),
+      itemCount: searchState.results.length + (searchState.hasMore ? 1 : 0),
       separatorBuilder: (context, index) => const Divider(height: 1),
       itemBuilder: (context, index) {
         if (index == searchState.results.length) {
@@ -581,11 +579,10 @@ class _LocationSearchScreenState extends ConsumerState<LocationSearchScreen> {
                     const SizedBox(width: 4),
                     Text(
                       _formatDistance(prediction.distanceMeters!),
-                      style:
-                          Theme.of(context).textTheme.bodySmall?.copyWith(
-                                color: AppTheme.primaryColor,
-                                fontWeight: FontWeight.w600,
-                              ),
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: AppTheme.primaryColor,
+                            fontWeight: FontWeight.w600,
+                          ),
                     ),
                   ],
                 ),

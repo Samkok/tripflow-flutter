@@ -145,7 +145,8 @@ class TermsScreen extends StatelessWidget {
 
   Widget _buildContactSection(BuildContext context) {
     const email = 'hengsamkok76@gmail.com';
-    final bodyStyle = Theme.of(context).textTheme.bodyMedium?.copyWith(height: 1.5);
+    final bodyStyle =
+        Theme.of(context).textTheme.bodyMedium?.copyWith(height: 1.5);
     return Padding(
       padding: const EdgeInsets.only(bottom: 24.0),
       child: Column(

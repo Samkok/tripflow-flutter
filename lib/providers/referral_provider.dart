@@ -37,8 +37,8 @@ final referralMonthsEarnedProvider = Provider<int>((ref) {
 });
 
 /// True once the user has ever opened the invite share sheet (persisted).
-final referralHasSharedProvider = FutureProvider<bool>(
-    (ref) => ReferralService.instance.hasEverShared());
+final referralHasSharedProvider =
+    FutureProvider<bool>((ref) => ReferralService.instance.hasEverShared());
 
 /// Session-scoped dismissal for the persistent home referral banner.
 /// Resets on app launch — Settings → Invite friends is the always-on entry.

@@ -14,9 +14,12 @@ class LogoutConfirmationDialog extends StatelessWidget {
           child: const Text('Cancel'),
         ),
         ElevatedButton(
-          onPressed: () => Navigator.of(context).pop(true), // User confirms logout
+          onPressed: () =>
+              Navigator.of(context).pop(true), // User confirms logout
           style: ElevatedButton.styleFrom(
-            backgroundColor: Theme.of(context).colorScheme.error, // Highlight logout as a destructive action
+            backgroundColor: Theme.of(context)
+                .colorScheme
+                .error, // Highlight logout as a destructive action
             foregroundColor: Theme.of(context).colorScheme.onError,
           ),
           child: const Text('Logout'),

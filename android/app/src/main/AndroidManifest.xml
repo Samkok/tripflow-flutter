@@ -5,6 +5,9 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <!-- gal (save route card to gallery): only needed on Android 10 and below -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="29" />
     <!-- Advertising ID: pulled in transitively by firebase_analytics and USED
          for Firebase Analytics + ads attribution (Google Ads conversions).
          Declared explicitly so intent is clear. Because this is present, you

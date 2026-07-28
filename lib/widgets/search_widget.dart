@@ -163,7 +163,8 @@ class _SearchWidgetState extends ConsumerState<SearchWidget> {
     // Show initial loading
     if (searchState.isLoading && searchState.results.isEmpty) {
       return Container(
-        constraints: BoxConstraints(maxHeight: maxHeight > 100 ? maxHeight : 100),
+        constraints:
+            BoxConstraints(maxHeight: maxHeight > 100 ? maxHeight : 100),
         child: const Center(
           child: Padding(
             padding: EdgeInsets.all(16.0),
@@ -176,7 +177,8 @@ class _SearchWidgetState extends ConsumerState<SearchWidget> {
     // Show error
     if (searchState.error != null && searchState.results.isEmpty) {
       return Container(
-        constraints: BoxConstraints(maxHeight: maxHeight > 100 ? maxHeight : 100),
+        constraints:
+            BoxConstraints(maxHeight: maxHeight > 100 ? maxHeight : 100),
         child: Center(
           child: Padding(
             padding: const EdgeInsets.all(16.0),
@@ -192,7 +194,8 @@ class _SearchWidgetState extends ConsumerState<SearchWidget> {
     // Show no results
     if (searchState.results.isEmpty) {
       return Container(
-        constraints: BoxConstraints(maxHeight: maxHeight > 100 ? maxHeight : 100),
+        constraints:
+            BoxConstraints(maxHeight: maxHeight > 100 ? maxHeight : 100),
         child: const Center(
           child: Padding(
             padding: EdgeInsets.all(16.0),
@@ -418,7 +421,8 @@ class _SearchWidgetState extends ConsumerState<SearchWidget> {
 
   Future<void> _selectPlace(PlacePrediction prediction) async {
     // Check if user has write access to the active trip
-    final hasWriteAccess = await ref.read(hasActiveTripWriteAccessProvider.future);
+    final hasWriteAccess =
+        await ref.read(hasActiveTripWriteAccessProvider.future);
 
     if (!hasWriteAccess) {
       if (!mounted) return;
@@ -480,4 +484,3 @@ class _SearchWidgetState extends ConsumerState<SearchWidget> {
     }
   }
 }
-

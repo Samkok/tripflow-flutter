@@ -33,8 +33,10 @@ class ReviewPromptService {
   static final instance = ReviewPromptService._();
 
   static const _kLastPromptedAt = 'review_prompt_last_at_ms';
-  static const _kOsPromptCount = 'review_prompt_count'; // real OS prompts issued
-  static const _kDialogShownCount = 'review_prompt_dialog_count'; // sentiment dialogs shown
+  static const _kOsPromptCount =
+      'review_prompt_count'; // real OS prompts issued
+  static const _kDialogShownCount =
+      'review_prompt_dialog_count'; // sentiment dialogs shown
   static const _kSuccessfulOptimizes = 'review_prompt_successful_optimizes';
   static const _kSessions = 'review_prompt_sessions';
 
@@ -79,8 +81,8 @@ class ReviewPromptService {
   Future<void> recordSuccessfulOptimize() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setInt(
-          _kSuccessfulOptimizes, (prefs.getInt(_kSuccessfulOptimizes) ?? 0) + 1);
+      await prefs.setInt(_kSuccessfulOptimizes,
+          (prefs.getInt(_kSuccessfulOptimizes) ?? 0) + 1);
     } catch (e, st) {
       debugPrint('ReviewPromptService.recordSuccessfulOptimize: $e\n$st');
     }

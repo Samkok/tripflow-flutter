@@ -39,25 +39,31 @@ class PlaceDetails {
   final String name;
   final String address;
   final LatLng coordinates;
+
   /// Cover photo reference — equal to the first item of [photoReferences]
   /// when any photos are present. Kept as a separate field so older code
   /// paths and database columns that only carry one reference keep working.
   final String? photoReference;
+
   /// All available photo references for the in-card gallery.
   /// Empty when the place has no photos.
   final List<String> photoReferences;
   final int? photoWidth;
   final int? photoHeight;
+
   /// Combined HTML attributions across every fetched photo. Google's terms
   /// require attributions to be displayed alongside any photo we render.
   final List<String>? photoAttributions;
+
   /// ISO 3166-1 alpha-2 country code parsed from address_components, when
   /// available. Used to flag cross-country adds against a trip's tagged
   /// country.
   final String? countryCode;
+
   /// Google Places `place_id`. Captured here so add-paths can persist it
   /// alongside the other place metadata for later external-app handoff.
   final String? placeId;
+
   /// Per-day opening periods parsed from Google's `regular_opening_hours`.
   /// Null when the place has no hours data, or for paths that didn't request
   /// hours (e.g. lightweight Nearby Search results).
@@ -192,9 +198,11 @@ class NearbyPlace {
   final String? photoReference;
   final List<String> photoReferences;
   final List<String>? photoAttributions;
+
   /// Primary type from Google's `types` array (e.g. "restaurant"). Useful
   /// for a one-line subtitle alongside the distance.
   final String? primaryType;
+
   /// Haversine distance from the long-press coordinate, in meters.
   final double distanceMeters;
 
@@ -323,7 +331,8 @@ class PlacesService {
 
       // Add location bias to prioritize nearby results
       if (currentLocation != null) {
-        url += '&location=${currentLocation.latitude},${currentLocation.longitude}';
+        url +=
+            '&location=${currentLocation.latitude},${currentLocation.longitude}';
         url += '&radius=50000'; // 50km radius
       }
 
@@ -366,7 +375,8 @@ class PlacesService {
               }
               return prediction;
             } catch (e) {
-              debugPrint('Error calculating distance for ${prediction.placeId}: $e');
+              debugPrint(
+                  'Error calculating distance for ${prediction.placeId}: $e');
               return prediction;
             }
           }),
@@ -417,19 +427,18 @@ class PlacesService {
       final overrideCountry = countryCodeOverride == null
           ? null
           : findCountryByCode(countryCodeOverride);
-      final effectiveQuery = overrideCountry != null
-          ? '$query ${overrideCountry.name}'
-          : query;
+      final effectiveQuery =
+          overrideCountry != null ? '$query ${overrideCountry.name}' : query;
 
       // Use Text Search API which supports better pagination
-      String url =
-          'https://maps.googleapis.com/maps/api/place/textsearch/json'
+      String url = 'https://maps.googleapis.com/maps/api/place/textsearch/json'
           '?query=${Uri.encodeComponent(effectiveQuery)}'
           '&key=${ApiService.googlePlacesApiKey}';
 
       // Add location bias
       if (currentLocation != null) {
-        url += '&location=${currentLocation.latitude},${currentLocation.longitude}';
+        url +=
+            '&location=${currentLocation.latitude},${currentLocation.longitude}';
         url += '&radius=50000'; // 50km radius
       }
 
@@ -448,10 +457,7 @@ class PlacesService {
       final results = (data['results'] as List?) ?? [];
 
       // Apply pagination manually (skip offset, take limit)
-      final paginatedResults = results
-          .skip(offset)
-          .take(limit)
-          .toList();
+      final paginatedResults = results.skip(offset).take(limit).toList();
 
       // Convert to PlacePrediction format
       final predictions = <PlacePrediction>[];
@@ -740,8 +746,7 @@ class PlacesService {
     ];
 
     final extraPages = await Future.wait(
-      supplementaryTypes
-          .map((t) => _nearbySearchPage(center, radiusMeters, t)),
+      supplementaryTypes.map((t) => _nearbySearchPage(center, radiusMeters, t)),
     );
 
     final all = <NearbyPlace>[...initial];

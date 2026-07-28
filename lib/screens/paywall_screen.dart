@@ -85,8 +85,7 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
     dump('monthly', monthly);
     dump('yearly', yearly);
     final info = ref.read(subscriptionProvider).customerInfo;
-    final ent = info?.entitlements
-        .all[RevenueCatConfig.entitlementVoyZaPro];
+    final ent = info?.entitlements.all[RevenueCatConfig.entitlementVoyZaPro];
     debugPrint(
       '[Paywall diag] entitlement: active=${ent?.isActive} '
       'periodType=${ent?.periodType} expires=${ent?.expirationDate}',
@@ -363,6 +362,7 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
       return eligibility[p.storeProduct.identifier] ==
           IntroEligibilityStatus.introEligibilityStatusIneligible;
     }
+
     final monthlyHasOffer = monthly?.storeProduct.introductoryPrice != null;
     final yearlyHasOffer = yearly?.storeProduct.introductoryPrice != null;
     if (!monthlyHasOffer && !yearlyHasOffer) return false;
@@ -377,7 +377,8 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
     final isFree = intro.price == 0;
     final unit = intro.periodUnit;
     final count = intro.periodNumberOfUnits;
-    if (!isFree) return '${intro.priceString} for ${count > 1 ? '$count ' : ''}${unit.name}${count > 1 ? 's' : ''}';
+    if (!isFree)
+      return '${intro.priceString} for ${count > 1 ? '$count ' : ''}${unit.name}${count > 1 ? 's' : ''}';
     final unitLabel = switch (unit) {
       PeriodUnit.day => count == 1 ? 'day' : 'days',
       PeriodUnit.week => count == 1 ? 'week' : 'weeks',
@@ -577,15 +578,15 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
   }) {
     final theme = Theme.of(context);
     final priceString = package.storeProduct.priceString;
-    final period = package.packageType == PackageType.annual ? '/year' : '/month';
+    final period =
+        package.packageType == PackageType.annual ? '/year' : '/month';
     final isSelected = _selectedPackage?.identifier == package.identifier;
     // Cross-platform trial label (iOS introductoryPrice / Android free phase),
     // null when there's no eligible trial — so we never dangle "3 days free"
     // at a user who can't actually claim it.
     final trialLabel = _trialLabelFor(package);
-    final effectiveSubtitle = trialLabel != null
-        ? '$trialLabel, then $priceString$period'
-        : subtitle;
+    final effectiveSubtitle =
+        trialLabel != null ? '$trialLabel, then $priceString$period' : subtitle;
     final perMonthLine = _perMonthLine(package);
 
     return GestureDetector(
@@ -626,7 +627,8 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
                       : theme.colorScheme.outline,
                   width: 2,
                 ),
-                color: isSelected ? theme.colorScheme.primary : Colors.transparent,
+                color:
+                    isSelected ? theme.colorScheme.primary : Colors.transparent,
               ),
               child: isSelected
                   ? Icon(
@@ -886,7 +888,8 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
       if (user?.email != null) {
         try {
           await RevenueCatService().setUserAttributes(email: user!.email);
-          debugPrint('PaywallScreen: Stored email to RevenueCat after purchase');
+          debugPrint(
+              'PaywallScreen: Stored email to RevenueCat after purchase');
         } catch (e) {
           debugPrint('PaywallScreen: Failed to store email to RevenueCat: $e');
         }
@@ -919,7 +922,8 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
 
           // Sync trial subscription record as fallback for webhook delays
           final trialExpiryStr = entAfter?.expirationDate;
-          final trialExpiry = trialExpiryStr != null ? DateTime.tryParse(trialExpiryStr) : null;
+          final trialExpiry =
+              trialExpiryStr != null ? DateTime.tryParse(trialExpiryStr) : null;
           final rcOriginalId =
               ref.read(subscriptionProvider).customerInfo?.originalAppUserId;
           await repo.syncTrialSubscription(
@@ -928,7 +932,8 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
             revenueCatAppUserId: rcOriginalId,
             trialExpiresAt: trialExpiry,
           );
-          debugPrint('PaywallScreen: ✅ Trial subscription synced for user ${user.id}');
+          debugPrint(
+              'PaywallScreen: ✅ Trial subscription synced for user ${user.id}');
         } catch (e) {
           debugPrint('PaywallScreen: ⚠️ Failed to log trial start: $e');
         }
@@ -945,14 +950,14 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
       // Small delay to ensure state propagates
       await Future.delayed(const Duration(milliseconds: 300));
 
-      debugPrint('PaywallScreen: Current isPro state: ${ref.read(isProProvider)}');
+      debugPrint(
+          'PaywallScreen: Current isPro state: ${ref.read(isProProvider)}');
 
       // Post-purchase referral prompt — the happiest moment, and the
       // reward cost is offset by their payment. Only on a fresh purchase
       // (not restore), and only for signed-in users (anonymous purchasers
       // have no referral code to share). Shown before we pop the paywall.
-      if (mounted &&
-          SupabaseService.instance.client.auth.currentUser != null) {
+      if (mounted && SupabaseService.instance.client.auth.currentUser != null) {
         await showReferralAfterPurchase(context, ref);
       }
 

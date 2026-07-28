@@ -24,8 +24,8 @@ class _ConnectivityWrapperState extends ConsumerState<ConnectivityWrapper> {
       _dismissed = false;
     }
 
-    final showBanner = connectivityStatus == ConnectivityStatus.isDisconnected &&
-        !_dismissed;
+    final showBanner =
+        connectivityStatus == ConnectivityStatus.isDisconnected && !_dismissed;
 
     return Stack(
       children: [

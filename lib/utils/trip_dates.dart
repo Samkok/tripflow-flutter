@@ -39,3 +39,36 @@ List<DateTime> contiguousTripDates(Iterable<DateTime?> marks) {
   }
   return out;
 }
+
+/// Normalizes any timestamp to its local calendar day (local midnight).
+/// The shared day key for grouping, chip highlighting, and day math —
+/// always pair with [daySpanDays] instead of `difference().inDays`.
+DateTime dayKey(DateTime d) => DateTime(d.year, d.month, d.day);
+
+/// Calendar days from [from] to [to] (positive when [to] is later), immune
+/// to DST: `difference().inDays` between local midnights truncates across a
+/// spring-forward (23h day), shifting every rescheduled place a day early.
+/// Comparing the dates in UTC removes the offset change from the math.
+int daySpanDays(DateTime from, DateTime to) {
+  final a = DateTime.utc(from.year, from.month, from.day);
+  final b = DateTime.utc(to.year, to.month, to.day);
+  return b.difference(a).inDays;
+}
+
+/// When a row with a stay range moves to [newStart], its end must move with
+/// it — writing only the start leaves `start > end`, and `isActiveOnDate`
+/// then matches NO day at all (the row vanishes from every list). Returns
+/// the new end preserving the stay's calendar length, or null when the row
+/// has no forward span (callers should write that null to clear any stale
+/// stored end).
+DateTime? shiftedSpanEnd({
+  required DateTime oldStart,
+  required DateTime? oldEnd,
+  required DateTime newStart,
+}) {
+  if (oldEnd == null) return null;
+  final span = daySpanDays(dayKey(oldStart), dayKey(oldEnd));
+  if (span <= 0) return null;
+  final ns = dayKey(newStart);
+  return DateTime(ns.year, ns.month, ns.day + span);
+}

@@ -13,6 +13,7 @@ import 'package:voyza/widgets/accommodation_prompts.dart';
 import 'package:voyza/widgets/location_detail_sheet.dart';
 import 'package:voyza/widgets/location_photo_gallery.dart';
 import 'package:voyza/utils/date_picker_utils.dart';
+import 'package:voyza/utils/same_day_place_guard.dart';
 import 'package:voyza/utils/trip_date_validator.dart';
 import 'package:voyza/widgets/app_toast.dart';
 
@@ -487,7 +488,7 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
     // "Remove from trip" only makes sense when this location is actually
     // attached to a trip — i.e. there's an active trip in this view. When
     // there isn't (loose locations on the map), the option is hidden.
-    final activeTrip = ref.watch(realtimeActiveTripProvider).asData?.value;
+    final activeTrip = ref.watch(realtimeActiveTripProvider).valueOrNull;
     final canRemoveFromTrip = activeTrip != null && hasWriteAccess;
 
     return PopupMenuButton<String>(
@@ -663,10 +664,11 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
       firstDate: earliestDate,
       lastDate: DateTime.now().add(const Duration(days: 365 * 5)),
       highlightedDates: highlightedDates,
+      highlightRange: activeTripDateRange(ref),
     );
 
     if (newDate != null) {
-      final activeTrip = ref.read(realtimeActiveTripProvider).asData?.value;
+      final activeTrip = ref.read(realtimeActiveTripProvider).valueOrNull;
       if (!context.mounted) return;
       final allowed = await ensureScheduledDateAllowed(
         context,
@@ -687,6 +689,28 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
       final tripNotifier = ref.read(tripProvider.notifier);
       final dateNotifier = ref.read(selectedDateProvider.notifier);
       final dayKey = DateTime(newDate.year, newDate.month, newDate.day);
+      // Shared same-day duplicate rule: the place may repeat across days,
+      // never within one day. COPY keeps the source row as an occupant
+      // (copying onto its own day duplicates); MOVE excludes it (no-op).
+      final occupants = ref
+          .read(tripProvider)
+          .pinnedLocations
+          .where((l) =>
+              (isCopy || l.id != location.id) &&
+              l.scheduledDate != null &&
+              l.isActiveOnDate(dayKey))
+          .map(placeKeyOfModel);
+      final dup = filterSameDayDuplicates(
+        moving: [placeKeyOfModel(location)],
+        occupantsOnDay: occupants,
+      );
+      if (dup.allowedIds.isEmpty) {
+        if (context.mounted) {
+          AppToast.warning(context,
+              '"${location.name}" is already on ${DateFormat('MMM d').format(dayKey)}');
+        }
+        return;
+      }
       final dayWasEmpty = !ref
           .read(tripProvider)
           .pinnedLocations

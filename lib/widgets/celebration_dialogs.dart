@@ -192,8 +192,8 @@ class _FirstOptimizeDialogState extends State<_FirstOptimizeDialog> {
                 const SizedBox(height: 8),
                 Text.rich(
                   TextSpan(
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant),
+                    style: theme.textTheme.bodyMedium
+                        ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
                     children: [
                       const TextSpan(text: 'VoyZa put your '),
                       TextSpan(
@@ -347,8 +347,7 @@ Future<void> showTripRecapDialog(
           );
 
       return Dialog(
-        shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
         child: Padding(
           padding: const EdgeInsets.fromLTRB(24, 28, 24, 20),
           child: Column(
@@ -492,8 +491,7 @@ class _PlanCardDialogState extends State<_PlanCardDialog> {
             const SizedBox(height: 14),
             // The earned identity — the shareable unit.
             Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
               decoration: BoxDecoration(
                 color: primary.withValues(alpha: 0.12),
                 borderRadius: BorderRadius.circular(12),

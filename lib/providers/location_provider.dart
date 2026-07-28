@@ -48,8 +48,11 @@ final filteredLocationsForMapProvider =
       'filteredLocationsForMapProvider: Starting to listen for location changes');
 
   await for (final locations in locationsStream) {
-    // Get current active trip from the watched async value
-    final activeTrip = activeTripAsync.asData?.value;
+    // valueOrNull, not asData: during a realtimeActiveTripProvider reload
+    // (every add/remove-day invalidation) asData is null even though the
+    // previous trip is retained — which made every trip pin vanish and
+    // pinnedLocations empty for the refetch window.
+    final activeTrip = activeTripAsync.valueOrNull;
 
     // Authenticated when user ID is non-null
     final isAuthenticated = currentUserId != null;

@@ -158,8 +158,7 @@ class _SecurityScreenState extends ConsumerState<SecurityScreen> {
       }
     } catch (_) {
       if (mounted) {
-        AppToast.error(
-            context, 'Failed to change password. Please try again.');
+        AppToast.error(context, 'Failed to change password. Please try again.');
       }
     } finally {
       if (mounted) setState(() => _step2Loading = false);
@@ -168,7 +167,9 @@ class _SecurityScreenState extends ConsumerState<SecurityScreen> {
 
   String _friendlyAuthError(AuthException e) {
     final msg = e.message.toLowerCase();
-    if (msg.contains('invalid') || msg.contains('wrong') || msg.contains('incorrect')) {
+    if (msg.contains('invalid') ||
+        msg.contains('wrong') ||
+        msg.contains('incorrect')) {
       return 'Current password is incorrect.';
     }
     if (msg.contains('weak') || msg.contains('short')) {
@@ -274,8 +275,7 @@ class _SecurityScreenState extends ConsumerState<SecurityScreen> {
                 icon: Icon(
                   _step1Obscure ? Icons.visibility_off : Icons.visibility,
                 ),
-                onPressed: () =>
-                    setState(() => _step1Obscure = !_step1Obscure),
+                onPressed: () => setState(() => _step1Obscure = !_step1Obscure),
               ),
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
@@ -284,8 +284,7 @@ class _SecurityScreenState extends ConsumerState<SecurityScreen> {
             ),
             validator: (v) =>
                 (v == null || v.isEmpty) ? 'Enter your current password' : null,
-            onFieldSubmitted: (_) =>
-                blocked ? null : _verifyCurrentPassword(),
+            onFieldSubmitted: (_) => blocked ? null : _verifyCurrentPassword(),
           ),
 
           // Manual error display (keeps red text even after rebuild)
@@ -309,9 +308,8 @@ class _SecurityScreenState extends ConsumerState<SecurityScreen> {
           SizedBox(
             width: double.infinity,
             child: ElevatedButton(
-              onPressed: blocked || _step1Loading
-                  ? null
-                  : _verifyCurrentPassword,
+              onPressed:
+                  blocked || _step1Loading ? null : _verifyCurrentPassword,
               style: ElevatedButton.styleFrom(
                 padding: const EdgeInsets.symmetric(vertical: 14),
                 shape: RoundedRectangleBorder(
@@ -322,8 +320,8 @@ class _SecurityScreenState extends ConsumerState<SecurityScreen> {
                   ? const SizedBox(
                       width: 20,
                       height: 20,
-                      child:
-                          CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2, color: Colors.white),
                     )
                   : const Text(
                       'Continue',
@@ -373,9 +371,7 @@ class _SecurityScreenState extends ConsumerState<SecurityScreen> {
                     prefixIcon: const Icon(Icons.lock_outline),
                     suffixIcon: IconButton(
                       icon: Icon(
-                        _newObscure
-                            ? Icons.visibility_off
-                            : Icons.visibility,
+                        _newObscure ? Icons.visibility_off : Icons.visibility,
                       ),
                       onPressed: () =>
                           setState(() => _newObscure = !_newObscure),
@@ -399,9 +395,8 @@ class _SecurityScreenState extends ConsumerState<SecurityScreen> {
                     child: LinearProgressIndicator(
                       value: strength,
                       minHeight: 6,
-                      backgroundColor: Theme.of(context)
-                          .colorScheme
-                          .surfaceContainerHighest,
+                      backgroundColor:
+                          Theme.of(context).colorScheme.surfaceContainerHighest,
                       valueColor: AlwaysStoppedAnimation(
                         _strengthColor(strength),
                       ),
@@ -503,8 +498,8 @@ class _SecurityScreenState extends ConsumerState<SecurityScreen> {
                   ? const SizedBox(
                       width: 20,
                       height: 20,
-                      child:
-                          CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2, color: Colors.white),
                     )
                   : const Text(
                       'Change Password',
@@ -550,8 +545,7 @@ class _SectionHeader extends StatelessWidget {
         Container(
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
-            color:
-                Theme.of(context).colorScheme.primary.withValues(alpha: 0.1),
+            color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.1),
             borderRadius: BorderRadius.circular(12),
           ),
           child: Icon(icon,
@@ -599,9 +593,7 @@ class _StepIndicator extends StatelessWidget {
           child: Text(
             '$step',
             style: const TextStyle(
-                color: Colors.white,
-                fontSize: 13,
-                fontWeight: FontWeight.bold),
+                color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
           ),
         ),
         const SizedBox(width: 10),
@@ -644,10 +636,12 @@ class _PasswordRequirements extends StatelessWidget {
               Icon(
                 met ? Icons.check_rounded : Icons.circle_outlined,
                 size: 14,
-                color: met ? Colors.green : Theme.of(context)
-                    .colorScheme
-                    .onSurface
-                    .withValues(alpha: 0.35),
+                color: met
+                    ? Colors.green
+                    : Theme.of(context)
+                        .colorScheme
+                        .onSurface
+                        .withValues(alpha: 0.35),
               ),
               const SizedBox(width: 6),
               Text(

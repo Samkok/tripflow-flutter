@@ -60,9 +60,10 @@ class _AddToTripSheetState extends ConsumerState<AddToTripSheet> {
                       children: [
                         Text(
                           'Add Locations to Trip',
-                          style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                                fontWeight: FontWeight.bold,
-                              ),
+                          style:
+                              Theme.of(context).textTheme.titleLarge?.copyWith(
+                                    fontWeight: FontWeight.bold,
+                                  ),
                         ),
                         IconButton(
                           icon: const Icon(Icons.close),
@@ -94,7 +95,8 @@ class _AddToTripSheetState extends ConsumerState<AddToTripSheet> {
                   separatorBuilder: (_, __) => const SizedBox(height: 8),
                   itemBuilder: (context, index) {
                     final location = widget.availableLocations[index];
-                    final isSelected = selectedLocationIds.contains(location.id);
+                    final isSelected =
+                        selectedLocationIds.contains(location.id);
 
                     return _buildLocationTile(location, isSelected, () {
                       setState(() {
@@ -146,7 +148,8 @@ class _AddToTripSheetState extends ConsumerState<AddToTripSheet> {
                         // Auto-select if only one trip is available
                         if (displayTrips.length == 1 && selectedTrip == null) {
                           WidgetsBinding.instance.addPostFrameCallback((_) {
-                            if (mounted) setState(() => selectedTrip = displayTrips.first);
+                            if (mounted)
+                              setState(() => selectedTrip = displayTrips.first);
                           });
                         }
 
@@ -227,8 +230,8 @@ class _AddToTripSheetState extends ConsumerState<AddToTripSheet> {
                                     // long-press, trip-detail) shares the
                                     // same gating.
                                     final picks = widget.availableLocations
-                                        .where((l) => selectedLocationIds
-                                            .contains(l.id))
+                                        .where((l) =>
+                                            selectedLocationIds.contains(l.id))
                                         .toList();
                                     if (!mounted) return;
                                     final added = await LocationAddService(ref)

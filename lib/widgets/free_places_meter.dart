@@ -102,7 +102,8 @@ class FreePlacesProgressChip extends ConsumerWidget {
               decoration: BoxDecoration(
                 color: filled
                     ? theme.colorScheme.primary
-                    : theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.25),
+                    : theme.colorScheme.onSurfaceVariant
+                        .withValues(alpha: 0.25),
                 borderRadius: BorderRadius.circular(3),
               ),
             );

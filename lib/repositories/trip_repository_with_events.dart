@@ -31,12 +31,12 @@ class TripRepositoryWithEvents {
         startDate: startDate,
         endDate: endDate,
       );
-      
+
       developer.log(
         'TripRepositoryWithEvents: Trip created - ${trip.id}',
         name: 'trip_repository_events',
       );
-      
+
       _eventService.notifyTripCreated(trip);
       return trip;
     } catch (e) {
@@ -64,12 +64,12 @@ class TripRepositoryWithEvents {
   Future<Trip> setActiveTrip(String userId, String tripId) async {
     try {
       final trip = await _repository.setActiveTrip(userId, tripId);
-      
+
       developer.log(
         'TripRepositoryWithEvents: Trip activated - ${trip.id}',
         name: 'trip_repository_events',
       );
-      
+
       // CRITICAL: Emit activation event for UI to listen to
       _eventService.notifyTripActivated(trip);
       return trip;
@@ -88,12 +88,12 @@ class TripRepositoryWithEvents {
   Future<Trip> deactivateTrip(String tripId) async {
     try {
       final trip = await _repository.deactivateTrip(tripId);
-      
+
       developer.log(
         'TripRepositoryWithEvents: Trip deactivated - ${trip.id}',
         name: 'trip_repository_events',
       );
-      
+
       // CRITICAL: Emit deactivation event for UI to listen to
       _eventService.notifyTripDeactivated(trip.id);
       return trip;
@@ -127,12 +127,12 @@ class TripRepositoryWithEvents {
         totalDistance: totalDistance,
         totalDurationMinutes: totalDurationMinutes,
       );
-      
+
       developer.log(
         'TripRepositoryWithEvents: Trip updated - ${trip.id}',
         name: 'trip_repository_events',
       );
-      
+
       _eventService.notifyTripUpdated(trip);
       return trip;
     } catch (e) {
@@ -149,12 +149,12 @@ class TripRepositoryWithEvents {
   Future<void> deleteTrip(String tripId) async {
     try {
       await _repository.deleteTrip(tripId);
-      
+
       developer.log(
         'TripRepositoryWithEvents: Trip deleted - $tripId',
         name: 'trip_repository_events',
       );
-      
+
       _eventService.notifyTripDeleted(tripId);
     } catch (e) {
       developer.log(

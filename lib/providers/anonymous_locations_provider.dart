@@ -12,7 +12,8 @@ final anonymousUserIdProvider = FutureProvider<String>((ref) async {
 });
 
 /// Provider for loading anonymous (local) locations
-final anonymousLocationsProvider = FutureProvider<List<SavedLocation>>((ref) async {
+final anonymousLocationsProvider =
+    FutureProvider<List<SavedLocation>>((ref) async {
   try {
     final userId = await ref.read(anonymousUserIdProvider.future);
     // Load local locations from storage
@@ -25,18 +26,21 @@ final anonymousLocationsProvider = FutureProvider<List<SavedLocation>>((ref) asy
 });
 
 /// Provider for synced (but offline) locations from authenticated users
-final unSyncedLocationsProvider = FutureProvider<List<SavedLocation>>((ref) async {
+final unSyncedLocationsProvider =
+    FutureProvider<List<SavedLocation>>((ref) async {
   try {
     final userId = ref.read(authStateProvider).maybeWhen(
-      data: (state) => state?.session?.user.id,
-      orElse: () => null,
-    );
-    
+          data: (state) => state?.session?.user.id,
+          orElse: () => null,
+        );
+
     if (userId == null) return [];
-    
+
     // Load local unsynced locations
     final locations = await StorageService.getHiveLocations(userId);
-    return locations.where((loc) => !loc.isSynced && loc.source == 'synced').toList();
+    return locations
+        .where((loc) => !loc.isSynced && loc.source == 'synced')
+        .toList();
   } catch (e) {
     log('Error loading unsynced locations: $e');
     return [];
@@ -44,12 +48,13 @@ final unSyncedLocationsProvider = FutureProvider<List<SavedLocation>>((ref) asyn
 });
 
 /// Sync anonymous locations when user logs in
-final syncAnonymousLocationsProvider = FutureProvider.family<SyncResult?, String>(
+final syncAnonymousLocationsProvider =
+    FutureProvider.family<SyncResult?, String>(
   (ref, userId) async {
     try {
       // Get anonymous locations
       final anonLocations = await ref.read(anonymousLocationsProvider.future);
-      
+
       if (anonLocations.isEmpty) {
         return null; // No anonymous locations to sync
       }

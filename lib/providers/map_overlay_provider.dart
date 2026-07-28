@@ -48,13 +48,16 @@ class MapOverlayNotifier extends AsyncNotifier<MapOverlayState> {
   Future<MapOverlayState> build() async {
     // PERFORMANCE: Use .select() to only rebuild when specific fields change
     // instead of watching entire TripState which rebuilds on ANY change
-    final pinnedLocations = ref.watch(tripProvider.select((s) => s.pinnedLocations));
-    final currentLocation = ref.watch(tripProvider.select((s) => s.currentLocation));
+    final pinnedLocations =
+        ref.watch(tripProvider.select((s) => s.pinnedLocations));
+    final currentLocation =
+        ref.watch(tripProvider.select((s) => s.currentLocation));
     final legPolylines = ref.watch(tripProvider.select((s) => s.legPolylines));
     final proximityThreshold = ref.watch(proximityThresholdCommittedProvider);
     final tappedPolylineId = ref.watch(tappedPolylineIdProvider);
     final showMarkerNames = ref.watch(showMarkerNamesProvider);
-    final isDarkMode = ref.watch(themeProvider.select((mode) => mode == ThemeMode.dark));
+    final isDarkMode =
+        ref.watch(themeProvider.select((mode) => mode == ThemeMode.dark));
 
     // Load marker icons if not already loaded
     if (_currentLocationIcon == null) {
@@ -62,8 +65,14 @@ class MapOverlayNotifier extends AsyncNotifier<MapOverlayState> {
           backgroundColor: Colors.black);
     }
 
-    return await _generateOverlays(pinnedLocations, currentLocation,
-        legPolylines, proximityThreshold, tappedPolylineId, showMarkerNames, isDarkMode);
+    return await _generateOverlays(
+        pinnedLocations,
+        currentLocation,
+        legPolylines,
+        proximityThreshold,
+        tappedPolylineId,
+        showMarkerNames,
+        isDarkMode);
   }
 
   Future<MapOverlayState> _generateOverlays(

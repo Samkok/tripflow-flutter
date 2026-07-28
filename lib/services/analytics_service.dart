@@ -152,4 +152,8 @@ class AnalyticsService {
   void routeCardShared({required bool anonymous, String format = 'story'}) =>
       _fire('route_card_shared',
           {'anonymous': anonymous ? 'yes' : 'no', 'format': format});
+
+  /// The route card was saved to the photo library instead of shared.
+  void routeCardSaved({String format = 'story'}) =>
+      _fire('route_card_saved', {'format': format});
 }

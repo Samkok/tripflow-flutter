@@ -46,7 +46,8 @@ class RevenueCatPurchaseResult {
         errorMessage: message,
       );
 
-  factory RevenueCatPurchaseResult.cancelled() => const RevenueCatPurchaseResult(
+  factory RevenueCatPurchaseResult.cancelled() =>
+      const RevenueCatPurchaseResult(
         success: false,
         userCancelled: true,
       );
@@ -112,7 +113,8 @@ class RevenueCatService {
         throw Exception('REVENUECAT_API_KEY_$platform not found in .env file');
       }
 
-      debugPrint('RevenueCatService: Initializing with API key for ${Platform.isIOS ? 'iOS' : 'Android'}...');
+      debugPrint(
+          'RevenueCatService: Initializing with API key for ${Platform.isIOS ? 'iOS' : 'Android'}...');
 
       // Configure RevenueCat
       final configuration = PurchasesConfiguration(apiKey);
@@ -138,8 +140,10 @@ class RevenueCatService {
       // Set up listener for customer info updates
       Purchases.addCustomerInfoUpdateListener((customerInfo) {
         debugPrint('RevenueCatService: Customer info updated via listener');
-        debugPrint('RevenueCatService: Listener - Active entitlements: ${customerInfo.entitlements.active.keys.toList()}');
-        debugPrint('RevenueCatService: Listener - All entitlements: ${customerInfo.entitlements.all.keys.toList()}');
+        debugPrint(
+            'RevenueCatService: Listener - Active entitlements: ${customerInfo.entitlements.active.keys.toList()}');
+        debugPrint(
+            'RevenueCatService: Listener - All entitlements: ${customerInfo.entitlements.all.keys.toList()}');
         RevenueCatService()._customerInfoController.add(customerInfo);
       });
 
@@ -243,8 +247,10 @@ class RevenueCatService {
     try {
       final customerInfo = await Purchases.getCustomerInfo();
       debugPrint('RevenueCatService: Retrieved customer info');
-      debugPrint('RevenueCatService: Active entitlements: ${customerInfo.entitlements.active.keys.toList()}');
-      debugPrint('RevenueCatService: All entitlements: ${customerInfo.entitlements.all.keys.toList()}');
+      debugPrint(
+          'RevenueCatService: Active entitlements: ${customerInfo.entitlements.active.keys.toList()}');
+      debugPrint(
+          'RevenueCatService: All entitlements: ${customerInfo.entitlements.all.keys.toList()}');
       return customerInfo;
     } catch (e) {
       debugPrint('RevenueCatService: Failed to get customer info - $e');
@@ -311,11 +317,14 @@ class RevenueCatService {
       // ignore: deprecated_member_use
       final result = await Purchases.purchasePackage(package);
       debugPrint('RevenueCatService: Purchase successful');
-      debugPrint('RevenueCatService: Purchase result - Active entitlements: ${result.customerInfo.entitlements.active.keys.toList()}');
-      debugPrint('RevenueCatService: Purchase result - All entitlements: ${result.customerInfo.entitlements.all.keys.toList()}');
+      debugPrint(
+          'RevenueCatService: Purchase result - Active entitlements: ${result.customerInfo.entitlements.active.keys.toList()}');
+      debugPrint(
+          'RevenueCatService: Purchase result - All entitlements: ${result.customerInfo.entitlements.all.keys.toList()}');
 
       // Check if the expected entitlement is active
-      final hasVoyZaPro = result.customerInfo.entitlements.active.containsKey(RevenueCatConfig.entitlementVoyZaPro);
+      final hasVoyZaPro = result.customerInfo.entitlements.active
+          .containsKey(RevenueCatConfig.entitlementVoyZaPro);
       debugPrint('RevenueCatService: Has voyza_pro entitlement: $hasVoyZaPro');
 
       // purchasePackage returns PurchaseResult which contains customerInfo
@@ -464,7 +473,8 @@ class RevenueCatService {
   Future<String?> getCurrentProductId() async {
     try {
       final customerInfo = await getCustomerInfo();
-      final proEntitlement = customerInfo.entitlements.active[RevenueCatConfig.entitlementVoyZaPro];
+      final proEntitlement = customerInfo
+          .entitlements.active[RevenueCatConfig.entitlementVoyZaPro];
       return proEntitlement?.productIdentifier;
     } catch (e) {
       debugPrint('RevenueCatService: Failed to get current product ID - $e');
@@ -489,14 +499,17 @@ class RevenueCatService {
   Future<RevenueCatPurchaseResult> changePlan(Package newPackage) async {
     await waitForInitialization();
     try {
-      debugPrint('RevenueCatService: Changing plan to: ${newPackage.identifier}');
+      debugPrint(
+          'RevenueCatService: Changing plan to: ${newPackage.identifier}');
 
       // Get current subscription info
       final customerInfo = await getCustomerInfo();
-      final proEntitlement = customerInfo.entitlements.active[RevenueCatConfig.entitlementVoyZaPro];
+      final proEntitlement = customerInfo
+          .entitlements.active[RevenueCatConfig.entitlementVoyZaPro];
 
       if (proEntitlement == null) {
-        return RevenueCatPurchaseResult.error('No active subscription to change.');
+        return RevenueCatPurchaseResult.error(
+            'No active subscription to change.');
       }
 
       // Purchase the new package (RevenueCat/App Store/Play Store handles the upgrade/downgrade)
@@ -509,7 +522,8 @@ class RevenueCatService {
       return result;
     } catch (e) {
       debugPrint('RevenueCatService: Plan change failed - $e');
-      return RevenueCatPurchaseResult.error('Failed to change plan. Please try again.');
+      return RevenueCatPurchaseResult.error(
+          'Failed to change plan. Please try again.');
     }
   }
 

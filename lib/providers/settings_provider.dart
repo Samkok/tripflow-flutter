@@ -5,4 +5,5 @@ import '../services/location_service.dart';
 final showMarkerNamesProvider = StateProvider<bool>((ref) => true);
 
 // Provider for the device's compass heading
-final headingStreamProvider = StreamProvider<double?>((ref) => LocationService.getCompassStream());
+final headingStreamProvider =
+    StreamProvider<double?>((ref) => LocationService.getCompassStream());

@@ -59,11 +59,8 @@ Future<void> openDirectionsInGoogleMaps({
   };
 
   if (waypoints.isNotEmpty) {
-    params['waypoints'] =
-        waypoints.map(_coordsParam).join('|');
-    final waypointPlaceIds = waypoints
-        .map((w) => w.placeId ?? '')
-        .toList();
+    params['waypoints'] = waypoints.map(_coordsParam).join('|');
+    final waypointPlaceIds = waypoints.map((w) => w.placeId ?? '').toList();
     if (waypointPlaceIds.any((id) => id.isNotEmpty)) {
       // Google's spec requires same length as `waypoints` (empty entries
       // are allowed and fall back to the coord). We always emit the full
@@ -149,8 +146,8 @@ Future<void> _launchOrFallback(
     debugPrint('External map launch failed: $e');
   }
 
-  final geoUrl = Uri.parse(
-      'geo:${fallbackCoords.latitude},${fallbackCoords.longitude}');
+  final geoUrl =
+      Uri.parse('geo:${fallbackCoords.latitude},${fallbackCoords.longitude}');
   try {
     await launchUrl(geoUrl, mode: LaunchMode.externalApplication);
   } catch (e) {

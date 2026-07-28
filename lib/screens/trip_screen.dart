@@ -23,7 +23,11 @@ import 'package:voyza/utils/countries.dart';
 import 'package:voyza/utils/trip_date_validator.dart';
 import 'package:voyza/widgets/app_toast.dart';
 import 'package:voyza/widgets/country_flag_icon.dart';
+import 'package:voyza/utils/same_day_place_guard.dart';
+import 'package:voyza/utils/trip_dates.dart';
 import 'package:voyza/widgets/country_picker_sheet.dart';
+import 'package:voyza/widgets/pulsing_glow.dart';
+import 'package:voyza/screens/create_trip_wizard.dart';
 import 'package:voyza/widgets/referral_prompt.dart';
 import 'package:voyza/widgets/trip_collaborators_row.dart';
 import 'package:voyza/widgets/trip_skeleton.dart';
@@ -36,13 +40,7 @@ class TripScreen extends ConsumerStatefulWidget {
 }
 
 class _TripScreenState extends ConsumerState<TripScreen> {
-  bool _showCreateForm = false;
   bool _creatingSampleTrip = false;
-  final _nameController = TextEditingController();
-  final _descriptionController = TextEditingController();
-  String? _selectedCountryCode; // Optional ISO-3166-1 alpha-2 for new trip
-  DateTime? _selectedStartDate;
-  DateTime? _selectedEndDate;
 
   // Multi-select state
   bool _selectionMode = false;
@@ -93,8 +91,7 @@ class _TripScreenState extends ConsumerState<TripScreen> {
         final start = trip.startDate;
         final days = start != null
             ? endDay
-                    .difference(
-                        DateTime(start.year, start.month, start.day))
+                    .difference(DateTime(start.year, start.month, start.day))
                     .inDays +
                 1
             : 1;
@@ -124,56 +121,6 @@ class _TripScreenState extends ConsumerState<TripScreen> {
     } catch (e) {
       debugPrint('TripScreen._maybeShowTripRecap: $e');
     }
-  }
-
-  @override
-  void dispose() {
-    _nameController.dispose();
-    _descriptionController.dispose();
-    super.dispose();
-  }
-
-  void _resetForm() {
-    _nameController.clear();
-    _descriptionController.clear();
-    setState(() {
-      _showCreateForm = false;
-      _selectedCountryCode = null;
-      _selectedStartDate = null;
-      _selectedEndDate = null;
-    });
-  }
-
-  Future<void> _pickCreateFormCountry() async {
-    final result = await showCountryPickerSheet(
-      context,
-      selectedCode: _selectedCountryCode,
-    );
-    if (result == null) return;
-    setState(() {
-      _selectedCountryCode =
-          result.code == kClearCountry.code ? null : result.code;
-    });
-  }
-
-  Future<void> _pickCreateFormDateRange() async {
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    final initialRange =
-        (_selectedStartDate != null && _selectedEndDate != null)
-            ? DateTimeRange(start: _selectedStartDate!, end: _selectedEndDate!)
-            : null;
-    final picked = await showDateRangePicker(
-      context: context,
-      initialDateRange: initialRange,
-      firstDate: DateTime(today.year - 1),
-      lastDate: DateTime(today.year + 5),
-    );
-    if (picked == null) return;
-    setState(() {
-      _selectedStartDate = picked.start;
-      _selectedEndDate = picked.end;
-    });
   }
 
   void _showLoginRequiredModal(BuildContext context) {
@@ -283,68 +230,16 @@ class _TripScreenState extends ConsumerState<TripScreen> {
     );
   }
 
-  Future<void> _createTrip() async {
-    if (_nameController.text.trim().isEmpty) {
-      AppToast.warning(context, 'Please enter a trip name');
+  void _openCreateWizard() {
+    final userId = ref.read(currentUserIdProvider);
+    if (userId == null) {
+      _showLoginRequiredModal(context);
       return;
     }
-
-    // Trip creation is free and unlimited — only saved places are metered
-    // (see SubscriptionLimitService.canAddPlace). The paywall promises
-    // "Unlimited trips," so no gate here.
-    try {
-      final authState = ref.read(authStateProvider);
-      final tripRepository = ref.read(tripRepositoryProvider);
-
-      // Captured BEFORE the create/invalidate so "first" means "had zero
-      // trips when they tapped Create." Drives the one-time congrats modal
-      // on the details screen (double-gated by a per-user prefs flag).
-      // Fail-safe: while the trips list is loading/errored we can't know,
-      // so we DON'T celebrate rather than risk congratulating a veteran.
-      final wasFirstTrip =
-          ref.read(userTripsProvider).asData?.value.isEmpty ?? false;
-
-      await authState.whenData((state) async {
-        final userId = state.session?.user.id;
-        if (userId == null) throw Exception('User not authenticated');
-
-        final newTrip = await tripRepository.createTrip(
-          userId: userId,
-          name: _nameController.text.trim(),
-          description: _descriptionController.text.trim().isEmpty
-              ? null
-              : _descriptionController.text.trim(),
-          countryCode: _selectedCountryCode,
-          startDate: _selectedStartDate,
-          endDate: _selectedEndDate,
-        );
-
-        // Invalidate and refresh
-        ref.invalidate(userTripsProvider);
-        AnalyticsService.instance.tripCreated();
-        _resetForm();
-
-        if (mounted) {
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (context) => TripDetailsScreen(
-                trip: newTrip,
-                celebrateFirstTrip: wasFirstTrip,
-              ),
-            ),
-          );
-        }
-      });
-    } catch (e) {
-      debugPrint('Error creating trip: $e');
-      if (mounted) {
-        AppToast.error(
-          context,
-          'Could not create trip. Please check your connection and try again.',
-        );
-      }
-    }
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const CreateTripWizard()),
+    );
   }
 
   /// [goToMap] jumps the bottom nav to the Map tab after activation — the
@@ -404,8 +299,7 @@ class _TripScreenState extends ConsumerState<TripScreen> {
       final trip = await tripRepository.createTrip(
         userId: userId,
         name: 'Lisbon — sample trip ✨',
-        description:
-            'A demo trip so you can see route optimization in action. '
+        description: 'A demo trip so you can see route optimization in action. '
             'Delete it anytime to free up your free places.',
         countryCode: 'PT',
         startDate: day,
@@ -629,11 +523,20 @@ class _TripScreenState extends ConsumerState<TripScreen> {
     ref.listen<String?>(tripFormPrefillProvider, (prev, code) {
       if (code == null) return;
       ref.read(tripFormPrefillProvider.notifier).state = null; // consume
-      setState(() {
-        _showCreateForm = true;
-        // '' = "open the form without a country" (user skipped the question).
-        _selectedCountryCode = code.isEmpty ? null : code;
-      });
+      // Same auth gate as the New Trip button — without it a signed-out
+      // user could fill all four wizard steps and only learn at Confirm.
+      if (ref.read(currentUserIdProvider) == null) {
+        _showLoginRequiredModal(context);
+        return;
+      }
+      // '' = "start without a country" (user skipped the question) — the
+      // wizard shows its country step either way so they can revise.
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => CreateTripWizard(initialCountryCode: code),
+        ),
+      );
     });
     ref.listen<int>(sampleTripRequestProvider, (prev, next) {
       if (prev == next) return;
@@ -815,23 +718,29 @@ class _TripScreenState extends ConsumerState<TripScreen> {
               SliverToBoxAdapter(
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 16),
-                  child: _showCreateForm
-                      ? _buildCreateForm(context)
-                      : ElevatedButton.icon(
-                          onPressed: () {
-                            final userId = ref.read(currentUserIdProvider);
-                            if (userId == null) {
-                              _showLoginRequiredModal(context);
-                            } else {
-                              setState(() => _showCreateForm = true);
-                            }
-                          },
-                          icon: const Icon(Icons.add_rounded),
-                          label: const Text('New Trip'),
-                          style: ElevatedButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(vertical: 12),
-                          ),
+                  // THE creation affordance — glowing, big, unmissable.
+                  child: PulsingGlow(
+                    shape: BoxShape.rectangle,
+                    borderRadius: BorderRadius.circular(18),
+                    glowColor: Theme.of(context).colorScheme.primary,
+                    child: SizedBox(
+                      width: double.infinity,
+                      child: FilledButton(
+                        onPressed: _openCreateWizard,
+                        style: FilledButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 18),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(18)),
+                          textStyle:
+                              Theme.of(context).textTheme.titleMedium?.copyWith(
+                                    fontWeight: FontWeight.w800,
+                                    letterSpacing: 0.6,
+                                  ),
                         ),
+                        child: const Text('New Trip'),
+                      ),
+                    ),
+                  ),
                 ),
               ),
 
@@ -900,7 +809,8 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                               label: const Text('Try a sample trip'),
                             ),
                             const SizedBox(height: 8),
-                            Text('or tap "New Trip" above to start from scratch',
+                            Text(
+                                'or tap "New Trip" above to start from scratch',
                                 textAlign: TextAlign.center,
                                 style: t.textTheme.bodySmall?.copyWith(
                                     color: t.colorScheme.onSurfaceVariant)),
@@ -1197,163 +1107,6 @@ class _TripScreenState extends ConsumerState<TripScreen> {
     );
   }
 
-  Widget _buildCreateForm(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Theme.of(context).cardColor,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: Theme.of(context).dividerColor.withOpacity(0.2),
-          width: 1,
-        ),
-      ),
-      child: Column(
-        children: [
-          TextField(
-            controller: _nameController,
-            maxLength: 30,
-            decoration: InputDecoration(
-              hintText: 'Trip name',
-              labelText: 'Trip Name',
-              counterText: '',
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(8),
-              ),
-            ),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _descriptionController,
-            decoration: InputDecoration(
-              hintText: 'Optional description',
-              labelText: 'Description',
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(8),
-              ),
-            ),
-            minLines: 2,
-            maxLines: 3,
-          ),
-          const SizedBox(height: 12),
-          _buildCountryField(context),
-          const SizedBox(height: 12),
-          _buildDateRangeField(context),
-          const SizedBox(height: 16),
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton(
-                  onPressed: _resetForm,
-                  child: const Text('Cancel'),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: ElevatedButton(
-                  onPressed: _createTrip,
-                  child: const Text('Create'),
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildCountryField(BuildContext context) {
-    final country = findCountryByCode(_selectedCountryCode);
-    final theme = Theme.of(context);
-    return InkWell(
-      onTap: _pickCreateFormCountry,
-      borderRadius: BorderRadius.circular(8),
-      child: InputDecorator(
-        decoration: InputDecoration(
-          labelText: 'Destination Country',
-          hintText: 'Optional — biases location search',
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(8),
-          ),
-          suffixIcon: country == null
-              ? const Icon(Icons.arrow_drop_down)
-              : IconButton(
-                  icon: const Icon(Icons.clear, size: 20),
-                  tooltip: 'Clear country',
-                  onPressed: () => setState(() => _selectedCountryCode = null),
-                ),
-        ),
-        child: Row(
-          children: [
-            if (country != null) ...[
-              CountryFlagIcon(country.code, height: 18),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  country.name,
-                  style: theme.textTheme.bodyLarge,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-            ] else
-              Expanded(
-                child: Text(
-                  'Choose a country',
-                  style: theme.textTheme.bodyLarge?.copyWith(
-                    color: theme.hintColor,
-                  ),
-                ),
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildDateRangeField(BuildContext context) {
-    final theme = Theme.of(context);
-    final hasRange = _selectedStartDate != null && _selectedEndDate != null;
-    final fmt = DateFormat('MMM d, y');
-    return InkWell(
-      onTap: _pickCreateFormDateRange,
-      borderRadius: BorderRadius.circular(8),
-      child: InputDecorator(
-        decoration: InputDecoration(
-          labelText: 'Trip Dates',
-          hintText: 'Optional — pick start and end dates',
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(8),
-          ),
-          suffixIcon: !hasRange
-              ? const Icon(Icons.calendar_today_outlined)
-              : IconButton(
-                  icon: const Icon(Icons.clear, size: 20),
-                  tooltip: 'Clear dates',
-                  onPressed: () => setState(() {
-                    _selectedStartDate = null;
-                    _selectedEndDate = null;
-                  }),
-                ),
-        ),
-        child: Row(
-          children: [
-            Expanded(
-              child: Text(
-                hasRange
-                    ? '${fmt.format(_selectedStartDate!)} - ${fmt.format(_selectedEndDate!)}'
-                    : 'Add a date range',
-                style: theme.textTheme.bodyLarge?.copyWith(
-                  color: hasRange ? null : theme.hintColor,
-                ),
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
   Widget _buildTripCard(BuildContext context, Trip trip) {
     final locationsAsync = ref.watch(savedLocationsProvider);
     final isSelected = _selectedTripIds.contains(trip.id);
@@ -1602,7 +1355,7 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                                       startDate.month, startDate.day);
                                   final e = DateTime(endDate!.year,
                                       endDate.month, endDate.day);
-                                  final dayCount = e.difference(s).inDays + 1;
+                                  final dayCount = daySpanDays(s, e) + 1;
                                   final dateText = startDate == endDate
                                       ? DateFormat('MMM d, y').format(startDate)
                                       : '${DateFormat('MMM d').format(startDate)} - ${DateFormat('MMM d, y').format(endDate)}';
@@ -1970,6 +1723,21 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                                   ],
                                 ),
                               ),
+                              PopupMenuItem<String>(
+                                value: 'reschedule',
+                                child: Row(
+                                  children: [
+                                    Icon(
+                                      Icons.event_repeat_rounded,
+                                      size: 18,
+                                      color:
+                                          Theme.of(context).colorScheme.primary,
+                                    ),
+                                    const SizedBox(width: 12),
+                                    const Text('Reschedule'),
+                                  ],
+                                ),
+                              ),
                               const PopupMenuDivider(),
                               const PopupMenuItem<String>(
                                 value: 'delete',
@@ -1992,6 +1760,8 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                             onSelected: (value) {
                               if (value == 'rename') {
                                 _showEditTripDialog(context, trip);
+                              } else if (value == 'reschedule') {
+                                _rescheduleTripFromCard(trip);
                               } else if (value == 'delete') {
                                 _showDeleteConfirmation(context, trip);
                               }
@@ -2068,7 +1838,7 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                                       startDate.month, startDate.day);
                                   final e = DateTime(
                                       endDate.year, endDate.month, endDate.day);
-                                  final dayCount = e.difference(s).inDays + 1;
+                                  final dayCount = daySpanDays(s, e) + 1;
                                   final dateText = startDate == endDate
                                       ? DateFormat('MMM d, y').format(startDate)
                                       : '${DateFormat('MMM d').format(startDate)} - ${DateFormat('MMM d, y').format(endDate)}';
@@ -2405,6 +2175,7 @@ class _TripScreenState extends ConsumerState<TripScreen> {
         trip: trip,
         onSave: ({
           required String newName,
+          required String newDescription,
           required String? newCountryCode,
           required bool clearCountry,
           required DateTime? newStartDate,
@@ -2414,6 +2185,7 @@ class _TripScreenState extends ConsumerState<TripScreen> {
           _updateTripDetails(
             trip,
             newName: newName,
+            newDescription: newDescription,
             newCountryCode: newCountryCode,
             clearCountry: clearCountry,
             newStartDate: newStartDate,
@@ -2425,9 +2197,250 @@ class _TripScreenState extends ConsumerState<TripScreen> {
     );
   }
 
+  /// Card action: move the whole trip to a new start date. The duration is
+  /// preserved, the start can't be in the past, and every planned place
+  /// shifts with it — same day-by-day grouping, same order.
+  Future<void> _rescheduleTripFromCard(Trip trip) async {
+    // Never reschedule against a list that hasn't loaded — an empty
+    // fallback would move the trip's range while shifting zero places.
+    final allAsync = ref.read(savedLocationsProvider);
+    final all = allAsync.valueOrNull;
+    if (all == null) {
+      AppToast.info(context, 'Still loading your places — try again.');
+      return;
+    }
+    final tripLocs = all.where((l) => l.tripId == trip.id).toList();
+    final days = contiguousTripDates([
+      trip.startDate,
+      trip.endDate,
+      for (final l in tripLocs) ...[
+        l.scheduledDate ?? l.createdAt,
+        l.scheduledEndDate ?? l.scheduledDate ?? l.createdAt,
+      ],
+    ]);
+    if (days.isEmpty) {
+      AppToast.info(context, 'Add dates or places first, then reschedule.');
+      return;
+    }
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final newStart = await showDatePicker(
+      context: context,
+      initialDate: days.first.isBefore(today) ? today : days.first,
+      firstDate: today,
+      lastDate: DateTime(today.year + 5),
+      helpText: 'New start date',
+    );
+    if (newStart == null || !mounted) return;
+
+    final startKey = DateTime(newStart.year, newStart.month, newStart.day);
+    final span = daySpanDays(days.first, days.last);
+    final newEnd = DateTime(startKey.year, startKey.month, startKey.day + span);
+    try {
+      final scheduled = tripLocs.where((l) => l.scheduledDate != null).toList();
+      var moved = 0;
+      if (scheduled.isNotEmpty) {
+        // Span preserved → no clamping → the plan can never contain
+        // merge-deletions on this path.
+        final plan = _planTripShift(
+          scheduled,
+          oldStart: days.first,
+          newStart: startKey,
+          newEnd: newEnd,
+        );
+        await _executeShiftPlan(plan);
+        moved = plan.moved;
+      }
+      await ref.read(tripRepositoryProvider).updateTrip(
+            trip.id,
+            startDate: startKey,
+            endDate: newEnd,
+          );
+      ref.invalidate(userTripsProvider);
+      if (mounted) {
+        final fmt = DateFormat('MMM d');
+        final movedNote = moved > 0
+            ? ' · $moved ${moved == 1 ? 'place' : 'places'} moved'
+            : '';
+        AppToast.success(
+            context,
+            'Trip moved — ${fmt.format(startKey)} to '
+            '${fmt.format(newEnd)}$movedNote');
+      }
+    } catch (e) {
+      debugPrint('_rescheduleTripFromCard: $e');
+      if (mounted) {
+        AppToast.error(
+            context,
+            'Couldn\'t finish rescheduling — some places may not have '
+            'moved. Check the trip and try again.');
+      }
+    }
+  }
+
+  /// "Trip dates changed — what about the planned places?" Returns 'move'
+  /// (shift them with the trip), 'keep' (leave them on their dates), or
+  /// null (cancel the whole edit).
+  Future<String?> _askRescheduleMode({
+    required int count,
+    required DateTime newStart,
+  }) {
+    final fmt = DateFormat('MMM d');
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) {
+        final theme = Theme.of(ctx);
+        return AlertDialog(
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: const Text('Reschedule the plan too?'),
+          content: Text(
+            '$count planned ${count == 1 ? 'place' : 'places'} follow the '
+            'old dates. Move ${count == 1 ? 'it' : 'them'} with the trip — '
+            'day by day, in the same order, starting ${fmt.format(newStart)} '
+            '— or keep ${count == 1 ? 'it' : 'them'} on '
+            '${count == 1 ? 'its' : 'their'} current dates?',
+            style: theme.textTheme.bodyMedium,
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            OutlinedButton(
+              onPressed: () => Navigator.pop(ctx, 'keep'),
+              child: const Text('Keep dates'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, 'move'),
+              child: const Text('Move with trip'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  /// A shift decided entirely BEFORE any write: per-row updates, rows to
+  /// delete (same-place squashed onto one day by a shortening clamp), and
+  /// counts for the caller's single toast. Rows whose stored dates would
+  /// not change are skipped outright.
+  ({
+    Map<String, Map<String, dynamic>> updates,
+    List<String> deletions,
+    int moved,
+    int merged,
+  }) _planTripShift(
+    List<SavedLocation> tripLocations, {
+    required DateTime oldStart,
+    required DateTime newStart,
+    required DateTime newEnd,
+  }) {
+    final oldStartKey = dayKey(oldStart);
+    final rangeStart = dayKey(newStart);
+    final rangeEnd = dayKey(newEnd);
+    // Calendar-day delta (NOT difference().inDays — that truncates across a
+    // DST spring-forward and shifted every place one day early).
+    final delta = daySpanDays(oldStartKey, rangeStart);
+
+    DateTime clamp(DateTime d) {
+      if (d.isBefore(rangeStart)) return rangeStart;
+      if (d.isAfter(rangeEnd)) return rangeEnd;
+      return d;
+    }
+
+    final sorted = [...tripLocations]
+      ..sort((a, b) => a.scheduledDate!.compareTo(b.scheduledDate!));
+    final updates = <String, Map<String, dynamic>>{};
+    final deletions = <String>[];
+    final claimedAccommodationDays = <DateTime>{};
+    final placedByDay = <DateTime, List<PlaceKey>>{};
+    var moved = 0, merged = 0;
+
+    for (final loc in sorted) {
+      final sched = dayKey(loc.scheduledDate!);
+      final newSched =
+          clamp(DateTime(sched.year, sched.month, sched.day + delta));
+      DateTime? newSpanEnd;
+      final end = loc.scheduledEndDate;
+      if (end != null) {
+        final e = dayKey(end);
+        final shifted = clamp(DateTime(e.year, e.month, e.day + delta));
+        if (shifted.isAfter(newSched)) newSpanEnd = shifted;
+      }
+
+      // Same-day duplicate rule: clamping a shortened trip can squash two
+      // copies of a place onto one day — planned as a deletion the caller
+      // must get CONSENT for before executing.
+      final key = placeKeyOfSaved(loc);
+      final placedHere = placedByDay.putIfAbsent(newSched, () => []);
+      if (placedHere.any((o) => isSamePlace(o, key))) {
+        deletions.add(loc.id);
+        merged++;
+        continue;
+      }
+      placedHere.add(key);
+
+      var unmarkAccommodation = false;
+      if (loc.isAccommodation) {
+        final covered = <DateTime>[];
+        for (var d = newSched;
+            !d.isAfter(newSpanEnd ?? newSched);
+            d = DateTime(d.year, d.month, d.day + 1)) {
+          covered.add(d);
+        }
+        if (covered.any(claimedAccommodationDays.contains)) {
+          unmarkAccommodation = true;
+        } else {
+          claimedAccommodationDays.addAll(covered);
+        }
+      }
+
+      final endUnchanged = (newSpanEnd == null && end == null) ||
+          (newSpanEnd != null &&
+              end != null &&
+              newSpanEnd.isAtSameMomentAs(dayKey(end)));
+      if (newSched.isAtSameMomentAs(sched) &&
+          endUnchanged &&
+          !unmarkAccommodation) {
+        continue; // no-op — don't rewrite identical rows
+      }
+
+      updates[loc.id] = {
+        'scheduled_date': newSched.toIso8601String(),
+        'scheduled_end_date': newSpanEnd?.toIso8601String(),
+        if (unmarkAccommodation) 'is_accommodation': false,
+      };
+      moved++;
+    }
+    return (
+      updates: updates,
+      deletions: deletions,
+      moved: moved,
+      merged: merged,
+    );
+  }
+
+  /// Executes a [_planTripShift] result: updates dispatched together
+  /// (single round-trip wall-clock), deletions LAST so a mid-flight
+  /// failure can't have destroyed rows before the moves landed.
+  Future<void> _executeShiftPlan(
+      ({
+        Map<String, Map<String, dynamic>> updates,
+        List<String> deletions,
+        int moved,
+        int merged,
+      }) plan) async {
+    final repo = ref.read(locationRepositoryProvider);
+    await Future.wait(
+        plan.updates.entries.map((e) => repo.updateLocation(e.key, e.value)));
+    await Future.wait(plan.deletions.map(repo.deleteLocation));
+  }
+
   Future<void> _updateTripDetails(
     Trip trip, {
     required String newName,
+    required String newDescription,
     required String? newCountryCode,
     required bool clearCountry,
     required DateTime? newStartDate,
@@ -2440,45 +2453,123 @@ class _TripScreenState extends ConsumerState<TripScreen> {
     }
 
     final nameUnchanged = newName == trip.name;
+    final descriptionUnchanged = newDescription == (trip.description ?? '');
     final countryUnchanged = !clearCountry &&
         (newCountryCode?.toUpperCase() ?? trip.countryCode) == trip.countryCode;
     final datesUnchanged = !clearDates &&
         newStartDate == trip.startDate &&
         newEndDate == trip.endDate;
-    if (nameUnchanged && countryUnchanged && datesUnchanged) {
+    if (nameUnchanged &&
+        descriptionUnchanged &&
+        countryUnchanged &&
+        datesUnchanged) {
       return; // No changes made
     }
 
-    // When the user changed the trip's date range to a non-empty range,
-    // verify that existing locations still fit; if any fall outside, ask
-    // for confirmation before persisting.
+    // When the user changed the trip's date range, planned places need a
+    // decision. If both old and new ranges have a start, offer the
+    // RESCHEDULE path: shift every place by the start-date delta so the
+    // day-by-day plan survives on the new dates, in the same order. If
+    // they'd rather keep places on their current dates (or ranges don't
+    // support a shift), fall back to the fit check.
+    ({
+      Map<String, Map<String, dynamic>> updates,
+      List<String> deletions,
+      int moved,
+      int merged,
+    })? pendingShift;
     if (!datesUnchanged &&
         !clearDates &&
         (newStartDate != null || newEndDate != null)) {
-      final allLocations =
-          ref.read(savedLocationsProvider).asData?.value ?? const [];
-      final tripLocationDates = allLocations
+      // Never plan against a list that hasn't loaded — an empty fallback
+      // silently skipped the reschedule question AND the fit check.
+      final allAsync = ref.read(savedLocationsProvider);
+      final allLocations = allAsync.valueOrNull;
+      if (allLocations == null) {
+        AppToast.info(context, 'Still loading your places — try again.');
+        return;
+      }
+      final tripLocations = allLocations
           .where((loc) => loc.tripId == trip.id && loc.scheduledDate != null)
-          .map((loc) => loc.scheduledDate!)
           .toList();
-      if (tripLocationDates.isNotEmpty) {
+      if (tripLocations.isNotEmpty) {
         if (!mounted) return;
-        final ok = await ensureLocationsFitNewTripRange(
-          context,
-          tripName: trip.name,
-          newStart: newStartDate,
-          newEnd: newEndDate,
-          existingScheduledDates: tripLocationDates,
-        );
-        if (!ok) return;
+        var shifted = false;
+        if (newStartDate != null && trip.startDate != null) {
+          final mode = await _askRescheduleMode(
+            count: tripLocations.length,
+            newStart: newStartDate,
+          );
+          if (mode == null) return; // cancelled
+          if (mode == 'move') {
+            pendingShift = _planTripShift(
+              tripLocations,
+              oldStart: trip.startDate!,
+              newStart: newStartDate,
+              newEnd: newEndDate ?? newStartDate,
+            );
+            // A shortened range can squash same-place duplicates together;
+            // those rows get DELETED — never without explicit consent.
+            if (pendingShift.merged > 0) {
+              if (!mounted) return;
+              final proceed = await showDialog<bool>(
+                context: context,
+                builder: (ctx) => AlertDialog(
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(20)),
+                  title: const Text('Some places will merge'),
+                  content: Text(
+                    'The shorter dates squeeze the plan: '
+                    '${pendingShift!.merged} duplicate '
+                    '${pendingShift.merged == 1 ? 'place lands' : 'places land'} '
+                    'on a day that already has the same place, and the extra '
+                    '${pendingShift.merged == 1 ? 'copy' : 'copies'} will be '
+                    'deleted. Continue?',
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(ctx, false),
+                      child: const Text('Cancel'),
+                    ),
+                    FilledButton(
+                      onPressed: () => Navigator.pop(ctx, true),
+                      child: const Text('Continue'),
+                    ),
+                  ],
+                ),
+              );
+              if (proceed != true) return;
+            }
+            shifted = true;
+          }
+        }
+        if (!shifted) {
+          if (!mounted) return;
+          final ok = await ensureLocationsFitNewTripRange(
+            context,
+            tripName: trip.name,
+            newStart: newStartDate,
+            newEnd: newEndDate,
+            existingScheduledDates:
+                tripLocations.map((loc) => loc.scheduledDate!).toList(),
+          );
+          if (!ok) return;
+        }
       }
     }
 
     try {
+      // The shift runs INSIDE this try — a mid-flight failure must surface
+      // as an error, not escape as an unhandled async exception with the
+      // itinerary half-moved.
+      if (pendingShift != null) {
+        await _executeShiftPlan(pendingShift);
+      }
       final tripRepository = ref.read(tripRepositoryProvider);
       await tripRepository.updateTrip(
         trip.id,
         name: nameUnchanged ? null : newName,
+        description: descriptionUnchanged ? null : newDescription,
         countryCode: clearCountry ? null : newCountryCode,
         clearCountryCode: clearCountry,
         startDate: clearDates ? null : newStartDate,
@@ -2489,7 +2580,17 @@ class _TripScreenState extends ConsumerState<TripScreen> {
       ref.invalidate(userTripsProvider);
 
       if (mounted) {
-        AppToast.success(context, 'Trip updated');
+        final parts = <String>[
+          if ((pendingShift?.moved ?? 0) > 0)
+            '${pendingShift!.moved} '
+                '${pendingShift.moved == 1 ? 'place' : 'places'} moved',
+          if ((pendingShift?.merged ?? 0) > 0) '${pendingShift!.merged} merged',
+        ];
+        AppToast.success(
+            context,
+            parts.isEmpty
+                ? 'Trip updated'
+                : 'Trip updated · ${parts.join(' · ')}');
       }
     } catch (e) {
       debugPrint('Error updating trip: $e');
@@ -2694,6 +2795,7 @@ extension on String {}
 
 typedef _EditTripSaveCallback = void Function({
   required String newName,
+  required String newDescription,
   required String? newCountryCode,
   required bool clearCountry,
   required DateTime? newStartDate,
@@ -2713,6 +2815,7 @@ class _EditTripDialog extends StatefulWidget {
 
 class _EditTripDialogState extends State<_EditTripDialog> {
   late final TextEditingController _nameController;
+  late final TextEditingController _descriptionController;
   late String? _countryCode;
   late bool _clearedCountry;
   late DateTime? _startDate;
@@ -2723,6 +2826,8 @@ class _EditTripDialogState extends State<_EditTripDialog> {
   void initState() {
     super.initState();
     _nameController = TextEditingController(text: widget.trip.name);
+    _descriptionController =
+        TextEditingController(text: widget.trip.description ?? '');
     _countryCode = widget.trip.countryCode;
     _clearedCountry = false;
     _startDate = widget.trip.startDate;
@@ -2733,6 +2838,7 @@ class _EditTripDialogState extends State<_EditTripDialog> {
   @override
   void dispose() {
     _nameController.dispose();
+    _descriptionController.dispose();
     super.dispose();
   }
 
@@ -2797,6 +2903,19 @@ class _EditTripDialogState extends State<_EditTripDialog> {
             autofocus: true,
           ),
           const SizedBox(height: 12),
+          TextField(
+            controller: _descriptionController,
+            minLines: 2,
+            maxLines: 3,
+            decoration: InputDecoration(
+              hintText: 'Optional description',
+              labelText: 'Description',
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
           InkWell(
             onTap: _pickCountry,
             borderRadius: BorderRadius.circular(8),
@@ -2857,6 +2976,7 @@ class _EditTripDialogState extends State<_EditTripDialog> {
             Navigator.pop(context);
             widget.onSave(
               newName: _nameController.text.trim(),
+              newDescription: _descriptionController.text.trim(),
               newCountryCode: _countryCode,
               clearCountry: _clearedCountry,
               newStartDate: _startDate,

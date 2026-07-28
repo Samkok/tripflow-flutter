@@ -53,7 +53,8 @@ class SettingsScreen extends ConsumerWidget {
         children: [
           // Pro upgrade banner for non-Pro users
           !subscriptionState.isPro
-              ? const ProUpgradeBanner() : const SizedBox.shrink(),
+              ? const ProUpgradeBanner()
+              : const SizedBox.shrink(),
           const SizedBox(height: 16),
 
           // Profile Section
@@ -152,13 +153,13 @@ class SettingsScreen extends ConsumerWidget {
           borderRadius: BorderRadius.circular(20),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withValues(alpha:0.05),
+              color: Colors.black.withValues(alpha: 0.05),
               blurRadius: 10,
               offset: const Offset(0, 4),
             ),
           ],
           border: Border.all(
-            color: Theme.of(context).dividerColor.withValues(alpha:0.1),
+            color: Theme.of(context).dividerColor.withValues(alpha: 0.1),
           ),
         ),
         padding: const EdgeInsets.all(20),
@@ -206,99 +207,100 @@ class SettingsScreen extends ConsumerWidget {
         MaterialPageRoute(builder: (_) => const ProfileScreen()),
       ),
       child: Container(
-      decoration: BoxDecoration(
-        color: Theme.of(context).cardColor,
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha:0.05),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
+        decoration: BoxDecoration(
+          color: Theme.of(context).cardColor,
+          borderRadius: BorderRadius.circular(20),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.05),
+              blurRadius: 10,
+              offset: const Offset(0, 4),
+            ),
+          ],
+          border: Border.all(
+            color: Theme.of(context).dividerColor.withValues(alpha: 0.1),
           ),
-        ],
-        border: Border.all(
-          color: Theme.of(context).dividerColor.withValues(alpha:0.1),
         ),
-      ),
-      padding: const EdgeInsets.all(20),
-      child: Column(
-        children: [
-          Row(
-            children: [
-              CircleAvatar(
-                radius: 30,
-                backgroundColor: AppTheme.primaryColor,
-                child: Text(
-                  currentUser.email?.substring(0, 1).toUpperCase() ?? 'U',
-                  style: const TextStyle(
-                    fontSize: 24,
-                    color: Colors.black,
-                    fontWeight: FontWeight.bold,
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          children: [
+            Row(
+              children: [
+                CircleAvatar(
+                  radius: 30,
+                  backgroundColor: AppTheme.primaryColor,
+                  child: Text(
+                    currentUser.email?.substring(0, 1).toUpperCase() ?? 'U',
+                    style: const TextStyle(
+                      fontSize: 24,
+                      color: Colors.black,
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                 ),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      currentUser.email ?? 'User',
-                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                            fontWeight: FontWeight.bold,
-                          ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      'Account Sync Active',
-                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                            color: Colors.green,
-                          ),
-                    ),
-                  ],
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        currentUser.email ?? 'User',
+                        style:
+                            Theme.of(context).textTheme.titleMedium?.copyWith(
+                                  fontWeight: FontWeight.bold,
+                                ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Account Sync Active',
+                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                              color: Colors.green,
+                            ),
+                      ),
+                    ],
+                  ),
                 ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          SizedBox(
-            width: double.infinity,
-            child: OutlinedButton.icon(
-              onPressed: () async {
-                final shouldLogout = await showDialog<bool>(
-                  context: context,
-                  builder: (context) => const LogoutConfirmationDialog(),
-                );
-
-                if (shouldLogout == true) {
-                  // Clear cached data BEFORE signing out so the brief
-                  // window between auth tear-down and navigator swap
-                  // doesn't re-render stale trip/location data.
-                  ref.invalidate(sharedTripsProvider);
-                  ref.invalidate(userTripsProvider);
-                  ref.invalidate(activeTripsProvider);
-                  ref.invalidate(tripProvider);
-
-                  // Kick off subscription reinit in parallel — it
-                  // doesn't gate navigation, so awaiting it just adds
-                  // perceived sign-out latency.
-                  ref.read(subscriptionProvider.notifier).reinitialize();
-
-                  // signOut now finishes in ~100–300 ms (local clears
-                  // only; network cleanups fire-and-forget). The
-                  // `signedOut` event triggers main.dart's listener
-                  // which swaps to LoginScreen.
-                  await ref.read(authServiceProvider).signOut();
-                }
-              },
-              icon: const Icon(Icons.logout),
-              label: const Text('Sign Out'),
+              ],
             ),
-          ),
-        ],
-      ),
+            const SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: () async {
+                  final shouldLogout = await showDialog<bool>(
+                    context: context,
+                    builder: (context) => const LogoutConfirmationDialog(),
+                  );
+
+                  if (shouldLogout == true) {
+                    // Clear cached data BEFORE signing out so the brief
+                    // window between auth tear-down and navigator swap
+                    // doesn't re-render stale trip/location data.
+                    ref.invalidate(sharedTripsProvider);
+                    ref.invalidate(userTripsProvider);
+                    ref.invalidate(activeTripsProvider);
+                    ref.invalidate(tripProvider);
+
+                    // Kick off subscription reinit in parallel — it
+                    // doesn't gate navigation, so awaiting it just adds
+                    // perceived sign-out latency.
+                    ref.read(subscriptionProvider.notifier).reinitialize();
+
+                    // signOut now finishes in ~100–300 ms (local clears
+                    // only; network cleanups fire-and-forget). The
+                    // `signedOut` event triggers main.dart's listener
+                    // which swaps to LoginScreen.
+                    await ref.read(authServiceProvider).signOut();
+                  }
+                },
+                icon: const Icon(Icons.logout),
+                label: const Text('Sign Out'),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -311,7 +313,7 @@ class SettingsScreen extends ConsumerWidget {
         borderRadius: BorderRadius.circular(20),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha:0.05),
+            color: Colors.black.withValues(alpha: 0.05),
             blurRadius: 10,
             offset: const Offset(0, 4),
           ),
@@ -323,7 +325,7 @@ class SettingsScreen extends ConsumerWidget {
         secondary: Container(
           padding: const EdgeInsets.all(8),
           decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.primary.withValues(alpha:0.1),
+            color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.1),
             borderRadius: BorderRadius.circular(10),
           ),
           child: Icon(
@@ -351,7 +353,7 @@ class SettingsScreen extends ConsumerWidget {
         borderRadius: BorderRadius.circular(20),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha:0.05),
+            color: Colors.black.withValues(alpha: 0.05),
             blurRadius: 10,
             offset: const Offset(0, 4),
           ),
@@ -364,17 +366,22 @@ class SettingsScreen extends ConsumerWidget {
 
           // Refresh subscription state when user returns
           if (context.mounted) {
-            debugPrint('SettingsScreen: User returned, refreshing subscription state');
+            debugPrint(
+                'SettingsScreen: User returned, refreshing subscription state');
             await ref.read(subscriptionProvider.notifier).refresh();
-            debugPrint('SettingsScreen: Current isPro state: ${ref.read(isProProvider)}');
+            debugPrint(
+                'SettingsScreen: Current isPro state: ${ref.read(isProProvider)}');
           }
         },
         leading: Container(
           padding: const EdgeInsets.all(8),
           decoration: BoxDecoration(
             color: isPro
-                ? Theme.of(context).colorScheme.primary.withValues(alpha:0.1)
-                : Theme.of(context).colorScheme.secondary.withValues(alpha:0.1),
+                ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.1)
+                : Theme.of(context)
+                    .colorScheme
+                    .secondary
+                    .withValues(alpha: 0.1),
             borderRadius: BorderRadius.circular(10),
           ),
           child: Icon(
@@ -403,7 +410,7 @@ class SettingsScreen extends ConsumerWidget {
         borderRadius: BorderRadius.circular(20),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha:0.05),
+            color: Colors.black.withValues(alpha: 0.05),
             blurRadius: 10,
             offset: const Offset(0, 4),
           ),
@@ -418,7 +425,7 @@ class SettingsScreen extends ConsumerWidget {
         leading: Container(
           padding: const EdgeInsets.all(8),
           decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.primary.withValues(alpha:0.1),
+            color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.1),
             borderRadius: BorderRadius.circular(10),
           ),
           child: Icon(
@@ -458,8 +465,7 @@ class SettingsScreen extends ConsumerWidget {
         leading: Container(
           padding: const EdgeInsets.all(8),
           decoration: BoxDecoration(
-            color:
-                Theme.of(context).colorScheme.primary.withValues(alpha: 0.1),
+            color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.1),
             borderRadius: BorderRadius.circular(10),
           ),
           child: Icon(
@@ -690,7 +696,8 @@ class SettingsScreen extends ConsumerWidget {
             children: [
               Row(
                 children: [
-                  const Icon(Icons.warning_rounded, color: Colors.red, size: 20),
+                  const Icon(Icons.warning_rounded,
+                      color: Colors.red, size: 20),
                   const SizedBox(width: 8),
                   Text(
                     'Delete Account',
@@ -729,7 +736,8 @@ class SettingsScreen extends ConsumerWidget {
     );
   }
 
-  Future<void> _showDeleteAccountDialog(BuildContext context, WidgetRef ref) async {
+  Future<void> _showDeleteAccountDialog(
+      BuildContext context, WidgetRef ref) async {
     final confirmed = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
@@ -743,7 +751,6 @@ class SettingsScreen extends ConsumerWidget {
   }
 
   Future<void> _deleteAccount(BuildContext context, WidgetRef ref) async {
-
     // Show loading dialog
     showDialog(
       context: context,
@@ -790,7 +797,8 @@ class _LocationTile extends StatefulWidget {
   State<_LocationTile> createState() => _LocationTileState();
 }
 
-class _LocationTileState extends State<_LocationTile> with WidgetsBindingObserver {
+class _LocationTileState extends State<_LocationTile>
+    with WidgetsBindingObserver {
   bool _enabled = false;
   bool _loading = true;
 
@@ -817,10 +825,18 @@ class _LocationTileState extends State<_LocationTile> with WidgetsBindingObserve
     try {
       final permission = await Geolocator.checkPermission();
       final granted = permission == LocationPermission.whileInUse;
-      if (mounted) setState(() { _enabled = granted; _loading = false; });
+      if (mounted)
+        setState(() {
+          _enabled = granted;
+          _loading = false;
+        });
     } catch (e) {
       debugPrint('_LocationTile: _loadState failed: $e');
-      if (mounted) setState(() { _enabled = false; _loading = false; });
+      if (mounted)
+        setState(() {
+          _enabled = false;
+          _loading = false;
+        });
     }
   }
 
@@ -841,11 +857,19 @@ class _LocationTileState extends State<_LocationTile> with WidgetsBindingObserve
         permission = await Geolocator.requestPermission();
 
         if (permission == LocationPermission.whileInUse) {
-          if (mounted) setState(() { _enabled = true; _loading = false; });
+          if (mounted)
+            setState(() {
+              _enabled = true;
+              _loading = false;
+            });
         } else if (permission == LocationPermission.deniedForever) {
           // "Don't ask again" was selected — open settings
           await ph.openAppSettings();
-          if (mounted) setState(() { _enabled = false; _loading = false; });
+          if (mounted)
+            setState(() {
+              _enabled = false;
+              _loading = false;
+            });
         } else {
           // User tapped Deny on the dialog
           if (mounted) {
@@ -853,7 +877,10 @@ class _LocationTileState extends State<_LocationTile> with WidgetsBindingObserve
               context,
               'Location permission denied. Enable it in System Settings.',
             );
-            setState(() { _enabled = false; _loading = false; });
+            setState(() {
+              _enabled = false;
+              _loading = false;
+            });
           }
         }
       } else {
@@ -914,7 +941,8 @@ class _NotificationTile extends StatefulWidget {
   State<_NotificationTile> createState() => _NotificationTileState();
 }
 
-class _NotificationTileState extends State<_NotificationTile> with WidgetsBindingObserver {
+class _NotificationTileState extends State<_NotificationTile>
+    with WidgetsBindingObserver {
   bool _enabled = false;
   bool _loading = true;
 
@@ -948,10 +976,18 @@ class _NotificationTileState extends State<_NotificationTile> with WidgetsBindin
         await NotificationService().disableNotifications();
       }
 
-      if (mounted) setState(() { _enabled = effective; _loading = false; });
+      if (mounted)
+        setState(() {
+          _enabled = effective;
+          _loading = false;
+        });
     } catch (e) {
       debugPrint('_NotificationTile: _loadState failed: $e');
-      if (mounted) setState(() { _enabled = false; _loading = false; });
+      if (mounted)
+        setState(() {
+          _enabled = false;
+          _loading = false;
+        });
     }
   }
 
@@ -966,10 +1002,18 @@ class _NotificationTileState extends State<_NotificationTile> with WidgetsBindin
             'Permission denied. Enable notifications in System Settings.',
           );
         }
-        if (mounted) setState(() { _enabled = granted; _loading = false; });
+        if (mounted)
+          setState(() {
+            _enabled = granted;
+            _loading = false;
+          });
       } else {
         await NotificationService().disableNotifications();
-        if (mounted) setState(() { _enabled = false; _loading = false; });
+        if (mounted)
+          setState(() {
+            _enabled = false;
+            _loading = false;
+          });
       }
     } catch (e) {
       debugPrint('_NotificationTile: _onToggle failed: $e');
@@ -985,7 +1029,7 @@ class _NotificationTileState extends State<_NotificationTile> with WidgetsBindin
         borderRadius: BorderRadius.circular(20),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha:0.05),
+            color: Colors.black.withValues(alpha: 0.05),
             blurRadius: 10,
             offset: const Offset(0, 4),
           ),
@@ -997,11 +1041,13 @@ class _NotificationTileState extends State<_NotificationTile> with WidgetsBindin
         secondary: Container(
           padding: const EdgeInsets.all(8),
           decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.primary.withValues(alpha:0.1),
+            color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.1),
             borderRadius: BorderRadius.circular(10),
           ),
           child: Icon(
-            _enabled ? Icons.notifications_rounded : Icons.notifications_off_outlined,
+            _enabled
+                ? Icons.notifications_rounded
+                : Icons.notifications_off_outlined,
             color: Theme.of(context).colorScheme.primary,
           ),
         ),
@@ -1089,8 +1135,7 @@ class _NearbyRadiusTile extends ConsumerWidget {
             max: NearbyRadiusNotifier.maxRadius,
             divisions: 19,
             label: _format(value),
-            onChanged: (v) =>
-                ref.read(nearbyRadiusProvider.notifier).set(v),
+            onChanged: (v) => ref.read(nearbyRadiusProvider.notifier).set(v),
           ),
         ],
       ),
@@ -1153,12 +1198,10 @@ class _AnalyticsTileState extends State<_AnalyticsTile> {
             color: theme.colorScheme.primary.withValues(alpha: 0.1),
             borderRadius: BorderRadius.circular(10),
           ),
-          child: Icon(Icons.insights_rounded,
-              color: theme.colorScheme.primary),
+          child: Icon(Icons.insights_rounded, color: theme.colorScheme.primary),
         ),
         title: const Text('Share usage analytics'),
-        subtitle:
-            const Text('Privacy-friendly. Helps us improve VoyZa.'),
+        subtitle: const Text('Privacy-friendly. Helps us improve VoyZa.'),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
       ),
     );
@@ -1185,10 +1228,9 @@ class _IncludeCurrentInFitTile extends ConsumerWidget {
         ],
       ),
       child: SwitchListTile(
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-        secondary: Icon(Icons.my_location,
-            color: theme.colorScheme.primary, size: 22),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+        secondary:
+            Icon(Icons.my_location, color: theme.colorScheme.primary, size: 22),
         title: Text(
           'Include current location in fit',
           style: theme.textTheme.titleMedium?.copyWith(
@@ -1202,8 +1244,7 @@ class _IncludeCurrentInFitTile extends ConsumerWidget {
           ),
         ),
         value: value,
-        onChanged: (v) =>
-            ref.read(includeCurrentInFitProvider.notifier).set(v),
+        onChanged: (v) => ref.read(includeCurrentInFitProvider.notifier).set(v),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
       ),
     );

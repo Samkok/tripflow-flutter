@@ -25,7 +25,10 @@ import 'package:voyza/widgets/location_photo_gallery.dart';
 import 'package:voyza/providers/local_active_trip_provider.dart';
 import 'package:voyza/providers/trip_provider.dart';
 import 'package:voyza/widgets/accommodation_prompts.dart';
+import 'package:voyza/utils/same_day_place_guard.dart';
 import 'package:voyza/utils/trip_dates.dart';
+import 'package:voyza/services/trip_day_service.dart';
+import 'package:voyza/widgets/pulsing_glow.dart';
 
 class TripDetailsScreen extends ConsumerStatefulWidget {
   final Trip trip;
@@ -47,6 +50,12 @@ class TripDetailsScreen extends ConsumerStatefulWidget {
 }
 
 class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
+  /// widget.trip frozen at push time, overridden after in-screen changes to
+  /// the trip's date range (the add-day tile) so the day slots refresh
+  /// without reopening the screen.
+  Trip? _tripOverride;
+  Trip get _trip => _tripOverride ?? widget.trip;
+
   final TextEditingController _searchController = TextEditingController();
   String _searchQuery = '';
   // Stream created once so rebuilds (e.g. typing in search) don't recreate it,
@@ -363,30 +372,20 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
           ? null
           : hasWriteAccessAsync.when(
               data: (hasWriteAccess) => hasWriteAccess
-                  ? Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: [
-                        FloatingActionButton.extended(
-                          heroTag: 'fab_add_existing',
-                          onPressed: () => _showExistingLocationsSheet(),
-                          icon: const Icon(Icons.playlist_add_rounded),
-                          label: const Text('Add Existing'),
-                          backgroundColor: Theme.of(context).cardColor,
-                          foregroundColor:
-                              Theme.of(context).colorScheme.primary,
-                        ),
-                        const SizedBox(height: 12),
-                        FloatingActionButton.extended(
-                          heroTag: 'fab_add_location',
-                          onPressed: () => _showAddLocationDialog(),
-                          icon: const Icon(Icons.add_location_alt_outlined),
-                          label: const Text('Add Location'),
-                          backgroundColor:
-                              Theme.of(context).colorScheme.primary,
-                          foregroundColor: Colors.black,
-                        ),
-                      ],
+                  // Single glowing Add Location FAB — the old secondary
+                  // "Add Existing" entry confused more than it helped.
+                  ? PulsingGlow(
+                      shape: BoxShape.rectangle,
+                      borderRadius: BorderRadius.circular(16),
+                      glowColor: Theme.of(context).colorScheme.primary,
+                      child: FloatingActionButton.extended(
+                        heroTag: 'fab_add_location',
+                        onPressed: () => _showAddLocationDialog(),
+                        icon: const Icon(Icons.add_location_alt_outlined),
+                        label: const Text('Add Location'),
+                        backgroundColor: Theme.of(context).colorScheme.primary,
+                        foregroundColor: Colors.black,
+                      ),
                     )
                   : null,
               loading: () => null,
@@ -544,8 +543,8 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
   /// trip-plan bottom sheet so both surfaces show identical days.
   List<DateTime> _buildAllDates(List<SavedLocation> locations) {
     return contiguousTripDates([
-      widget.trip.startDate,
-      widget.trip.endDate,
+      _trip.startDate,
+      _trip.endDate,
       for (final loc in locations) ...[
         loc.scheduledDate ?? loc.createdAt,
         loc.scheduledEndDate ?? loc.scheduledDate ?? loc.createdAt,
@@ -597,6 +596,9 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
         SliverList(
           delegate: SliverChildBuilderDelegate(
             (context, index) {
+              if (index == allDates.length) {
+                return _buildAddDayTile(allDates);
+              }
               final day = allDates[index];
               final dateGroup = groupedByDay[day] ?? const <SavedLocation>[];
               return _buildDateSection(
@@ -605,7 +607,8 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
                 hasWriteAccess: hasWriteAccess,
               );
             },
-            childCount: allDates.length,
+            childCount: allDates.length +
+                ((hasWriteAccess && _searchQuery.isEmpty) ? 1 : 0),
           ),
         ),
         // Bottom padding sized to clear the two stacked extended FABs
@@ -737,18 +740,15 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
                 ),
               ],
             ),
-            if (widget.trip.startDate != null &&
-                widget.trip.endDate != null) ...[
+            if (_trip.startDate != null && _trip.endDate != null) ...[
               const SizedBox(height: 10),
               Builder(builder: (context) {
-                final s = DateTime(widget.trip.startDate!.year,
-                    widget.trip.startDate!.month, widget.trip.startDate!.day);
-                final e = DateTime(widget.trip.endDate!.year,
-                    widget.trip.endDate!.month, widget.trip.endDate!.day);
-                final dayCount = e.difference(s).inDays + 1;
-                final dateText = widget.trip.startDate == widget.trip.endDate
-                    ? DateFormat('MMM d, y').format(widget.trip.startDate!)
-                    : '${DateFormat('MMM d').format(widget.trip.startDate!)} - ${DateFormat('MMM d, y').format(widget.trip.endDate!)}';
+                final s = dayKey(_trip.startDate!);
+                final e = dayKey(_trip.endDate!);
+                final dayCount = daySpanDays(s, e) + 1;
+                final dateText = s == e
+                    ? DateFormat('MMM d, y').format(s)
+                    : '${DateFormat('MMM d').format(s)} - ${DateFormat('MMM d, y').format(e)}';
                 return Row(
                   children: [
                     Icon(
@@ -790,6 +790,110 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
         ),
       ),
     );
+  }
+
+  /// Framed, transparent "add a day" box after the last date: extends the
+  /// trip's range by one day (start pinned to the current first day so
+  /// location-derived ranges become explicit).
+  Widget _buildAddDayTile(List<DateTime> allDates) {
+    final theme = Theme.of(context);
+    final primary = theme.colorScheme.primary;
+    final last = allDates.last;
+    final newDay = DateTime(last.year, last.month, last.day + 1);
+    final canRemove = allDates.length > 1;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+      child: Row(
+        children: [
+          if (canRemove) ...[
+            // Remove the last day (framed, transparent — quiet next to Add).
+            Material(
+              color: Colors.transparent,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(14),
+                onTap: () => _removeLastTripDay(allDates),
+                child: Container(
+                  height: 54,
+                  width: 54,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(
+                        color: theme.colorScheme.onSurfaceVariant
+                            .withValues(alpha: 0.45),
+                        width: 1.4),
+                  ),
+                  child: Icon(Icons.remove_rounded,
+                      size: 22, color: theme.colorScheme.onSurfaceVariant),
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
+          ],
+          Expanded(
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(14),
+                onTap: () => _addTripDayAtEnd(allDates),
+                child: Container(
+                  height: 54,
+                  decoration: BoxDecoration(
+                    color: Colors.transparent,
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(
+                        color: primary.withValues(alpha: 0.5), width: 1.4),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(Icons.add_rounded, size: 20, color: primary),
+                      const SizedBox(width: 8),
+                      Text(
+                        'Add a day (${DateFormat('MMM d').format(newDay)})',
+                        style: theme.textTheme.labelLarge?.copyWith(
+                          color: primary,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _removeLastTripDay(List<DateTime> allDates) async {
+    final range = await TripDayService.removeLastDay(
+      context,
+      ref,
+      trip: _trip,
+      days: allDates,
+    );
+    if (range != null && mounted) {
+      setState(() {
+        _tripOverride =
+            _trip.copyWith(startDate: range.start, endDate: range.end);
+      });
+    }
+  }
+
+  Future<void> _addTripDayAtEnd(List<DateTime> allDates) async {
+    final range = await TripDayService.addDayAtEnd(
+      context,
+      ref,
+      trip: _trip,
+      days: allDates,
+    );
+    if (range != null && mounted) {
+      setState(() {
+        _tripOverride =
+            _trip.copyWith(startDate: range.start, endDate: range.end);
+      });
+    }
   }
 
   Widget _buildDateSection(
@@ -1025,13 +1129,42 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
       // materializes a new trip day → ask about accommodation after.
       // (Active-trip data; the prompt self-skips for non-active trips.)
       final dayKey = DateTime(newDay.year, newDay.month, newDay.day);
+      // Shared same-day duplicate rule: same place may repeat across days,
+      // never within one day.
+      final saved = ref.read(savedLocationsProvider).valueOrNull ??
+          const <SavedLocation>[];
+      final dup = filterSameDayDuplicates(
+        moving: [placeKeyOfSaved(location)],
+        occupantsOnDay: saved
+            .where((l) =>
+                l.tripId == widget.trip.id &&
+                l.id != location.id &&
+                l.scheduledDate != null &&
+                l.isActiveOnDate(dayKey))
+            .map(placeKeyOfSaved),
+      );
+      if (dup.allowedIds.isEmpty) {
+        AppToast.warning(context,
+            '"${location.name}" is already on ${DateFormat('MMM d').format(dayKey)}');
+        return;
+      }
       final dayWasEmpty = !ref
           .read(tripProvider)
           .pinnedLocations
           .any((l) => l.isActiveOnDate(dayKey));
+      // Multi-day stays move WHOLE: shifting only the start left
+      // start > end and the row disappeared from every day section.
+      final newEnd = shiftedSpanEnd(
+        oldStart: location.scheduledDate ?? location.createdAt,
+        oldEnd: location.scheduledEndDate,
+        newStart: newDay,
+      );
       await ref.read(locationRepositoryProvider).updateLocation(
         location.id,
-        {'scheduled_date': newDay.toIso8601String()},
+        {
+          'scheduled_date': newDay.toIso8601String(),
+          'scheduled_end_date': newEnd?.toIso8601String(),
+        },
       );
       if (!mounted) return;
       AppToast.success(
@@ -1307,7 +1440,7 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (context) => _LocationSearchSheet(
-        trip: widget.trip,
+        trip: _trip,
       ),
     );
   }
@@ -1321,18 +1454,9 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (context) => _LocationSearchSheet(
-        trip: widget.trip,
+        trip: _trip,
         scheduledDate: day,
       ),
-    );
-  }
-
-  void _showExistingLocationsSheet() {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (context) => _ExistingLocationsSheet(trip: widget.trip),
     );
   }
 }
@@ -1394,10 +1518,35 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
   /// scoped to widget.trip, so we filter by trip_id rather than using a
   /// global pinned list — the trip being viewed in trip-details is often
   /// not the user's active trip).
-  bool _isAlreadyInTrip(String? placeId) {
-    if (placeId == null || placeId.isEmpty) return false;
-    final saved = ref.read(savedLocationsProvider).asData?.value ?? const [];
-    return saved.any((l) => l.tripId == widget.tripId && l.placeId == placeId);
+  /// Same-day duplicate check for the add flow — the same shared rule as
+  /// every reschedule path: the place may already exist elsewhere in the
+  /// trip, just not on the day this sheet adds to.
+  bool _isAlreadyOnTargetDay({
+    String? placeId,
+    String? name,
+    double? lat,
+    double? lng,
+  }) {
+    final target = _effectiveScheduledDate();
+    final day = DateTime(target.year, target.month, target.day);
+    final saved =
+        ref.read(savedLocationsProvider).valueOrNull ?? const <SavedLocation>[];
+    final candidate = (
+      id: '',
+      placeId: placeId,
+      name: name ?? '',
+      lat: lat ?? double.nan,
+      lng: lng ?? double.nan,
+    );
+    return filterSameDayDuplicates(
+      moving: [candidate],
+      occupantsOnDay: saved
+          .where((l) =>
+              l.tripId == widget.tripId &&
+              l.scheduledDate != null &&
+              l.isActiveOnDate(day))
+          .map(placeKeyOfSaved),
+    ).allowedIds.isEmpty;
   }
 
   /// Reset the sheet back to its "ready for the next search" state after
@@ -1863,10 +2012,15 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
 
       // Reject the paste if the decoded place is already on this trip —
       // mirrors the tap-to-add path so both entry points behave the same.
-      if (_isAlreadyInTrip(placeDetails.placeId)) {
+      if (_isAlreadyOnTargetDay(
+        placeId: placeDetails.placeId,
+        name: placeDetails.name,
+        lat: placeDetails.coordinates.latitude,
+        lng: placeDetails.coordinates.longitude,
+      )) {
         AppToast.warning(
           context,
-          '"${placeDetails.name}" is already in this trip',
+          '"${placeDetails.name}" is already planned for this day',
         );
         _resetSearchForNextAdd();
         return;
@@ -1938,10 +2092,10 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
     // Cheap duplicate check using the prediction's place_id — saves the
     // round-trip cost of Place Details when the pick is already in the
     // trip. Notify the user, reset the search, and bail.
-    if (_isAlreadyInTrip(prediction.placeId)) {
+    if (_isAlreadyOnTargetDay(placeId: prediction.placeId)) {
       AppToast.warning(
         context,
-        '"${prediction.mainText}" is already in this trip',
+        '"${prediction.mainText}" is already planned for this day',
       );
       _resetSearchForNextAdd();
       return;
@@ -1964,10 +2118,15 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
       // the autocomplete prediction's id (CID vs ChIJ, region variants).
       // Re-check duplicates against the canonical id before committing.
       final canonicalPlaceId = placeDetails.placeId ?? prediction.placeId;
-      if (_isAlreadyInTrip(canonicalPlaceId)) {
+      if (_isAlreadyOnTargetDay(
+        placeId: canonicalPlaceId,
+        name: placeDetails.name,
+        lat: placeDetails.coordinates.latitude,
+        lng: placeDetails.coordinates.longitude,
+      )) {
         AppToast.warning(
           context,
-          '"${placeDetails.name}" is already in this trip',
+          '"${placeDetails.name}" is already planned for this day',
         );
         _resetSearchForNextAdd();
         return;
@@ -2015,262 +2174,6 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
       }
     } finally {
       if (mounted) setState(() => _isAddingPlace = false);
-    }
-  }
-}
-
-class _ExistingLocationsSheet extends ConsumerStatefulWidget {
-  /// The viewed trip itself, NOT just its id. The date-range confirmation
-  /// in [LocationAddService.attachExistingLocationToTrip] needs the trip's
-  /// startDate/endDate up front — looking it up via userTripsProvider
-  /// silently fails for collaborator trips (which aren't in that provider)
-  /// and during transient loading states, which is why the date dialog
-  /// wasn't firing before.
-  final Trip trip;
-
-  const _ExistingLocationsSheet({required this.trip});
-
-  @override
-  ConsumerState<_ExistingLocationsSheet> createState() =>
-      _ExistingLocationsSheetState();
-}
-
-class _ExistingLocationsSheetState
-    extends ConsumerState<_ExistingLocationsSheet> {
-  final Set<String> _adding = {};
-
-  @override
-  Widget build(BuildContext context) {
-    final currentUserId = ref.watch(currentUserIdProvider);
-
-    return DraggableScrollableSheet(
-      initialChildSize: 0.6,
-      minChildSize: 0.4,
-      maxChildSize: 0.95,
-      builder: (context, scrollController) {
-        return Container(
-          decoration: BoxDecoration(
-            color: Theme.of(context).scaffoldBackgroundColor,
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-          ),
-          child: Column(
-            children: [
-              // Drag handle
-              Container(
-                margin: const EdgeInsets.only(top: 12, bottom: 8),
-                height: 4,
-                width: 40,
-                decoration: BoxDecoration(
-                  color: Colors.grey[400],
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-
-              // Header
-              Padding(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        'Add Existing Location',
-                        style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                              fontWeight: FontWeight.bold,
-                            ),
-                      ),
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.close),
-                      onPressed: () => Navigator.pop(context),
-                    ),
-                  ],
-                ),
-              ),
-
-              const Divider(),
-
-              // Location list
-              Expanded(
-                child: currentUserId == null
-                    ? const Center(child: Text('Not signed in'))
-                    : _buildLocationList(currentUserId, scrollController),
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _buildLocationList(
-      String currentUserId, ScrollController scrollController) {
-    return StreamBuilder<List<SavedLocation>>(
-      stream: ref.read(locationRepositoryProvider).watchLocations(),
-      initialData: const [],
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting &&
-            snapshot.data == null) {
-          return const Center(child: CircularProgressIndicator());
-        }
-
-        final unassigned = (snapshot.data ?? [])
-            .where((loc) => loc.tripId == null && loc.userId == currentUserId)
-            .toList();
-
-        if (unassigned.isEmpty) {
-          return Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(
-                  Icons.playlist_add_check_rounded,
-                  size: 64,
-                  color: Theme.of(context)
-                      .colorScheme
-                      .primary
-                      .withValues(alpha: 0.3),
-                ),
-                const SizedBox(height: 16),
-                Text(
-                  'No saved locations available',
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.bold,
-                      ),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  'Locations not assigned to any trip will appear here',
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        color: Theme.of(context)
-                            .textTheme
-                            .bodyMedium
-                            ?.color
-                            ?.withValues(alpha: 0.6),
-                      ),
-                ),
-              ],
-            ),
-          );
-        }
-
-        return ListView.separated(
-          controller: scrollController,
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          itemCount: unassigned.length,
-          separatorBuilder: (_, __) => const SizedBox(height: 8),
-          itemBuilder: (context, index) {
-            final loc = unassigned[index];
-            final isAdding = _adding.contains(loc.id);
-            return Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Theme.of(context).cardColor,
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(
-                  color: Theme.of(context).dividerColor.withValues(alpha: 0.1),
-                  width: 1,
-                ),
-              ),
-              child: Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: Theme.of(context)
-                          .colorScheme
-                          .primary
-                          .withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Icon(
-                      Icons.location_on_rounded,
-                      size: 18,
-                      color: Theme.of(context).colorScheme.primary,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          loc.name,
-                          style:
-                              Theme.of(context).textTheme.titleSmall?.copyWith(
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          '${loc.lat.toStringAsFixed(4)}, ${loc.lng.toStringAsFixed(4)}',
-                          style:
-                              Theme.of(context).textTheme.labelSmall?.copyWith(
-                                    color: Theme.of(context)
-                                        .textTheme
-                                        .bodyMedium
-                                        ?.color
-                                        ?.withValues(alpha: 0.6),
-                                  ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  isAdding
-                      ? const SizedBox(
-                          width: 24,
-                          height: 24,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : TextButton(
-                          onPressed: () => _assignToTrip(loc),
-                          child: const Text('Add'),
-                        ),
-                ],
-              ),
-            );
-          },
-        );
-      },
-    );
-  }
-
-  Future<void> _assignToTrip(SavedLocation location) async {
-    setState(() => _adding.add(location.id));
-
-    try {
-      // Best-effort country lookup so the cross-country guard works for
-      // legacy rows without a stored country code.
-      final details =
-          await PlacesService.getPlaceDetails(location.placeId ?? '');
-
-      if (!mounted) return;
-      // Routes through the date-range confirmation dialog: if the
-      // location's scheduledDate falls outside the viewed trip's range,
-      // the user is asked whether to extend the trip dates. The previous
-      // code called beforeAddingLocation (which checks the ACTIVE trip,
-      // not the viewed one), so the dialog never fired for trip-details
-      // attachments and the trip dates were silently left out of sync.
-      final added = await LocationAddService(ref).attachExistingLocationToTrip(
-        context,
-        location,
-        widget.trip,
-        locationCountryCode: details?.countryCode,
-      );
-      if (!added || !mounted) return;
-      AppToast.success(context, 'Added ${location.name} to trip');
-    } catch (e) {
-      if (mounted) {
-        AppToast.error(context, 'Failed to add location: $e');
-      }
-    } finally {
-      if (mounted) setState(() => _adding.remove(location.id));
     }
   }
 }

@@ -26,7 +26,8 @@ class CachedMarkersState {
 String _generateLocationsCacheKey(List<LocationModel> locations,
     LatLng? currentLocation, DateTime selectedDate) {
   // Use a combination of IDs and count to ensure the key changes when items are added/removed.
-  final locationIds = locations.map((l) => '${l.id}-${l.isSkipped}-${l.isDone}').join('_');
+  final locationIds =
+      locations.map((l) => '${l.id}-${l.isSkipped}-${l.isDone}').join('_');
   final currentLocKey = currentLocation != null
       ? '${currentLocation.latitude}_${currentLocation.longitude}'
       : 'none';
@@ -114,7 +115,8 @@ final finalMarkersProvider = Provider<Set<Marker>>((ref) {
   final currentLocation =
       ref.watch(tripProvider.select((s) => s.currentLocation));
 
-  debugPrint('finalMarkersProvider: Building ${locationsForDate.length} markers (${locationsForDate.where((l) => !l.isSkipped).length} active)');
+  debugPrint(
+      'finalMarkersProvider: Building ${locationsForDate.length} markers (${locationsForDate.where((l) => !l.isSkipped).length} active)');
 
   return markerBitmapsAsync.when(
     // During a RELOAD (background sync updates locations), keep showing the
@@ -153,7 +155,8 @@ final finalMarkersProvider = Provider<Set<Marker>>((ref) {
           ));
         }
       }
-      debugPrint('finalMarkersProvider: Created ${markers.length} total markers');
+      debugPrint(
+          'finalMarkersProvider: Created ${markers.length} total markers');
       return markers;
     },
     loading: () => {},
@@ -445,29 +448,29 @@ final assembledMapOverlaysProvider =
   // Since finalMarkersProvider is synchronous (deriving from an async one),
   // we can treat it more directly. We'll use the async state of the bitmap provider to manage loading/error states.
   return ref.watch(cachedMarkerBitmapsProvider).when(
-    skipLoadingOnReload: true,
-    data: (_) {
-      // We don't need the data here, just the state.
-      final routeInfoMarkers = routeInfoMarkersAsync.valueOrNull ?? {};
+        skipLoadingOnReload: true,
+        data: (_) {
+          // We don't need the data here, just the state.
+          final routeInfoMarkers = routeInfoMarkersAsync.valueOrNull ?? {};
 
-      // DEBUG: Uncomment to track overlay assembly
-      // debugPrint('✅ Assembling map overlays: ${markers.length} base markers, ${routeInfoMarkers.length} route info markers, ${polylines.length} polylines, ${automaticZones.length} auto zones');
+          // DEBUG: Uncomment to track overlay assembly
+          // debugPrint('✅ Assembling map overlays: ${markers.length} base markers, ${routeInfoMarkers.length} route info markers, ${polylines.length} polylines, ${automaticZones.length} auto zones');
 
-      return AsyncValue.data(AssembledMapOverlays(
-        markers: {...markers, ...routeInfoMarkers},
-        polylines: polylines,
-        automaticZones: automaticZones,
-      ));
-    },
-    loading: () {
-      // DEBUG: Uncomment to track loading state
-      // debugPrint('⏳ Loading markers...');
-      return AsyncValue.loading();
-    },
-    error: (error, stack) {
-      // Keep error logging for debugging issues
-      debugPrint('❌ Error loading markers: $error');
-      return AsyncValue.error(error, stack);
-    },
-  );
+          return AsyncValue.data(AssembledMapOverlays(
+            markers: {...markers, ...routeInfoMarkers},
+            polylines: polylines,
+            automaticZones: automaticZones,
+          ));
+        },
+        loading: () {
+          // DEBUG: Uncomment to track loading state
+          // debugPrint('⏳ Loading markers...');
+          return AsyncValue.loading();
+        },
+        error: (error, stack) {
+          // Keep error logging for debugging issues
+          debugPrint('❌ Error loading markers: $error');
+          return AsyncValue.error(error, stack);
+        },
+      );
 });

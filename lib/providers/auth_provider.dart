@@ -61,7 +61,8 @@ final userProfileByIdProvider =
 
 /// Provider that listens to auth state changes and links RevenueCat user ID
 /// This ensures RevenueCat is always in sync with Supabase authentication
-final revenueCatAuthSyncProvider = FutureProvider.autoDispose<void>((ref) async {
+final revenueCatAuthSyncProvider =
+    FutureProvider.autoDispose<void>((ref) async {
   debugPrint('AuthProvider: revenueCatAuthSyncProvider started');
 
   // Wait for auth state to have data (not loading)
@@ -81,12 +82,14 @@ final revenueCatAuthSyncProvider = FutureProvider.autoDispose<void>((ref) async 
       final currentAppUserId = await revenueCatService.getAppUserId();
       final isAnonymous = await revenueCatService.isAnonymous();
 
-      debugPrint('AuthProvider: Current RevenueCat app user ID: $currentAppUserId');
+      debugPrint(
+          'AuthProvider: Current RevenueCat app user ID: $currentAppUserId');
       debugPrint('AuthProvider: Is anonymous: $isAnonymous');
       debugPrint('AuthProvider: Supabase user ID: ${user.id}');
 
       if (currentAppUserId != user.id) {
-        debugPrint('AuthProvider: User IDs do not match - linking RevenueCat with user ${user.id}');
+        debugPrint(
+            'AuthProvider: User IDs do not match - linking RevenueCat with user ${user.id}');
         await revenueCatService.login(user.id);
         debugPrint('AuthProvider: RevenueCat linked successfully');
 

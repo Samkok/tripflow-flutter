@@ -30,6 +30,8 @@
 	<string>$(GOOGLE_MAPS_API_KEY)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>VoyZa saves your route share cards to your photo library when you choose Save.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>VoyZa uses your location to display your current position on the map, provide accurate directions, and help you plan your trips.</string>
 	<key>UIApplicationSupportsIndirectInputEvents</key>

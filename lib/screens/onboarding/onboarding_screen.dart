@@ -400,8 +400,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
               }
             },
             child: Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
               decoration: BoxDecoration(
                 color: theme.colorScheme.surfaceContainerHighest
                     .withValues(alpha: 0.4),
@@ -446,8 +445,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
               onPressed: () => _goTo(2),
               child: Text(
                 'I\'m not sure yet',
-                style:
-                    TextStyle(color: theme.colorScheme.onSurfaceVariant),
+                style: TextStyle(color: theme.colorScheme.onSurfaceVariant),
               ),
             ),
           ),
@@ -514,8 +512,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
           SizedBox(
             width: double.infinity,
             child: FilledButton(
-              onPressed:
-                  widget.isAnonymous ? _trySampleTrip : _planFirstTrip,
+              onPressed: widget.isAnonymous ? _trySampleTrip : _planFirstTrip,
               style: FilledButton.styleFrom(
                 padding: const EdgeInsets.symmetric(vertical: 16),
                 shape: RoundedRectangleBorder(
@@ -528,15 +525,14 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                     : _destination != null
                         ? 'Plan my ${_destination!.name} trip'
                         : 'Plan my first trip',
-                style: const TextStyle(
-                    fontSize: 16, fontWeight: FontWeight.w700),
+                style:
+                    const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
               ),
             ),
           ),
           Center(
             child: TextButton(
-              onPressed:
-                  widget.isAnonymous ? _planFirstTrip : _trySampleTrip,
+              onPressed: widget.isAnonymous ? _planFirstTrip : _trySampleTrip,
               child: Text(widget.isAnonymous
                   ? 'Start adding my own places'
                   : 'Try a sample trip instead'),
@@ -548,8 +544,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     );
   }
 
-  Widget _step(
-      ThemeData theme, IconData icon, String title, String subtitle) {
+  Widget _step(ThemeData theme, IconData icon, String title, String subtitle) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 18),
       child: Row(
@@ -572,8 +567,8 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                     style: theme.textTheme.titleMedium
                         ?.copyWith(fontWeight: FontWeight.w600)),
                 Text(subtitle,
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant)),
+                    style: theme.textTheme.bodyMedium
+                        ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
               ],
             ),
           ),

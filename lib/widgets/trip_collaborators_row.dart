@@ -303,8 +303,8 @@ class _PermissionToggle extends StatelessWidget {
       opacity: busy ? 0.6 : 1,
       child: Container(
         decoration: BoxDecoration(
-          color: theme.colorScheme.surfaceContainerHighest
-              .withValues(alpha: 0.5),
+          color:
+              theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
           borderRadius: BorderRadius.circular(20),
         ),
         padding: const EdgeInsets.all(2),

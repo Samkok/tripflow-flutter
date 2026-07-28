@@ -1,10 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:share_plus/share_plus.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/trip_collaborator.dart';
 import '../providers/trip_collaborator_provider.dart';
-import '../services/analytics_service.dart';
+import '../services/trip_buddy_service.dart';
 import 'app_toast.dart';
 
 class CollaboratorsSheet extends ConsumerStatefulWidget {
@@ -36,24 +35,9 @@ class _CollaboratorsSheetState extends ConsumerState<CollaboratorsSheet> {
   }
 
   Future<void> _addCollaborator() async {
-    // Only owner can add collaborators - check at function level
-    final isOwner = await ref.read(isTripOwnerProvider(widget.tripId).future);
-    if (!isOwner) {
-      if (!mounted) return;
-      AppToast.warning(context, 'Only the trip owner can invite travel buddies.');
-      return;
-    }
-
     final email = _emailController.text.trim().toLowerCase();
-
     if (email.isEmpty) {
       setState(() => _errorMessage = 'Please enter an email address');
-      return;
-    }
-
-    // Basic email validation
-    if (!RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$').hasMatch(email)) {
-      setState(() => _errorMessage = 'Please enter a valid email address');
       return;
     }
 
@@ -62,94 +46,33 @@ class _CollaboratorsSheetState extends ConsumerState<CollaboratorsSheet> {
       _errorMessage = null;
     });
 
-    final repository = ref.read(tripCollaboratorRepositoryProvider);
-    final result = await repository.addCollaborator(
+    // The SHARED add-a-buddy flow (same one the New Trip wizard uses):
+    // validation, direct add, and the not-on-VoyZa invite dialog + share.
+    final result = await TripBuddyService.addBuddy(
+      context,
+      ref,
       tripId: widget.tripId,
+      tripName: widget.tripName,
       email: email,
       permission: _selectedPermission,
     );
 
     if (!mounted) return;
-
     setState(() => _isLoading = false);
 
-    if (result.success) {
-      _emailController.clear();
-      // Refresh all trip-related providers to ensure UI updates correctly
-      ref.invalidate(tripCollaboratorsProvider(widget.tripId));
-      ref.invalidate(isTripOwnerProvider(widget.tripId));
-      ref.invalidate(hasWriteAccessProvider(widget.tripId));
-      ref.invalidate(userTripPermissionProvider(widget.tripId));
-
-      AppToast.success(
-          context, 'Added $email — you\'re planning together now');
-    } else if (result.needsInvite) {
-      // Not a VoyZa user yet — offer the referral invite instead of erroring.
-      await _showInviteNonUser(result.inviteEmail ?? email);
-    } else {
-      setState(() => _errorMessage = result.error);
-    }
-  }
-
-  /// Shown when the invited email has no account: turn the dead-end into the
-  /// referral loop — invite them to join & plan this trip, both get a month,
-  /// and they auto-join this trip on signup (claim-invites edge function).
-  Future<void> _showInviteNonUser(String email) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) {
-        final theme = Theme.of(ctx);
-        return AlertDialog(
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-          title: const Text('They\'re not on VoyZa yet'),
-          content: Text(
-            '$email doesn\'t have an account. Invite them to plan '
-            '"${widget.tripName}" with you — you\'ll both get a free month of '
-            'Pro, and they\'ll join this trip automatically when they sign up.',
-            style: theme.textTheme.bodyMedium,
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel'),
-            ),
-            FilledButton.icon(
-              onPressed: () => Navigator.pop(ctx, true),
-              icon: const Icon(Icons.card_giftcard_rounded, size: 18),
-              label: const Text('Send invite'),
-            ),
-          ],
-        );
-      },
-    );
-    if (confirmed != true || !mounted) return;
-
-    setState(() => _isLoading = true);
-    final repository = ref.read(tripCollaboratorRepositoryProvider);
-    final code = await repository.createPendingInvite(
-      tripId: widget.tripId,
-      email: email,
-      permission: _selectedPermission,
-    );
-    if (!mounted) return;
-    setState(() => _isLoading = false);
-
-    if (code == null) {
-      AppToast.error(context, 'Couldn\'t create the invite. Please try again.');
-      return;
-    }
-    _emailController.clear();
-    AnalyticsService.instance.referralPromptShown('collab_invite');
-    await SharePlus.instance.share(ShareParams(
-      text: 'Join me on VoyZa to plan "${widget.tripName}" together — '
-          'and we\'ll both get a free month of Pro. Use my code $code when '
-          'you sign up: https://voyza.xtremon.com/r/$code',
-      subject: 'Plan "${widget.tripName}" with me on VoyZa',
-    ));
-    if (mounted) {
-      AppToast.success(
-          context, 'Invite ready to share — they\'ll join when they sign up.');
+    switch (result.status) {
+      case BuddyAddStatus.added:
+        _emailController.clear();
+        AppToast.success(
+            context, 'Added $email — you\'re planning together now');
+      case BuddyAddStatus.invited:
+        _emailController.clear();
+        AppToast.success(context,
+            'Invite ready to share — they\'ll join when they sign up.');
+      case BuddyAddStatus.cancelled:
+        break;
+      case BuddyAddStatus.error:
+        setState(() => _errorMessage = result.error);
     }
   }
 
@@ -196,6 +119,7 @@ class _CollaboratorsSheetState extends ConsumerState<CollaboratorsSheet> {
     }
 
     // Show confirmation dialog
+    if (!mounted) return;
     final confirm = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -241,7 +165,8 @@ class _CollaboratorsSheetState extends ConsumerState<CollaboratorsSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final collaboratorsAsync = ref.watch(tripCollaboratorsProvider(widget.tripId));
+    final collaboratorsAsync =
+        ref.watch(tripCollaboratorsProvider(widget.tripId));
     // Check if current user is the owner
     final isOwnerAsync = ref.watch(isTripOwnerProvider(widget.tripId));
     final isOwner = isOwnerAsync.asData?.value ?? false;
@@ -274,13 +199,17 @@ class _CollaboratorsSheetState extends ConsumerState<CollaboratorsSheet> {
 
               // Header
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                 child: Row(
                   children: [
                     Container(
                       padding: const EdgeInsets.all(8),
                       decoration: BoxDecoration(
-                        color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.1),
+                        color: Theme.of(context)
+                            .colorScheme
+                            .primary
+                            .withValues(alpha: 0.1),
                         borderRadius: BorderRadius.circular(8),
                       ),
                       child: Icon(
@@ -295,15 +224,23 @@ class _CollaboratorsSheetState extends ConsumerState<CollaboratorsSheet> {
                         children: [
                           Text(
                             'Travel buddies',
-                            style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                            style: Theme.of(context)
+                                .textTheme
+                                .titleLarge
+                                ?.copyWith(
                                   fontWeight: FontWeight.bold,
                                 ),
                           ),
                           Text(
                             widget.tripName,
-                            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                  color: Theme.of(context).textTheme.bodyMedium?.color?.withValues(alpha: 0.6),
-                                ),
+                            style:
+                                Theme.of(context).textTheme.bodySmall?.copyWith(
+                                      color: Theme.of(context)
+                                          .textTheme
+                                          .bodyMedium
+                                          ?.color
+                                          ?.withValues(alpha: 0.6),
+                                    ),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                           ),
@@ -329,9 +266,10 @@ class _CollaboratorsSheetState extends ConsumerState<CollaboratorsSheet> {
                     children: [
                       Text(
                         'Invite a travel buddy',
-                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                              fontWeight: FontWeight.w600,
-                            ),
+                        style:
+                            Theme.of(context).textTheme.titleMedium?.copyWith(
+                                  fontWeight: FontWeight.w600,
+                                ),
                       ),
                       const SizedBox(height: 10),
                       // The reward, stated up front — the invite IS the
@@ -430,12 +368,14 @@ class _CollaboratorsSheetState extends ConsumerState<CollaboratorsSheet> {
                               ? const SizedBox(
                                   width: 20,
                                   height: 20,
-                                  child: CircularProgressIndicator(strokeWidth: 2),
+                                  child:
+                                      CircularProgressIndicator(strokeWidth: 2),
                                 )
                               : const Icon(Icons.person_add),
                           label: Text(_isLoading ? 'Inviting…' : 'Invite'),
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: Theme.of(context).colorScheme.primary,
+                            backgroundColor:
+                                Theme.of(context).colorScheme.primary,
                             foregroundColor: Colors.black,
                             padding: const EdgeInsets.symmetric(vertical: 14),
                             shape: RoundedRectangleBorder(
@@ -452,7 +392,8 @@ class _CollaboratorsSheetState extends ConsumerState<CollaboratorsSheet> {
 
               // Collaborators list header
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                 child: Row(
                   children: [
                     Text(
@@ -466,7 +407,11 @@ class _CollaboratorsSheetState extends ConsumerState<CollaboratorsSheet> {
                       data: (collaborators) => Text(
                         '${collaborators.length} on this trip',
                         style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                              color: Theme.of(context).textTheme.bodyMedium?.color?.withValues(alpha: 0.6),
+                              color: Theme.of(context)
+                                  .textTheme
+                                  .bodyMedium
+                                  ?.color
+                                  ?.withValues(alpha: 0.6),
                             ),
                       ),
                       loading: () => const SizedBox.shrink(),
@@ -488,7 +433,10 @@ class _CollaboratorsSheetState extends ConsumerState<CollaboratorsSheet> {
                             Icon(
                               Icons.group_outlined,
                               size: 64,
-                              color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.3),
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .primary
+                                  .withValues(alpha: 0.3),
                             ),
                             const SizedBox(height: 16),
                             Text(
@@ -497,8 +445,8 @@ class _CollaboratorsSheetState extends ConsumerState<CollaboratorsSheet> {
                             ),
                             const SizedBox(height: 8),
                             Padding(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 32),
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 32),
                               child: Text(
                                 isOwner
                                     ? 'Everyone sees the same live map — '
@@ -527,9 +475,11 @@ class _CollaboratorsSheetState extends ConsumerState<CollaboratorsSheet> {
 
                     return ListView.separated(
                       controller: scrollController,
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 8),
                       itemCount: collaborators.length,
-                      separatorBuilder: (context, index) => const SizedBox(height: 8),
+                      separatorBuilder: (context, index) =>
+                          const SizedBox(height: 8),
                       itemBuilder: (context, index) {
                         final collaborator = collaborators[index];
                         return _buildCollaboratorCard(
@@ -540,7 +490,8 @@ class _CollaboratorsSheetState extends ConsumerState<CollaboratorsSheet> {
                       },
                     );
                   },
-                  loading: () => const Center(child: CircularProgressIndicator()),
+                  loading: () =>
+                      const Center(child: CircularProgressIndicator()),
                   error: (error, _) => Center(
                     child: Text('Error: $error'),
                   ),
@@ -576,7 +527,9 @@ class _CollaboratorsSheetState extends ConsumerState<CollaboratorsSheet> {
               : Theme.of(context).cardColor,
           borderRadius: BorderRadius.circular(12),
           border: Border.all(
-            color: isSelected ? color : Theme.of(context).dividerColor.withValues(alpha: 0.3),
+            color: isSelected
+                ? color
+                : Theme.of(context).dividerColor.withValues(alpha: 0.3),
             width: isSelected ? 2 : 1,
           ),
         ),
@@ -598,7 +551,11 @@ class _CollaboratorsSheetState extends ConsumerState<CollaboratorsSheet> {
             Text(
               description,
               style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                    color: Theme.of(context).textTheme.bodyMedium?.color?.withValues(alpha: 0.6),
+                    color: Theme.of(context)
+                        .textTheme
+                        .bodyMedium
+                        ?.color
+                        ?.withValues(alpha: 0.6),
                   ),
               textAlign: TextAlign.center,
             ),
@@ -630,7 +587,8 @@ class _CollaboratorsSheetState extends ConsumerState<CollaboratorsSheet> {
         children: [
           // Avatar
           CircleAvatar(
-            backgroundColor: Theme.of(context).colorScheme.primary.withValues(alpha: 0.2),
+            backgroundColor:
+                Theme.of(context).colorScheme.primary.withValues(alpha: 0.2),
             child: Text(
               collaborator.email[0].toUpperCase(),
               style: TextStyle(
@@ -659,9 +617,13 @@ class _CollaboratorsSheetState extends ConsumerState<CollaboratorsSheet> {
                     if (isCurrentUser)
                       Container(
                         margin: const EdgeInsets.only(left: 8),
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 6, vertical: 2),
                         decoration: BoxDecoration(
-                          color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.2),
+                          color: Theme.of(context)
+                              .colorScheme
+                              .primary
+                              .withValues(alpha: 0.2),
                           borderRadius: BorderRadius.circular(8),
                         ),
                         child: Text(
@@ -677,7 +639,8 @@ class _CollaboratorsSheetState extends ConsumerState<CollaboratorsSheet> {
                 ),
                 const SizedBox(height: 4),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                   decoration: BoxDecoration(
                     color: permissionColor.withValues(alpha: 0.15),
                     borderRadius: BorderRadius.circular(12),
@@ -710,7 +673,9 @@ class _CollaboratorsSheetState extends ConsumerState<CollaboratorsSheet> {
                         color: Theme.of(context).colorScheme.primary,
                       ),
                       const SizedBox(width: 12),
-                      Text(isWrite ? 'Change to View Only' : 'Change to Can Edit'),
+                      Text(isWrite
+                          ? 'Change to View Only'
+                          : 'Change to Can Edit'),
                     ],
                   ),
                 ),

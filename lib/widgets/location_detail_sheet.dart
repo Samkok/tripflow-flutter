@@ -9,6 +9,7 @@ import 'package:voyza/models/trip.dart';
 import 'package:voyza/providers/user_trip_provider.dart';
 import 'package:voyza/services/timing_simulation.dart' show kNeverCloses;
 import 'package:voyza/providers/location_provider.dart';
+import 'package:voyza/utils/same_day_place_guard.dart';
 import 'package:voyza/providers/map_ui_state_provider.dart';
 import 'package:voyza/providers/trip_listener_provider.dart';
 import 'package:voyza/providers/trip_provider.dart';
@@ -656,7 +657,7 @@ class LocationDetailSheet extends ConsumerWidget {
                         final normalized =
                             DateTime(newDate.year, newDate.month, newDate.day);
                         final activeTrip =
-                            ref.read(realtimeActiveTripProvider).asData?.value;
+                            ref.read(realtimeActiveTripProvider).valueOrNull;
                         if (!context.mounted) return;
                         final allowed = await ensureScheduledDateAllowed(
                           context,
@@ -665,9 +666,44 @@ class LocationDetailSheet extends ConsumerWidget {
                           actionLabel: 'Save anyway',
                         );
                         if (!allowed) return;
-                        // Captured before the write: rescheduling onto a
-                        // previously-empty day materializes a new trip day
-                        // → ask about accommodation after.
+                        // The confirm dialog above awaited — the sheet may
+                        // have been popped/replaced from under it.
+                        if (!context.mounted) return;
+                        // Shared same-day duplicate rule. Occupants come
+                        // from THIS location's trip: pinned state only
+                        // covers the ACTIVE trip, and checking another
+                        // trip's day both false-blocks and false-passes.
+                        final sheetTripId = tripId;
+                        final Iterable<PlaceKey> occupants;
+                        if (sheetTripId == null) {
+                          occupants = ref
+                              .read(tripProvider)
+                              .pinnedLocations
+                              .where((l) =>
+                                  l.id != updatedLocation.id &&
+                                  l.scheduledDate != null &&
+                                  l.isActiveOnDate(normalized))
+                              .map(placeKeyOfModel);
+                        } else {
+                          occupants =
+                              (ref.read(savedLocationsProvider).valueOrNull ??
+                                      const <SavedLocation>[])
+                                  .where((l) =>
+                                      l.tripId == sheetTripId &&
+                                      l.id != updatedLocation.id &&
+                                      l.scheduledDate != null &&
+                                      l.isActiveOnDate(normalized))
+                                  .map(placeKeyOfSaved);
+                        }
+                        final dup = filterSameDayDuplicates(
+                          moving: [placeKeyOfModel(updatedLocation)],
+                          occupantsOnDay: occupants,
+                        );
+                        if (dup.allowedIds.isEmpty) {
+                          AppToast.warning(context,
+                              '"${updatedLocation.name}" is already on ${DateFormat('MMM d').format(normalized)}');
+                          return;
+                        }
                         final dayWasEmpty = !ref
                             .read(tripProvider)
                             .pinnedLocations
@@ -1347,7 +1383,7 @@ class LocationDetailSheet extends ConsumerWidget {
         }
       }
     }
-    scopedTrip ??= ref.watch(realtimeActiveTripProvider).asData?.value;
+    scopedTrip ??= ref.watch(realtimeActiveTripProvider).valueOrNull;
     // Effective range: declared dates and/or scheduled-location days — a
     // trip whose places are dated has a range even without explicit dates.
     final effectiveDays = _effectiveTripDays(ref, scopedTrip);
@@ -1475,7 +1511,7 @@ class LocationDetailSheet extends ConsumerWidget {
         if (t.id == tripId) return t;
       }
     }
-    return ref.read(realtimeActiveTripProvider).asData?.value;
+    return ref.read(realtimeActiveTripProvider).valueOrNull;
   }
 
   /// Pushes the new range to storage. Goes through the [tripProvider]
@@ -1485,31 +1521,72 @@ class LocationDetailSheet extends ConsumerWidget {
   /// set (trip details screen for a non-active trip), call the repository
   /// directly — Supabase RLS still enforces access, but we don't fail
   /// silently against the wrong trip's permission gate.
-  Future<void> _writeDateRange(
+  /// Returns false (with a toast) when the shared same-day duplicate rule
+  /// blocks the range: another row of the SAME place active on any day of
+  /// [start..end].
+  Future<bool> _writeDateRange(
+    BuildContext context,
     WidgetRef ref,
-    String locationId,
+    LocationModel loc,
     DateTime start,
     DateTime? end,
   ) async {
-    if (tripId == null) {
-      await ref
-          .read(tripProvider.notifier)
-          .setLocationDateRange(locationId, start, end);
-      return;
-    }
     final startKey = _dayKey(start);
     DateTime? endKey;
     if (end != null) {
       final candidate = _dayKey(end);
       if (candidate.isAfter(startKey)) endKey = candidate;
     }
+
+    final movingKey = placeKeyOfModel(loc);
+    final pinnedOthers = tripId == null
+        ? ref
+            .read(tripProvider)
+            .pinnedLocations
+            .where((l) => l.id != loc.id)
+            .toList()
+        : const <LocationModel>[];
+    final savedOthers = tripId == null
+        ? const <SavedLocation>[]
+        : (ref.read(savedLocationsProvider).valueOrNull ??
+                const <SavedLocation>[])
+            .where((l) => l.tripId == tripId && l.id != loc.id)
+            .toList();
+    for (var d = startKey;
+        !d.isAfter(endKey ?? startKey);
+        d = DateTime(d.year, d.month, d.day + 1)) {
+      final keys = tripId == null
+          ? pinnedOthers
+              .where((l) => l.scheduledDate != null && l.isActiveOnDate(d))
+              .map(placeKeyOfModel)
+          : savedOthers
+              .where((l) => l.scheduledDate != null && l.isActiveOnDate(d))
+              .map(placeKeyOfSaved);
+      final dup =
+          filterSameDayDuplicates(moving: [movingKey], occupantsOnDay: keys);
+      if (dup.allowedIds.isEmpty) {
+        if (context.mounted) {
+          AppToast.warning(context,
+              '"${loc.name}" is already on ${DateFormat('MMM d').format(d)}');
+        }
+        return false;
+      }
+    }
+
+    if (tripId == null) {
+      await ref
+          .read(tripProvider.notifier)
+          .setLocationDateRange(loc.id, start, end);
+      return true;
+    }
     await ref.read(locationRepositoryProvider).updateLocation(
-      locationId,
+      loc.id,
       {
         'scheduled_date': startKey.toIso8601String(),
         'scheduled_end_date': endKey?.toIso8601String(),
       },
     );
+    return true;
   }
 
   Future<void> _pickStayRange(
@@ -1552,7 +1629,7 @@ class LocationDetailSheet extends ConsumerWidget {
     );
     if (picked == null) return;
     try {
-      await _writeDateRange(ref, loc.id, picked.start, picked.end);
+      await _writeDateRange(context, ref, loc, picked.start, picked.end);
     } catch (e) {
       if (!context.mounted) return;
       AppToast.error(context, 'Could not save range: $e');
@@ -1567,8 +1644,8 @@ class LocationDetailSheet extends ConsumerWidget {
     DateTime tripEnd,
   ) async {
     try {
-      await _writeDateRange(ref, loc.id, tripStart, tripEnd);
-      if (!context.mounted) return;
+      final ok = await _writeDateRange(context, ref, loc, tripStart, tripEnd);
+      if (!ok || !context.mounted) return;
       final df = DateFormat('MMM d');
       AppToast.success(
         context,
@@ -1587,7 +1664,7 @@ class LocationDetailSheet extends ConsumerWidget {
   ) async {
     final start = loc.scheduledDate ?? DateTime.now();
     try {
-      await _writeDateRange(ref, loc.id, start, null);
+      await _writeDateRange(context, ref, loc, start, null);
     } catch (e) {
       if (!context.mounted) return;
       AppToast.error(context, 'Could not clear range: $e');
@@ -2014,7 +2091,7 @@ class LocationDetailSheet extends ConsumerWidget {
     final endRaw = location.scheduledEndDate ?? startRaw;
     final end = DateTime(endRaw.year, endRaw.month, endRaw.day);
     final isActiveTripContext = tripId == null ||
-        ref.read(realtimeActiveTripProvider).asData?.value?.id == tripId;
+        ref.read(realtimeActiveTripProvider).valueOrNull?.id == tripId;
     final spansHere = isActiveTripContext &&
         end.isAfter(start) &&
         !day.isBefore(start) &&

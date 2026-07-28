@@ -21,7 +21,8 @@ class LocalActiveTripNotifier extends StateNotifier<String?> {
     final prefs = SharedPrefsCache.instance;
     final tripId = prefs.getString(_activeTripKey);
     if (tripId != null) {
-      debugPrint('LocalActiveTripNotifier: 📂 Loaded active trip from storage: $tripId');
+      debugPrint(
+          'LocalActiveTripNotifier: 📂 Loaded active trip from storage: $tripId');
     } else {
       debugPrint('LocalActiveTripNotifier: No active trip stored');
     }
@@ -29,7 +30,8 @@ class LocalActiveTripNotifier extends StateNotifier<String?> {
   }
 
   Future<void> setActiveTrip(String tripId) async {
-    debugPrint('LocalActiveTripNotifier: 💾 Saving active trip to storage: $tripId');
+    debugPrint(
+        'LocalActiveTripNotifier: 💾 Saving active trip to storage: $tripId');
     final prefs = SharedPrefsCache.instance;
     await prefs.setString(_activeTripKey, tripId);
     state = tripId;
@@ -77,19 +79,26 @@ final localActiveTripProvider = FutureProvider<Trip?>((ref) async {
 
   // If either provider is still loading, return null but DON'T clear the stored trip ID
   // This allows the trip to persist through app restarts without interruption
-  if (userTripsAsync.isLoading || sharedTripsAsync.isLoading) {
+  // Refreshes (e.g. a date-range edit invalidating userTripsProvider)
+  // RETAIN the previous list — only a true first load has no value yet.
+  // Bailing on every refresh nulled the active trip for a frame, which
+  // cascaded into a visible "page reload" of the map sheet.
+  if ((userTripsAsync.isLoading && !userTripsAsync.hasValue) ||
+      (sharedTripsAsync.isLoading && !sharedTripsAsync.hasValue)) {
     debugPrint('LocalActiveTripProvider: ⏳ Waiting for trips to load...');
     return null; // Still loading, keep the stored trip ID
   }
 
-  debugPrint('LocalActiveTripProvider: ✅ Trips loaded, searching for active trip...');
+  debugPrint(
+      'LocalActiveTripProvider: ✅ Trips loaded, searching for active trip...');
 
   // Now that both providers are loaded, try to find the trip
-  final userTrips = userTripsAsync.asData?.value ?? [];
+  final userTrips = userTripsAsync.valueOrNull ?? [];
 
   for (final trip in userTrips) {
     if (trip.id == activeTripId) {
-      debugPrint('LocalActiveTripProvider: ✅ Found trip in user trips: ${trip.name}');
+      debugPrint(
+          'LocalActiveTripProvider: ✅ Found trip in user trips: ${trip.name}');
       return trip;
     }
   }
@@ -102,7 +111,7 @@ final localActiveTripProvider = FutureProvider<Trip?>((ref) async {
   // country guard depend on these), we use the embed only to confirm the
   // active trip is one the user can see, then re-fetch the canonical row
   // from the trips table by id.
-  final sharedTripsData = sharedTripsAsync.asData?.value ?? [];
+  final sharedTripsData = sharedTripsAsync.valueOrNull ?? [];
 
   for (final sharedTripData in sharedTripsData) {
     final trip = sharedTripData['trips'] as Map<String, dynamic>?;
@@ -111,7 +120,8 @@ final localActiveTripProvider = FutureProvider<Trip?>((ref) async {
         final repo = ref.read(tripRepositoryProvider);
         final fresh = await repo.getTripById(activeTripId);
         if (fresh != null) {
-          debugPrint('LocalActiveTripProvider: ✅ Found trip in shared trips: ${fresh.name}');
+          debugPrint(
+              'LocalActiveTripProvider: ✅ Found trip in shared trips: ${fresh.name}');
           return fresh;
         }
       } catch (e) {
@@ -121,15 +131,26 @@ final localActiveTripProvider = FutureProvider<Trip?>((ref) async {
       // Embed-only fallback if the direct fetch fails (network / RLS) —
       // at least the user keeps a usable active trip object.
       final tripObj = Trip.fromJson(trip);
-      debugPrint('LocalActiveTripProvider: ✅ Found trip in shared trips (embed fallback): ${tripObj.name}');
+      debugPrint(
+          'LocalActiveTripProvider: ✅ Found trip in shared trips (embed fallback): ${tripObj.name}');
       return tripObj;
     }
   }
 
-  // Trip not found AFTER both providers finished loading
-  // This means the trip was deleted or user lost access
-  // NOW it's safe to clear the stored active trip ID
-  debugPrint('LocalActiveTripProvider: ⚠️ Trip not found (deleted or access lost), clearing...');
+  // Trip not found. Only treat that as "deleted or access lost" when BOTH
+  // providers are fully settled: during a refresh the retained lists are
+  // STALE, and a just-created/just-activated trip is legitimately absent
+  // from them — deactivating here erased the active trip the user set
+  // milliseconds earlier (create-then-activate race). While refreshing,
+  // keep the stored id and emit null for this frame; the refetch re-runs
+  // this provider and resolves the trip.
+  if (userTripsAsync.isLoading || sharedTripsAsync.isLoading) {
+    debugPrint(
+        'LocalActiveTripProvider: ⏳ Trip not in STALE lists, waiting for refresh...');
+    return null;
+  }
+  debugPrint(
+      'LocalActiveTripProvider: ⚠️ Trip not found (deleted or access lost), clearing...');
   await ref.read(localActiveTripIdProvider.notifier).deactivateTrip();
   return null;
 });

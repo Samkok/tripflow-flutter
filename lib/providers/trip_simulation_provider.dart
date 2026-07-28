@@ -59,8 +59,8 @@ final tripSimulationProvider = Provider<TimingSimulationResult?>((ref) {
       DateTime(selectedDate.year, selectedDate.month, selectedDate.day);
   if (selectedDay.isBefore(today)) return null;
 
-  final ordered = ref.watch(
-      tripProvider.select((s) => s.optimizedLocationsForSelectedDate));
+  final ordered = ref
+      .watch(tripProvider.select((s) => s.optimizedLocationsForSelectedDate));
   if (ordered.isEmpty) return null;
 
   final routable = ordered.where((s) => !s.isSkipped && !s.isDone).toList();
@@ -90,8 +90,7 @@ final acknowledgedTimingWarningsProvider =
 /// Per-stop warnings indexed by `locationId` for cheap O(1) lookup from
 /// [OptimizedLocationCard]'s badge. Empty map when no simulation has run
 /// or every stop is feasible.
-final stopWarningsProvider =
-    Provider<Map<String, List<TimingWarning>>>((ref) {
+final stopWarningsProvider = Provider<Map<String, List<TimingWarning>>>((ref) {
   final result = ref.watch(tripSimulationProvider);
   if (result == null) return const {};
   return {

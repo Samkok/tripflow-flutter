@@ -48,7 +48,8 @@ class NotificationService {
   // Android notification channel
   static const _channelId = 'voyza_notifications';
   static const _channelName = 'VoyZa Notifications';
-  static const _channelDescription = 'Trip collaboration and activity notifications';
+  static const _channelDescription =
+      'Trip collaboration and activity notifications';
 
   bool _initialized = false;
 
@@ -68,7 +69,8 @@ class NotificationService {
       debugPrint('NotificationService: Firebase initialized');
 
       // Register background handler (must be registered before any other setup)
-      FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+      FirebaseMessaging.onBackgroundMessage(
+          _firebaseMessagingBackgroundHandler);
 
       // Configure local notifications for foreground display
       await _initLocalNotifications();
@@ -80,7 +82,8 @@ class NotificationService {
       FirebaseMessaging.onMessageOpenedApp.listen(_onNotificationTap);
 
       // Handle notification that launched the app from terminated state
-      final initialMessage = await FirebaseMessaging.instance.getInitialMessage();
+      final initialMessage =
+          await FirebaseMessaging.instance.getInitialMessage();
       if (initialMessage != null) {
         // Slight delay to allow navigator to be ready
         await Future.delayed(const Duration(milliseconds: 500));
@@ -97,7 +100,8 @@ class NotificationService {
       if (alreadySignedIn) {
         // Fire-and-forget — don't block initialization
         registerToken().catchError((e) {
-          debugPrint('NotificationService: registerToken on restart failed: $e');
+          debugPrint(
+              'NotificationService: registerToken on restart failed: $e');
         });
       }
     } catch (e) {
@@ -117,7 +121,8 @@ class NotificationService {
 
       final userId = SupabaseService.instance.client.auth.currentUser?.id;
       if (userId == null) {
-        debugPrint('NotificationService: registerToken skipped — no signed-in user');
+        debugPrint(
+            'NotificationService: registerToken skipped — no signed-in user');
         return;
       }
 
@@ -134,12 +139,14 @@ class NotificationService {
         return;
       }
 
-      debugPrint('NotificationService: Permission status: ${settings.authorizationStatus}');
+      debugPrint(
+          'NotificationService: Permission status: ${settings.authorizationStatus}');
 
       // Get the FCM registration token for this device
       final token = await FirebaseMessaging.instance.getToken();
       if (token == null) {
-        debugPrint('NotificationService: FCM token is null (simulator or permission denied)');
+        debugPrint(
+            'NotificationService: FCM token is null (simulator or permission denied)');
         return;
       }
 
@@ -156,12 +163,12 @@ class NotificationService {
           debugPrint('NotificationService: FCM token refreshed');
           await _upsertToken(userId: userId, token: newToken);
         } catch (e) {
-          debugPrint(
-              'NotificationService: onTokenRefresh handler failed: $e');
+          debugPrint('NotificationService: onTokenRefresh handler failed: $e');
         }
       });
 
-      debugPrint('NotificationService: Device registered for push notifications');
+      debugPrint(
+          'NotificationService: Device registered for push notifications');
     } catch (e) {
       debugPrint('NotificationService: registerToken failed: $e');
     }
@@ -226,15 +233,13 @@ class NotificationService {
       final token = await FirebaseMessaging.instance.getToken();
       if (token == null) return;
 
-      await SupabaseService.instance.client
-          .from('device_tokens')
-          .update({
-            'is_active': false,
-            'updated_at': DateTime.now().toUtc().toIso8601String(),
-          })
-          .eq('fcm_token', token);
+      await SupabaseService.instance.client.from('device_tokens').update({
+        'is_active': false,
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      }).eq('fcm_token', token);
 
-      debugPrint('NotificationService: Device token marked inactive (sign-out)');
+      debugPrint(
+          'NotificationService: Device token marked inactive (sign-out)');
     } catch (e) {
       debugPrint('NotificationService: deregisterToken failed: $e');
     }
@@ -246,9 +251,11 @@ class NotificationService {
 
   /// Configures flutter_local_notifications for foreground display.
   Future<void> _initLocalNotifications() async {
-    const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
+    const androidSettings =
+        AndroidInitializationSettings('@mipmap/ic_launcher');
     const iosSettings = DarwinInitializationSettings(
-      requestAlertPermission: false, // Handled by FirebaseMessaging.requestPermission()
+      requestAlertPermission:
+          false, // Handled by FirebaseMessaging.requestPermission()
       requestBadgePermission: false,
       requestSoundPermission: false,
     );
@@ -260,7 +267,8 @@ class NotificationService {
         final payload = response.payload;
         if (payload != null) {
           // Minimal routing — foreground taps navigate to the relevant screen
-          debugPrint('NotificationService: Local notification tapped: $payload');
+          debugPrint(
+              'NotificationService: Local notification tapped: $payload');
         }
       },
     );
@@ -316,7 +324,8 @@ class NotificationService {
 
   /// Handles a notification tap (from background/open state).
   void _onNotificationTap(RemoteMessage message) {
-    debugPrint('NotificationService: Notification tapped — type: ${message.data["type"]}');
+    debugPrint(
+        'NotificationService: Notification tapped — type: ${message.data["type"]}');
     _handleNotificationTap(message.data);
   }
 
@@ -325,7 +334,8 @@ class NotificationService {
     final type = data['type'] as String?;
     final tripId = data['trip_id'] as String?;
 
-    debugPrint('NotificationService: Handling tap — type: $type, tripId: $tripId');
+    debugPrint(
+        'NotificationService: Handling tap — type: $type, tripId: $tripId');
 
     switch (type) {
       case 'collaborator_added':
@@ -336,7 +346,8 @@ class NotificationService {
         _navigateToTrip(tripId);
         break;
       default:
-        debugPrint('NotificationService: No navigation handler for type: $type');
+        debugPrint(
+            'NotificationService: No navigation handler for type: $type');
     }
   }
 

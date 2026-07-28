@@ -5,12 +5,15 @@ import 'package:intl/intl.dart';
 class DatePickerUtils {
   /// Shows a custom date picker dialog that highlights specific dates with a
   /// marker dot. [highlightedDates] are the dates that contain locations.
+  /// [highlightRange] (the trip's start→end) renders as a soft contiguous
+  /// band behind the day cells, so the trip reads as a row on the calendar.
   static Future<DateTime?> showCustomDatePicker({
     required BuildContext context,
     required DateTime initialDate,
     required DateTime firstDate,
     required DateTime lastDate,
     required Set<DateTime> highlightedDates,
+    DateTimeRange? highlightRange,
   }) async {
     final normalizedHighlights = <DateTime>{
       for (final d in highlightedDates) DateTime(d.year, d.month, d.day),
@@ -23,6 +26,12 @@ class DatePickerUtils {
         firstDate: _dateOnly(firstDate),
         lastDate: _dateOnly(lastDate),
         highlightedDates: normalizedHighlights,
+        highlightRange: highlightRange == null
+            ? null
+            : DateTimeRange(
+                start: _dateOnly(highlightRange.start),
+                end: _dateOnly(highlightRange.end),
+              ),
       ),
     );
   }
@@ -35,12 +44,14 @@ class _MarkedCalendarDialog extends StatefulWidget {
   final DateTime firstDate;
   final DateTime lastDate;
   final Set<DateTime> highlightedDates;
+  final DateTimeRange? highlightRange;
 
   const _MarkedCalendarDialog({
     required this.initialDate,
     required this.firstDate,
     required this.lastDate,
     required this.highlightedDates,
+    this.highlightRange,
   });
 
   @override
@@ -59,13 +70,16 @@ class _MarkedCalendarDialogState extends State<_MarkedCalendarDialog> {
   }
 
   bool get _canGoPrevMonth {
-    final firstOfDisplayed = DateTime(_displayedMonth.year, _displayedMonth.month);
-    final firstAllowed = DateTime(widget.firstDate.year, widget.firstDate.month);
+    final firstOfDisplayed =
+        DateTime(_displayedMonth.year, _displayedMonth.month);
+    final firstAllowed =
+        DateTime(widget.firstDate.year, widget.firstDate.month);
     return firstOfDisplayed.isAfter(firstAllowed);
   }
 
   bool get _canGoNextMonth {
-    final firstOfDisplayed = DateTime(_displayedMonth.year, _displayedMonth.month);
+    final firstOfDisplayed =
+        DateTime(_displayedMonth.year, _displayedMonth.month);
     final firstAllowed = DateTime(widget.lastDate.year, widget.lastDate.month);
     return firstOfDisplayed.isBefore(firstAllowed);
   }
@@ -73,14 +87,16 @@ class _MarkedCalendarDialogState extends State<_MarkedCalendarDialog> {
   void _prevMonth() {
     if (!_canGoPrevMonth) return;
     setState(() {
-      _displayedMonth = DateTime(_displayedMonth.year, _displayedMonth.month - 1);
+      _displayedMonth =
+          DateTime(_displayedMonth.year, _displayedMonth.month - 1);
     });
   }
 
   void _nextMonth() {
     if (!_canGoNextMonth) return;
     setState(() {
-      _displayedMonth = DateTime(_displayedMonth.year, _displayedMonth.month + 1);
+      _displayedMonth =
+          DateTime(_displayedMonth.year, _displayedMonth.month + 1);
     });
   }
 
@@ -233,48 +249,78 @@ class _MarkedCalendarDialogState extends State<_MarkedCalendarDialog> {
 
         final dotColor = isSelected ? Colors.black : primary;
 
+        final range = widget.highlightRange;
+        final inTripRange = range != null &&
+            !date.isBefore(range.start) &&
+            !date.isAfter(range.end);
+        final isRangeStart = inTripRange && date == range.start;
+        final isRangeEnd = inTripRange && date == range.end;
+
         return InkWell(
-          onTap: selectable
-              ? () => setState(() => _selectedDate = date)
-              : null,
+          onTap: selectable ? () => setState(() => _selectedDate = date) : null,
           borderRadius: BorderRadius.circular(20),
-          child: Padding(
-            padding: const EdgeInsets.all(2),
-            child: Container(
-              decoration: BoxDecoration(
-                color: bg,
-                shape: BoxShape.circle,
-                border: border,
-              ),
-              child: Stack(
-                alignment: Alignment.center,
-                children: [
-                  Center(
-                    child: Text(
-                      '$dayNum',
-                      style: TextStyle(
-                        color: fg,
-                        fontWeight: isSelected || isToday
-                            ? FontWeight.bold
-                            : FontWeight.normal,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              // The trip's date range as a continuous row band. Full cell
+              // width (outside the circle padding) so neighbors connect;
+              // capped only at the range's two ends.
+              if (inTripRange)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 5),
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: primary.withValues(alpha: 0.14),
+                      borderRadius: BorderRadius.horizontal(
+                        left: isRangeStart
+                            ? const Radius.circular(18)
+                            : Radius.zero,
+                        right: isRangeEnd
+                            ? const Radius.circular(18)
+                            : Radius.zero,
                       ),
                     ),
                   ),
-                  if (hasLocations)
-                    Positioned(
-                      bottom: 4,
-                      child: Container(
-                        width: 5,
-                        height: 5,
-                        decoration: BoxDecoration(
-                          color: dotColor,
-                          shape: BoxShape.circle,
+                ),
+              Padding(
+                padding: const EdgeInsets.all(2),
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: bg,
+                    shape: BoxShape.circle,
+                    border: border,
+                  ),
+                  child: Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      Center(
+                        child: Text(
+                          '$dayNum',
+                          style: TextStyle(
+                            color: fg,
+                            fontWeight: isSelected || isToday
+                                ? FontWeight.bold
+                                : FontWeight.normal,
+                          ),
                         ),
                       ),
-                    ),
-                ],
+                      if (hasLocations)
+                        Positioned(
+                          bottom: 4,
+                          child: Container(
+                            width: 5,
+                            height: 5,
+                            decoration: BoxDecoration(
+                              color: dotColor,
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
               ),
-            ),
+            ],
           ),
         );
       },

@@ -32,7 +32,7 @@ Future<void> maybePromptAccommodationForNewDays(
 
   // Accommodations come from the ACTIVE trip's in-memory state — bail for
   // any other trip rather than showing wrong options.
-  final activeTrip = ref.read(realtimeActiveTripProvider).asData?.value;
+  final activeTrip = ref.read(realtimeActiveTripProvider).valueOrNull;
   if (activeTrip?.id != trip.id) return;
 
   final accommodations = ref

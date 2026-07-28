@@ -35,9 +35,14 @@ class MapUIState {
   }) {
     return MapUIState(
       isFabMenuOpen: isFabMenuOpen ?? this.isFabMenuOpen,
-      showPolylineInfoOverlay: showPolylineInfoOverlay ?? this.showPolylineInfoOverlay,
-      tappedPolylineId: clearTappedPolyline ? null : (tappedPolylineId ?? this.tappedPolylineId),
-      highlightedLocationIndex: clearHighlightedLocation ? null : (highlightedLocationIndex ?? this.highlightedLocationIndex),
+      showPolylineInfoOverlay:
+          showPolylineInfoOverlay ?? this.showPolylineInfoOverlay,
+      tappedPolylineId: clearTappedPolyline
+          ? null
+          : (tappedPolylineId ?? this.tappedPolylineId),
+      highlightedLocationIndex: clearHighlightedLocation
+          ? null
+          : (highlightedLocationIndex ?? this.highlightedLocationIndex),
       routeDescription: routeDescription ?? this.routeDescription,
       formattedDuration: formattedDuration ?? this.formattedDuration,
       formattedDistance: formattedDistance ?? this.formattedDistance,
@@ -97,7 +102,8 @@ class MapUIStateNotifier extends StateNotifier<MapUIState> {
   }
 }
 
-final mapUIStateProvider = StateNotifierProvider<MapUIStateNotifier, MapUIState>((ref) {
+final mapUIStateProvider =
+    StateNotifierProvider<MapUIStateNotifier, MapUIState>((ref) {
   return MapUIStateNotifier();
 });
 
@@ -108,11 +114,13 @@ final fabMenuOpenProvider = Provider<bool>((ref) {
 });
 
 final tappedPolylineIdProvider = Provider<String?>((ref) {
-  return ref.watch(mapUIStateProvider.select((state) => state.tappedPolylineId));
+  return ref
+      .watch(mapUIStateProvider.select((state) => state.tappedPolylineId));
 });
 
 final highlightedLocationIndexProvider = Provider<int?>((ref) {
-  return ref.watch(mapUIStateProvider.select((state) => state.highlightedLocationIndex));
+  return ref.watch(
+      mapUIStateProvider.select((state) => state.highlightedLocationIndex));
 });
 
 // Providers for multi-select functionality in the trip list

@@ -39,7 +39,10 @@ class PolylineInfoOverlay extends StatelessWidget {
                     ),
                   ],
                   border: Border.all(
-                    color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.3),
+                    color: Theme.of(context)
+                        .colorScheme
+                        .primary
+                        .withValues(alpha: 0.3),
                     width: 1,
                   ),
                 ),
@@ -58,10 +61,13 @@ class PolylineInfoOverlay extends StatelessWidget {
                         Expanded(
                           child: Text(
                             'Route Segment',
-                            style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                              color: Theme.of(context).colorScheme.primary,
-                              fontWeight: FontWeight.bold,
-                            ),
+                            style: Theme.of(context)
+                                .textTheme
+                                .titleMedium
+                                ?.copyWith(
+                                  color: Theme.of(context).colorScheme.primary,
+                                  fontWeight: FontWeight.bold,
+                                ),
                           ),
                         ),
                         IconButton(
@@ -80,8 +86,8 @@ class PolylineInfoOverlay extends StatelessWidget {
                     Text(
                       routeDescription,
                       style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                        fontWeight: FontWeight.w500,
-                      ),
+                            fontWeight: FontWeight.w500,
+                          ),
                     ),
                     const SizedBox(height: 16),
                     Row(
@@ -90,10 +96,16 @@ class PolylineInfoOverlay extends StatelessWidget {
                           child: Container(
                             padding: const EdgeInsets.all(12),
                             decoration: BoxDecoration(
-                              color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.1),
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .primary
+                                  .withValues(alpha: 0.1),
                               borderRadius: BorderRadius.circular(12),
                               border: Border.all(
-                                color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.3),
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .primary
+                                    .withValues(alpha: 0.3),
                                 width: 1,
                               ),
                             ),
@@ -107,16 +119,24 @@ class PolylineInfoOverlay extends StatelessWidget {
                                 const SizedBox(height: 4),
                                 Text(
                                   formattedDuration,
-                                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                                    color: Theme.of(context).colorScheme.primary,
-                                    fontWeight: FontWeight.bold,
-                                  ),
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .titleMedium
+                                      ?.copyWith(
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .primary,
+                                        fontWeight: FontWeight.bold,
+                                      ),
                                 ),
                                 Text(
                                   'Travel Time',
-                                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                    color: Colors.grey[400],
-                                  ),
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .bodySmall
+                                      ?.copyWith(
+                                        color: Colors.grey[400],
+                                      ),
                                 ),
                               ],
                             ),
@@ -127,10 +147,16 @@ class PolylineInfoOverlay extends StatelessWidget {
                           child: Container(
                             padding: const EdgeInsets.all(12),
                             decoration: BoxDecoration(
-                              color: Theme.of(context).colorScheme.error.withValues(alpha: 0.1),
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .error
+                                  .withValues(alpha: 0.1),
                               borderRadius: BorderRadius.circular(12),
                               border: Border.all(
-                                color: Theme.of(context).colorScheme.error.withValues(alpha: 0.3),
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .error
+                                    .withValues(alpha: 0.3),
                                 width: 1,
                               ),
                             ),
@@ -144,16 +170,23 @@ class PolylineInfoOverlay extends StatelessWidget {
                                 const SizedBox(height: 4),
                                 Text(
                                   formattedDistance,
-                                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                                    color: Theme.of(context).colorScheme.error,
-                                    fontWeight: FontWeight.bold,
-                                  ),
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .titleMedium
+                                      ?.copyWith(
+                                        color:
+                                            Theme.of(context).colorScheme.error,
+                                        fontWeight: FontWeight.bold,
+                                      ),
                                 ),
                                 Text(
                                   'Distance',
-                                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                    color: Colors.grey[400],
-                                  ),
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .bodySmall
+                                      ?.copyWith(
+                                        color: Colors.grey[400],
+                                      ),
                                 ),
                               ],
                             ),

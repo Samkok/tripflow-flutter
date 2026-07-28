@@ -58,7 +58,9 @@ class UserProfile {
       createdAt: DateTime.parse(json['created_at'] as String),
       updatedAt: DateTime.parse(json['updated_at'] as String),
       locationsAddedCount: json['locations_added_count'] as int? ?? 0,
-      trialStartAt: json['trial_start_at'] != null ? DateTime.parse(json['trial_start_at'] as String) : null,
+      trialStartAt: json['trial_start_at'] != null
+          ? DateTime.parse(json['trial_start_at'] as String)
+          : null,
     );
   }
 
