@@ -76,6 +76,14 @@ class _MapScreenState extends ConsumerState<MapScreen>
   /// than the old one (the sync listener that swaps locations is async).
   bool _pendingTripCameraMove = false;
 
+  /// Content signature of the all-days routes the camera last fitted.
+  /// allDayRoutesProvider recomputes on every pinnedLocations emission
+  /// (startup sync churn!) and returns a FRESH map instance each time, so
+  /// an identity check re-fitted the camera over and over — yanking the
+  /// view back to zoom-to-fit while the user was mid-gesture. Geometry
+  /// content is what matters: re-fit only when it actually changes.
+  String? _allDaysRoutesFitSig;
+
   StreamSubscription<LatLng>?
       _locationSubscription; // PERFORMANCE: Track subscription for cleanup
 
@@ -476,13 +484,15 @@ class _MapScreenState extends ConsumerState<MapScreen>
     const qaNoShare = bool.fromEnvironment('QA_NO_SHARE', defaultValue: false);
     ShareCardFormat format = ShareCardFormat.story;
     var saveToPhotos = false;
+    var captureAsIs = false;
     if (!qaNoShare) {
       final picked = await _pickShareFormat();
       if (picked == null || !mounted) {
         return; // dismissed — don't hijack the camera
       }
-      format = picked.$1;
-      saveToPhotos = picked.$2;
+      format = picked.format;
+      saveToPhotos = picked.save;
+      captureAsIs = picked.asIs;
     }
     setState(() => _preparingShare = true);
     try {
@@ -490,17 +500,24 @@ class _MapScreenState extends ConsumerState<MapScreen>
       // layer (no search bar / FABs / sheet), and the share card center-crops
       // it to the chosen format's window — so fit every location + route into
       // that window as large as possible, mode-aware (all days vs selected).
-      _zoomToFitForShare(format.aspect);
-      await Future.delayed(const Duration(milliseconds: 900));
+      // "Screenshot" mode skips ALL of that: the user framed the map
+      // themselves, so we capture the current camera untouched (and leave
+      // it exactly where they put it afterwards).
+      if (!captureAsIs) {
+        _zoomToFitForShare(format.aspect);
+        await Future.delayed(const Duration(milliseconds: 900));
+      }
       Uint8List? bytes = await _mapController?.takeSnapshot();
       if (bytes == null && _mapController != null) {
         await Future.delayed(const Duration(milliseconds: 700));
         bytes = await _mapController?.takeSnapshot();
       }
       if (!mounted) return;
-      // Frame captured — restore the normal north-up browsing camera so the
-      // user isn't left on a rotated map behind the share sheet.
-      _zoomToFitTrip();
+      if (!captureAsIs) {
+        // Frame captured — restore the normal north-up browsing camera so
+        // the user isn't left on a rotated map behind the share sheet.
+        _zoomToFitTrip();
+      }
       final trip = ref.read(realtimeActiveTripProvider).valueOrNull;
       final anonymous = ref.read(currentUserIdProvider) == null;
       // All-days mode: the card frames the whole trip, so its stats must be
@@ -1323,6 +1340,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
     // selected day's framing.
     ref.listen<bool>(allDaysModeProvider, (previous, next) {
       if (previous == next) return;
+      _allDaysRoutesFitSig = null;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         if (next) {
@@ -1341,7 +1359,17 @@ class _MapScreenState extends ConsumerState<MapScreen>
       final routes = next.valueOrNull;
       if (routes == null || routes.isEmpty) return;
       if (!ref.read(allDaysModeProvider)) return;
-      if (identical(previous?.valueOrNull, routes)) return;
+      // Cheap geometry signature: day keys + per-day point counts (+ end
+      // points). Recomputes triggered by unrelated state churn produce the
+      // SAME geometry from the route cache — those must never move the
+      // camera; only routes genuinely (re)landing may.
+      final sig = (routes.entries.toList()
+            ..sort((a, b) => a.key.compareTo(b.key)))
+          .map((e) => '${e.key.toIso8601String()}#${e.value.length}'
+              '#${e.value.isEmpty ? '' : '${e.value.first.latitude.toStringAsFixed(5)},${e.value.last.longitude.toStringAsFixed(5)}'}')
+          .join('|');
+      if (sig == _allDaysRoutesFitSig) return;
+      _allDaysRoutesFitSig = sig;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) _zoomToFitAllDays();
       });
@@ -2346,26 +2374,30 @@ class _MapScreenState extends ConsumerState<MapScreen>
   /// can't host custom actions, so ONLY there each row keeps a download
   /// button that saves the card straight to the gallery. Returns null when
   /// dismissed.
-  Future<(ShareCardFormat, bool)?> _pickShareFormat() {
+  Future<({ShareCardFormat format, bool save, bool asIs})?> _pickShareFormat() {
     final androidSaveButton = defaultTargetPlatform == TargetPlatform.android;
     Widget option(BuildContext ctx, ShareCardFormat format, IconData icon,
-        String title, String subtitle) {
+        String title, String subtitle,
+        {bool asIs = false}) {
       return ListTile(
         leading: Icon(icon),
         title: Text(title),
         subtitle: Text(subtitle),
-        onTap: () => Navigator.of(ctx).pop((format, false)),
+        onTap: () =>
+            Navigator.of(ctx).pop((format: format, save: false, asIs: asIs)),
         trailing: androidSaveButton
             ? IconButton(
                 icon: const Icon(Icons.download_rounded),
                 tooltip: 'Save to gallery',
-                onPressed: () => Navigator.of(ctx).pop((format, true)),
+                onPressed: () => Navigator.of(ctx)
+                    .pop((format: format, save: true, asIs: asIs)),
               )
             : null,
       );
     }
 
-    return showModalBottomSheet<(ShareCardFormat, bool)>(
+    return showModalBottomSheet<
+        ({ShareCardFormat format, bool save, bool asIs})>(
       context: context,
       showDragHandle: true,
       builder: (ctx) => SafeArea(
@@ -2382,6 +2414,11 @@ class _MapScreenState extends ConsumerState<MapScreen>
                 '9:16 full screen — Instagram/Facebook Stories, WhatsApp status'),
             option(ctx, ShareCardFormat.post, Icons.grid_on, 'Post',
                 '4:5 — fits Instagram & Facebook feed posts without cropping'),
+            // As-framed: no auto zoom — the card captures the map exactly
+            // as the user has panned/zoomed it right now.
+            option(ctx, ShareCardFormat.story, Icons.crop_free_rounded,
+                'Screenshot', 'Captures the map exactly as you framed it',
+                asIs: true),
             const SizedBox(height: 8),
           ],
         ),

@@ -478,8 +478,7 @@ class RouteShareCardService {
       );
       if (file == null) return;
 
-      final publicLink = await _getOrCreatePublicLink(tripId);
-      final link = await _audienceLink(anonymous: false);
+      // Links intentionally omitted from this caption (owner's edit above).
       final dayCount = places
           .where((p) => p.scheduledDate != null)
           .map((p) {
@@ -488,10 +487,10 @@ class RouteShareCardService {
           })
           .toSet()
           .length;
-      final steal = publicLink != null ? '\nSteal it: $publicLink' : '';
+      // final steal = publicLink != null ? '\nSteal it: $publicLink' : '';
       final text =
           'My ${tripName.trim()} plan is done — $dayCount ${dayCount == 1 ? 'day' : 'days'}, '
-          '${places.length} places.$steal\n$link';
+          '${places.length} places.';
 
       await Share.shareXFiles([XFile(file.path)], text: text);
       AnalyticsService.instance.planCardShared();
@@ -714,12 +713,12 @@ class RouteShareCardService {
       final file = File('${dir.path}/voyza_route_map_card_${format.name}.png');
       await file.writeAsBytes(png, flush: true);
 
-      final link = await _audienceLink(anonymous: anonymous);
-      String itinerary = '';
-      if (!anonymous && tripId != null) {
-        final publicLink = await _getOrCreatePublicLink(tripId);
-        if (publicLink != null) itinerary = '\nSteal it: $publicLink';
-      }
+      // final link = await _audienceLink(anonymous: anonymous);
+      // String itinerary = '';
+      // if (!anonymous && tripId != null) {
+      //   final publicLink = await _getOrCreatePublicLink(tripId);
+      //   if (publicLink != null) itinerary = '\nSteal it: $publicLink';
+      // }
       final saved = timeSaved >= const Duration(minutes: 5)
           ? ' · ~${_formatDuration(timeSaved)} of travel time saved'
           : '';
@@ -728,16 +727,13 @@ class RouteShareCardService {
       if (allTrip) {
         text = 'My ${tripName.trim()} plan — $daysCount '
             '${daysCount == 1 ? 'day' : 'days'}, $totalPlaces '
-            '${totalPlaces == 1 ? 'place' : 'places'}$saved.'
-            '$itinerary\n$link';
+            '${totalPlaces == 1 ? 'place' : 'places'}$saved.';
       } else if (planMode) {
         text = 'My ${tripName.trim()} plan is ready — ${archetype.trim()}. '
-            '$stopCount ${stopCount == 1 ? 'stop' : 'stops'}$saved.'
-            '$itinerary\n$link';
+            '$stopCount ${stopCount == 1 ? 'stop' : 'stops'}$saved.';
       } else {
         text = 'My ${tripName.trim()} route, optimized — '
-            '$stopCount ${stopCount == 1 ? 'stop' : 'stops'}$saved.'
-            '$itinerary\n$link';
+            '$stopCount ${stopCount == 1 ? 'stop' : 'stops'}$saved.';
       }
 
       // Share the IMAGE alone and put the caption (with its links) on the
@@ -898,11 +894,11 @@ class RouteShareCardService {
       );
       if (file == null) return;
 
-      final link = await _audienceLink(anonymous: anonymous);
-      String itinerary = '';
+      // final link = await _audienceLink(anonymous: anonymous);
+      // String itinerary = '';
       if (!anonymous && tripId != null) {
-        final publicLink = await _getOrCreatePublicLink(tripId);
-        if (publicLink != null) itinerary = '\nFull itinerary: $publicLink';
+        // final publicLink = await _getOrCreatePublicLink(tripId);
+        // if (publicLink != null) itinerary = '\nFull itinerary: $publicLink';
       }
 
       final saved = timeSaved >= const Duration(minutes: 5)
@@ -911,7 +907,7 @@ class RouteShareCardService {
       final text =
           '$tripName, by the numbers — $days ${days == 1 ? 'day' : 'days'} · '
           '$places ${places == 1 ? 'place' : 'places'}$saved. '
-          'Planned with VoyZa.$itinerary\n$link';
+          'Planned with VoyZa.';
 
       await Share.shareXFiles([XFile(file.path)], text: text);
       AnalyticsService.instance.tripRecapShared();

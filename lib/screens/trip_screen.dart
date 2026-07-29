@@ -723,6 +723,13 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                     shape: BoxShape.rectangle,
                     borderRadius: BorderRadius.circular(18),
                     glowColor: Theme.of(context).colorScheme.primary,
+                    // Toned down from the defaults — the full glow read as
+                    // overwhelming on the home screen.
+                    minBlur: 6,
+                    maxBlur: 16,
+                    maxSpread: 2,
+                    minAlpha: 0.15,
+                    maxAlpha: 0.4,
                     child: SizedBox(
                       width: double.infinity,
                       child: FilledButton(
@@ -2302,18 +2309,31 @@ class _TripScreenState extends ConsumerState<TripScreen> {
             '${count == 1 ? 'its' : 'their'} current dates?',
             style: theme.textTheme.bodyMedium,
           ),
+          actionsPadding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
           actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('Cancel'),
-            ),
-            OutlinedButton(
-              onPressed: () => Navigator.pop(ctx, 'keep'),
-              child: const Text('Keep dates'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(ctx, 'move'),
-              child: const Text('Move with trip'),
+            Row(
+              children: [
+                Expanded(
+                  child: TextButton(
+                    onPressed: () => Navigator.pop(ctx),
+                    child: const Text('Cancel'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: () => Navigator.pop(ctx, 'keep'),
+                    child: const Text('Keep'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: FilledButton(
+                    onPressed: () => Navigator.pop(ctx, 'move'),
+                    child: const Text('Move'),
+                  ),
+                ),
+              ],
             ),
           ],
         );

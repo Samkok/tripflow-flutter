@@ -104,6 +104,17 @@ class MarkerUtils {
   }) async {
     final ui.PictureRecorder pictureRecorder = ui.PictureRecorder();
 
+    // Render at the DEVICE pixel ratio: these bitmaps were drawn 1:1 in
+    // logical pixels (20px circle, 12px label) and Google Maps upscaled
+    // them ~3x on modern phones — the "blurry name" effect. The canvas is
+    // scaled so every measurement below stays in logical units; the PNG is
+    // physically dpr× larger and imagePixelRatio tells the map its true
+    // density.
+    final double dpr = (WidgetsBinding
+                .instance.platformDispatcher.implicitView?.devicePixelRatio ??
+            3.0)
+        .clamp(1.0, 4.0);
+
     // --- 1. Configure Text Painters ---
     // Painter for the number inside the circle or the skipped icon
     TextPainter contentPainter = TextPainter(textDirection: TextDirection.ltr);
@@ -147,11 +158,18 @@ class MarkerUtils {
     }
     contentPainter.layout();
 
-    // Painter for the location name below the circle
+    // Painter for the location name below the circle. Full name up to 50
+    // characters (the old 60px wrap width truncated almost everything to
+    // "Hong Kong In..."), centered across up to two lines.
+    final displayName =
+        name.length > 50 ? '${name.substring(0, 50).trimRight()}…' : name;
     TextPainter namePainter = TextPainter(
-        textDirection: TextDirection.ltr, maxLines: 2, ellipsis: '...');
+        textDirection: TextDirection.ltr,
+        textAlign: TextAlign.center,
+        maxLines: 2,
+        ellipsis: '...');
     namePainter.text = TextSpan(
-      text: name,
+      text: displayName,
       style: TextStyle(
         fontSize: 12, // Increased from 14 for better readability
         fontWeight: FontWeight.w700, // Bolder for better visibility
@@ -173,8 +191,9 @@ class MarkerUtils {
         ],
       ),
     );
-    // Layout the name with a max width to allow wrapping
-    namePainter.layout(maxWidth: size * 3);
+    // Wide enough that ~25 characters fit per line — 50-char names wrap
+    // onto two lines instead of vanishing into an ellipsis.
+    namePainter.layout(maxWidth: 170);
 
     // --- 2. Calculate Canvas Dimensions ---
     final double circleRadius = size / 2;
@@ -187,6 +206,7 @@ class MarkerUtils {
     final double canvasCenterX = totalWidth / 2;
 
     final Canvas canvas = Canvas(pictureRecorder);
+    canvas.scale(dpr);
 
     // --- 3. Draw the Elements ---
 
@@ -275,7 +295,7 @@ class MarkerUtils {
     // --- 4. Convert to Bitmap ---
     final ui.Image img = await pictureRecorder
         .endRecording()
-        .toImage(totalWidth.toInt(), totalHeight.toInt());
+        .toImage((totalWidth * dpr).round(), (totalHeight * dpr).round());
     final ByteData? data = await img.toByteData(format: ui.ImageByteFormat.png);
 
     if (data == null) {
@@ -287,7 +307,10 @@ class MarkerUtils {
     final double anchorY = (size / 2) / totalHeight;
 
     return MarkerBitmapResult(
-      BitmapDescriptor.bytes(data.buffer.asUint8List()),
+      BitmapDescriptor.bytes(
+        data.buffer.asUint8List(),
+        imagePixelRatio: dpr,
+      ),
       Offset(anchorX, anchorY),
     );
   }

@@ -275,12 +275,13 @@ final styledPolylinesProvider = Provider<Set<Polyline>>((ref) {
         Polyline(
           polylineId: PolylineId(polylineId),
           points: legPoints,
-          // The route is the product's hero — brand color always. A tapped
-          // leg still reads stronger via full opacity, extra width, and the
-          // white inner border added below.
+          // Tapped vs untapped must be unmistakable: an untapped leg is
+          // neutral grey, the tapped one is the brand color (plus extra
+          // width and the white inner border added below). Same-color
+          // opacity tweaks were indistinguishable on a real map.
           color: isHighlighted
               ? AppTheme.primaryColor
-              : AppTheme.primaryColor.withValues(alpha: 0.85),
+              : const Color(0xFFB9C1CC),
           // Professional width: thicker when highlighted
           width: isHighlighted ? 8 : 6,
           // No patterns for cleaner, more professional look

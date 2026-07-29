@@ -17,7 +17,6 @@ import '../utils/same_day_place_guard.dart';
 import '../services/review_prompt_service.dart';
 import '../services/trip_day_service.dart';
 import 'timing_warnings_sheet.dart';
-import '../utils/external_app_links.dart';
 import '../utils/trip_date_validator.dart';
 import '../utils/trip_dates.dart';
 import '../core/theme.dart';
@@ -461,6 +460,15 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
               Expanded(
                 child: NotificationListener<ScrollNotification>(
                   onNotification: (notification) {
+                    // ONLY this list's own VERTICAL scrolling may compact the
+                    // summary. Notifications bubble up from nested
+                    // scrollables too — rolling the horizontal day-chip strip
+                    // was reporting its horizontal offset here and collapsing
+                    // the Route Summary card mid-swipe.
+                    if (notification.metrics.axis != Axis.vertical) {
+                      return false;
+                    }
+                    if (notification.depth != 0) return false;
                     final pixels = notification.metrics.pixels;
                     final compact = pixels > 8;
                     if (_summaryCompact.value != compact) {
@@ -597,29 +605,64 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
     final hasOptimizedRoute =
         ref.watch(tripProvider.select((s) => s.optimizedRoute.isNotEmpty));
 
+    // Inline stat line under the title — the route's vitals at a glance
+    // (replaces scanning down to the summary card for the basics).
+    final allDaysStats = ref.watch(allDaysModeProvider);
+    final axisDays = ref.watch(activeTripDayAxisProvider).length;
+    final placesAll =
+        ref.watch(tripProvider.select((s) => s.pinnedLocations.length));
+    final dayStops = ref.watch(locationsForSelectedDateProvider).length;
+    final distanceKm =
+        ref.watch(tripProvider.select((s) => s.totalDistance)) / 1000.0;
+    final travelTime = ref.watch(tripProvider.select((s) => s.totalTravelTime));
+    final String statLine;
+    if (allDaysStats) {
+      statLine = '$axisDays ${axisDays == 1 ? 'day' : 'days'} · '
+          '$placesAll ${placesAll == 1 ? 'place' : 'places'}';
+    } else if (hasOptimizedRoute) {
+      statLine = '$dayStops ${dayStops == 1 ? 'stop' : 'stops'}'
+          ' · ${distanceKm.toStringAsFixed(1)} km'
+          '${travelTime > Duration.zero ? ' · ${_formatDuration(travelTime)}' : ''}';
+    } else if (dayStops > 0) {
+      statLine = '$dayStops ${dayStops == 1 ? 'stop' : 'stops'} · not '
+          'optimized yet';
+    } else {
+      statLine = 'Add places to plan this day';
+    }
+
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      crossAxisAlignment: CrossAxisAlignment.center,
       children: [
         // Flexible: with Clear + Re-optimize both visible the action cluster
         // can outgrow narrow screens — the title yields (ellipsis) instead of
         // overflowing the row.
         Flexible(
-          child: Text(
-            'Trip Plan',
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: Theme.of(context).textTheme.headlineMedium,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Trip plan',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context)
+                    .textTheme
+                    .headlineMedium
+                    ?.copyWith(fontWeight: FontWeight.w800),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                statLine,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant),
+              ),
+            ],
           ),
         ),
         Row(
           children: [
-            IconButton(
-              icon: const Icon(Icons.tune),
-              onPressed: onShowZoneSettings,
-              color: Theme.of(context).textTheme.bodyMedium?.color,
-              tooltip: 'Zone settings',
-            ),
-            const SizedBox(width: 4),
             // Consumer(
             //   builder: (context, ref, child) {
             //     final showNames = ref.watch(showMarkerNamesProvider);
@@ -710,7 +753,7 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                     begin: Alignment.topLeft,
                     end: Alignment.bottomRight,
                   ),
-                  borderRadius: BorderRadius.circular(12),
+                  borderRadius: BorderRadius.circular(24),
                 ),
                 child: Material(
                   color: Colors.transparent,
@@ -719,10 +762,10 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                         ? () => _onOptimizePressed(context, ref,
                             isReoptimizing: hasOptimizedRoute)
                         : null,
-                    borderRadius: BorderRadius.circular(12),
+                    borderRadius: BorderRadius.circular(24),
                     child: Padding(
                       padding: const EdgeInsets.symmetric(
-                          horizontal: 16, vertical: 10),
+                          horizontal: 18, vertical: 11),
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
@@ -735,9 +778,7 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                           ),
                           const SizedBox(width: 8),
                           Text(
-                            hasOptimizedRoute
-                                ? 'Re-optimize'
-                                : 'Optimize Route',
+                            hasOptimizedRoute ? 'Re-optimize' : 'Optimize',
                             style: const TextStyle(
                               color: Colors.white,
                               fontWeight: FontWeight.bold,
@@ -754,6 +795,24 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
               if (!canTap) return button;
               return _PulsingGlow(glowColor: primaryColor, child: button);
             }),
+            const SizedBox(width: 8),
+            Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                    color:
+                        Theme.of(context).dividerColor.withValues(alpha: 0.6)),
+              ),
+              child: IconButton(
+                icon: const Icon(Icons.tune, size: 20),
+                padding: EdgeInsets.zero,
+                onPressed: onShowZoneSettings,
+                color: Theme.of(context).textTheme.bodyMedium?.color,
+                tooltip: 'Zone settings',
+              ),
+            ),
           ],
         ),
       ],
@@ -1123,7 +1182,7 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
         (ref.watch(hasActiveTripWriteAccessProvider).valueOrNull ?? false);
 
     return SizedBox(
-      height: 34,
+      height: 42,
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -1147,12 +1206,12 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
               style: TextButton.styleFrom(
                 minimumSize: Size.zero,
                 padding:
-                    const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 foregroundColor: fg,
                 backgroundColor: Colors.transparent,
                 shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10),
+                  borderRadius: BorderRadius.circular(14),
                   side: BorderSide(
                       color: theme.dividerColor.withValues(alpha: 0.7),
                       width: 1.2),
@@ -1161,7 +1220,7 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(Icons.remove_rounded, size: 15, color: fg),
+                  Icon(Icons.remove_rounded, size: 16, color: fg),
                   const SizedBox(width: 4),
                   Text('Remove day',
                       style: theme.textTheme.labelMedium
@@ -1171,32 +1230,30 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
             );
           }
 
-          // ── "+ Add day" box — framed, transparent body. ──
+          // ── "+" add-day square — dashed frame, transparent body. ──
           if (canAddDay && index == days.length + 1) {
-            return TextButton(
-              onPressed: () => _addTripDay(context, ref, trip, days),
-              style: TextButton.styleFrom(
-                minimumSize: Size.zero,
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                foregroundColor: primary,
-                backgroundColor: Colors.transparent,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10),
-                  side: BorderSide(
-                      color: primary.withValues(alpha: 0.55), width: 1.2),
+            final fg =
+                theme.textTheme.bodyMedium?.color?.withValues(alpha: 0.75) ??
+                    theme.colorScheme.onSurface;
+            return Tooltip(
+              message: 'Add day',
+              child: CustomPaint(
+                painter: _DashedRRectPainter(
+                  color: fg.withValues(alpha: 0.6),
+                  radius: 14,
                 ),
-                textStyle: theme.textTheme.labelMedium
-                    ?.copyWith(fontWeight: FontWeight.w700),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(Icons.add_rounded, size: 15, color: primary),
-                  const SizedBox(width: 4),
-                  const Text('Add day'),
-                ],
+                child: SizedBox(
+                  width: 42,
+                  height: 42,
+                  child: Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(14),
+                      onTap: () => _addTripDay(context, ref, trip, days),
+                      child: Icon(Icons.add_rounded, size: 20, color: fg),
+                    ),
+                  ),
+                ),
               ),
             );
           }
@@ -1206,7 +1263,10 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
           // layers icon vs their outline look) so it reads as a MODE, not
           // another date.
           if (index == 0) {
-            final fg = allDaysMode ? theme.colorScheme.onPrimary : primary;
+            final fg = allDaysMode
+                ? theme.colorScheme.onPrimary
+                : (theme.textTheme.bodyMedium?.color?.withValues(alpha: 0.85) ??
+                    theme.colorScheme.onSurface);
             return TextButton(
               onPressed: () {
                 ref.read(allDaysModeProvider.notifier).state = true;
@@ -1215,20 +1275,20 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
               style: TextButton.styleFrom(
                 minimumSize: Size.zero,
                 padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                 tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 foregroundColor: fg,
-                backgroundColor:
-                    allDaysMode ? primary : primary.withValues(alpha: 0.14),
+                backgroundColor: allDaysMode ? primary : Colors.transparent,
                 shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16),
+                  borderRadius: BorderRadius.circular(21),
                   side: BorderSide(
-                    color:
-                        allDaysMode ? primary : primary.withValues(alpha: 0.55),
+                    color: allDaysMode
+                        ? primary
+                        : theme.dividerColor.withValues(alpha: 0.5),
                     width: allDaysMode ? 1.6 : 1,
                   ),
                 ),
-                textStyle: theme.textTheme.labelMedium
+                textStyle: theme.textTheme.labelLarge
                     ?.copyWith(fontWeight: FontWeight.w800),
               ),
               child: Row(
@@ -1248,21 +1308,24 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
           final isSelected = !allDaysMode && day.isAtSameMomentAs(selected);
           final isToday = day.isAtSameMomentAs(today);
 
-          // Color resolution: "selected" wins on the fill/border (primary
-          // tint), "today (unselected)" gets its own accent treatment, and
-          // a plain chip is the default. The "TODAY" pill below makes the
-          // current day stand out even when it's also the selected one.
+          // Each day's route color, shown as a leading dot — doubles as the
+          // legend for All-days mode and stays consistent because the same
+          // provider colors the map polylines.
+          final routeColor = dayColors[day];
+
+          // The SELECTED chip borrows its own day's route color for the
+          // fill/border, tying the strip to the map's polylines; unselected
+          // chips stay quiet. Today keeps its label + trailing dot instead
+          // of a competing green fill.
+          final accent = routeColor ?? primary;
           final Color fg;
           final Color bg;
           final Color borderColor;
           if (isSelected) {
-            fg = primary;
-            bg = primary.withValues(alpha: 0.12);
-            borderColor = primary.withValues(alpha: 0.6);
-          } else if (isToday) {
-            fg = todayAccent;
-            bg = todayAccent.withValues(alpha: 0.10);
-            borderColor = todayAccent.withValues(alpha: 0.55);
+            fg =
+                theme.textTheme.bodyLarge?.color ?? theme.colorScheme.onSurface;
+            bg = accent.withValues(alpha: 0.12);
+            borderColor = accent.withValues(alpha: 0.7);
           } else {
             fg = theme.textTheme.bodyMedium?.color?.withValues(alpha: 0.75) ??
                 theme.colorScheme.onSurface;
@@ -1270,12 +1333,7 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
             borderColor = theme.dividerColor.withValues(alpha: 0.4);
           }
 
-          final dateLabel = isToday ? 'Today' : DateFormat('MMM d').format(day);
-
-          // Each day's route color, shown as a leading dot — doubles as the
-          // legend for All-days mode and stays consistent because the same
-          // provider colors the map polylines.
-          final routeColor = dayColors[day];
+          final dateLabel = isToday ? 'Today' : DateFormat('d MMM').format(day);
 
           return TextButton(
             onPressed: () {
@@ -1286,15 +1344,16 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
             },
             style: TextButton.styleFrom(
               minimumSize: Size.zero,
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
               tapTargetSize: MaterialTapTargetSize.shrinkWrap,
               foregroundColor: fg,
               backgroundColor: bg,
               shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16),
-                side: BorderSide(color: borderColor),
+                borderRadius: BorderRadius.circular(21),
+                side:
+                    BorderSide(color: borderColor, width: isSelected ? 1.4 : 1),
               ),
-              textStyle: theme.textTheme.labelMedium?.copyWith(
+              textStyle: theme.textTheme.labelLarge?.copyWith(
                 fontWeight:
                     (isSelected || isToday) ? FontWeight.w700 : FontWeight.w500,
               ),
@@ -1311,9 +1370,9 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                       shape: BoxShape.circle,
                     ),
                   ),
-                  const SizedBox(width: 5),
+                  const SizedBox(width: 6),
                 ],
-                Text('$index · $dateLabel'),
+                Text(dateLabel),
                 if (isToday) ...[
                   const SizedBox(width: 6),
                   Container(
@@ -1385,6 +1444,7 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      margin: const EdgeInsets.only(top: 16),
       decoration: BoxDecoration(
         color: theme.cardColor,
         borderRadius: BorderRadius.circular(14),
@@ -1440,26 +1500,6 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
               overflow: TextOverflow.ellipsis,
             ),
           ),
-          if (totalStopsForDate >= 2) ...[
-            const SizedBox(width: 8),
-            Consumer(builder: (context, ref, _) {
-              return SizedBox(
-                width: 32,
-                height: 32,
-                child: IconButton(
-                  onPressed: () => _openGoogleMaps(context, ref),
-                  icon: const Icon(Icons.directions, size: 18),
-                  tooltip: 'Open in Google Maps',
-                  padding: EdgeInsets.zero,
-                  style: IconButton.styleFrom(
-                    backgroundColor:
-                        theme.colorScheme.primary.withValues(alpha: 0.15),
-                    foregroundColor: theme.colorScheme.primary,
-                  ),
-                ),
-              );
-            }),
-          ],
         ],
       ),
     );
@@ -1472,6 +1512,7 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
 
     return Container(
       padding: const EdgeInsets.all(16),
+      margin: const EdgeInsets.only(top: 16),
       decoration: BoxDecoration(
         color: Theme.of(context).cardColor,
         borderRadius: BorderRadius.circular(16),
@@ -1622,39 +1663,6 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
         ],
       ),
     );
-  }
-
-  // Opens Google Maps with directions from the first to last location with
-  // waypoints. Hands off via [openDirectionsInGoogleMaps] so each stop's
-  // place_id is preferred over its lat/lng — that way renamed entries
-  // still resolve to the exact Google place on the receiving end.
-  Future<void> _openGoogleMaps(BuildContext context, WidgetRef ref) async {
-    try {
-      final locations = ref.read(locationsForSelectedDateProvider);
-
-      if (locations.length < 2) {
-        if (context.mounted) {
-          AppToast.warning(
-            context,
-            'Need at least 2 locations to open directions',
-          );
-        }
-        return;
-      }
-
-      await openDirectionsInGoogleMaps(
-        origin: locations.first,
-        destination: locations.last,
-        waypoints: locations.length > 2
-            ? locations.sublist(1, locations.length - 1)
-            : const [],
-      );
-    } catch (e) {
-      debugPrint('Error opening Google Maps: $e');
-      if (context.mounted) {
-        AppToast.error(context, 'Failed to open Google Maps: $e');
-      }
-    }
   }
 
   Widget _summaryItem(BuildContext context, String label, String value) {
@@ -1839,7 +1847,7 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
           indicatorSize: TabBarIndicatorSize.tab,
           dividerColor: Colors.transparent,
           tabs: const [
-            Tab(text: 'This day'),
+            Tab(text: 'Selected Day'),
             Tab(text: 'Whole trip'),
           ],
         ),
@@ -3268,4 +3276,47 @@ class _StatusChip extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Dashed rounded-rect outline for the add-day square — Flutter has no
+/// built-in dashed BorderSide.
+class _DashedRRectPainter extends CustomPainter {
+  final Color color;
+  final double radius;
+
+  static const double dashLength = 5;
+  static const double gapLength = 4;
+
+  const _DashedRRectPainter({
+    required this.color,
+    required this.radius,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.2;
+    final path = Path()
+      ..addRRect(RRect.fromRectAndRadius(
+        Offset.zero & size,
+        Radius.circular(radius),
+      ));
+    for (final metric in path.computeMetrics()) {
+      var distance = 0.0;
+      while (distance < metric.length) {
+        final next = distance + dashLength;
+        canvas.drawPath(
+          metric.extractPath(distance, next.clamp(0, metric.length)),
+          paint,
+        );
+        distance = next + gapLength;
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(_DashedRRectPainter oldDelegate) =>
+      color != oldDelegate.color || radius != oldDelegate.radius;
 }

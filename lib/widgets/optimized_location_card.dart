@@ -105,47 +105,32 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
               // photo gallery. IntrinsicHeight here would query the new
               // (collapsed) child's height while AnimatedSize is still
               // rendering at the old size, causing a transient overflow.
-              child: Stack(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Padding(
-                    padding: const EdgeInsetsDirectional.only(start: 30),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(10, 12, 4, 12),
-                          child: _buildHeaderRow(
-                            context,
-                            hasPhotos: hasPhotos,
-                            photoRefs: photoRefs,
-                            isSelectionMode: isSelectionMode,
-                            isSelected: isSelected,
-                          ),
-                        ),
-                        AnimatedSize(
-                          duration: const Duration(milliseconds: 200),
-                          curve: Curves.easeOut,
-                          alignment: Alignment.topCenter,
-                          child: hasPhotos && _isExpanded
-                              ? LocationPhotoGallery(
-                                  photoRefs: photoRefs,
-                                  heroTagPrefix: '${location.id}_photo',
-                                  title: location.name,
-                                  padding:
-                                      const EdgeInsets.fromLTRB(10, 0, 10, 12),
-                                )
-                              : const SizedBox(
-                                  width: double.infinity, height: 0),
-                        ),
-                      ],
+                    padding: const EdgeInsets.all(12),
+                    child: _buildHeaderRow(
+                      context,
+                      hasPhotos: hasPhotos,
+                      photoRefs: photoRefs,
+                      isSelectionMode: isSelectionMode,
+                      isSelected: isSelected,
+                      accent: accent,
                     ),
                   ),
-                  PositionedDirectional(
-                    start: 0,
-                    top: 0,
-                    bottom: 0,
-                    width: 30,
-                    child: _buildAccentBar(context, accent),
+                  AnimatedSize(
+                    duration: const Duration(milliseconds: 200),
+                    curve: Curves.easeOut,
+                    alignment: Alignment.topCenter,
+                    child: hasPhotos && _isExpanded
+                        ? LocationPhotoGallery(
+                            photoRefs: photoRefs,
+                            heroTagPrefix: '${location.id}_photo',
+                            title: location.name,
+                            padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                          )
+                        : const SizedBox(width: double.infinity, height: 0),
                   ),
                 ],
               ),
@@ -156,38 +141,40 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
     );
   }
 
+  /// Opening–closing hours for the day this stop is planned on. Falls back
+  /// to an explicit "not found" line rather than an empty subtitle, so the
+  /// card always reads the same shape.
+  String _hoursSubtitle() {
+    const notFound = 'Opening and closing time not found';
+    final hours = location.googleOpeningHours;
+    if (hours == null || hours.isEmpty) return notFound;
+    if (hours.length == 1 && hours.first.isAlwaysOpen) return 'Open 24 hours';
+
+    // Google's weekday numbering: Sunday = 0 … Saturday = 6 (Dart's
+    // DateTime.weekday is Monday = 1 … Sunday = 7).
+    final day = location.scheduledDate ?? DateTime.now();
+    final googleDay = day.weekday % 7;
+
+    final periods = hours.where((p) => p.openDay == googleDay).toList();
+    if (periods.isEmpty) return 'Closed on this day';
+    return periods.map((p) {
+      final open = _formatClockMinutes(p.openMinutes);
+      final close = p.closeMinutes;
+      if (close == null) return 'Opens $open';
+      return '$open – ${_formatClockMinutes(close)}';
+    }).join(', ');
+  }
+
+  String _formatClockMinutes(int minutes) {
+    final h = (minutes ~/ 60) % 24;
+    final m = minutes % 60;
+    return '${h.toString().padLeft(2, '0')}:${m.toString().padLeft(2, '0')}';
+  }
+
   Color _accentColor(Color primary) {
     if (location.isDone) return Colors.green.shade500;
     if (location.isSkipped) return Colors.grey.shade500;
     return primary;
-  }
-
-  /// Wider vertical accent bar that doubles as the index/status indicator.
-  /// Stretches to full card height (including the expanded gallery) thanks
-  /// to the surrounding `IntrinsicHeight` + `crossAxisAlignment.stretch`.
-  Widget _buildAccentBar(BuildContext context, Color accent) {
-    Widget content;
-    if (location.isDone) {
-      content = const Icon(Icons.check_rounded, color: Colors.white, size: 16);
-    } else if (location.isSkipped) {
-      content = const Icon(Icons.remove_rounded, color: Colors.white, size: 16);
-    } else {
-      content = Text(
-        '$number',
-        style: const TextStyle(
-          color: Colors.black,
-          fontWeight: FontWeight.w800,
-          fontSize: 14,
-        ),
-      );
-    }
-
-    return Container(
-      color: accent,
-      alignment: Alignment.topCenter,
-      padding: const EdgeInsets.only(top: 14),
-      child: content,
-    );
   }
 
   Widget _buildHeaderRow(
@@ -196,6 +183,7 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
     required List<String> photoRefs,
     required bool isSelectionMode,
     required bool isSelected,
+    required Color accent,
   }) {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -203,48 +191,86 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
         if (hasPhotos) ...[
           LocationPhotoThumbnail(
             photoRef: photoRefs.first,
-            size: 52,
+            size: 108,
             extraCount: photoRefs.length > 1 ? photoRefs.length - 1 : null,
-            onTap: () => setState(() => _isExpanded = !_isExpanded),
+            onTap: () => _handleTap(context, ref, isSelectionMode, isSelected),
+          ),
+          const SizedBox(width: 12),
+        ],
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _buildTitleBlock(context, accent),
+              if (!isSelectionMode) ...[
+                const SizedBox(height: 12),
+                _buildActions(context, hasPhotos),
+              ],
+            ],
+          ),
+        ),
+        if (isSelectionMode) ...[
+          const SizedBox(width: 4),
+          _buildCheckbox(ref, isSelected),
+        ],
+      ],
+    );
+  }
+
+  /// The attachment's two-button row. Labels follow this app's FUNCTIONS:
+  /// the left button expands the inline photo gallery, the right one opens
+  /// the per-stop menu that used to hide behind a three-dot icon.
+  Widget _buildActions(BuildContext context, bool hasPhotos) {
+    final theme = Theme.of(context);
+    final primary = theme.colorScheme.primary;
+
+    ButtonStyle style(Color bg) => FilledButton.styleFrom(
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          backgroundColor: bg,
+          foregroundColor: theme.colorScheme.onSurface,
+          minimumSize: const Size(0, 40),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          textStyle:
+              theme.textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w600),
+        );
+
+    return Row(
+      children: [
+        if (hasPhotos) ...[
+          Expanded(
+            child: FilledButton(
+              onPressed: () => setState(() => _isExpanded = !_isExpanded),
+              style: style(primary.withValues(alpha: 0.30)),
+              child: Text(
+                _isExpanded ? 'Hide photos' : 'More photos',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
           ),
           const SizedBox(width: 10),
         ],
-        Expanded(child: _buildTitleBlock(context)),
-        const SizedBox(width: 4),
-        if (isSelectionMode)
-          _buildCheckbox(ref, isSelected)
-        else
-          _buildActions(context, hasPhotos),
-      ],
-    );
-  }
-
-  Widget _buildActions(BuildContext context, bool hasPhotos) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        if (hasPhotos)
-          IconButton(
-            visualDensity: VisualDensity.compact,
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-            tooltip: _isExpanded ? 'Hide photos' : 'Show photos',
-            icon: AnimatedRotation(
-              turns: _isExpanded ? 0.5 : 0,
-              duration: const Duration(milliseconds: 200),
-              child: const Icon(Icons.expand_more, size: 22),
-            ),
-            onPressed: () => setState(() => _isExpanded = !_isExpanded),
+        Expanded(
+          child: _buildOptionsButton(
+            context,
+            ref,
+            style(theme.colorScheme.onSurface.withValues(alpha: 0.10)),
           ),
-        _buildPopupMenu(context, ref),
+        ),
       ],
     );
   }
 
-  Widget _buildTitleBlock(BuildContext context) {
+  Widget _buildTitleBlock(BuildContext context, Color accent) {
     final theme = Theme.of(context);
     final mutedColor =
         theme.textTheme.bodyMedium?.color?.withValues(alpha: 0.7);
+    final titleStyle = theme.textTheme.titleMedium?.copyWith(
+      fontWeight: FontWeight.w700,
+      decoration: location.isSkipped ? TextDecoration.lineThrough : null,
+      color: location.isSkipped ? mutedColor : null,
+    );
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -253,14 +279,40 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Expanded(
-              child: Text(
-                location.name,
-                style: theme.textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.w700,
-                  decoration:
-                      location.isSkipped ? TextDecoration.lineThrough : null,
-                  color: location.isSkipped ? mutedColor : null,
+              // "1. A Symphony of Lights" — the index leads the name (it
+              // used to live in a separate accent bar). Done/skipped stops
+              // swap the number for their status glyph, keeping the
+              // information the bar carried.
+              child: Text.rich(
+                TextSpan(
+                  children: [
+                    if (location.isDone)
+                      WidgetSpan(
+                        alignment: PlaceholderAlignment.middle,
+                        child: Padding(
+                          padding: const EdgeInsets.only(right: 6),
+                          child: Icon(Icons.check_circle_rounded,
+                              size: 18, color: accent),
+                        ),
+                      )
+                    else if (location.isSkipped)
+                      WidgetSpan(
+                        alignment: PlaceholderAlignment.middle,
+                        child: Padding(
+                          padding: const EdgeInsets.only(right: 6),
+                          child: Icon(Icons.remove_circle_outline_rounded,
+                              size: 18, color: accent),
+                        ),
+                      )
+                    else
+                      TextSpan(
+                        text: '$number. ',
+                        style: titleStyle?.copyWith(color: accent),
+                      ),
+                    TextSpan(text: location.name),
+                  ],
                 ),
+                style: titleStyle,
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
               ),
@@ -272,18 +324,27 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
           ],
         ),
         const SizedBox(height: 4),
-        Text(
-          location.address,
-          style: theme.textTheme.bodySmall?.copyWith(color: mutedColor),
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(Icons.access_time_rounded, size: 13, color: mutedColor),
+            const SizedBox(width: 4),
+            Expanded(
+              child: Text(
+                _hoursSubtitle(),
+                style: theme.textTheme.bodySmall?.copyWith(color: mutedColor),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
         ),
-        if (location.travelTimeFromPrevious != null &&
-            location.distanceFromPrevious != null) ...[
-          const SizedBox(height: 8),
-          _buildTravelChips(context),
-        ],
-        _buildWarningBadge(context),
+        // if (location.travelTimeFromPrevious != null &&
+        //     location.distanceFromPrevious != null) ...[
+        //   const SizedBox(height: 8),
+        //   _buildTravelChips(context),
+        // ],
+        // _buildWarningBadge(context),
       ],
     );
   }
@@ -482,7 +543,31 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
     );
   }
 
-  Widget _buildPopupMenu(BuildContext context, WidgetRef ref) {
+  /// "Options" — the SAME menu the three-dot icon used to open, presented
+  /// as the mockup's labeled button. [style] comes from the actions row so
+  /// both buttons share one shape.
+  Widget _buildOptionsButton(
+      BuildContext context, WidgetRef ref, ButtonStyle style) {
+    return _buildPopupMenu(
+      context,
+      ref,
+      child: FilledButton(
+        // The PopupMenuButton wrapper owns the gesture; this button just
+        // draws and forwards the tap to it.
+        onPressed: null,
+        style: style.copyWith(
+          backgroundColor: WidgetStateProperty.resolveWith(
+              (_) => style.backgroundColor?.resolve({}) ?? Colors.transparent),
+          foregroundColor: WidgetStateProperty.resolveWith((_) =>
+              style.foregroundColor?.resolve({}) ??
+              Theme.of(context).colorScheme.onSurface),
+        ),
+        child: const Text('Options', maxLines: 1),
+      ),
+    );
+  }
+
+  Widget _buildPopupMenu(BuildContext context, WidgetRef ref, {Widget? child}) {
     final hasWriteAccessAsync = ref.watch(hasActiveTripWriteAccessProvider);
     final hasWriteAccess = hasWriteAccessAsync.asData?.value ?? false;
     // "Remove from trip" only makes sense when this location is actually
@@ -493,7 +578,10 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
 
     return PopupMenuButton<String>(
       padding: EdgeInsets.zero,
-      icon: const Icon(Icons.more_vert, size: 22),
+      // With [child] the button renders as the labeled "Options" control;
+      // without it, the classic three-dot icon (other call sites).
+      icon: child == null ? const Icon(Icons.more_vert, size: 22) : null,
+      child: child,
       onSelected: (value) {
         if (!hasWriteAccess && value != 'copy') {
           AppToast.warning(
