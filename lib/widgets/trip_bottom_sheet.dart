@@ -68,6 +68,10 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
     with SingleTickerProviderStateMixin {
   late final TabController _tabController;
 
+  /// Last seen [mapDayFocusRequestProvider] value — see the watch-and-compare
+  /// block in [build].
+  int? _lastDayFocusReq;
+
   /// Flips to true when the inner list is scrolled past the top, and back
   /// to false when it's at the top again. Used to swap the Route Summary
   /// between its full and compact layouts via [AnimatedCrossFade]. A
@@ -117,6 +121,9 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
+    // Seed with the current value so a request from BEFORE this sheet
+    // existed doesn't fire a phantom tab flip on first build.
+    _lastDayFocusReq = ref.read(mapDayFocusRequestProvider);
   }
 
   @override
@@ -196,6 +203,26 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
     // Don't watch entire tripState here since it rebuilds on every state change
     final hasPinnedLocations =
         ref.watch(tripProvider.select((s) => s.pinnedLocations.isNotEmpty));
+
+    // A flow (trip card "Go to map") just focused a specific day — flip the
+    // locations toggle back to "Selected Day" so the landing shows that day,
+    // not whatever tab was left selected for the previous trip. Watch-and-
+    // compare (not ref.listen): the sheet lives offstage in the IndexedStack
+    // when the request fires, and this catches up on the next build even if
+    // no listener was live at that moment.
+    final focusReq = ref.watch(mapDayFocusRequestProvider);
+    if (focusReq != _lastDayFocusReq) {
+      _lastDayFocusReq = focusReq;
+      if (_tabController.index != 0) {
+        // Post-frame: mutating the TabController mid-build would rebuild
+        // dependents during this build pass.
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && _tabController.index != 0) {
+            _tabController.index = 0;
+          }
+        });
+      }
+    }
 
     // Auto-open the warnings sheet whenever an optimization run lands with
     // simulation warnings. zoomToFitRouteTrigger increments at the end of
@@ -370,10 +397,24 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                         final now = DateTime.now();
                         final today = DateTime(now.year, now.month, now.day);
                         final isPastDate = selectedDate.isBefore(today);
-                        if (isPastDate) {
-                          return _buildHistoryBanner(context);
-                        }
-                        return const SizedBox.shrink();
+                        if (!isPastDate) return const SizedBox.shrink();
+                        // The banner lives in the FIXED sticky region. At
+                        // collapsed sheet heights it pushes the column past
+                        // the sheet's height (RenderFlex overflow on small
+                        // screens) — same guard as the route summary below:
+                        // hide it until the sheet is tall enough.
+                        return ListenableBuilder(
+                          listenable: Listenable.merge([sheetController]),
+                          builder: (context, _) {
+                            final ctrl = sheetController;
+                            final sheetTooShort = ctrl == null
+                                ? true
+                                : (!ctrl.isAttached ||
+                                    ctrl.pixels < _fullSummaryMinHeight);
+                            if (sheetTooShort) return const SizedBox.shrink();
+                            return _buildHistoryBanner(context);
+                          },
+                        );
                       }),
                       if (hasPinnedLocations)
                         Consumer(builder: (context, ref, _) {

@@ -11,6 +11,8 @@ import 'package:voyza/providers/auth_provider.dart';
 import 'package:voyza/providers/location_provider.dart';
 import 'package:voyza/providers/trip_collaborator_provider.dart';
 import 'package:voyza/providers/local_active_trip_provider.dart';
+import 'package:voyza/providers/map_ui_state_provider.dart';
+import 'package:voyza/providers/all_days_route_provider.dart';
 import 'package:voyza/providers/onboarding_provider.dart';
 import 'package:voyza/screens/login_screen.dart';
 import 'package:voyza/screens/trip_details_screen.dart';
@@ -29,6 +31,7 @@ import 'package:voyza/widgets/country_picker_sheet.dart';
 import 'package:voyza/widgets/pulsing_glow.dart';
 import 'package:voyza/screens/create_trip_wizard.dart';
 import 'package:voyza/widgets/referral_prompt.dart';
+import 'package:voyza/widgets/rotating_globe_background.dart';
 import 'package:voyza/widgets/trip_collaborators_row.dart';
 import 'package:voyza/widgets/trip_skeleton.dart';
 
@@ -42,9 +45,19 @@ class TripScreen extends ConsumerStatefulWidget {
 class _TripScreenState extends ConsumerState<TripScreen> {
   bool _creatingSampleTrip = false;
 
+  // Drives the scroll-to-top after activating a trip, so the Active Trip
+  // section (pinned at the top) is immediately in view.
+  final ScrollController _tripsScrollController = ScrollController();
+
   // Multi-select state
   bool _selectionMode = false;
   final Set<String> _selectedTripIds = {};
+
+  @override
+  void dispose() {
+    _tripsScrollController.dispose();
+    super.dispose();
+  }
 
   @override
   void initState() {
@@ -242,10 +255,9 @@ class _TripScreenState extends ConsumerState<TripScreen> {
     );
   }
 
-  /// [goToMap] jumps the bottom nav to the Map tab after activation — the
-  /// natural next step is seeing the trip on the map. The sample-trip flow
-  /// passes false because it pushes TripDetailsScreen on top instead.
-  Future<void> _setActiveTrip(Trip trip, {bool goToMap = true}) async {
+  /// Activation stays on the current screen — the active card's "Go to map"
+  /// button is the explicit way over to the Map tab.
+  Future<void> _setActiveTrip(Trip trip) async {
     try {
       // Clear cached locations on the map before activating a new trip
       ref.read(tripProvider.notifier).clearTrip();
@@ -255,8 +267,14 @@ class _TripScreenState extends ConsumerState<TripScreen> {
 
       if (mounted) {
         AppToast.success(context, '${trip.name} is now active');
-        if (goToMap) {
-          ref.read(mainTabRequestProvider.notifier).state = 1; // Map tab
+        // Bring the Active Trip section (top of the page) into view so the
+        // just-activated trip is immediately visible and actionable.
+        if (_tripsScrollController.hasClients) {
+          _tripsScrollController.animateTo(
+            0,
+            duration: const Duration(milliseconds: 450),
+            curve: Curves.easeOutCubic,
+          );
         }
       }
     } catch (e) {
@@ -265,6 +283,21 @@ class _TripScreenState extends ConsumerState<TripScreen> {
         AppToast.error(context, 'Could not activate trip. Please try again.');
       }
     }
+  }
+
+  /// "Go to map" on the active trip card: pre-select the trip's first day
+  /// (when it has dates) so the map opens on day one, then jump tabs.
+  void _goToMapForTrip(Trip trip) {
+    final start = trip.startDate;
+    if (start != null) {
+      ref.read(allDaysModeProvider.notifier).state = false;
+      ref.read(selectedDateProvider.notifier).state =
+          DateTime(start.year, start.month, start.day);
+      // Nudge the trip sheet onto the "Selected Day" toggle so the landing
+      // actually shows day one (the toggle otherwise keeps its last state).
+      ref.read(mapDayFocusRequestProvider.notifier).state++;
+    }
+    ref.read(mainTabRequestProvider.notifier).state = 1; // Map tab
   }
 
   /// Activation lever: drops the user into a pre-built, editable sample trip
@@ -341,7 +374,7 @@ class _TripScreenState extends ConsumerState<TripScreen> {
       AnalyticsService.instance
           .sampleTripSeeded(anonymous: false, placeCount: places.length);
       if (!mounted) return;
-      await _setActiveTrip(trip, goToMap: false);
+      await _setActiveTrip(trip);
       if (!mounted) return;
       Navigator.push(
         context,
@@ -555,6 +588,13 @@ class _TripScreenState extends ConsumerState<TripScreen> {
     final selectedTrips =
         ownedTrips.where((t) => _selectedTripIds.contains(t.id)).toList();
 
+    // The active trip is pulled OUT of the lists below and pinned in its own
+    // "Active Trip" section at the top.
+    final activeTrip = activeTripAsync.valueOrNull;
+    final activeTripId = activeTrip?.id;
+    final hideYourTripsHeader =
+        ownedTrips.isNotEmpty && ownedTrips.every((t) => t.id == activeTripId);
+
     return Scaffold(
       bottomNavigationBar: _selectionMode && _selectedTripIds.isNotEmpty
           ? Container(
@@ -598,338 +638,444 @@ class _TripScreenState extends ConsumerState<TripScreen> {
               ),
             )
           : null,
-      body: RefreshIndicator(
-        onRefresh: _refreshTrips,
-        child: CustomScrollView(
-          slivers: [
-            // Header
-            SliverAppBar(
-              floating: true,
-              pinned: true,
-              elevation: 0,
-              backgroundColor: _selectionMode
-                  ? Theme.of(context).colorScheme.primaryContainer
-                  : Theme.of(context).scaffoldBackgroundColor,
-              leading: _selectionMode
-                  ? IconButton(
-                      icon: const Icon(Icons.close_rounded),
-                      onPressed: _exitSelectionMode,
-                    )
-                  : null,
-              title: _selectionMode
-                  ? Text(
-                      '${_selectedTripIds.length} selected',
-                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                            fontWeight: FontWeight.bold,
+      body: Stack(
+        children: [
+          // Ambient rotating globe behind the whole page. Paused while this
+          // tab is offstage so the ticker doesn't burn frames from inside
+          // the IndexedStack.
+          Positioned.fill(
+            child: RotatingGlobeBackground(
+              animate: ref.watch(selectedTabIndexProvider) == 0,
+            ),
+          ),
+          RefreshIndicator(
+            onRefresh: _refreshTrips,
+            // Spawn the spinner below the status bar — the page has no header.
+            edgeOffset: MediaQuery.of(context).padding.top,
+            child: CustomScrollView(
+              controller: _tripsScrollController,
+              slivers: [
+                // No header in normal mode — content starts under the status bar.
+                // Multi-select keeps its contextual bar (exit / count / select
+                // all); without it the mode would be unusable.
+                if (!_selectionMode)
+                  SliverToBoxAdapter(
+                    child: SizedBox(
+                        height: MediaQuery.of(context).padding.top + 12),
+                  )
+                else
+                  SliverAppBar(
+                    floating: true,
+                    pinned: true,
+                    elevation: 0,
+                    backgroundColor: _selectionMode
+                        ? Theme.of(context).colorScheme.primaryContainer
+                        : Theme.of(context).scaffoldBackgroundColor,
+                    leading: _selectionMode
+                        ? IconButton(
+                            icon: const Icon(Icons.close_rounded),
+                            onPressed: _exitSelectionMode,
+                          )
+                        : null,
+                    title: _selectionMode
+                        ? Text(
+                            '${_selectedTripIds.length} selected',
+                            style: Theme.of(context)
+                                .textTheme
+                                .titleLarge
+                                ?.copyWith(
+                                  fontWeight: FontWeight.bold,
+                                ),
+                          )
+                        : Text(
+                            'My Trips',
+                            style: Theme.of(context)
+                                .textTheme
+                                .headlineMedium
+                                ?.copyWith(
+                                  fontWeight: FontWeight.bold,
+                                ),
                           ),
-                    )
-                  : Text(
-                      'My Trips',
-                      style:
-                          Theme.of(context).textTheme.headlineMedium?.copyWith(
-                                fontWeight: FontWeight.bold,
-                              ),
-                    ),
-              actions: _selectionMode
-                  ? [
-                      Padding(
-                        padding: const EdgeInsets.only(right: 8),
-                        child: Tooltip(
-                          message: allSelected ? 'Deselect All' : 'Select All',
-                          child: InkWell(
-                            borderRadius: BorderRadius.circular(8),
-                            onTap: allSelected
-                                ? _deselectAll
-                                : () => _selectAll(ownedTrips),
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 8, vertical: 4),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  SizedBox(
-                                    width: 24,
-                                    height: 24,
-                                    child: Checkbox(
-                                      value: allSelected
-                                          ? true
-                                          : _selectedTripIds.isNotEmpty
-                                              ? null
-                                              : false,
-                                      tristate: true,
-                                      onChanged: (_) => allSelected
-                                          ? _deselectAll()
-                                          : _selectAll(ownedTrips),
-                                      materialTapTargetSize:
-                                          MaterialTapTargetSize.shrinkWrap,
-                                      visualDensity: VisualDensity.compact,
+                    actions: _selectionMode
+                        ? [
+                            Padding(
+                              padding: const EdgeInsets.only(right: 8),
+                              child: Tooltip(
+                                message:
+                                    allSelected ? 'Deselect All' : 'Select All',
+                                child: InkWell(
+                                  borderRadius: BorderRadius.circular(8),
+                                  onTap: allSelected
+                                      ? _deselectAll
+                                      : () => _selectAll(ownedTrips),
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 8, vertical: 4),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        SizedBox(
+                                          width: 24,
+                                          height: 24,
+                                          child: Checkbox(
+                                            value: allSelected
+                                                ? true
+                                                : _selectedTripIds.isNotEmpty
+                                                    ? null
+                                                    : false,
+                                            tristate: true,
+                                            onChanged: (_) => allSelected
+                                                ? _deselectAll()
+                                                : _selectAll(ownedTrips),
+                                            materialTapTargetSize:
+                                                MaterialTapTargetSize
+                                                    .shrinkWrap,
+                                            visualDensity:
+                                                VisualDensity.compact,
+                                          ),
+                                        ),
+                                        const SizedBox(width: 6),
+                                        Text(
+                                          allSelected
+                                              ? 'Deselect All'
+                                              : 'Select All',
+                                          style: Theme.of(context)
+                                              .textTheme
+                                              .bodyMedium
+                                              ?.copyWith(
+                                                  fontWeight: FontWeight.w600),
+                                        ),
+                                      ],
                                     ),
                                   ),
-                                  const SizedBox(width: 6),
-                                  Text(
-                                    allSelected ? 'Deselect All' : 'Select All',
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .bodyMedium
-                                        ?.copyWith(fontWeight: FontWeight.w600),
-                                  ),
-                                ],
+                                ),
                               ),
                             ),
-                          ),
-                        ),
-                      ),
-                    ]
-                  : null,
-            ),
+                          ]
+                        : null,
+                  ),
 
-            // Persistent referral banner — self-suppresses for signed-out
-            // users and advocates (already shared / have referrals).
-            if (!_selectionMode)
-              const SliverToBoxAdapter(child: ReferralHomeBanner()),
+                // Persistent referral banner — self-suppresses for signed-out
+                // users and advocates (already shared / have referrals).
+                if (!_selectionMode)
+                  const SliverToBoxAdapter(child: ReferralHomeBanner()),
 
-            // Active Trip Section
-            SliverToBoxAdapter(
-              child: activeTripAsync.when(
-                data: (activeTrip) {
-                  if (activeTrip == null) {
-                    return Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: _buildEmptyActiveTrip(context),
-                    );
-                  }
-                  return Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: _buildActiveTrip(context, activeTrip),
-                  );
-                },
-                loading: () => const Padding(
-                  padding: EdgeInsets.all(16),
-                  child: ActiveTripSkeleton(),
+                // Active Trip Section
+                SliverToBoxAdapter(
+                  child: activeTripAsync.when(
+                    data: (activeTrip) {
+                      if (activeTrip == null) {
+                        return Padding(
+                          padding: const EdgeInsets.all(16),
+                          child: _buildEmptyActiveTrip(context),
+                        );
+                      }
+                      return Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: _buildActiveTrip(context, activeTrip),
+                      );
+                    },
+                    loading: () => const Padding(
+                      padding: EdgeInsets.all(16),
+                      child: ActiveTripSkeleton(),
+                    ),
+                    error: (_, __) => const SizedBox.shrink(),
+                  ),
                 ),
-                error: (_, __) => const SizedBox.shrink(),
-              ),
-            ),
 
-            const SliverPadding(padding: EdgeInsets.symmetric(vertical: 8)),
+                const SliverPadding(padding: EdgeInsets.symmetric(vertical: 8)),
 
-            // Create Trip Button or Form (hidden during multi-select)
-            if (!_selectionMode)
-              SliverToBoxAdapter(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  // THE creation affordance — glowing, big, unmissable.
-                  child: PulsingGlow(
-                    shape: BoxShape.rectangle,
-                    borderRadius: BorderRadius.circular(18),
-                    glowColor: Theme.of(context).colorScheme.primary,
-                    // Toned down from the defaults — the full glow read as
-                    // overwhelming on the home screen.
-                    minBlur: 6,
-                    maxBlur: 16,
-                    maxSpread: 2,
-                    minAlpha: 0.15,
-                    maxAlpha: 0.4,
-                    child: SizedBox(
-                      width: double.infinity,
-                      child: FilledButton(
-                        onPressed: _openCreateWizard,
-                        style: FilledButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(vertical: 18),
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(18)),
-                          textStyle:
-                              Theme.of(context).textTheme.titleMedium?.copyWith(
+                // Create Trip Button or Form (hidden during multi-select)
+                if (!_selectionMode)
+                  SliverToBoxAdapter(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      // THE creation affordance — glowing, big, unmissable.
+                      child: PulsingGlow(
+                        shape: BoxShape.rectangle,
+                        borderRadius: BorderRadius.circular(18),
+                        glowColor: Theme.of(context).colorScheme.primary,
+                        // Toned down from the defaults — the full glow read as
+                        // overwhelming on the home screen.
+                        minBlur: 6,
+                        maxBlur: 16,
+                        maxSpread: 2,
+                        minAlpha: 0.15,
+                        maxAlpha: 0.4,
+                        child: SizedBox(
+                          width: double.infinity,
+                          child: FilledButton(
+                            onPressed: _openCreateWizard,
+                            style: FilledButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(vertical: 18),
+                              shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(18)),
+                              textStyle: Theme.of(context)
+                                  .textTheme
+                                  .titleMedium
+                                  ?.copyWith(
                                     fontWeight: FontWeight.w800,
                                     letterSpacing: 0.6,
                                   ),
+                            ),
+                            child: const Text('New Trip'),
+                          ),
                         ),
-                        child: const Text('New Trip'),
                       ),
                     ),
                   ),
-                ),
-              ),
 
-            const SliverPadding(padding: EdgeInsets.symmetric(vertical: 8)),
+                const SliverPadding(padding: EdgeInsets.symmetric(vertical: 8)),
 
-            // Trips List
-            SliverToBoxAdapter(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: Text(
-                  'Your Trips',
-                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                        fontWeight: FontWeight.w600,
+                // Active trip section — its full card, pinned above the
+                // lists (and excluded from them so it never shows twice).
+                if (activeTrip != null) ...[
+                  SliverToBoxAdapter(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.navigation_rounded,
+                            size: 20,
+                            color: Theme.of(context).colorScheme.primary,
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            'Active Trip',
+                            style: Theme.of(context)
+                                .textTheme
+                                .titleLarge
+                                ?.copyWith(fontWeight: FontWeight.w600),
+                          ),
+                        ],
                       ),
-                ),
-              ),
-            ),
+                    ),
+                  ),
+                  SliverPadding(
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                    sliver: SliverToBoxAdapter(
+                      child: Builder(builder: (context) {
+                        // A shared trip can be active too — render it with
+                        // the shared card so its actions match the user's
+                        // permission; owned (or still-loading) trips get the
+                        // regular card.
+                        String? sharedPermission;
+                        for (final row
+                            in sharedTripsAsync.valueOrNull ?? const []) {
+                          final t = row['trips'] as Map<String, dynamic>?;
+                          if (t != null && t['id'] == activeTrip.id) {
+                            sharedPermission = row['permission'] as String?;
+                            break;
+                          }
+                        }
+                        if (sharedPermission != null) {
+                          return _buildSharedTripCard(
+                              context, activeTrip, sharedPermission);
+                        }
+                        return _buildTripCard(context, activeTrip);
+                      }),
+                    ),
+                  ),
+                ],
 
-            tripsAsync.when(
-              data: (trips) {
-                if (trips.isEmpty) {
-                  // Activation empty state: the lever for the ~77% who never
-                  // create a trip. Teach the 3-step value (save places →
-                  // optimize → smarter route) so the first trip feels worth it.
-                  final t = Theme.of(context);
-                  Widget step(IconData icon, String text) => Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 4),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(icon, size: 18, color: t.colorScheme.primary),
-                            const SizedBox(width: 10),
-                            Flexible(
-                              child: Text(text,
-                                  style: t.textTheme.bodyMedium?.copyWith(
-                                      color: t.colorScheme.onSurfaceVariant)),
+                // Trips List
+                if (!hideYourTripsHeader)
+                  SliverToBoxAdapter(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: Text(
+                        'Your Trips',
+                        style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                              fontWeight: FontWeight.w600,
                             ),
-                          ],
+                      ),
+                    ),
+                  ),
+
+                tripsAsync.when(
+                  data: (trips) {
+                    if (trips.isEmpty) {
+                      // Activation empty state: the lever for the ~77% who never
+                      // create a trip. Teach the 3-step value (save places →
+                      // optimize → smarter route) so the first trip feels worth it.
+                      final t = Theme.of(context);
+                      Widget step(IconData icon, String text) => Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 4),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(icon,
+                                    size: 18, color: t.colorScheme.primary),
+                                const SizedBox(width: 10),
+                                Flexible(
+                                  child: Text(text,
+                                      style: t.textTheme.bodyMedium?.copyWith(
+                                          color:
+                                              t.colorScheme.onSurfaceVariant)),
+                                ),
+                              ],
+                            ),
+                          );
+                      return SliverToBoxAdapter(
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(28, 20, 28, 8),
+                          child: Center(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.route_rounded,
+                                    size: 46, color: t.colorScheme.primary),
+                                const SizedBox(height: 14),
+                                Text('Plan your first trip',
+                                    style: t.textTheme.titleMedium?.copyWith(
+                                        fontWeight: FontWeight.bold)),
+                                const SizedBox(height: 14),
+                                step(Icons.place_outlined,
+                                    'Save 3+ places you want to visit'),
+                                step(Icons.auto_awesome_rounded,
+                                    'Tap Optimize — VoyZa orders them smartly'),
+                                step(Icons.timelapse_rounded,
+                                    'See more, backtrack less'),
+                                const SizedBox(height: 18),
+                                ElevatedButton.icon(
+                                  onPressed: _createSampleTrip,
+                                  icon: const Icon(Icons.auto_awesome_rounded,
+                                      size: 18),
+                                  label: const Text('Try a sample trip'),
+                                ),
+                                const SizedBox(height: 8),
+                                Text(
+                                    'or tap "New Trip" above to start from scratch',
+                                    textAlign: TextAlign.center,
+                                    style: t.textTheme.bodySmall?.copyWith(
+                                        color: t.colorScheme.onSurfaceVariant)),
+                              ],
+                            ),
+                          ),
                         ),
                       );
-                  return SliverToBoxAdapter(
-                    child: Padding(
-                      padding: const EdgeInsets.fromLTRB(28, 20, 28, 8),
-                      child: Center(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(Icons.route_rounded,
-                                size: 46, color: t.colorScheme.primary),
-                            const SizedBox(height: 14),
-                            Text('Plan your first trip',
-                                style: t.textTheme.titleMedium
-                                    ?.copyWith(fontWeight: FontWeight.bold)),
-                            const SizedBox(height: 14),
-                            step(Icons.place_outlined,
-                                'Save 3+ places you want to visit'),
-                            step(Icons.auto_awesome_rounded,
-                                'Tap Optimize — VoyZa orders them smartly'),
-                            step(Icons.timelapse_rounded,
-                                'See more, backtrack less'),
-                            const SizedBox(height: 18),
-                            ElevatedButton.icon(
-                              onPressed: _createSampleTrip,
-                              icon: const Icon(Icons.auto_awesome_rounded,
-                                  size: 18),
-                              label: const Text('Try a sample trip'),
-                            ),
-                            const SizedBox(height: 8),
-                            Text(
-                                'or tap "New Trip" above to start from scratch',
-                                textAlign: TextAlign.center,
-                                style: t.textTheme.bodySmall?.copyWith(
-                                    color: t.colorScheme.onSurfaceVariant)),
-                          ],
+                    }
+
+                    // The active trip already has its own section above.
+                    final listTrips =
+                        trips.where((t) => t.id != activeTripId).toList();
+                    if (listTrips.isEmpty) {
+                      return const SliverToBoxAdapter(child: SizedBox.shrink());
+                    }
+
+                    return SliverPadding(
+                      padding: const EdgeInsets.only(
+                        left: 16,
+                        right: 16,
+                        top: 12,
+                        bottom: 16,
+                      ),
+                      sliver: SliverList(
+                        delegate: SliverChildBuilderDelegate(
+                          (context, index) {
+                            final trip = listTrips[index];
+                            return Padding(
+                              padding: const EdgeInsets.only(bottom: 12),
+                              child: _buildTripCard(context, trip),
+                            );
+                          },
+                          childCount: listTrips.length,
                         ),
                       ),
-                    ),
-                  );
-                }
-
-                return SliverPadding(
-                  padding: const EdgeInsets.only(
-                    left: 16,
-                    right: 16,
-                    top: 12,
-                    bottom: 16,
+                    );
+                  },
+                  loading: () => const SliverToBoxAdapter(
+                    child: TripsListSkeleton(),
                   ),
-                  sliver: SliverList(
-                    delegate: SliverChildBuilderDelegate(
-                      (context, index) {
-                        final trip = trips[index];
-                        return Padding(
-                          padding: const EdgeInsets.only(bottom: 12),
-                          child: _buildTripCard(context, trip),
-                        );
-                      },
-                      childCount: trips.length,
-                    ),
+                  error: (_, __) => SliverToBoxAdapter(
+                    child: _buildConnectionError(context),
                   ),
-                );
-              },
-              loading: () => const SliverToBoxAdapter(
-                child: TripsListSkeleton(),
-              ),
-              error: (_, __) => SliverToBoxAdapter(
-                child: _buildConnectionError(context),
-              ),
-            ),
+                ),
 
-            // Shared Trips Section
-            sharedTripsAsync.when(
-              data: (sharedTrips) {
-                if (sharedTrips.isEmpty) {
-                  return const SliverToBoxAdapter(child: SizedBox.shrink());
-                }
+                // Shared Trips Section
+                sharedTripsAsync.when(
+                  data: (allSharedTrips) {
+                    // The active trip already has its own section above.
+                    final sharedTrips = allSharedTrips.where((d) {
+                      final t = d['trips'] as Map<String, dynamic>?;
+                      return t?['id'] != activeTripId;
+                    }).toList();
+                    if (sharedTrips.isEmpty) {
+                      return const SliverToBoxAdapter(child: SizedBox.shrink());
+                    }
 
-                return SliverToBoxAdapter(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const SizedBox(height: 16),
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 16),
-                        child: Row(
-                          children: [
-                            Icon(
-                              Icons.group_outlined,
-                              size: 20,
-                              color: Theme.of(context).colorScheme.primary,
+                    return SliverToBoxAdapter(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const SizedBox(height: 16),
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 16),
+                            child: Row(
+                              children: [
+                                Icon(
+                                  Icons.group_outlined,
+                                  size: 20,
+                                  color: Theme.of(context).colorScheme.primary,
+                                ),
+                                const SizedBox(width: 8),
+                                Text(
+                                  'Shared With You',
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .titleLarge
+                                      ?.copyWith(
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                ),
+                              ],
                             ),
-                            const SizedBox(width: 8),
-                            Text(
-                              'Shared With You',
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .titleLarge
-                                  ?.copyWith(
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      ...sharedTrips.map((data) {
-                        final tripData = data['trips'] as Map<String, dynamic>?;
-                        final permission = data['permission'] as String;
-                        if (tripData == null) return const SizedBox.shrink();
-
-                        final trip = Trip.fromJson(tripData);
-                        return Padding(
-                          padding: const EdgeInsets.only(
-                            left: 16,
-                            right: 16,
-                            bottom: 12,
                           ),
-                          child:
-                              _buildSharedTripCard(context, trip, permission),
-                        );
-                      }),
-                    ],
-                  ),
-                );
-              },
-              loading: () => const SliverToBoxAdapter(child: SizedBox.shrink()),
-              error: (_, __) =>
-                  const SliverToBoxAdapter(child: SizedBox.shrink()),
-            ),
+                          const SizedBox(height: 12),
+                          ...sharedTrips.map((data) {
+                            final tripData =
+                                data['trips'] as Map<String, dynamic>?;
+                            final permission = data['permission'] as String;
+                            if (tripData == null)
+                              return const SizedBox.shrink();
 
-            // Clear the floating bottom tab bar (~70px + safe-area inset)
-            // — MainScreen sets `extendBody: true`, so the list scrolls
-            // behind the bar and the last card otherwise tucks under it.
-            // The previous 50px wasn't enough once the safe-area inset
-            // was included, especially on iOS devices with a home
-            // indicator.
-            SliverPadding(
-              padding: EdgeInsets.only(
-                bottom: 90 + MediaQuery.of(context).padding.bottom,
-              ),
+                            final trip = Trip.fromJson(tripData);
+                            return Padding(
+                              padding: const EdgeInsets.only(
+                                left: 16,
+                                right: 16,
+                                bottom: 12,
+                              ),
+                              child: _buildSharedTripCard(
+                                  context, trip, permission),
+                            );
+                          }),
+                        ],
+                      ),
+                    );
+                  },
+                  loading: () =>
+                      const SliverToBoxAdapter(child: SizedBox.shrink()),
+                  error: (_, __) =>
+                      const SliverToBoxAdapter(child: SizedBox.shrink()),
+                ),
+
+                // Clear the floating bottom tab bar (~70px + safe-area inset)
+                // — MainScreen sets `extendBody: true`, so the list scrolls
+                // behind the bar and the last card otherwise tucks under it.
+                // The previous 50px wasn't enough once the safe-area inset
+                // was included, especially on iOS devices with a home
+                // indicator.
+                SliverPadding(
+                  padding: EdgeInsets.only(
+                    bottom: 90 + MediaQuery.of(context).padding.bottom,
+                  ),
+                ),
+              ],
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
@@ -977,11 +1123,12 @@ class _TripScreenState extends ConsumerState<TripScreen> {
   Widget _buildEmptyActiveTrip(BuildContext context) {
     return Container(
       padding: const EdgeInsets.all(20),
+      // Transparent body — the ambient globe shows through; only the border
+      // defines the card.
       decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.primary.withOpacity(0.1),
         borderRadius: BorderRadius.circular(16),
         border: Border.all(
-          color: Theme.of(context).colorScheme.primary.withOpacity(0.2),
+          color: Theme.of(context).colorScheme.primary.withOpacity(0.25),
           width: 1,
         ),
       ),
@@ -1019,18 +1166,11 @@ class _TripScreenState extends ConsumerState<TripScreen> {
   Widget _buildActiveTrip(BuildContext context, Trip trip) {
     return Container(
       padding: const EdgeInsets.all(20),
+      // Transparent body (matches the empty-state card) — border only.
       decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            Theme.of(context).colorScheme.primary.withOpacity(0.2),
-            Theme.of(context).colorScheme.secondary.withOpacity(0.1),
-          ],
-        ),
         borderRadius: BorderRadius.circular(16),
         border: Border.all(
-          color: Theme.of(context).colorScheme.primary.withOpacity(0.3),
+          color: Theme.of(context).colorScheme.primary.withOpacity(0.35),
           width: 1,
         ),
       ),
@@ -1204,7 +1344,8 @@ class _TripScreenState extends ConsumerState<TripScreen> {
       },
       child: Container(
         decoration: BoxDecoration(
-          color: Theme.of(context).cardColor,
+          // Translucent to match the owned-trip cards — globe shows through.
+          color: Theme.of(context).cardColor.withValues(alpha: 0.55),
           borderRadius: BorderRadius.circular(16),
           border: Border.all(
             color: isActive
@@ -1405,51 +1546,83 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                         ),
 
                         const SizedBox(height: 8),
-                        // Activate/Deactivate button for shared trips
-                        SizedBox(
-                          height: 28,
-                          child: ElevatedButton.icon(
-                            onPressed: () {
-                              if (isActive) {
-                                _deactivateTrip(trip);
-                              } else {
-                                _setActiveTrip(trip);
-                              }
-                            },
-                            icon: Icon(
-                              isActive
-                                  ? Icons.stop_circle_outlined
-                                  : Icons.play_circle_outline,
-                              size: 16,
-                            ),
-                            label: Text(
-                              isActive ? 'Deactivate' : 'Activate',
-                              style: const TextStyle(fontSize: 12),
-                            ),
-                            style: ElevatedButton.styleFrom(
-                              // Neutral styling: managing the active trip is
-                              // housekeeping, not a warning (orange) or a
-                              // success (green).
-                              backgroundColor: isActive
-                                  ? Theme.of(context)
-                                      .colorScheme
-                                      .onSurface
-                                      .withValues(alpha: 0.12)
-                                  : Theme.of(context).colorScheme.primary,
-                              foregroundColor: isActive
-                                  ? Theme.of(context)
-                                      .colorScheme
-                                      .onSurface
-                                      .withValues(alpha: 0.85)
-                                  : Theme.of(context).colorScheme.onPrimary,
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 10,
+                        // Activate/Deactivate (+ Go to map when active) for
+                        // shared trips
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (isActive) ...[
+                              SizedBox(
+                                height: 28,
+                                child: ElevatedButton.icon(
+                                  onPressed: () => _goToMapForTrip(trip),
+                                  icon: const Icon(Icons.map_rounded, size: 16),
+                                  label: const Text(
+                                    'Go to map',
+                                    style: TextStyle(fontSize: 12),
+                                  ),
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor:
+                                        Theme.of(context).colorScheme.primary,
+                                    foregroundColor:
+                                        Theme.of(context).colorScheme.onPrimary,
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 10,
+                                    ),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(6),
+                                    ),
+                                  ),
+                                ),
                               ),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(6),
+                              const SizedBox(width: 8),
+                            ],
+                            SizedBox(
+                              height: 28,
+                              child: ElevatedButton.icon(
+                                onPressed: () {
+                                  if (isActive) {
+                                    _deactivateTrip(trip);
+                                  } else {
+                                    _setActiveTrip(trip);
+                                  }
+                                },
+                                icon: Icon(
+                                  isActive
+                                      ? Icons.stop_circle_outlined
+                                      : Icons.play_circle_outline,
+                                  size: 16,
+                                ),
+                                label: Text(
+                                  isActive ? 'Deactivate' : 'Activate',
+                                  style: const TextStyle(fontSize: 12),
+                                ),
+                                style: ElevatedButton.styleFrom(
+                                  // Neutral styling: managing the active trip is
+                                  // housekeeping, not a warning (orange) or a
+                                  // success (green).
+                                  backgroundColor: isActive
+                                      ? Theme.of(context)
+                                          .colorScheme
+                                          .onSurface
+                                          .withValues(alpha: 0.12)
+                                      : Theme.of(context).colorScheme.primary,
+                                  foregroundColor: isActive
+                                      ? Theme.of(context)
+                                          .colorScheme
+                                          .onSurface
+                                          .withValues(alpha: 0.85)
+                                      : Theme.of(context).colorScheme.onPrimary,
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 10,
+                                  ),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(6),
+                                  ),
+                                ),
                               ),
                             ),
-                          ),
+                          ],
                         ),
                       ],
                     ),
@@ -1631,7 +1804,9 @@ class _TripScreenState extends ConsumerState<TripScreen> {
           children: [
             Container(
               decoration: BoxDecoration(
-                color: Theme.of(context).cardColor,
+                // Translucent so the ambient globe stays visible behind the
+                // list; the border carries the card's shape.
+                color: Theme.of(context).cardColor.withValues(alpha: 0.55),
                 borderRadius: BorderRadius.circular(16),
                 border: Border.all(color: borderColor, width: borderWidth),
                 boxShadow: [
@@ -1935,6 +2110,32 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                             ),
 
                             const Spacer(),
+
+                            // Active trip: explicit hop over to the Map tab
+                            // (activation itself no longer auto-switches).
+                            if (isActive) ...[
+                              SizedBox(
+                                height: 32,
+                                child: ElevatedButton.icon(
+                                  onPressed: () => _goToMapForTrip(trip),
+                                  icon: const Icon(Icons.map_rounded, size: 18),
+                                  label: const Text('Go to map'),
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor:
+                                        Theme.of(context).colorScheme.primary,
+                                    foregroundColor:
+                                        Theme.of(context).colorScheme.onPrimary,
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 12,
+                                    ),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                            ],
 
                             // Activate/Deactivate button
                             SizedBox(

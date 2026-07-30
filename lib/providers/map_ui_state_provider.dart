@@ -133,3 +133,10 @@ final selectedDateProvider = StateProvider<DateTime>((ref) {
   // Default to today at midnight to ignore time component
   return DateTime(now.year, now.month, now.day);
 });
+
+/// One-shot signal (bumped counter) that a flow just focused the map on a
+/// specific day — e.g. the trip card's "Go to map" sets [selectedDateProvider]
+/// to the trip's first day and bumps this. The trip sheet listens and flips
+/// its locations toggle back to "Selected Day", which otherwise retains
+/// whatever the user last used and made the landing look un-focused.
+final mapDayFocusRequestProvider = StateProvider<int>((ref) => 0);

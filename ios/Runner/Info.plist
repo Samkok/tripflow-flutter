@@ -32,6 +32,12 @@
 	<true/>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>VoyZa saves your route share cards to your photo library when you choose Save.</string>
+	<!-- Required by App Store review (ITMS-90683): the linked photo-library
+	     framework references read APIs, so a purpose string must be present
+	     even though VoyZa only ever ADDS its own share cards and never reads
+	     or browses your photos. -->
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>VoyZa only adds route share cards you choose to save. It never reads or browses your photos.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>VoyZa uses your location to display your current position on the map, provide accurate directions, and help you plan your trips.</string>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
