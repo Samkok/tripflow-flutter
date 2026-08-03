@@ -333,6 +333,7 @@ class NotificationService {
   void _handleNotificationTap(Map<String, dynamic> data) {
     final type = data['type'] as String?;
     final tripId = data['trip_id'] as String?;
+    final locationId = data['location_id'] as String?;
 
     debugPrint(
         'NotificationService: Handling tap — type: $type, tripId: $tripId');
@@ -340,10 +341,7 @@ class NotificationService {
     switch (type) {
       case 'collaborator_added':
       case 'location_added':
-        // Navigation is deferred to the app layer via navigatorKey.
-        // Import navigatorKey from main.dart and push the trip screen.
-        // This is handled at the app level to avoid circular imports.
-        _navigateToTrip(tripId);
+        _requestOpenTrip(tripId, locationId);
         break;
       default:
         debugPrint(
@@ -351,13 +349,37 @@ class NotificationService {
     }
   }
 
-  void _navigateToTrip(String? tripId) {
+  /// Set by the app layer (main.dart) once the navigator exists. Kept as a
+  /// callback so this service never imports main.dart (circular dependency).
+  /// [locationId] is non-null for location_added taps — the details screen
+  /// opens that location's detail sheet on arrival.
+  static void Function(String tripId, String? locationId)? onOpenTripRequest;
+
+  /// A tap that arrived before the app layer registered its callback
+  /// (terminated-state launch). Consumed by [consumePendingOpenTrip].
+  static ({String tripId, String? locationId})? _pendingOpenTrip;
+
+  void _requestOpenTrip(String? tripId, String? locationId) {
     if (tripId == null) return;
-    // Use the global navigator key from main.dart.
-    // We avoid importing main.dart here to prevent circular dependencies.
-    // Instead, the app's router/navigator handles this via a stream or callback.
-    // For now, log the intent — wire up navigation in main.dart if needed.
-    debugPrint('NotificationService: Navigate to trip: $tripId');
+    final cb = onOpenTripRequest;
+    if (cb != null) {
+      cb(tripId, locationId);
+    } else {
+      debugPrint(
+          'NotificationService: Navigator not ready — buffering trip open');
+      _pendingOpenTrip = (tripId: tripId, locationId: locationId);
+    }
+  }
+
+  /// Called by the app layer right after registering [onOpenTripRequest] to
+  /// replay a tap that launched the app from the terminated state.
+  static void consumePendingOpenTrip() {
+    final pending = _pendingOpenTrip;
+    final cb = onOpenTripRequest;
+    if (pending != null && cb != null) {
+      _pendingOpenTrip = null;
+      cb(pending.tripId, pending.locationId);
+    }
   }
 
   /// Registers or reactivates the FCM token for the current user.

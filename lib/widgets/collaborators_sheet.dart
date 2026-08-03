@@ -1,6 +1,9 @@
+import 'dart:ui' show ImageFilter;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:voyza/core/theme.dart';
 import '../models/trip_collaborator.dart';
 import '../providers/trip_collaborator_provider.dart';
 import '../services/trip_buddy_service.dart';
@@ -179,283 +182,76 @@ class _CollaboratorsSheetState extends ConsumerState<CollaboratorsSheet> {
       minChildSize: 0.5,
       maxChildSize: 0.95,
       builder: (context, scrollController) {
-        return Container(
-          decoration: BoxDecoration(
-            color: Theme.of(context).scaffoldBackgroundColor,
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-          ),
-          child: Column(
-            children: [
-              // Drag handle
-              Container(
-                margin: const EdgeInsets.only(top: 12, bottom: 8),
-                height: 4,
-                width: 40,
-                decoration: BoxDecoration(
-                  color: Colors.grey[400],
-                  borderRadius: BorderRadius.circular(2),
+        // Glass sheet: the trip page (and its globe) reads through, with a
+        // light blur keeping the content legible. Matches the Search for
+        // Location sheet.
+        return ClipRRect(
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+          child: BackdropFilter(
+            filter: ImageFilter.blur(
+                sigmaX: AppTheme.sheetBlurSigma,
+                sigmaY: AppTheme.sheetBlurSigma),
+            child: Container(
+              decoration: BoxDecoration(
+                color: Theme.of(context)
+                    .scaffoldBackgroundColor
+                    .withValues(alpha: AppTheme.sheetFillAlpha(context)),
+                borderRadius:
+                    const BorderRadius.vertical(top: Radius.circular(20)),
+                border: Border.all(
+                  color: AppTheme.sheetBorderColor(context),
+                  width: 0.8,
                 ),
               ),
-
-              // Header
-              Padding(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                child: Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: Theme.of(context)
-                            .colorScheme
-                            .primary
-                            .withValues(alpha: 0.1),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Icon(
-                        Icons.group,
-                        color: Theme.of(context).colorScheme.primary,
-                      ),
+              child: Column(
+                children: [
+                  // Drag handle
+                  Container(
+                    margin: const EdgeInsets.only(top: 12, bottom: 8),
+                    height: 4,
+                    width: 40,
+                    decoration: BoxDecoration(
+                      color: Colors.grey[400],
+                      borderRadius: BorderRadius.circular(2),
                     ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Travel buddies',
-                            style: Theme.of(context)
-                                .textTheme
-                                .titleLarge
-                                ?.copyWith(
-                                  fontWeight: FontWeight.bold,
-                                ),
-                          ),
-                          Text(
-                            widget.tripName,
-                            style:
-                                Theme.of(context).textTheme.bodySmall?.copyWith(
-                                      color: Theme.of(context)
-                                          .textTheme
-                                          .bodyMedium
-                                          ?.color
-                                          ?.withValues(alpha: 0.6),
-                                    ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ],
-                      ),
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.close),
-                      onPressed: () => Navigator.pop(context),
-                    ),
-                  ],
-                ),
-              ),
+                  ),
 
-              const Divider(),
-
-              // Add collaborator form - ONLY visible to owner
-              if (isOwner) ...[
-                Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Invite a travel buddy',
-                        style:
-                            Theme.of(context).textTheme.titleMedium?.copyWith(
-                                  fontWeight: FontWeight.w600,
-                                ),
-                      ),
-                      const SizedBox(height: 10),
-                      // The reward, stated up front — the invite IS the
-                      // referral loop (claim-invites grants both sides a
-                      // month when a new user joins).
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 10),
-                        decoration: BoxDecoration(
-                          color: Theme.of(context)
-                              .colorScheme
-                              .primary
-                              .withValues(alpha: 0.08),
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(
+                  // Header
+                  Padding(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    child: Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
                             color: Theme.of(context)
                                 .colorScheme
                                 .primary
-                                .withValues(alpha: 0.3),
+                                .withValues(alpha: 0.1),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Icon(
+                            Icons.group,
+                            color: Theme.of(context).colorScheme.primary,
                           ),
                         ),
-                        child: Row(
-                          children: [
-                            Icon(Icons.card_giftcard_rounded,
-                                size: 20,
-                                color: Theme.of(context).colorScheme.primary),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: Text(
-                                'Invite a buddy who\'s new to VoyZa and you '
-                                'both get a free month of Pro.',
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Travel buddies',
                                 style: Theme.of(context)
                                     .textTheme
-                                    .bodySmall
-                                    ?.copyWith(fontWeight: FontWeight.w600),
+                                    .titleLarge
+                                    ?.copyWith(
+                                      fontWeight: FontWeight.bold,
+                                    ),
                               ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-
-                      // Email input
-                      TextField(
-                        controller: _emailController,
-                        keyboardType: TextInputType.emailAddress,
-                        decoration: InputDecoration(
-                          hintText: 'Their email address',
-                          prefixIcon: const Icon(Icons.email_outlined),
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          filled: true,
-                          fillColor: Theme.of(context).cardColor,
-                          errorText: _errorMessage,
-                        ),
-                        onChanged: (_) {
-                          if (_errorMessage != null) {
-                            setState(() => _errorMessage = null);
-                          }
-                        },
-                      ),
-                      const SizedBox(height: 12),
-
-                      // Permission selector — Can Edit first (the collaborative
-                      // default); Read Only is the deliberate downgrade.
-                      Row(
-                        children: [
-                          Expanded(
-                            child: _buildPermissionOption(
-                              'write',
-                              'Can Edit',
-                              Icons.edit,
-                              'Plan together, live',
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: _buildPermissionOption(
-                              'read',
-                              'View Only',
-                              Icons.visibility,
-                              'Can follow along',
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 16),
-
-                      // Add button
-                      SizedBox(
-                        width: double.infinity,
-                        child: ElevatedButton.icon(
-                          onPressed: _isLoading ? null : _addCollaborator,
-                          icon: _isLoading
-                              ? const SizedBox(
-                                  width: 20,
-                                  height: 20,
-                                  child:
-                                      CircularProgressIndicator(strokeWidth: 2),
-                                )
-                              : const Icon(Icons.person_add),
-                          label: Text(_isLoading ? 'Inviting…' : 'Invite'),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor:
-                                Theme.of(context).colorScheme.primary,
-                            foregroundColor: Colors.black,
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const Divider(),
-              ],
-
-              // Collaborators list header
-              Padding(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                child: Row(
-                  children: [
-                    Text(
-                      isOwner ? 'Your travel buddies' : 'Travel buddies',
-                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                            fontWeight: FontWeight.w600,
-                          ),
-                    ),
-                    const Spacer(),
-                    collaboratorsAsync.when(
-                      data: (collaborators) => Text(
-                        '${collaborators.length} on this trip',
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                              color: Theme.of(context)
-                                  .textTheme
-                                  .bodyMedium
-                                  ?.color
-                                  ?.withValues(alpha: 0.6),
-                            ),
-                      ),
-                      loading: () => const SizedBox.shrink(),
-                      error: (_, __) => const SizedBox.shrink(),
-                    ),
-                  ],
-                ),
-              ),
-
-              // Collaborators list
-              Expanded(
-                child: collaboratorsAsync.when(
-                  data: (collaborators) {
-                    if (collaborators.isEmpty) {
-                      return Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(
-                              Icons.group_outlined,
-                              size: 64,
-                              color: Theme.of(context)
-                                  .colorScheme
-                                  .primary
-                                  .withValues(alpha: 0.3),
-                            ),
-                            const SizedBox(height: 16),
-                            Text(
-                              'Plan this trip together',
-                              style: Theme.of(context).textTheme.titleMedium,
-                            ),
-                            const SizedBox(height: 8),
-                            Padding(
-                              padding:
-                                  const EdgeInsets.symmetric(horizontal: 32),
-                              child: Text(
-                                isOwner
-                                    ? 'Everyone sees the same live map — '
-                                        'changes sync instantly. And when a '
-                                        'buddy new to VoyZa joins, you both '
-                                        'get a free month of Pro.'
-                                    : 'Only the trip owner can invite '
-                                        'travel buddies.',
-                                textAlign: TextAlign.center,
+                              Text(
+                                widget.tripName,
                                 style: Theme.of(context)
                                     .textTheme
                                     .bodySmall
@@ -466,38 +262,273 @@ class _CollaboratorsSheetState extends ConsumerState<CollaboratorsSheet> {
                                           ?.color
                                           ?.withValues(alpha: 0.6),
                                     ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ],
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.close),
+                          onPressed: () => Navigator.pop(context),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  const Divider(),
+
+                  // Add collaborator form - ONLY visible to owner
+                  if (isOwner) ...[
+                    Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Invite a travel buddy',
+                            style: Theme.of(context)
+                                .textTheme
+                                .titleMedium
+                                ?.copyWith(
+                                  fontWeight: FontWeight.w600,
+                                ),
+                          ),
+                          const SizedBox(height: 10),
+                          // The reward, stated up front — the invite IS the
+                          // referral loop (claim-invites grants both sides a
+                          // month when a new user joins).
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 12, vertical: 10),
+                            decoration: BoxDecoration(
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .primary
+                                  .withValues(alpha: 0.08),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .primary
+                                    .withValues(alpha: 0.3),
                               ),
                             ),
-                          ],
-                        ),
-                      );
-                    }
+                            child: Row(
+                              children: [
+                                Icon(Icons.card_giftcard_rounded,
+                                    size: 20,
+                                    color:
+                                        Theme.of(context).colorScheme.primary),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: Text(
+                                    'Invite a buddy who\'s new to VoyZa and you '
+                                    'both get a free month of Pro.',
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .bodySmall
+                                        ?.copyWith(fontWeight: FontWeight.w600),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 12),
 
-                    return ListView.separated(
-                      controller: scrollController,
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 16, vertical: 8),
-                      itemCount: collaborators.length,
-                      separatorBuilder: (context, index) =>
-                          const SizedBox(height: 8),
-                      itemBuilder: (context, index) {
-                        final collaborator = collaborators[index];
-                        return _buildCollaboratorCard(
-                          collaborator,
-                          isOwner: isOwner,
-                          isCurrentUser: collaborator.userId == currentUserId,
+                          // Email input
+                          TextField(
+                            controller: _emailController,
+                            keyboardType: TextInputType.emailAddress,
+                            decoration: InputDecoration(
+                              hintText: 'Their email address',
+                              prefixIcon: const Icon(Icons.email_outlined),
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              filled: true,
+                              fillColor: Theme.of(context).cardColor,
+                              errorText: _errorMessage,
+                            ),
+                            onChanged: (_) {
+                              if (_errorMessage != null) {
+                                setState(() => _errorMessage = null);
+                              }
+                            },
+                          ),
+                          const SizedBox(height: 12),
+
+                          // Permission selector — Can Edit first (the collaborative
+                          // default); Read Only is the deliberate downgrade.
+                          Row(
+                            children: [
+                              Expanded(
+                                child: _buildPermissionOption(
+                                  'write',
+                                  'Can Edit',
+                                  Icons.edit,
+                                  'Plan together, live',
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: _buildPermissionOption(
+                                  'read',
+                                  'View Only',
+                                  Icons.visibility,
+                                  'Can follow along',
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 16),
+
+                          // Add button
+                          SizedBox(
+                            width: double.infinity,
+                            child: ElevatedButton.icon(
+                              onPressed: _isLoading ? null : _addCollaborator,
+                              icon: _isLoading
+                                  ? const SizedBox(
+                                      width: 20,
+                                      height: 20,
+                                      child: CircularProgressIndicator(
+                                          strokeWidth: 2),
+                                    )
+                                  : const Icon(Icons.person_add),
+                              label: Text(_isLoading ? 'Inviting…' : 'Invite'),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor:
+                                    Theme.of(context).colorScheme.primary,
+                                foregroundColor: Colors.black,
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 14),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const Divider(),
+                  ],
+
+                  // Collaborators list header
+                  Padding(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    child: Row(
+                      children: [
+                        Text(
+                          isOwner ? 'Your travel buddies' : 'Travel buddies',
+                          style:
+                              Theme.of(context).textTheme.titleMedium?.copyWith(
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                        ),
+                        const Spacer(),
+                        collaboratorsAsync.when(
+                          data: (collaborators) => Text(
+                            '${collaborators.length} on this trip',
+                            style:
+                                Theme.of(context).textTheme.bodySmall?.copyWith(
+                                      color: Theme.of(context)
+                                          .textTheme
+                                          .bodyMedium
+                                          ?.color
+                                          ?.withValues(alpha: 0.6),
+                                    ),
+                          ),
+                          loading: () => const SizedBox.shrink(),
+                          error: (_, __) => const SizedBox.shrink(),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  // Collaborators list
+                  Expanded(
+                    child: collaboratorsAsync.when(
+                      data: (collaborators) {
+                        if (collaborators.isEmpty) {
+                          return Center(
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(
+                                  Icons.group_outlined,
+                                  size: 64,
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .primary
+                                      .withValues(alpha: 0.3),
+                                ),
+                                const SizedBox(height: 16),
+                                Text(
+                                  'Plan this trip together',
+                                  style:
+                                      Theme.of(context).textTheme.titleMedium,
+                                ),
+                                const SizedBox(height: 8),
+                                Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 32),
+                                  child: Text(
+                                    isOwner
+                                        ? 'Everyone sees the same live map — '
+                                            'changes sync instantly. And when a '
+                                            'buddy new to VoyZa joins, you both '
+                                            'get a free month of Pro.'
+                                        : 'Only the trip owner can invite '
+                                            'travel buddies.',
+                                    textAlign: TextAlign.center,
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .bodySmall
+                                        ?.copyWith(
+                                          color: Theme.of(context)
+                                              .textTheme
+                                              .bodyMedium
+                                              ?.color
+                                              ?.withValues(alpha: 0.6),
+                                        ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                        }
+
+                        return ListView.separated(
+                          controller: scrollController,
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 16, vertical: 8),
+                          itemCount: collaborators.length,
+                          separatorBuilder: (context, index) =>
+                              const SizedBox(height: 8),
+                          itemBuilder: (context, index) {
+                            final collaborator = collaborators[index];
+                            return _buildCollaboratorCard(
+                              collaborator,
+                              isOwner: isOwner,
+                              isCurrentUser:
+                                  collaborator.userId == currentUserId,
+                            );
+                          },
                         );
                       },
-                    );
-                  },
-                  loading: () =>
-                      const Center(child: CircularProgressIndicator()),
-                  error: (error, _) => Center(
-                    child: Text('Error: $error'),
+                      loading: () =>
+                          const Center(child: CircularProgressIndicator()),
+                      error: (error, _) => Center(
+                        child: Text('Error: $error'),
+                      ),
+                    ),
                   ),
-                ),
+                ],
               ),
-            ],
+            ),
           ),
         );
       },
@@ -577,7 +608,10 @@ class _CollaboratorsSheetState extends ConsumerState<CollaboratorsSheet> {
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Theme.of(context).cardColor,
+        // See-through inside the glass sheet.
+        color: Theme.of(context)
+            .cardColor
+            .withValues(alpha: AppTheme.sheetCardAlpha(context)),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
           color: Theme.of(context).dividerColor.withValues(alpha: 0.2),

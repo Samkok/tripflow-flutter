@@ -15,11 +15,55 @@ class AppTheme {
   static const Color lightBackgroundColor = Color(0xFFF2F2F7);
   static const Color lightSurfaceColor = Colors.white;
   static const Color lightCardColor = Colors.white;
+
+  // ── Glass sheets ───────────────────────────────────────────────────────
+  // ONE source of truth for every see-through surface (trip plan, search for
+  // location, collaborators, and the cards inside them) so their glass can't
+  // drift apart.
+  static const double sheetBlurSigma = 12;
+
+  /// Sheet fill opacity.
+  ///
+  /// Light mode is the tricky one: a white card over a white pane over a pale
+  /// map composites to ~73% white at the "readable" alphas, which buries the
+  /// blur completely — the glass just looks like flat white. Keeping BOTH
+  /// layers thin lets the blurred backdrop actually show, and the 12px blur
+  /// still smooths it enough for dark text to sit on top.
+  static double sheetFillAlpha(BuildContext context) =>
+      Theme.of(context).brightness == Brightness.dark ? 0.25 : 0.32;
+
+  /// Fill for cards sitting INSIDE a glass sheet — translucent enough that
+  /// the blurred backdrop reads through, opaque enough to group content.
+  static double sheetCardAlpha(BuildContext context) =>
+      Theme.of(context).brightness == Brightness.dark ? 0.30 : 0.28;
+
+  /// Hairline edge of a glass pane. White reads as a lit edge on dark; on
+  /// light it just disappears, so use a soft dark line instead.
+  static Color sheetBorderColor(BuildContext context) =>
+      Theme.of(context).brightness == Brightness.dark
+          ? Colors.white.withValues(alpha: 0.08)
+          : Colors.black.withValues(alpha: 0.08);
+
+  /// Scrim behind a glass sheet. Light mode needs a touch more so the pane
+  /// separates from the page instead of blending into it.
+  static Color sheetBarrierColor(BuildContext context) =>
+      Theme.of(context).brightness == Brightness.dark
+          ? Colors.black.withValues(alpha: 0.15)
+          : Colors.black.withValues(alpha: 0.25);
   static ThemeData darkTheme = ThemeData(
     useMaterial3: true,
     brightness: Brightness.dark,
     primaryColor: primaryColor,
     scaffoldBackgroundColor: darkBackgroundColor,
+    // Headers are COMPLETELY transparent app-wide: no fill, no shadow, and
+    // no Material-3 scrolled-under surface tint (that tint is what made
+    // "transparent" app bars regain a background once content scrolled).
+    appBarTheme: const AppBarTheme(
+      backgroundColor: Colors.transparent,
+      elevation: 0,
+      scrolledUnderElevation: 0,
+      surfaceTintColor: Colors.transparent,
+    ),
     colorScheme: const ColorScheme.dark(
       primary: primaryColor,
       secondary: secondaryColor,
@@ -86,6 +130,15 @@ class AppTheme {
     brightness: Brightness.light,
     primaryColor: primaryColor,
     scaffoldBackgroundColor: lightBackgroundColor,
+    // Headers are COMPLETELY transparent app-wide: no fill, no shadow, and
+    // no Material-3 scrolled-under surface tint (that tint is what made
+    // "transparent" app bars regain a background once content scrolled).
+    appBarTheme: const AppBarTheme(
+      backgroundColor: Colors.transparent,
+      elevation: 0,
+      scrolledUnderElevation: 0,
+      surfaceTintColor: Colors.transparent,
+    ),
     colorScheme: const ColorScheme.light(
       primary: primaryColor,
       secondary: secondaryColor,

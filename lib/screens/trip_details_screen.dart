@@ -1,5 +1,9 @@
 import 'dart:async';
+import 'dart:ui' show ImageFilter;
+
+import 'package:voyza/core/theme.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:google_maps_url_extractor/google_maps_url_extractor.dart';
@@ -29,6 +33,7 @@ import 'package:voyza/utils/same_day_place_guard.dart';
 import 'package:voyza/utils/trip_dates.dart';
 import 'package:voyza/services/trip_day_service.dart';
 import 'package:voyza/widgets/pulsing_glow.dart';
+import 'package:voyza/widgets/rotating_globe_background.dart';
 
 class TripDetailsScreen extends ConsumerStatefulWidget {
   final Trip trip;
@@ -39,10 +44,15 @@ class TripDetailsScreen extends ConsumerStatefulWidget {
   /// lives, instead of on the screen being left behind.
   final bool celebrateFirstTrip;
 
+  /// When set (notification tap: "X added a place"), the screen opens that
+  /// location's detail sheet as soon as its data has loaded.
+  final String? initialLocationId;
+
   const TripDetailsScreen({
     super.key,
     required this.trip,
     this.celebrateFirstTrip = false,
+    this.initialLocationId,
   });
 
   @override
@@ -185,7 +195,49 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
       if (widget.celebrateFirstTrip) {
         _maybeCelebrateFirstTrip();
       }
+
+      // Notification tap landing: open the added location's detail sheet
+      // once its row is in (the remote refresh above may still be running).
+      if (widget.initialLocationId != null) {
+        _maybeOpenInitialLocation();
+      }
     });
+  }
+
+  /// Waits (bounded) for [TripDetailsScreen.initialLocationId] to appear in
+  /// this trip's locations, then opens its detail sheet — mirroring a tap on
+  /// its card, including the same day-group so the multi-day section works.
+  Future<void> _maybeOpenInitialLocation() async {
+    final targetId = widget.initialLocationId;
+    if (targetId == null) return;
+    try {
+      final all = await ref
+          .read(locationRepositoryProvider)
+          .watchLocations()
+          .firstWhere((locs) =>
+              locs.any((l) => l.id == targetId && l.tripId == widget.trip.id))
+          .timeout(const Duration(seconds: 10));
+      if (!mounted) return;
+
+      final tripLocations =
+          all.where((l) => l.tripId == widget.trip.id).toList();
+      final target = tripLocations.firstWhere((l) => l.id == targetId);
+      final day = _dayKey(target.scheduledDate ?? target.createdAt);
+      // Same day-cover rule as _buildLocationsList: the group holds every
+      // location whose scheduled range covers the target's first day.
+      final dateGroup = tripLocations.where((l) {
+        final startRaw = l.scheduledDate ?? l.createdAt;
+        final s = _dayKey(startRaw);
+        final e = _dayKey(l.scheduledEndDate ?? startRaw);
+        return !day.isBefore(s) && !day.isAfter(e);
+      }).toList();
+      var index = dateGroup.indexWhere((l) => l.id == targetId);
+      if (index < 0) index = 0;
+      _showLocationDetail(target, index, dateGroup);
+    } catch (_) {
+      // Timed out or gone (deleted / access revoked) — the details page is
+      // still the right landing; just don't pop a sheet.
+    }
   }
 
   Future<void> _maybeCelebrateFirstTrip() async {
@@ -206,6 +258,8 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
 
   @override
   void dispose() {
+    _stopDragAutoScroll();
+    _listScrollController.dispose();
     _searchController.dispose();
     super.dispose();
   }
@@ -262,135 +316,153 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
     final hasWriteAccessAsync =
         ref.watch(hasWriteAccessProvider(widget.trip.id));
 
-    return Scaffold(
-      appBar: _selectionMode
-          ? AppBar(
-              elevation: 0,
-              backgroundColor:
-                  Theme.of(context).colorScheme.primary.withValues(alpha: 0.08),
-              leading: IconButton(
-                icon: const Icon(Icons.close),
-                onPressed: _exitSelectionMode,
-              ),
-              title: Text(
-                '${_selectedIds.length} selected',
-                style: Theme.of(context)
-                    .textTheme
-                    .headlineSmall
-                    ?.copyWith(fontWeight: FontWeight.bold),
-              ),
-              actions: [
-                // Tristate checkbox: null=some, true=all, false=none
-                Checkbox(
-                  tristate: true,
-                  value: _selectedIds.isEmpty
-                      ? false
-                      : _selectedIds.length == _currentTripLocations.length
-                          ? true
-                          : null,
-                  onChanged: (_) {
-                    setState(() {
-                      if (_selectedIds.length == _currentTripLocations.length) {
-                        _selectedIds.clear();
-                      } else {
-                        _selectedIds
-                            .addAll(_currentTripLocations.map((l) => l.id));
-                      }
-                    });
-                  },
-                ),
-                IconButton(
-                  icon: const Icon(Icons.delete_outline, color: Colors.red),
-                  tooltip: 'Delete selected',
-                  onPressed: _selectedIds.isEmpty ? null : _deleteSelected,
-                ),
-              ],
-            )
-          : AppBar(
-              elevation: 0,
-              backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-              leading: IconButton(
-                icon: const Icon(Icons.arrow_back_rounded),
-                onPressed: () => Navigator.pop(context),
-              ),
-              title: Text(
-                widget.trip.name,
-                style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                      fontWeight: FontWeight.bold,
-                    ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-              actions: [
-                // Team members button - only visible to trip owner
-                isOwnerAsync.when(
-                  data: (isOwner) => isOwner
-                      ? IconButton(
-                          icon: const Icon(Icons.group_outlined),
-                          tooltip: 'Travel buddies',
-                          onPressed: () => _showCollaboratorsSheet(),
-                        )
-                      : const SizedBox.shrink(),
-                  loading: () => const SizedBox.shrink(),
-                  error: (_, __) => const SizedBox.shrink(),
-                ),
-              ],
-            ),
-      bottomNavigationBar: _selectionMode
-          ? SafeArea(
-              child: Padding(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                child: FilledButton.icon(
-                  style: FilledButton.styleFrom(backgroundColor: Colors.red),
-                  onPressed: _selectedIds.isEmpty ? null : _deleteSelected,
-                  icon: const Icon(Icons.delete_outline),
-                  label: Text(
-                      'Delete ${_selectedIds.length} location${_selectedIds.length == 1 ? '' : 's'}'),
-                ),
-              ),
-            )
-          : null,
-      body: RefreshIndicator(
-        onRefresh: _refreshPermissions,
-        child: Column(
-          children: [
-            // Search bar
-            _buildSearchBar(),
-            // Locations list. Pass write-access down so drag-to-move handles
-            // and drop targets are only enabled for users who can edit.
-            Expanded(
-              child: _buildLocationStreamBody(
-                hasWriteAccess:
-                    hasWriteAccessAsync.whenOrNull(data: (v) => v) ?? false,
-              ),
-            ),
-          ],
+    return Stack(
+      children: [
+        // Ambient rotating globe behind the page (see-through cards + a
+        // transparent app bar let it show, matching the home screen).
+        Positioned.fill(
+          child: ColoredBox(
+            color: Theme.of(context).scaffoldBackgroundColor,
+            child: const RotatingGlobeBackground(),
+          ),
         ),
-      ),
-      floatingActionButton: _selectionMode
-          ? null
-          : hasWriteAccessAsync.when(
-              data: (hasWriteAccess) => hasWriteAccess
-                  // Single glowing Add Location FAB — the old secondary
-                  // "Add Existing" entry confused more than it helped.
-                  ? PulsingGlow(
-                      shape: BoxShape.rectangle,
-                      borderRadius: BorderRadius.circular(16),
-                      glowColor: Theme.of(context).colorScheme.primary,
-                      child: FloatingActionButton.extended(
-                        heroTag: 'fab_add_location',
-                        onPressed: () => _showAddLocationDialog(),
-                        icon: const Icon(Icons.add_location_alt_outlined),
-                        label: const Text('Add Location'),
-                        backgroundColor: Theme.of(context).colorScheme.primary,
-                        foregroundColor: Colors.black,
-                      ),
-                    )
-                  : null,
-              loading: () => null,
-              error: (_, __) => null,
+        Scaffold(
+          backgroundColor: Colors.transparent,
+          appBar: _selectionMode
+              ? AppBar(
+                  elevation: 0,
+                  backgroundColor: Theme.of(context)
+                      .colorScheme
+                      .primary
+                      .withValues(alpha: 0.08),
+                  leading: IconButton(
+                    icon: const Icon(Icons.close),
+                    onPressed: _exitSelectionMode,
+                  ),
+                  title: Text(
+                    '${_selectedIds.length} selected',
+                    style: Theme.of(context)
+                        .textTheme
+                        .headlineSmall
+                        ?.copyWith(fontWeight: FontWeight.bold),
+                  ),
+                  actions: [
+                    // Tristate checkbox: null=some, true=all, false=none
+                    Checkbox(
+                      tristate: true,
+                      value: _selectedIds.isEmpty
+                          ? false
+                          : _selectedIds.length == _currentTripLocations.length
+                              ? true
+                              : null,
+                      onChanged: (_) {
+                        setState(() {
+                          if (_selectedIds.length ==
+                              _currentTripLocations.length) {
+                            _selectedIds.clear();
+                          } else {
+                            _selectedIds
+                                .addAll(_currentTripLocations.map((l) => l.id));
+                          }
+                        });
+                      },
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.delete_outline, color: Colors.red),
+                      tooltip: 'Delete selected',
+                      onPressed: _selectedIds.isEmpty ? null : _deleteSelected,
+                    ),
+                  ],
+                )
+              : AppBar(
+                  elevation: 0,
+                  backgroundColor: Colors.transparent,
+                  leading: IconButton(
+                    icon: const Icon(Icons.arrow_back_rounded),
+                    onPressed: () => Navigator.pop(context),
+                  ),
+                  title: Text(
+                    widget.trip.name,
+                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                          fontWeight: FontWeight.bold,
+                        ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  actions: [
+                    // Team members button - only visible to trip owner
+                    isOwnerAsync.when(
+                      data: (isOwner) => isOwner
+                          ? IconButton(
+                              icon: const Icon(Icons.group_outlined),
+                              tooltip: 'Travel buddies',
+                              onPressed: () => _showCollaboratorsSheet(),
+                            )
+                          : const SizedBox.shrink(),
+                      loading: () => const SizedBox.shrink(),
+                      error: (_, __) => const SizedBox.shrink(),
+                    ),
+                  ],
+                ),
+          bottomNavigationBar: _selectionMode
+              ? SafeArea(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 10),
+                    child: FilledButton.icon(
+                      style:
+                          FilledButton.styleFrom(backgroundColor: Colors.red),
+                      onPressed: _selectedIds.isEmpty ? null : _deleteSelected,
+                      icon: const Icon(Icons.delete_outline),
+                      label: Text(
+                          'Delete ${_selectedIds.length} location${_selectedIds.length == 1 ? '' : 's'}'),
+                    ),
+                  ),
+                )
+              : null,
+          body: RefreshIndicator(
+            onRefresh: _refreshPermissions,
+            child: Column(
+              children: [
+                // Search bar
+                _buildSearchBar(),
+                // Locations list. Pass write-access down so drag-to-move handles
+                // and drop targets are only enabled for users who can edit.
+                Expanded(
+                  child: _buildLocationStreamBody(
+                    hasWriteAccess:
+                        hasWriteAccessAsync.whenOrNull(data: (v) => v) ?? false,
+                  ),
+                ),
+              ],
             ),
+          ),
+          floatingActionButton: _selectionMode
+              ? null
+              : hasWriteAccessAsync.when(
+                  data: (hasWriteAccess) => hasWriteAccess
+                      // Single glowing Add Location FAB — the old secondary
+                      // "Add Existing" entry confused more than it helped.
+                      ? PulsingGlow(
+                          shape: BoxShape.rectangle,
+                          borderRadius: BorderRadius.circular(16),
+                          glowColor: Theme.of(context).colorScheme.primary,
+                          child: FloatingActionButton.extended(
+                            heroTag: 'fab_add_location',
+                            onPressed: () => _showAddLocationDialog(),
+                            icon: const Icon(Icons.add_location_alt_outlined),
+                            label: const Text('Add Location'),
+                            backgroundColor:
+                                Theme.of(context).colorScheme.primary,
+                            foregroundColor: Colors.black,
+                          ),
+                        )
+                      : null,
+                  loading: () => null,
+                  error: (_, __) => null,
+                ),
+        ),
+      ],
     );
   }
 
@@ -399,6 +471,8 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
+      // Light barrier so the page stays visible behind the glass sheet.
+      barrierColor: AppTheme.sheetBarrierColor(context),
       builder: (context) => CollaboratorsSheet(
         tripId: widget.trip.id,
         tripName: widget.trip.name,
@@ -526,6 +600,16 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
   /// the same calendar day compare equal.
   DateTime _dayKey(DateTime d) => DateTime(d.year, d.month, d.day);
 
+  /// Stay duration (stored in seconds) → "45m" under an hour, "2h" / "1h 30m"
+  /// above it.
+  String _formatStayLabel(int seconds) {
+    final minutes = (seconds / 60).round();
+    if (minutes < 60) return '${minutes}m';
+    final h = minutes ~/ 60;
+    final m = minutes % 60;
+    return m == 0 ? '${h}h' : '${h}h ${m}m';
+  }
+
   /// True when [day] is a calendar day strictly before today. Used to lock
   /// out the per-date "add a place" affordances for dates that have already
   /// passed (mirrors the search screen's guard and the detail sheet's
@@ -589,6 +673,8 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
     }
 
     return CustomScrollView(
+      key: _listViewportKey,
+      controller: _listScrollController,
       slivers: [
         SliverToBoxAdapter(
           child: _buildTripInfoSection(),
@@ -928,16 +1014,27 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
             duration: const Duration(milliseconds: 150),
             padding: const EdgeInsets.all(6),
             decoration: BoxDecoration(
+              // Unmistakable drop target: at 6% the fill was easy to miss
+              // while the eye was following the dragged card.
               color: highlighted
-                  ? theme.colorScheme.primary.withValues(alpha: 0.06)
+                  ? theme.colorScheme.primary.withValues(alpha: 0.16)
                   : Colors.transparent,
               borderRadius: BorderRadius.circular(12),
               border: Border.all(
                 color: highlighted
-                    ? theme.colorScheme.primary.withValues(alpha: 0.6)
+                    ? theme.colorScheme.primary
                     : Colors.transparent,
-                width: 1.5,
+                width: 2,
               ),
+              boxShadow: highlighted
+                  ? [
+                      BoxShadow(
+                        color:
+                            theme.colorScheme.primary.withValues(alpha: 0.35),
+                        blurRadius: 16,
+                      ),
+                    ]
+                  : null,
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -1074,48 +1171,140 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
   /// Small floating chip rendered under the user's finger while dragging a
   /// location card. Lighter than re-rendering the whole card — keeps the
   /// drop targets visible underneath.
+  /// Width of the card that rides under the finger while dragging.
+  static const double _dragCardWidth = 260;
+
+  /// The dragged location rendered as a miniature of its own card, so the
+  /// user is visibly carrying the card rather than a generic chip. Centred
+  /// under the finger (see the anchor strategy at the Draggable) and tilted
+  /// a touch so it reads as "lifted off the page".
   Widget _buildDragFeedback(SavedLocation location) {
     final theme = Theme.of(context);
+    final photoRefs = location.effectivePhotoReferences;
     return Material(
       color: Colors.transparent,
-      child: Transform.translate(
-        offset: const Offset(12, 12),
-        child: Container(
-          constraints: const BoxConstraints(maxWidth: 240),
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          decoration: BoxDecoration(
-            color: theme.colorScheme.primary,
-            borderRadius: BorderRadius.circular(10),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.25),
-                blurRadius: 12,
-                offset: const Offset(0, 4),
+      child: Transform.rotate(
+        angle: -0.02,
+        child: Opacity(
+          opacity: 0.95,
+          child: Container(
+            width: _dragCardWidth,
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: theme.cardColor,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: theme.colorScheme.primary.withValues(alpha: 0.9),
+                width: 1.5,
               ),
-            ],
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.location_on_rounded,
-                  color: Colors.black, size: 18),
-              const SizedBox(width: 8),
-              Flexible(
-                child: Text(
-                  location.name,
-                  style: const TextStyle(
-                    color: Colors.black,
-                    fontWeight: FontWeight.w600,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.45),
+                  blurRadius: 20,
+                  offset: const Offset(0, 10),
                 ),
-              ),
-            ],
+              ],
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: SizedBox(
+                    width: 44,
+                    height: 44,
+                    child: photoRefs.isNotEmpty
+                        ? LocationPhotoThumbnail(
+                            photoRef: photoRefs.first,
+                            size: 44,
+                          )
+                        : ColoredBox(
+                            color: theme.colorScheme.primary
+                                .withValues(alpha: 0.15),
+                            child: Icon(Icons.location_on_rounded,
+                                color: theme.colorScheme.primary, size: 22),
+                          ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        location.name,
+                        style: theme.textTheme.titleSmall
+                            ?.copyWith(fontWeight: FontWeight.w700),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        'Drop on a day',
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: theme.colorScheme.primary,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
     );
+  }
+
+  // ── Auto-scroll while dragging ─────────────────────────────────────────
+  // Draggable/DragTarget do NOT scroll the enclosing scroll view (unlike
+  // ReorderableListView), so a card could never be moved to a day that was
+  // off-screen. These drive the list from the drag's pointer position.
+
+  final ScrollController _listScrollController = ScrollController();
+  final GlobalKey _listViewportKey = GlobalKey();
+  Timer? _autoScrollTimer;
+  double? _dragPointerY;
+
+  void _startDragAutoScroll() {
+    _autoScrollTimer ??= Timer.periodic(
+      const Duration(milliseconds: 16),
+      (_) => _autoScrollTick(),
+    );
+  }
+
+  void _stopDragAutoScroll() {
+    _autoScrollTimer?.cancel();
+    _autoScrollTimer = null;
+    _dragPointerY = null;
+  }
+
+  void _autoScrollTick() {
+    final y = _dragPointerY;
+    if (y == null || !_listScrollController.hasClients) return;
+    final box =
+        _listViewportKey.currentContext?.findRenderObject() as RenderBox?;
+    if (box == null || !box.hasSize) return;
+
+    final top = box.localToGlobal(Offset.zero).dy;
+    final bottom = top + box.size.height;
+    // Hot zones at each end; speed ramps up the deeper the finger goes in.
+    const zone = 130.0;
+    const maxStep = 16.0;
+    double delta = 0;
+    if (y < top + zone) {
+      delta = -maxStep * ((top + zone - y) / zone).clamp(0.0, 1.0);
+    } else if (y > bottom - zone) {
+      delta = maxStep * ((y - (bottom - zone)) / zone).clamp(0.0, 1.0);
+    }
+    if (delta == 0) return;
+
+    final pos = _listScrollController.position;
+    final target =
+        (pos.pixels + delta).clamp(pos.minScrollExtent, pos.maxScrollExtent);
+    if (target != pos.pixels) _listScrollController.jumpTo(target);
   }
 
   /// Reassigns [location] to [newDay]. Uses the repository directly (mirrors
@@ -1222,9 +1411,10 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 180),
         decoration: BoxDecoration(
+          // Translucent so the ambient globe stays visible behind the list.
           color: isSelected
               ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.1)
-              : Theme.of(context).cardColor,
+              : Theme.of(context).cardColor.withValues(alpha: 0.55),
           borderRadius: BorderRadius.circular(10),
           border: Border.all(
             color: isSelected
@@ -1343,7 +1533,7 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
                       ),
                       if (location.stayDuration > 0)
                         Text(
-                          '${(location.stayDuration / 60).toStringAsFixed(0)}m stay',
+                          '${_formatStayLabel(location.stayDuration)} stay',
                           style:
                               Theme.of(context).textTheme.labelSmall?.copyWith(
                                     color: Theme.of(context)
@@ -1378,7 +1568,19 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
                     const SizedBox(width: 2),
                     Draggable<SavedLocation>(
                       data: location,
-                      dragAnchorStrategy: pointerDragAnchorStrategy,
+                      // Centre the card horizontally on the finger with the
+                      // finger just below its top edge, so the card is
+                      // carried rather than trailing off to one side.
+                      dragAnchorStrategy: (_, __, ___) =>
+                          const Offset(_dragCardWidth / 2, 26),
+                      onDragStarted: () {
+                        HapticFeedback.mediumImpact();
+                        _startDragAutoScroll();
+                      },
+                      onDragUpdate: (d) => _dragPointerY = d.globalPosition.dy,
+                      onDragEnd: (_) => _stopDragAutoScroll(),
+                      onDragCompleted: _stopDragAutoScroll,
+                      onDraggableCanceled: (_, __) => _stopDragAutoScroll(),
                       feedback: _buildDragFeedback(location),
                       childWhenDragging: Opacity(
                         opacity: 0.35,
@@ -1397,8 +1599,10 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
                         child: MouseRegion(
                           cursor: SystemMouseCursors.grab,
                           child: Padding(
+                            // Roomier target: a 22px glyph is a hard thing
+                            // to land a thumb on mid-scroll.
                             padding: const EdgeInsets.symmetric(
-                                horizontal: 2, vertical: 4),
+                                horizontal: 6, vertical: 8),
                             child: Icon(
                               Icons.drag_indicator,
                               size: 22,
@@ -1439,6 +1643,9 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
+      // Light barrier: the page (and its globe) stays visible behind the
+      // frosted sheet instead of going near-black.
+      barrierColor: AppTheme.sheetBarrierColor(context),
       builder: (context) => _LocationSearchSheet(
         trip: _trip,
       ),
@@ -1453,6 +1660,9 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
+      // Light barrier: the page (and its globe) stays visible behind the
+      // frosted sheet instead of going near-black.
+      barrierColor: AppTheme.sheetBarrierColor(context),
       builder: (context) => _LocationSearchSheet(
         trip: _trip,
         scheduledDate: day,
@@ -1487,15 +1697,25 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
   Timer? _debounceTimer;
   bool _isAddingPlace = false;
 
+  /// Captured in initState because Riverpod forbids touching `ref` from
+  /// dispose (it threw "Cannot use ref after the widget was disposed" on
+  /// every sheet close). The provider is app-lifetime (not autoDispose),
+  /// so calling clear() on the captured notifier after unmount is safe.
+  late final PaginatedSearchNotifier _searchStateNotifier;
+
+  @override
+  void initState() {
+    super.initState();
+    _searchStateNotifier = ref.read(tripDetailSearchProvider.notifier);
+  }
+
   @override
   void dispose() {
     _searchController.dispose();
     _searchFocusNode.dispose();
     _debounceTimer?.cancel();
-    // Clear search state when sheet is closed
-    Future.microtask(() {
-      ref.read(tripDetailSearchProvider.notifier).clear();
-    });
+    // Clear search state when sheet is closed.
+    Future.microtask(_searchStateNotifier.clear);
     super.dispose();
   }
 
@@ -1579,155 +1799,173 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
       maxChildSize: 0.95,
       builder: (context, scrollController) {
         scrollController.addListener(() => _onScroll(scrollController));
-        return Container(
-          decoration: BoxDecoration(
-            color: Theme.of(context).scaffoldBackgroundColor,
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-          ),
-          // Stack so the busy overlay can cover the whole sheet (close
-          // button, drag handle, results) while a request is in flight —
-          // prevents the user from queuing a second tap mid-add.
-          child: Stack(
-            children: [
-              Column(
-                children: [
-                  // Drag handle
-                  Container(
-                    margin: const EdgeInsets.only(top: 12, bottom: 8),
-                    height: 4,
-                    width: 40,
-                    decoration: BoxDecoration(
-                      color: Colors.grey[400],
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                  ),
-
-                  // Header
-                  Padding(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            'Search for Location',
-                            style: Theme.of(context)
-                                .textTheme
-                                .titleLarge
-                                ?.copyWith(
-                                  fontWeight: FontWeight.bold,
-                                ),
-                          ),
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.close),
-                          onPressed: () => Navigator.pop(context),
-                        ),
-                      ],
-                    ),
-                  ),
-
-                  // Search bar
-                  Padding(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                    child: TextField(
-                      controller: _searchController,
-                      focusNode: _searchFocusNode,
-                      autofocus: true,
-                      decoration: InputDecoration(
-                        hintText: 'Search for a place...',
-                        prefixIcon: const Icon(Icons.search),
-                        suffixIcon: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            IconButton(
-                              icon: const Icon(Icons.link),
-                              tooltip: 'Paste Google Maps link',
-                              onPressed: _showUrlInputDialog,
-                            ),
-                            if (_searchController.text.isNotEmpty)
-                              IconButton(
-                                icon: const Icon(Icons.clear),
-                                onPressed: () {
-                                  _searchController.clear();
-                                  ref
-                                      .read(tripDetailSearchProvider.notifier)
-                                      .clear();
-                                  setState(() {});
-                                },
-                              ),
-                          ],
-                        ),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        filled: true,
-                        fillColor: Theme.of(context).cardColor,
-                      ),
-                      onChanged: _onSearchChanged,
-                    ),
-                  ),
-
-                  const Divider(),
-
-                  // Search results
-                  Expanded(
-                    child: _buildSearchResults(scrollController),
-                  ),
-                ],
+        // Frosted glass: the trip page (and its ambient globe) stays visible
+        // through the sheet while the blur keeps the modal content readable.
+        return ClipRRect(
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+          child: BackdropFilter(
+            filter: ImageFilter.blur(
+                sigmaX: AppTheme.sheetBlurSigma,
+                sigmaY: AppTheme.sheetBlurSigma),
+            child: Container(
+              decoration: BoxDecoration(
+                color: Theme.of(context)
+                    .scaffoldBackgroundColor
+                    .withValues(alpha: AppTheme.sheetFillAlpha(context)),
+                borderRadius:
+                    const BorderRadius.vertical(top: Radius.circular(20)),
+                border: Border.all(
+                  color: AppTheme.sheetBorderColor(context),
+                  width: 0.8,
+                ),
               ),
-              // Busy overlay shown during either add path. AbsorbPointer
-              // blocks taps so a second _addLocationToTrip can't queue
-              // up before the first round trip finishes — and gives the
-              // user clear "the tap took" feedback.
-              if (_isAddingPlace || _isPastingUrl)
-                Positioned.fill(
-                  child: AbsorbPointer(
-                    child: ColoredBox(
-                      color: Colors.black.withValues(alpha: 0.25),
-                      child: Center(
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 24, vertical: 20),
-                          decoration: BoxDecoration(
-                            color: Theme.of(context).colorScheme.surface,
-                            borderRadius: BorderRadius.circular(16),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withValues(alpha: 0.2),
-                                blurRadius: 16,
-                                offset: const Offset(0, 4),
-                              ),
-                            ],
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const SizedBox(
-                                width: 22,
-                                height: 22,
-                                child:
-                                    CircularProgressIndicator(strokeWidth: 2.4),
-                              ),
-                              const SizedBox(width: 14),
-                              Text(
-                                _isPastingUrl
-                                    ? 'Decoding link…'
-                                    : 'Adding location…',
+              // Stack so the busy overlay can cover the whole sheet (close
+              // button, drag handle, results) while a request is in flight —
+              // prevents the user from queuing a second tap mid-add.
+              child: Stack(
+                children: [
+                  Column(
+                    children: [
+                      // Drag handle
+                      Container(
+                        margin: const EdgeInsets.only(top: 12, bottom: 8),
+                        height: 4,
+                        width: 40,
+                        decoration: BoxDecoration(
+                          color: Colors.grey[400],
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                      ),
+
+                      // Header
+                      Padding(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 8),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                'Search for Location',
                                 style: Theme.of(context)
                                     .textTheme
-                                    .bodyMedium
-                                    ?.copyWith(fontWeight: FontWeight.w600),
+                                    .titleLarge
+                                    ?.copyWith(
+                                      fontWeight: FontWeight.bold,
+                                    ),
                               ),
-                            ],
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.close),
+                              onPressed: () => Navigator.pop(context),
+                            ),
+                          ],
+                        ),
+                      ),
+
+                      // Search bar
+                      Padding(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 8),
+                        child: TextField(
+                          controller: _searchController,
+                          focusNode: _searchFocusNode,
+                          autofocus: true,
+                          decoration: InputDecoration(
+                            hintText: 'Search for a place...',
+                            prefixIcon: const Icon(Icons.search),
+                            suffixIcon: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                IconButton(
+                                  icon: const Icon(Icons.link),
+                                  tooltip: 'Paste Google Maps link',
+                                  onPressed: _showUrlInputDialog,
+                                ),
+                                if (_searchController.text.isNotEmpty)
+                                  IconButton(
+                                    icon: const Icon(Icons.clear),
+                                    onPressed: () {
+                                      _searchController.clear();
+                                      ref
+                                          .read(
+                                              tripDetailSearchProvider.notifier)
+                                          .clear();
+                                      setState(() {});
+                                    },
+                                  ),
+                              ],
+                            ),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            filled: true,
+                            fillColor: Theme.of(context).cardColor,
+                          ),
+                          onChanged: _onSearchChanged,
+                        ),
+                      ),
+
+                      const Divider(),
+
+                      // Search results
+                      Expanded(
+                        child: _buildSearchResults(scrollController),
+                      ),
+                    ],
+                  ),
+                  // Busy overlay shown during either add path. AbsorbPointer
+                  // blocks taps so a second _addLocationToTrip can't queue
+                  // up before the first round trip finishes — and gives the
+                  // user clear "the tap took" feedback.
+                  if (_isAddingPlace || _isPastingUrl)
+                    Positioned.fill(
+                      child: AbsorbPointer(
+                        child: ColoredBox(
+                          color: Colors.black.withValues(alpha: 0.25),
+                          child: Center(
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 24, vertical: 20),
+                              decoration: BoxDecoration(
+                                color: Theme.of(context).colorScheme.surface,
+                                borderRadius: BorderRadius.circular(16),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withValues(alpha: 0.2),
+                                    blurRadius: 16,
+                                    offset: const Offset(0, 4),
+                                  ),
+                                ],
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const SizedBox(
+                                    width: 22,
+                                    height: 22,
+                                    child: CircularProgressIndicator(
+                                        strokeWidth: 2.4),
+                                  ),
+                                  const SizedBox(width: 14),
+                                  Text(
+                                    _isPastingUrl
+                                        ? 'Decoding link…'
+                                        : 'Adding location…',
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .bodyMedium
+                                        ?.copyWith(fontWeight: FontWeight.w600),
+                                  ),
+                                ],
+                              ),
+                            ),
                           ),
                         ),
                       ),
                     ),
-                  ),
-                ),
-            ],
+                ],
+              ),
+            ),
           ),
         );
       },

@@ -10,6 +10,7 @@ import '../widgets/app_toast.dart';
 import '../utils/trip_dates.dart';
 import '../widgets/country_picker_sheet.dart';
 import '../widgets/country_flag_icon.dart';
+import '../widgets/rotating_globe_background.dart';
 import '../models/trip.dart';
 import 'trip_details_screen.dart';
 
@@ -282,104 +283,118 @@ class _CreateTripWizardState extends ConsumerState<CreateTripWizard> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Scaffold(
-      body: SafeArea(
-        child: Column(
-          children: [
-            // Header: Back · progress dots · Cancel.
-            Padding(
-              padding: const EdgeInsets.fromLTRB(8, 4, 8, 0),
-              child: Row(
-                children: [
-                  SizedBox(
-                    width: 72,
-                    child: _step > 0
-                        ? Align(
-                            alignment: Alignment.centerLeft,
-                            child: IconButton(
-                              onPressed:
-                                  _creating ? null : () => _goTo(_step - 1),
-                              icon: const Icon(Icons.arrow_back_rounded),
-                              tooltip: 'Back',
-                            ),
-                          )
-                        : null,
-                  ),
-                  Expanded(child: Center(child: _buildDots(theme))),
-                  SizedBox(
-                    width: 72,
-                    child: TextButton(
-                      onPressed: _creating
-                          ? null
-                          : () => Navigator.of(context).maybePop(),
-                      child: const Text('Cancel'),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            Expanded(
-              child: PageView(
-                controller: _pageController,
-                physics: const NeverScrollableScrollPhysics(),
-                children: [
-                  _buildCountryStep(theme),
-                  _buildDatesStep(theme),
-                  _buildNameStep(theme),
-                  _buildBuddyStep(theme),
-                ],
-              ),
-            ),
-            // Footer: primary Next/Confirm (+ Skip on optional steps).
-            Padding(
-              padding: const EdgeInsets.fromLTRB(24, 4, 24, 16),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  SizedBox(
-                    width: double.infinity,
-                    // Rebuilds with every name keystroke via the listenable
-                    // (not setState) — the four step subtrees stay still.
-                    child: ValueListenableBuilder<TextEditingValue>(
-                      valueListenable: _nameController,
-                      builder: (context, _, __) => FilledButton(
-                        onPressed:
-                            (_nextEnabled && !_creating) ? _onNext : null,
-                        style: FilledButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(16)),
-                          textStyle: theme.textTheme.titleMedium
-                              ?.copyWith(fontWeight: FontWeight.w800),
-                        ),
-                        child: _creating
-                            ? const SizedBox(
-                                height: 22,
-                                width: 22,
-                                child:
-                                    CircularProgressIndicator(strokeWidth: 2.5),
-                              )
-                            : Text(
-                                _step == _stepCount - 1 ? 'Confirm' : 'Next'),
-                      ),
-                    ),
-                  ),
-                  if (_step == 0 && _countryCode == null)
-                    TextButton(
-                      onPressed: _creating ? null : () => _goTo(1),
-                      child: const Text('Skip — no country'),
-                    ),
-                  if (_step == _stepCount - 1 && _buddies.isEmpty)
-                    TextButton(
-                      onPressed: _creating ? null : _confirm,
-                      child: const Text('Skip — invite them later'),
-                    ),
-                ],
-              ),
-            ),
-          ],
+    return Stack(
+      children: [
+        // Ambient rotating globe behind the wizard (matches the rest of
+        // the app's surfaces).
+        Positioned.fill(
+          child: ColoredBox(
+            color: theme.scaffoldBackgroundColor,
+            child: const RotatingGlobeBackground(),
+          ),
         ),
-      ),
+        Scaffold(
+          backgroundColor: Colors.transparent,
+          body: SafeArea(
+            child: Column(
+              children: [
+                // Header: Back · progress dots · Cancel.
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(8, 4, 8, 0),
+                  child: Row(
+                    children: [
+                      SizedBox(
+                        width: 72,
+                        child: _step > 0
+                            ? Align(
+                                alignment: Alignment.centerLeft,
+                                child: IconButton(
+                                  onPressed:
+                                      _creating ? null : () => _goTo(_step - 1),
+                                  icon: const Icon(Icons.arrow_back_rounded),
+                                  tooltip: 'Back',
+                                ),
+                              )
+                            : null,
+                      ),
+                      Expanded(child: Center(child: _buildDots(theme))),
+                      SizedBox(
+                        width: 72,
+                        child: TextButton(
+                          onPressed: _creating
+                              ? null
+                              : () => Navigator.of(context).maybePop(),
+                          child: const Text('Cancel'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Expanded(
+                  child: PageView(
+                    controller: _pageController,
+                    physics: const NeverScrollableScrollPhysics(),
+                    children: [
+                      _buildCountryStep(theme),
+                      _buildDatesStep(theme),
+                      _buildNameStep(theme),
+                      _buildBuddyStep(theme),
+                    ],
+                  ),
+                ),
+                // Footer: primary Next/Confirm (+ Skip on optional steps).
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(24, 4, 24, 16),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      SizedBox(
+                        width: double.infinity,
+                        // Rebuilds with every name keystroke via the listenable
+                        // (not setState) — the four step subtrees stay still.
+                        child: ValueListenableBuilder<TextEditingValue>(
+                          valueListenable: _nameController,
+                          builder: (context, _, __) => FilledButton(
+                            onPressed:
+                                (_nextEnabled && !_creating) ? _onNext : null,
+                            style: FilledButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(vertical: 16),
+                              shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(16)),
+                              textStyle: theme.textTheme.titleMedium
+                                  ?.copyWith(fontWeight: FontWeight.w800),
+                            ),
+                            child: _creating
+                                ? const SizedBox(
+                                    height: 22,
+                                    width: 22,
+                                    child: CircularProgressIndicator(
+                                        strokeWidth: 2.5),
+                                  )
+                                : Text(_step == _stepCount - 1
+                                    ? 'Confirm'
+                                    : 'Next'),
+                          ),
+                        ),
+                      ),
+                      if (_step == 0 && _countryCode == null)
+                        TextButton(
+                          onPressed: _creating ? null : () => _goTo(1),
+                          child: const Text('Skip — no country'),
+                        ),
+                      if (_step == _stepCount - 1 && _buddies.isEmpty)
+                        TextButton(
+                          onPressed: _creating ? null : _confirm,
+                          child: const Text('Skip — invite them later'),
+                        ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
     );
   }
 

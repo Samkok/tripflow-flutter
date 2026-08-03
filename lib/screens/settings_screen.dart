@@ -7,9 +7,11 @@ import 'package:permission_handler/permission_handler.dart' as ph;
 import 'package:url_launcher/url_launcher.dart';
 import 'package:voyza/core/theme.dart';
 import 'package:voyza/providers/theme_provider.dart';
+import 'package:voyza/providers/onboarding_provider.dart';
 import 'package:voyza/screens/terms_screen.dart';
 import 'package:voyza/services/review_prompt_service.dart';
 import 'package:voyza/widgets/app_toast.dart';
+import 'package:voyza/widgets/rotating_globe_background.dart';
 
 import '../providers/auth_provider.dart';
 import '../providers/nearby_radius_provider.dart';
@@ -40,93 +42,107 @@ class SettingsScreen extends ConsumerWidget {
     final themeMode = ref.watch(themeProvider);
     final subscriptionState = ref.watch(subscriptionProvider);
 
-    return Scaffold(
-      backgroundColor: Theme.of(context).colorScheme.surface,
-      appBar: AppBar(
-        title: const Text('Settings'),
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        centerTitle: true,
-      ),
-      body: ListView(
-        padding: const EdgeInsets.all(16.0),
-        children: [
-          // Pro upgrade banner for non-Pro users
-          !subscriptionState.isPro
-              ? const ProUpgradeBanner()
-              : const SizedBox.shrink(),
-          const SizedBox(height: 16),
+    return Stack(
+      children: [
+        // Ambient rotating globe behind the whole page (the translucent
+        // cards let it show through). Paused while this tab is offstage.
+        Positioned.fill(
+          child: ColoredBox(
+            color: Theme.of(context).colorScheme.surface,
+            child: RotatingGlobeBackground(
+              animate: ref.watch(selectedTabIndexProvider) == 2,
+            ),
+          ),
+        ),
+        Scaffold(
+          backgroundColor: Colors.transparent,
+          appBar: AppBar(
+            title: const Text('Settings'),
+            backgroundColor: Colors.transparent,
+            elevation: 0,
+            centerTitle: true,
+          ),
+          body: ListView(
+            padding: const EdgeInsets.all(16.0),
+            children: [
+              // Pro upgrade banner for non-Pro users
+              !subscriptionState.isPro
+                  ? const ProUpgradeBanner()
+                  : const SizedBox.shrink(),
+              const SizedBox(height: 16),
 
-          // Profile Section
-          _buildSectionHeader(context, 'Profile'),
-          _buildProfileCard(context, ref),
-          const SizedBox(height: 24),
+              // Profile Section
+              _buildSectionHeader(context, 'Profile'),
+              _buildProfileCard(context, ref),
+              const SizedBox(height: 24),
 
-          // Free Trial Section — visible only while a native intro free
-          // trial is active (RevenueCat reports periodType == trial).
-          if (ref.watch(isInTrialProvider)) ...[
-            _buildSectionHeader(context, 'Free Trial'),
-            const _TrialStatusTile(),
-            const SizedBox(height: 24),
-          ],
+              // Free Trial Section — visible only while a native intro free
+              // trial is active (RevenueCat reports periodType == trial).
+              if (ref.watch(isInTrialProvider)) ...[
+                _buildSectionHeader(context, 'Free Trial'),
+                const _TrialStatusTile(),
+                const SizedBox(height: 24),
+              ],
 
-          // Subscription Section
-          _buildSectionHeader(context, 'Subscription'),
-          _buildSubscriptionTile(context, ref),
-          const SizedBox(height: 24),
+              // Subscription Section
+              _buildSectionHeader(context, 'Subscription'),
+              _buildSubscriptionTile(context, ref),
+              const SizedBox(height: 24),
 
-          // Security Section (only for signed-in users)
-          if (ref.watch(currentUserProvider) != null) ...[
-            _buildSectionHeader(context, 'Security'),
-            _buildSecurityTile(context),
-            const SizedBox(height: 24),
-          ],
+              // Security Section (only for signed-in users)
+              if (ref.watch(currentUserProvider) != null) ...[
+                _buildSectionHeader(context, 'Security'),
+                _buildSecurityTile(context),
+                const SizedBox(height: 24),
+              ],
 
-          // Preferences Section
-          // Social currency: the compounding lifetime stat. Renders nothing
-          // until the user has actually saved time (no "0m" flex).
-          const _TimeSavedStatTile(),
+              // Preferences Section
+              // Social currency: the compounding lifetime stat. Renders nothing
+              // until the user has actually saved time (no "0m" flex).
+              const _TimeSavedStatTile(),
 
-          _buildSectionHeader(context, 'Preferences'),
-          _buildThemeTile(context, ref, themeMode),
-          const SizedBox(height: 12),
-          const _NotificationTile(),
-          const SizedBox(height: 12),
-          const _LocationTile(),
-          const SizedBox(height: 12),
-          const _NearbyRadiusTile(),
-          const SizedBox(height: 12),
-          const _IncludeCurrentInFitTile(),
-          const SizedBox(height: 12),
-          const _AnalyticsTile(),
-          const SizedBox(height: 24),
+              _buildSectionHeader(context, 'Preferences'),
+              _buildThemeTile(context, ref, themeMode),
+              const SizedBox(height: 12),
+              const _NotificationTile(),
+              const SizedBox(height: 12),
+              const _LocationTile(),
+              const SizedBox(height: 12),
+              const _NearbyRadiusTile(),
+              const SizedBox(height: 12),
+              const _IncludeCurrentInFitTile(),
+              const SizedBox(height: 12),
+              const _AnalyticsTile(),
+              const SizedBox(height: 24),
 
-          // Invite friends — referral program (signed-in users only).
-          if (ref.watch(currentUserProvider) != null) ...[
-            _buildSectionHeader(context, 'Invite friends'),
-            _buildInviteFriendsTile(context),
-            const SizedBox(height: 24),
-          ],
+              // Invite friends — referral program (signed-in users only).
+              if (ref.watch(currentUserProvider) != null) ...[
+                _buildSectionHeader(context, 'Invite friends'),
+                _buildInviteFriendsTile(context),
+                const SizedBox(height: 24),
+              ],
 
-          // About Section
-          _buildSectionHeader(context, 'About'),
-          _buildTermsTile(context),
-          const SizedBox(height: 12),
-          _buildPrivacyTile(context),
-          const SizedBox(height: 12),
-          _buildRateTile(context),
-          const SizedBox(height: 12),
-          _buildFeedbackTile(context),
-          const SizedBox(height: 24),
+              // About Section
+              _buildSectionHeader(context, 'About'),
+              _buildTermsTile(context),
+              const SizedBox(height: 12),
+              _buildPrivacyTile(context),
+              const SizedBox(height: 12),
+              _buildRateTile(context),
+              const SizedBox(height: 12),
+              _buildFeedbackTile(context),
+              const SizedBox(height: 24),
 
-          // Danger Zone - only show for authenticated users
-          if (ref.watch(currentUserProvider) != null) ...[
-            _buildDangerSection(context, ref),
-            const SizedBox(height: 100),
-          ] else
-            const SizedBox(height: 100),
-        ],
-      ),
+              // Danger Zone - only show for authenticated users
+              if (ref.watch(currentUserProvider) != null) ...[
+                _buildDangerSection(context, ref),
+                const SizedBox(height: 100),
+              ] else
+                const SizedBox(height: 100),
+            ],
+          ),
+        ),
+      ],
     );
   }
 
@@ -149,7 +165,7 @@ class SettingsScreen extends ConsumerWidget {
     if (currentUser == null) {
       return Container(
         decoration: BoxDecoration(
-          color: Theme.of(context).cardColor,
+          color: Theme.of(context).cardColor.withValues(alpha: 0.55),
           borderRadius: BorderRadius.circular(20),
           boxShadow: [
             BoxShadow(
@@ -208,7 +224,7 @@ class SettingsScreen extends ConsumerWidget {
       ),
       child: Container(
         decoration: BoxDecoration(
-          color: Theme.of(context).cardColor,
+          color: Theme.of(context).cardColor.withValues(alpha: 0.55),
           borderRadius: BorderRadius.circular(20),
           boxShadow: [
             BoxShadow(
@@ -309,7 +325,7 @@ class SettingsScreen extends ConsumerWidget {
       BuildContext context, WidgetRef ref, ThemeMode themeMode) {
     return Container(
       decoration: BoxDecoration(
-        color: Theme.of(context).cardColor,
+        color: Theme.of(context).cardColor.withValues(alpha: 0.55),
         borderRadius: BorderRadius.circular(20),
         boxShadow: [
           BoxShadow(
@@ -349,7 +365,7 @@ class SettingsScreen extends ConsumerWidget {
 
     return Container(
       decoration: BoxDecoration(
-        color: Theme.of(context).cardColor,
+        color: Theme.of(context).cardColor.withValues(alpha: 0.55),
         borderRadius: BorderRadius.circular(20),
         boxShadow: [
           BoxShadow(
@@ -406,7 +422,7 @@ class SettingsScreen extends ConsumerWidget {
   Widget _buildSecurityTile(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
-        color: Theme.of(context).cardColor,
+        color: Theme.of(context).cardColor.withValues(alpha: 0.55),
         borderRadius: BorderRadius.circular(20),
         boxShadow: [
           BoxShadow(
@@ -446,7 +462,7 @@ class SettingsScreen extends ConsumerWidget {
   Widget _buildInviteFriendsTile(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
-        color: Theme.of(context).cardColor,
+        color: Theme.of(context).cardColor.withValues(alpha: 0.55),
         borderRadius: BorderRadius.circular(20),
         boxShadow: [
           BoxShadow(
@@ -483,7 +499,7 @@ class SettingsScreen extends ConsumerWidget {
   Widget _buildTermsTile(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
-        color: Theme.of(context).cardColor,
+        color: Theme.of(context).cardColor.withValues(alpha: 0.55),
         borderRadius: BorderRadius.circular(20),
         boxShadow: [
           BoxShadow(
@@ -522,7 +538,7 @@ class SettingsScreen extends ConsumerWidget {
   Widget _buildPrivacyTile(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
-        color: Theme.of(context).cardColor,
+        color: Theme.of(context).cardColor.withValues(alpha: 0.55),
         borderRadius: BorderRadius.circular(20),
         boxShadow: [
           BoxShadow(
@@ -564,7 +580,7 @@ class SettingsScreen extends ConsumerWidget {
   Widget _buildRateTile(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
-        color: Theme.of(context).cardColor,
+        color: Theme.of(context).cardColor.withValues(alpha: 0.55),
         borderRadius: BorderRadius.circular(20),
         boxShadow: [
           BoxShadow(
@@ -613,7 +629,7 @@ class SettingsScreen extends ConsumerWidget {
   Widget _buildFeedbackTile(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
-        color: Theme.of(context).cardColor,
+        color: Theme.of(context).cardColor.withValues(alpha: 0.55),
         borderRadius: BorderRadius.circular(20),
         boxShadow: [
           BoxShadow(
@@ -898,7 +914,7 @@ class _LocationTileState extends State<_LocationTile>
   Widget build(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
-        color: Theme.of(context).cardColor,
+        color: Theme.of(context).cardColor.withValues(alpha: 0.55),
         borderRadius: BorderRadius.circular(20),
         boxShadow: [
           BoxShadow(
@@ -1025,7 +1041,7 @@ class _NotificationTileState extends State<_NotificationTile>
   Widget build(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
-        color: Theme.of(context).cardColor,
+        color: Theme.of(context).cardColor.withValues(alpha: 0.55),
         borderRadius: BorderRadius.circular(20),
         boxShadow: [
           BoxShadow(

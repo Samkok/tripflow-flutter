@@ -98,7 +98,12 @@ class _GlobePainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     // 60% of the full-bleed radius — the sphere reads as an object floating
     // behind the content, its limb visible on screen.
-    final center = size.center(Offset.zero);
+    //
+    // Centred at 40% of the height (not 50%): at dead centre the disc's top
+    // edge fell BELOW the app bar, so transparent headers had nothing behind
+    // them and read as solid slabs. Riding higher tucks the globe under the
+    // header on every screen without growing the sphere.
+    final center = Offset(size.width / 2, size.height * 0.40);
     final radius =
         math.sqrt(size.width * size.width + size.height * size.height) /
             2 *

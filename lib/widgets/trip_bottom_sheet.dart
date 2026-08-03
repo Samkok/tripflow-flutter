@@ -1,3 +1,5 @@
+import 'dart:ui' show ImageFilter;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -89,6 +91,11 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
   /// handle or the sticky region (header + route summary).
   final ScrollController _listScrollController = ScrollController();
 
+  /// Plan search: filters the location cards by name/address. Kept as a
+  /// notifier so typing rebuilds only the list bodies, not the whole sheet.
+  final TextEditingController _searchController = TextEditingController();
+  final ValueNotifier<String> _searchQuery = ValueNotifier<String>('');
+
   // Provider to clear the optimized route when the date changes.
   // This prevents showing an old route on a new day's location list.
   final routeClearerProvider = Provider<void>((ref) {
@@ -131,7 +138,18 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
     _tabController.dispose();
     _summaryCompact.dispose();
     _listScrollController.dispose();
+    _searchController.dispose();
+    _searchQuery.dispose();
     super.dispose();
+  }
+
+  /// Case-insensitive match over the fields a traveller would search by.
+  bool _matchesQuery(LocationModel loc, String query) {
+    if (query.isEmpty) return true;
+    final q = query.trim().toLowerCase();
+    if (q.isEmpty) return true;
+    return loc.name.toLowerCase().contains(q) ||
+        loc.address.toLowerCase().contains(q);
   }
 
   /// Snap targets shared between the drag-handle tap and the sticky-region
@@ -279,362 +297,410 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
         // below gives the framework's controller a position to point
         // at without participating in layout or gestures.
         final scrollController = _listScrollController;
-        return Container(
-          decoration: BoxDecoration(
-            // Uses theme colors
-            color: Theme.of(context).colorScheme.surface,
-            borderRadius: const BorderRadius.vertical(
-              top: Radius.circular(24),
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.3),
-                blurRadius: 20,
-                offset: const Offset(0, -5),
-              ),
-            ],
-          ),
-          child: Column(
-            children: [
-              // Hidden, 0-sized scrollable that consumes the framework's
-              // scrollController so DraggableScrollableController's
-              // jumpTo/animateTo (called by _dragSheetBy / _snapSheet)
-              // can resolve `controller.position` without throwing.
-              // NeverScrollableScrollPhysics keeps it from intercepting
-              // any gestures; SizedBox.shrink keeps it from taking
-              // layout space.
-              SizedBox(
-                height: 0,
-                width: 0,
-                child: SingleChildScrollView(
-                  controller: frameworkScrollController,
-                  physics: const NeverScrollableScrollPhysics(),
-                  child: const SizedBox.shrink(),
+        // Glass sheet — same blur/fill as the Search for Location and
+        // Collaborators sheets (AppTheme.sheet* is the one source of truth),
+        // so the map reads through while the plan stays legible.
+        return ClipRRect(
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+          child: BackdropFilter(
+            filter: ImageFilter.blur(
+                sigmaX: AppTheme.sheetBlurSigma,
+                sigmaY: AppTheme.sheetBlurSigma),
+            child: Container(
+              decoration: BoxDecoration(
+                color: Theme.of(context)
+                    .colorScheme
+                    .surface
+                    .withValues(alpha: AppTheme.sheetFillAlpha(context)),
+                borderRadius: const BorderRadius.vertical(
+                  top: Radius.circular(24),
                 ),
+                border: Border.all(
+                  color: AppTheme.sheetBorderColor(context),
+                  width: 0.8,
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.3),
+                    blurRadius: 20,
+                    offset: const Offset(0, -5),
+                  ),
+                ],
               ),
-              // Drag handle — taps toggle between snap points; vertical
-              // drags forward to the sheet controller (via the same
-              // helpers the sticky region uses) so users can drag the
-              // handle itself, not just tap it. Wrapped in a wider
-              // transparent hit area because the visible pill is only
-              // 4 × 50 px — too small to catch a drag reliably.
-              GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onTap: () {
-                  if (sheetController != null) {
-                    final currentSize = sheetController!.size;
-                    final targetSize =
-                        currentSize < 0.5 ? _snapExpanded : _snapCollapsed;
-                    sheetController!.animateTo(
-                      targetSize,
-                      duration: const Duration(milliseconds: 300),
-                      curve: Curves.easeInOut,
-                    );
-                    // When expanding, scroll to the top.
-                    scrollController.animateTo(
-                      0,
-                      duration: const Duration(milliseconds: 300),
-                      curve: Curves.easeInOut,
-                    );
-                  }
-                },
-                onVerticalDragUpdate: (details) =>
-                    _dragSheetBy(details.primaryDelta ?? 0),
-                onVerticalDragEnd: (details) =>
-                    _snapSheet(details.velocity.pixelsPerSecond.dy),
-                child: SizedBox(
-                  width: double.infinity,
-                  height: 28,
-                  child: Center(
-                    child: Container(
-                      margin: const EdgeInsets.only(top: 4),
-                      height: 4,
-                      width: 50,
-                      decoration: BoxDecoration(
-                        color: Colors.grey[400],
-                        borderRadius: BorderRadius.circular(2),
+              child: Column(
+                children: [
+                  // Hidden, 0-sized scrollable that consumes the framework's
+                  // scrollController so DraggableScrollableController's
+                  // jumpTo/animateTo (called by _dragSheetBy / _snapSheet)
+                  // can resolve `controller.position` without throwing.
+                  // NeverScrollableScrollPhysics keeps it from intercepting
+                  // any gestures; SizedBox.shrink keeps it from taking
+                  // layout space.
+                  SizedBox(
+                    height: 0,
+                    width: 0,
+                    child: SingleChildScrollView(
+                      controller: frameworkScrollController,
+                      physics: const NeverScrollableScrollPhysics(),
+                      child: const SizedBox.shrink(),
+                    ),
+                  ),
+                  // Drag handle — taps toggle between snap points; vertical
+                  // drags forward to the sheet controller (via the same
+                  // helpers the sticky region uses) so users can drag the
+                  // handle itself, not just tap it. Wrapped in a wider
+                  // transparent hit area because the visible pill is only
+                  // 4 × 50 px — too small to catch a drag reliably.
+                  GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () {
+                      if (sheetController != null) {
+                        final currentSize = sheetController!.size;
+                        final targetSize =
+                            currentSize < 0.5 ? _snapExpanded : _snapCollapsed;
+                        sheetController!.animateTo(
+                          targetSize,
+                          duration: const Duration(milliseconds: 300),
+                          curve: Curves.easeInOut,
+                        );
+                        // When expanding, scroll to the top.
+                        scrollController.animateTo(
+                          0,
+                          duration: const Duration(milliseconds: 300),
+                          curve: Curves.easeInOut,
+                        );
+                      }
+                    },
+                    onVerticalDragUpdate: (details) =>
+                        _dragSheetBy(details.primaryDelta ?? 0),
+                    onVerticalDragEnd: (details) =>
+                        _snapSheet(details.velocity.pixelsPerSecond.dy),
+                    child: SizedBox(
+                      width: double.infinity,
+                      height: 28,
+                      child: Center(
+                        child: Container(
+                          margin: const EdgeInsets.only(top: 4),
+                          height: 4,
+                          width: 50,
+                          decoration: BoxDecoration(
+                            color: Colors.grey[400],
+                            borderRadius: BorderRadius.circular(2),
+                          ),
+                        ),
                       ),
                     ),
                   ),
-                ),
-              ),
 
-              // Fixed sticky region — header, history banner (when on a
-              // past date) and route/trip summary stay pinned at the top
-              // of the sheet while everything below scrolls. Outside the
-              // Expanded(ListView) below, so the scrollController only
-              // governs the rest of the content (date picker, day chips,
-              // tabs, list, optimize buttons).
-              //
-              // The wrapping GestureDetector forwards vertical drag deltas
-              // to the sheet controller — without it, dragging on the
-              // sticky region wouldn't expand/collapse the sheet (since
-              // those gestures bypass the inner ListView that
-              // DraggableScrollableSheet normally coordinates with). Tap
-              // gestures on buttons inside the sticky region still win
-              // the arena (taps don't accumulate the movement needed for
-              // a drag recognizer to claim).
-              GestureDetector(
-                behavior: HitTestBehavior.translucent,
-                onVerticalDragUpdate: (details) =>
-                    _dragSheetBy(details.primaryDelta ?? 0),
-                onVerticalDragEnd: (details) =>
-                    _snapSheet(details.velocity.pixelsPerSecond.dy),
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 16, 20, 4),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Consumer(builder: (context, ref, _) {
-                        final isSelectionMode =
-                            ref.watch(isSelectionModeProvider);
-                        return isSelectionMode
-                            ? _buildSelectionModeHeader(context, ref)
-                            : _buildDefaultHeader(context, ref);
-                      }),
-                      Consumer(builder: (context, ref, _) {
-                        final selectedDate = ref.watch(selectedDateProvider);
-                        final now = DateTime.now();
-                        final today = DateTime(now.year, now.month, now.day);
-                        final isPastDate = selectedDate.isBefore(today);
-                        if (!isPastDate) return const SizedBox.shrink();
-                        // The banner lives in the FIXED sticky region. At
-                        // collapsed sheet heights it pushes the column past
-                        // the sheet's height (RenderFlex overflow on small
-                        // screens) — same guard as the route summary below:
-                        // hide it until the sheet is tall enough.
-                        return ListenableBuilder(
-                          listenable: Listenable.merge([sheetController]),
-                          builder: (context, _) {
-                            final ctrl = sheetController;
-                            final sheetTooShort = ctrl == null
-                                ? true
-                                : (!ctrl.isAttached ||
-                                    ctrl.pixels < _fullSummaryMinHeight);
-                            if (sheetTooShort) return const SizedBox.shrink();
-                            return _buildHistoryBanner(context);
-                          },
-                        );
-                      }),
-                      if (hasPinnedLocations)
-                        Consumer(builder: (context, ref, _) {
-                          final locationsForDate =
-                              ref.watch(locationsForSelectedDateProvider);
-                          final totalTravelTime = ref.watch(
-                              tripProvider.select((s) => s.totalTravelTime));
-                          final totalDistance = ref.watch(
-                              tripProvider.select((s) => s.totalDistance));
-                          // Data integrity: with no optimized route the
-                          // distance/time are zeros and an ETA is just the
-                          // wall clock — show stops only. On past days an
-                          // ETA computed from "now" is meaningless — hide it
-                          // (real route facts stay).
-                          final hasRoute = ref.watch(tripProvider
-                              .select((s) => s.optimizedRoute.isNotEmpty));
-                          final summarySelectedDate =
-                              ref.watch(selectedDateProvider);
-                          final summaryNow = DateTime.now();
-                          final summaryToday = DateTime(summaryNow.year,
-                              summaryNow.month, summaryNow.day);
-                          final hideEta =
-                              summarySelectedDate.isBefore(summaryToday);
-                          // Cross-fade between the full and compact route
-                          // summary. Goes compact when EITHER the list is
-                          // scrolled past the top (_summaryCompact, flipped by
-                          // the scroll notification listener below) OR the
-                          // sheet is too short to fit the full card — the
-                          // latter prevents the fixed sticky header from
-                          // overflowing the collapsed sheet. We listen to the
-                          // sheet controller so the fold tracks the collapse
-                          // animation, not just scrolls.
-                          return ListenableBuilder(
-                            listenable: Listenable.merge(
-                                [_summaryCompact, sheetController]),
-                            builder: (context, _) {
-                              final ctrl = sheetController;
-                              // Until the controller attaches (first frame) the
-                              // sheet sits at its collapsed initialChildSize,
-                              // so assume short until it reports real pixels.
-                              final sheetTooShort = ctrl == null
-                                  ? false
-                                  : (!ctrl.isAttached ||
-                                      ctrl.pixels < _fullSummaryMinHeight);
-                              final compact =
-                                  _summaryCompact.value || sheetTooShort;
-                              return AnimatedCrossFade(
-                                duration: const Duration(milliseconds: 200),
-                                sizeCurve: Curves.easeOut,
-                                firstCurve: Curves.easeOut,
-                                secondCurve: Curves.easeOut,
-                                crossFadeState: compact
-                                    ? CrossFadeState.showSecond
-                                    : CrossFadeState.showFirst,
-                                firstChild: _buildTripSummary(
-                                    context,
-                                    totalTravelTime,
-                                    totalDistance,
-                                    locationsForDate.length,
-                                    hasRoute: hasRoute,
-                                    hideEta: hideEta),
-                                secondChild: _buildCompactTripSummary(
-                                    context,
-                                    totalTravelTime,
-                                    totalDistance,
-                                    locationsForDate.length,
-                                    hasRoute: hasRoute,
-                                    hideEta: hideEta),
+                  // Fixed sticky region — header, history banner (when on a
+                  // past date) and route/trip summary stay pinned at the top
+                  // of the sheet while everything below scrolls. Outside the
+                  // Expanded(ListView) below, so the scrollController only
+                  // governs the rest of the content (date picker, day chips,
+                  // tabs, list, optimize buttons).
+                  //
+                  // The wrapping GestureDetector forwards vertical drag deltas
+                  // to the sheet controller — without it, dragging on the
+                  // sticky region wouldn't expand/collapse the sheet (since
+                  // those gestures bypass the inner ListView that
+                  // DraggableScrollableSheet normally coordinates with). Tap
+                  // gestures on buttons inside the sticky region still win
+                  // the arena (taps don't accumulate the movement needed for
+                  // a drag recognizer to claim).
+                  GestureDetector(
+                    behavior: HitTestBehavior.translucent,
+                    onVerticalDragUpdate: (details) =>
+                        _dragSheetBy(details.primaryDelta ?? 0),
+                    onVerticalDragEnd: (details) =>
+                        _snapSheet(details.velocity.pixelsPerSecond.dy),
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(20, 16, 20, 4),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Consumer(builder: (context, ref, _) {
+                            final isSelectionMode =
+                                ref.watch(isSelectionModeProvider);
+                            return isSelectionMode
+                                ? _buildSelectionModeHeader(context, ref)
+                                : _buildDefaultHeader(context, ref);
+                          }),
+                          Consumer(builder: (context, ref, _) {
+                            final selectedDate =
+                                ref.watch(selectedDateProvider);
+                            final now = DateTime.now();
+                            final today =
+                                DateTime(now.year, now.month, now.day);
+                            final isPastDate = selectedDate.isBefore(today);
+                            if (!isPastDate) return const SizedBox.shrink();
+                            // The banner lives in the FIXED sticky region. At
+                            // collapsed sheet heights it pushes the column past
+                            // the sheet's height (RenderFlex overflow on small
+                            // screens) — same guard as the route summary below:
+                            // hide it until the sheet is tall enough.
+                            return ListenableBuilder(
+                              listenable: Listenable.merge([sheetController]),
+                              builder: (context, _) {
+                                final ctrl = sheetController;
+                                final sheetTooShort = ctrl == null
+                                    ? true
+                                    : (!ctrl.isAttached ||
+                                        ctrl.pixels < _fullSummaryMinHeight);
+                                if (sheetTooShort)
+                                  return const SizedBox.shrink();
+                                return _buildHistoryBanner(context);
+                              },
+                            );
+                          }),
+                          if (hasPinnedLocations)
+                            Consumer(builder: (context, ref, _) {
+                              final locationsForDate =
+                                  ref.watch(locationsForSelectedDateProvider);
+                              final totalTravelTime = ref.watch(tripProvider
+                                  .select((s) => s.totalTravelTime));
+                              final totalDistance = ref.watch(
+                                  tripProvider.select((s) => s.totalDistance));
+                              // Data integrity: with no optimized route the
+                              // distance/time are zeros and an ETA is just the
+                              // wall clock — show stops only. On past days an
+                              // ETA computed from "now" is meaningless — hide it
+                              // (real route facts stay).
+                              final hasRoute = ref.watch(tripProvider
+                                  .select((s) => s.optimizedRoute.isNotEmpty));
+                              final summarySelectedDate =
+                                  ref.watch(selectedDateProvider);
+                              final summaryNow = DateTime.now();
+                              final summaryToday = DateTime(summaryNow.year,
+                                  summaryNow.month, summaryNow.day);
+                              final hideEta =
+                                  summarySelectedDate.isBefore(summaryToday);
+                              // Cross-fade between the full and compact route
+                              // summary. Goes compact when EITHER the list is
+                              // scrolled past the top (_summaryCompact, flipped by
+                              // the scroll notification listener below) OR the
+                              // sheet is too short to fit the full card — the
+                              // latter prevents the fixed sticky header from
+                              // overflowing the collapsed sheet. We listen to the
+                              // sheet controller so the fold tracks the collapse
+                              // animation, not just scrolls.
+                              return ListenableBuilder(
+                                listenable: Listenable.merge(
+                                    [_summaryCompact, sheetController]),
+                                builder: (context, _) {
+                                  final ctrl = sheetController;
+                                  // Until the controller attaches (first frame) the
+                                  // sheet sits at its collapsed initialChildSize,
+                                  // so assume short until it reports real pixels.
+                                  final sheetTooShort = ctrl == null
+                                      ? false
+                                      : (!ctrl.isAttached ||
+                                          ctrl.pixels < _fullSummaryMinHeight);
+                                  final compact =
+                                      _summaryCompact.value || sheetTooShort;
+                                  return AnimatedCrossFade(
+                                    duration: const Duration(milliseconds: 200),
+                                    sizeCurve: Curves.easeOut,
+                                    firstCurve: Curves.easeOut,
+                                    secondCurve: Curves.easeOut,
+                                    crossFadeState: compact
+                                        ? CrossFadeState.showSecond
+                                        : CrossFadeState.showFirst,
+                                    firstChild: _buildTripSummary(
+                                        context,
+                                        totalTravelTime,
+                                        totalDistance,
+                                        locationsForDate.length,
+                                        hasRoute: hasRoute,
+                                        hideEta: hideEta),
+                                    secondChild: _buildCompactTripSummary(
+                                        context,
+                                        totalTravelTime,
+                                        totalDistance,
+                                        locationsForDate.length,
+                                        hasRoute: hasRoute,
+                                        hideEta: hideEta),
+                                  );
+                                },
                               );
-                            },
-                          );
-                        }),
-                    ],
+                            }),
+                        ],
+                      ),
+                    ),
                   ),
-                ),
-              ),
 
-              // Scrollable region below the fixed sticky header.
-              //
-              // NotificationListener watches the inner list's scroll
-              // position to flip the route summary between its full and
-              // compact layouts. A small threshold (8px) keeps a tiny
-              // over-scroll bounce from toggling the state mid-flick.
-              Expanded(
-                child: NotificationListener<ScrollNotification>(
-                  onNotification: (notification) {
-                    // ONLY this list's own VERTICAL scrolling may compact the
-                    // summary. Notifications bubble up from nested
-                    // scrollables too — rolling the horizontal day-chip strip
-                    // was reporting its horizontal offset here and collapsing
-                    // the Route Summary card mid-swipe.
-                    if (notification.metrics.axis != Axis.vertical) {
-                      return false;
-                    }
-                    if (notification.depth != 0) return false;
-                    final pixels = notification.metrics.pixels;
-                    final compact = pixels > 8;
-                    if (_summaryCompact.value != compact) {
-                      _summaryCompact.value = compact;
-                    }
-                    return false;
-                  },
-                  // Framework's scrollController is attached to the
-                  // ListView — drags on the list area expand/collapse
-                  // the sheet via the built-in DraggableScrollableSheet
-                  // coordination.
-                  child: ListenableBuilder(
-                    listenable: _tabController,
-                    builder: (context, _) {
-                      return Consumer(builder: (context, ref, _) {
-                        // On the selected-date tab with no locations for that
-                        // date, render a scroll body whose empty-state fills
-                        // and centers in the remaining viewport. A plain list
-                        // item would otherwise hug the top of the sheet,
-                        // leaving the message stranded high up on tall screens
-                        // (e.g. iPad) instead of centered. .select keeps this
-                        // rebuilding only when emptiness actually flips.
-                        final onSelectedDateTab =
-                            !hasPinnedLocations || _tabController.index == 0;
-                        final selectedDateEmpty = onSelectedDateTab &&
-                            ref.watch(locationsForSelectedDateProvider
-                                .select((l) => l.isEmpty));
-                        if (selectedDateEmpty) {
-                          return CustomScrollView(
-                            controller: scrollController,
-                            physics: const AlwaysScrollableScrollPhysics(),
-                            slivers: [
-                              SliverPadding(
-                                padding:
-                                    const EdgeInsets.fromLTRB(20, 8, 20, 0),
-                                sliver: SliverList(
-                                  delegate: SliverChildListDelegate([
+                  // Scrollable region below the fixed sticky header.
+                  //
+                  // NotificationListener watches the inner list's scroll
+                  // position to flip the route summary between its full and
+                  // compact layouts. A small threshold (8px) keeps a tiny
+                  // over-scroll bounce from toggling the state mid-flick.
+                  Expanded(
+                    child: NotificationListener<ScrollNotification>(
+                      onNotification: (notification) {
+                        // ONLY this list's own VERTICAL scrolling may compact the
+                        // summary. Notifications bubble up from nested
+                        // scrollables too — rolling the horizontal day-chip strip
+                        // was reporting its horizontal offset here and collapsing
+                        // the Route Summary card mid-swipe.
+                        if (notification.metrics.axis != Axis.vertical) {
+                          return false;
+                        }
+                        if (notification.depth != 0) return false;
+                        final pixels = notification.metrics.pixels;
+                        final compact = pixels > 8;
+                        if (_summaryCompact.value != compact) {
+                          _summaryCompact.value = compact;
+                        }
+                        return false;
+                      },
+                      // Framework's scrollController is attached to the
+                      // ListView — drags on the list area expand/collapse
+                      // the sheet via the built-in DraggableScrollableSheet
+                      // coordination.
+                      child: ListenableBuilder(
+                        listenable: _tabController,
+                        builder: (context, _) {
+                          // Query is resolved OUTSIDE the Consumer so every
+                          // ref.watch below runs in the Consumer's own build (a
+                          // watch inside a nested builder callback subscribes the
+                          // wrong element).
+                          return ValueListenableBuilder<String>(
+                            valueListenable: _searchQuery,
+                            builder: (context, query, _) {
+                              return Consumer(builder: (context, ref, _) {
+                                final onSelectedDateTab = !hasPinnedLocations ||
+                                    _tabController.index == 0;
+                                final searching = query.trim().isNotEmpty;
+
+                                // .select keeps the common path rebuilding only
+                                // when emptiness actually flips.
+                                final selectedDateEmpty = onSelectedDateTab &&
+                                    ref.watch(locationsForSelectedDateProvider
+                                        .select((l) => l.isEmpty));
+
+                                // A search that matches nothing in the CURRENT
+                                // scope. Decided here (not deep inside the list
+                                // builders) so it can use the same centered
+                                // body as the empty-day state below — as a plain
+                                // list item the message hugged the top of the
+                                // sheet instead of sitting in the middle.
+                                var noMatches = false;
+                                if (searching && !selectedDateEmpty) {
+                                  final scope = onSelectedDateTab
+                                      ? ref.watch(
+                                          locationsForSelectedDateProvider)
+                                      : ref.watch(tripProvider
+                                          .select((s) => s.pinnedLocations));
+                                  noMatches = scope.isNotEmpty &&
+                                      !scope
+                                          .any((l) => _matchesQuery(l, query));
+                                }
+
+                                if (selectedDateEmpty || noMatches) {
+                                  return CustomScrollView(
+                                    controller: scrollController,
+                                    physics:
+                                        const AlwaysScrollableScrollPhysics(),
+                                    slivers: [
+                                      SliverPadding(
+                                        padding: const EdgeInsets.fromLTRB(
+                                            20, 8, 20, 0),
+                                        sliver: SliverList(
+                                          delegate: SliverChildListDelegate([
+                                            _buildDatePicker(context, ref),
+                                            _buildTripDayChips(context, ref),
+                                            if (hasPinnedLocations)
+                                              _buildPlanSearchField(context),
+                                            if (hasPinnedLocations)
+                                              _buildLocationsTabBar(context),
+                                          ]),
+                                        ),
+                                      ),
+                                      // Fills the space under the tab bar so the
+                                      // message lands in the middle of it.
+                                      SliverFillRemaining(
+                                        hasScrollBody: false,
+                                        child: Padding(
+                                          padding: const EdgeInsets.fromLTRB(
+                                              32, 8, 32, 32),
+                                          child: Center(
+                                            // Searching still needs the search
+                                            // copy (+ cross-day hint), not the
+                                            // generic "nothing planned" state.
+                                            child: searching
+                                                ? _buildNoSearchMatches(
+                                                    context, ref, query,
+                                                    dayScope: onSelectedDateTab)
+                                                : _buildEmptyDateState(context),
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  );
+                                }
+                                return ListView(
+                                  controller: scrollController,
+                                  shrinkWrap: false,
+                                  physics:
+                                      const AlwaysScrollableScrollPhysics(),
+                                  padding:
+                                      const EdgeInsets.fromLTRB(20, 8, 20, 20),
+                                  children: [
                                     _buildDatePicker(context, ref),
                                     _buildTripDayChips(context, ref),
                                     if (hasPinnedLocations)
+                                      _buildPlanSearchField(context),
+                                    if (hasPinnedLocations)
                                       _buildLocationsTabBar(context),
-                                  ]),
-                                ),
-                              ),
-                              SliverFillRemaining(
-                                hasScrollBody: false,
-                                child: Padding(
-                                  padding:
-                                      const EdgeInsets.fromLTRB(32, 8, 32, 32),
-                                  child: Center(
-                                      child: _buildEmptyDateState(context)),
-                                ),
-                              ),
-                            ],
-                          );
-                        }
-                        return ListView(
-                          controller: scrollController,
-                          shrinkWrap: false,
-                          physics: const AlwaysScrollableScrollPhysics(),
-                          padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
-                          children: [
-                            _buildDatePicker(context, ref),
-                            _buildTripDayChips(context, ref),
-                            if (hasPinnedLocations)
-                              _buildLocationsTabBar(context),
-                            ListenableBuilder(
-                              listenable: _tabController,
-                              builder: (context, _) {
-                                if (!hasPinnedLocations ||
-                                    _tabController.index == 0) {
-                                  return Consumer(builder: (context, ref, _) {
-                                    final locationsForDate = ref.watch(
-                                        locationsForSelectedDateProvider);
-                                    return Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: _buildLocationsListWidgets(
-                                          context,
-                                          ref,
-                                          locationsForDate,
-                                          scrollController),
-                                    );
-                                  });
-                                }
-                                return Consumer(builder: (context, ref, _) {
-                                  final all = ref.watch(tripProvider
-                                      .select((s) => s.pinnedLocations));
-                                  return Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: _buildAllLocationsGroupedByDate(
-                                        context, ref, all, scrollController),
-                                  );
-                                });
-                              },
-                            ),
-                            ListenableBuilder(
-                              listenable: _tabController,
-                              builder: (context, _) {
-                                if (hasPinnedLocations &&
-                                    _tabController.index != 0) {
-                                  return const SizedBox.shrink();
-                                }
-                                return Column(
-                                  crossAxisAlignment:
-                                      CrossAxisAlignment.stretch,
-                                  children: [
-                                    _buildOptimizeButton(
-                                        context, ref, scrollController),
-                                    const SizedBox(height: 12),
-                                    _buildCsvDownloadButton(context, ref),
+                                    if (onSelectedDateTab)
+                                      Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: _buildLocationsListWidgets(
+                                            context,
+                                            ref,
+                                            ref.watch(
+                                                locationsForSelectedDateProvider),
+                                            scrollController,
+                                            query: query),
+                                      )
+                                    else
+                                      Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children:
+                                            _buildAllLocationsGroupedByDate(
+                                                context,
+                                                ref,
+                                                ref.watch(tripProvider.select(
+                                                    (s) => s.pinnedLocations)),
+                                                scrollController,
+                                                query: query),
+                                      ),
+                                    if (onSelectedDateTab)
+                                      Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.stretch,
+                                        children: [
+                                          _buildOptimizeButton(
+                                              context, ref, scrollController),
+                                          const SizedBox(height: 12),
+                                          _buildCsvDownloadButton(context, ref),
+                                        ],
+                                      ),
+                                    const SizedBox(height: 130),
                                   ],
                                 );
-                              },
-                            ),
-                            const SizedBox(height: 130),
-                          ],
-                        );
-                      });
-                    },
+                              });
+                            },
+                          );
+                        },
+                      ),
+                    ),
                   ),
-                ),
+                ],
               ),
-            ],
+            ),
           ),
         );
       },
@@ -1487,7 +1553,9 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       margin: const EdgeInsets.only(top: 16),
       decoration: BoxDecoration(
-        color: theme.cardColor,
+        // Translucent to match the glass sheet it sits in.
+        color:
+            theme.cardColor.withValues(alpha: AppTheme.sheetCardAlpha(context)),
         borderRadius: BorderRadius.circular(14),
         border: Border.all(
           color: theme.colorScheme.primary.withValues(alpha: 0.3),
@@ -1555,7 +1623,10 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
       padding: const EdgeInsets.all(16),
       margin: const EdgeInsets.only(top: 16),
       decoration: BoxDecoration(
-        color: Theme.of(context).cardColor,
+        // Translucent to match the glass sheet it sits in.
+        color: Theme.of(context)
+            .cardColor
+            .withValues(alpha: AppTheme.sheetCardAlpha(context)),
         borderRadius: BorderRadius.circular(16),
         border: Border.all(
           color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.3),
@@ -1752,7 +1823,8 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
   }
 
   List<Widget> _buildLocationsListWidgets(BuildContext context, WidgetRef ref,
-      List<LocationModel> locations, ScrollController scrollController) {
+      List<LocationModel> locations, ScrollController scrollController,
+      {String query = ''}) {
     if (locations.isEmpty) {
       // Defensive fallback. The selected-date tab routes empty dates through
       // the centered SliverFillRemaining body in build(), so this path is only
@@ -1766,21 +1838,35 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
       ];
     }
 
-    final normalLocations =
+    final allNormal =
         locations.where((l) => !l.isSkipped && !l.isDone).toList();
-    final skippedLocations = locations.where((l) => l.isSkipped).toList();
-    final doneLocations = locations.where((l) => l.isDone).toList();
+    // Number BEFORE filtering: a card surfaced by a search must still show
+    // its real stop number, not its position within the results.
+    final numberedNormal = <(LocationModel, int)>[
+      for (var i = 0; i < allNormal.length; i++) (allNormal[i], i + 1),
+    ];
+
+    final normalLocations = numberedNormal
+        .where((entry) => _matchesQuery(entry.$1, query))
+        .toList();
+    final skippedLocations =
+        locations.where((l) => l.isSkipped && _matchesQuery(l, query)).toList();
+    final doneLocations =
+        locations.where((l) => l.isDone && _matchesQuery(l, query)).toList();
+
+    // No "no matches" branch here: build() detects an empty result set for
+    // the active scope and renders the centered empty body instead, so this
+    // builder is only reached when something matches.
 
     final widgets = <Widget>[];
 
     // Normal (upcoming) locations - directly add to list
-    for (int i = 0; i < normalLocations.length; i++) {
-      final location = normalLocations[i];
+    for (final (location, number) in normalLocations) {
       widgets.add(
         OptimizedLocationCard(
           key: ValueKey(location.id),
           location: location,
-          number: i + 1,
+          number: number,
           scrollController: scrollController,
           sheetController: sheetController,
           onLocationTap: onLocationTap,
@@ -1864,6 +1950,137 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
     return widgets;
   }
 
+  /// Filter field for the plan list. Scope follows the active tab: the
+  /// selected day's stops, or every stop in the trip.
+  Widget _buildPlanSearchField(BuildContext context) {
+    final theme = Theme.of(context);
+    final border = OutlineInputBorder(
+      borderRadius: BorderRadius.circular(12),
+      borderSide: BorderSide(
+        color: theme.colorScheme.onSurface.withValues(alpha: 0.12),
+      ),
+    );
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 10),
+      child: ValueListenableBuilder<String>(
+        valueListenable: _searchQuery,
+        builder: (context, query, _) {
+          return TextField(
+            controller: _searchController,
+            onChanged: (value) => _searchQuery.value = value,
+            textInputAction: TextInputAction.search,
+            onSubmitted: (_) => FocusScope.of(context).unfocus(),
+            onTap: () {
+              // Expand the sheet first — otherwise the keyboard buries the
+              // very results the user is typing to find.
+              final ctrl = sheetController;
+              if (ctrl != null &&
+                  ctrl.isAttached &&
+                  ctrl.size < _snapExpanded - 0.01) {
+                ctrl.animateTo(
+                  _snapExpanded,
+                  duration: const Duration(milliseconds: 250),
+                  curve: Curves.easeOut,
+                );
+              }
+            },
+            style: theme.textTheme.bodyMedium,
+            decoration: InputDecoration(
+              isDense: true,
+              hintText: 'Search places in this trip',
+              hintStyle: theme.textTheme.bodyMedium?.copyWith(
+                color:
+                    theme.textTheme.bodyMedium?.color?.withValues(alpha: 0.45),
+              ),
+              prefixIcon: Icon(
+                Icons.search_rounded,
+                size: 20,
+                color: theme.colorScheme.primary,
+              ),
+              prefixIconConstraints:
+                  const BoxConstraints(minWidth: 40, minHeight: 40),
+              suffixIcon: query.isEmpty
+                  ? null
+                  : IconButton(
+                      tooltip: 'Clear search',
+                      icon: const Icon(Icons.close_rounded, size: 18),
+                      onPressed: () {
+                        _searchController.clear();
+                        _searchQuery.value = '';
+                        FocusScope.of(context).unfocus();
+                      },
+                    ),
+              filled: true,
+              fillColor: theme.colorScheme.onSurface.withValues(alpha: 0.04),
+              contentPadding:
+                  const EdgeInsets.symmetric(vertical: 12, horizontal: 12),
+              border: border,
+              enabledBorder: border,
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide:
+                    BorderSide(color: theme.colorScheme.primary, width: 1.2),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  /// Shown when a search returns nothing in the current scope. On the
+  /// selected-day tab it also reports matches sitting on OTHER days —
+  /// otherwise searching a 10-day trip from one day looks broken.
+  Widget _buildNoSearchMatches(
+    BuildContext context,
+    WidgetRef ref,
+    String query, {
+    required bool dayScope,
+  }) {
+    final theme = Theme.of(context);
+    final muted = theme.textTheme.bodyMedium?.color?.withValues(alpha: 0.7);
+
+    var elsewhere = 0;
+    if (dayScope) {
+      final all = ref.watch(tripProvider.select((s) => s.pinnedLocations));
+      elsewhere = all.where((l) => _matchesQuery(l, query)).length;
+    }
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+      child: Column(
+        // Without this the Column expands to the full height its parent
+        // offers, so the enclosing Center has nothing to center and the
+        // message sticks to the top.
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.search_off_rounded, size: 44, color: muted),
+          const SizedBox(height: 12),
+          Text(
+            'No places match "${query.trim()}"',
+            style: theme.textTheme.titleSmall,
+            textAlign: TextAlign.center,
+          ),
+          if (dayScope && elsewhere > 0) ...[
+            const SizedBox(height: 8),
+            Text(
+              '$elsewhere ${elsewhere == 1 ? 'place matches' : 'places match'} on other days.',
+              style: theme.textTheme.bodySmall?.copyWith(color: muted),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: () => _tabController.animateTo(1),
+              icon: const Icon(Icons.travel_explore_rounded, size: 18),
+              label: const Text('Search the whole trip'),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
   /// Tab bar that switches between the locations for the selected date
   /// and a grouped-by-date view of every location in the trip.
   Widget _buildLocationsTabBar(BuildContext context) {
@@ -1903,8 +2120,9 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
     BuildContext context,
     WidgetRef ref,
     List<LocationModel> all,
-    ScrollController scrollController,
-  ) {
+    ScrollController scrollController, {
+    String query = '',
+  }) {
     if (all.isEmpty) {
       return [
         Padding(
@@ -1956,25 +2174,39 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
     final today =
         DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
 
+    final searching = query.trim().isNotEmpty;
     final widgets = <Widget>[];
     for (final date in sortedDates) {
       final locs = grouped[date] ?? const <LocationModel>[];
-      final isSelected = date == selectedDate;
-      widgets.add(_buildDateGroupHeader(context, date, today, locs.length,
-          isSelected: isSelected, onTap: () {
-        ref.read(selectedDateProvider.notifier).state = date;
-        _tabController.animateTo(0);
-      }));
 
       // Sort within a date: upcoming first, then done, then skipped.
       final normal = locs.where((l) => !l.isSkipped && !l.isDone).toList();
       final done = locs.where((l) => l.isDone).toList();
       final skipped = locs.where((l) => l.isSkipped).toList();
-      final ordered = [...normal, ...done, ...skipped];
+      // Number before filtering so a matched card keeps its real stop number.
+      final ordered = <(LocationModel, int)>[
+        for (var i = 0; i < normal.length; i++) (normal[i], i + 1),
+        for (final l in done) (l, -2),
+        for (final l in skipped) (l, -1),
+      ];
+      final visible =
+          ordered.where((entry) => _matchesQuery(entry.$1, query)).toList();
+
+      // While searching, days with no match drop out entirely — otherwise
+      // the results are buried under a wall of empty day headers.
+      if (searching && visible.isEmpty) continue;
+
+      final isSelected = date == selectedDate;
+      widgets.add(_buildDateGroupHeader(
+          context, date, today, searching ? visible.length : locs.length,
+          isSelected: isSelected, onTap: () {
+        ref.read(selectedDateProvider.notifier).state = date;
+        _tabController.animateTo(0);
+      }));
 
       // Empty in-between day: keep the header (so the day is visible and
       // tappable to plan it) with a muted placeholder instead of cards.
-      if (ordered.isEmpty) {
+      if (visible.isEmpty) {
         widgets.add(Padding(
           padding: const EdgeInsets.only(left: 8, top: 2, bottom: 4),
           child: Text(
@@ -1992,18 +2224,19 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
         continue;
       }
 
-      for (int i = 0; i < ordered.length; i++) {
-        final loc = ordered[i];
+      for (final (loc, number) in visible) {
         widgets.add(OptimizedLocationCard(
           key: ValueKey('all_${date.toIso8601String()}_${loc.id}'),
           location: loc,
-          number: loc.isDone ? -2 : (loc.isSkipped ? -1 : i + 1),
+          number: number,
           scrollController: scrollController,
           sheetController: sheetController,
           onLocationTap: onLocationTap,
         ));
       }
     }
+
+    // As above: an all-empty result is handled by build()'s centered body.
     return widgets;
   }
 

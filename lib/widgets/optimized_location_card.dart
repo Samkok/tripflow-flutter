@@ -16,6 +16,7 @@ import 'package:voyza/utils/date_picker_utils.dart';
 import 'package:voyza/utils/same_day_place_guard.dart';
 import 'package:voyza/utils/trip_date_validator.dart';
 import 'package:voyza/widgets/app_toast.dart';
+import 'package:voyza/core/theme.dart';
 
 /// Location card displayed inside the trip-plan bottom sheet.
 ///
@@ -67,9 +68,14 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
     final primary = theme.colorScheme.primary;
     final accent = _accentColor(primary);
 
+    // Translucent: these cards live inside the glass trip-plan sheet, so the
+    // map behind should read through them too.
     final cardColor = isSelected
         ? primary.withValues(alpha: 0.18)
-        : (isHighlighted ? primary.withValues(alpha: 0.10) : theme.cardColor);
+        : (isHighlighted
+            ? primary.withValues(alpha: 0.10)
+            : theme.cardColor
+                .withValues(alpha: AppTheme.sheetCardAlpha(context)));
 
     return RepaintBoundary(
       child: AnimatedContainer(

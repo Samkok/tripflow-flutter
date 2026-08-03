@@ -4,6 +4,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../providers/subscription_provider.dart';
 import '../widgets/app_toast.dart';
 import 'paywall_screen.dart';
+import 'package:voyza/widgets/rotating_globe_background.dart';
 
 /// Screen for managing subscription and accessing customer center
 class SubscriptionManagementScreen extends ConsumerStatefulWidget {
@@ -22,46 +23,58 @@ class _SubscriptionManagementScreenState
   Widget build(BuildContext context) {
     final subscriptionState = ref.watch(subscriptionProvider);
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Subscription'),
-      ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : RefreshIndicator(
-              onRefresh: () async {
-                await ref.read(subscriptionProvider.notifier).refresh();
-              },
-              child: SingleChildScrollView(
-                physics: const AlwaysScrollableScrollPhysics(),
-                padding: const EdgeInsets.all(24),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    // Current subscription status card
-                    _buildStatusCard(context, subscriptionState),
-                    const SizedBox(height: 24),
+    return Stack(
+      children: [
+        // Ambient rotating globe behind the page (app-wide treatment).
+        Positioned.fill(
+          child: ColoredBox(
+            color: Theme.of(context).scaffoldBackgroundColor,
+            child: const RotatingGlobeBackground(),
+          ),
+        ),
+        Scaffold(
+          backgroundColor: Colors.transparent,
+          appBar: AppBar(
+            title: const Text('Subscription'),
+          ),
+          body: _isLoading
+              ? const Center(child: CircularProgressIndicator())
+              : RefreshIndicator(
+                  onRefresh: () async {
+                    await ref.read(subscriptionProvider.notifier).refresh();
+                  },
+                  child: SingleChildScrollView(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    padding: const EdgeInsets.all(24),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        // Current subscription status card
+                        _buildStatusCard(context, subscriptionState),
+                        const SizedBox(height: 24),
 
-                    // Action buttons
-                    if (subscriptionState.isPro) ...[
-                      _buildManageSubscriptionSection(context),
-                    ] else ...[
-                      _buildUpgradeSection(context),
-                    ],
+                        // Action buttons
+                        if (subscriptionState.isPro) ...[
+                          _buildManageSubscriptionSection(context),
+                        ] else ...[
+                          _buildUpgradeSection(context),
+                        ],
 
-                    const SizedBox(height: 24),
+                        const SizedBox(height: 24),
 
-                    // Customer Center button
-                    // _buildCustomerCenterButton(context),
+                        // Customer Center button
+                        // _buildCustomerCenterButton(context),
 
-                    // const SizedBox(height: 24),
+                        // const SizedBox(height: 24),
 
-                    // Help section
-                    _buildHelpSection(context),
-                  ],
+                        // Help section
+                        _buildHelpSection(context),
+                      ],
+                    ),
+                  ),
                 ),
-              ),
-            ),
+        ),
+      ],
     );
   }
 

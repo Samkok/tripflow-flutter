@@ -1885,12 +1885,30 @@ class LocationDetailSheet extends ConsumerWidget {
     ];
 
     final customController = TextEditingController();
+    // Staged selection — NOTHING is written until the user confirms with
+    // "Set". Hoisted outside the StatefulBuilder so setLocalState rebuilds
+    // don't reset it.
+    Duration selected = location.stayDuration;
+    // Whether the staged value comes from the custom field (true) or a
+    // quick-select preset (false).
+    var customActive = false;
+    // Custom-field unit: minutes or hours.
+    var customUnitHours = false;
 
     showDialog(
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setLocalState) {
-          Duration selected = location.stayDuration;
+          // The staged custom duration, or null while the field is invalid.
+          Duration? customDuration() {
+            final raw = int.tryParse(customController.text.trim());
+            if (raw == null || raw <= 0) return null;
+            return customUnitHours
+                ? Duration(hours: raw)
+                : Duration(minutes: raw);
+          }
+
+          final staged = customActive ? customDuration() : selected;
 
           return AlertDialog(
             backgroundColor: Theme.of(context).cardColor,
@@ -1936,16 +1954,18 @@ class LocationDetailSheet extends ConsumerWidget {
                       padding: const EdgeInsets.only(bottom: 8),
                       child: Row(
                         children: rowPresets.expand((duration) {
-                          final isSelected = selected == duration;
+                          final isSelected =
+                              !customActive && selected == duration;
                           return [
                             Expanded(
                               child: InkWell(
                                 onTap: () {
-                                  ref
-                                      .read(tripProvider.notifier)
-                                      .updateLocationStayDuration(
-                                          location.id, duration);
-                                  Navigator.of(ctx).pop();
+                                  // Stage only — "Set" below commits.
+                                  setLocalState(() {
+                                    selected = duration;
+                                    customActive = false;
+                                    customController.clear();
+                                  });
                                 },
                                 borderRadius: BorderRadius.circular(10),
                                 child: AnimatedContainer(
@@ -1997,38 +2017,115 @@ class LocationDetailSheet extends ConsumerWidget {
                 const SizedBox(height: 16),
                 const Divider(height: 1),
                 const SizedBox(height: 14),
-                Text(
-                  'Custom duration',
-                  style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                        color: Colors.grey[500],
-                        letterSpacing: 0.5,
-                      ),
-                ),
-                const SizedBox(height: 10),
-                TextField(
-                  controller: customController,
-                  keyboardType: TextInputType.number,
-                  decoration: InputDecoration(
-                    hintText: 'e.g. 45',
-                    suffixText: 'min',
-                    filled: true,
-                    fillColor: Theme.of(context).colorScheme.surface,
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(10),
-                      borderSide: BorderSide.none,
+                // Custom duration — framed + labeled with an icon so it
+                // reads as a real, tappable option rather than fine print.
+                Container(
+                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+                  decoration: BoxDecoration(
+                    color: customActive
+                        ? Theme.of(context)
+                            .colorScheme
+                            .primary
+                            .withValues(alpha: 0.08)
+                        : Theme.of(context).colorScheme.surface,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: customActive
+                          ? Theme.of(context).colorScheme.primary
+                          : Theme.of(context)
+                              .colorScheme
+                              .primary
+                              .withValues(alpha: 0.25),
+                      width: customActive ? 1.5 : 1,
                     ),
-                    focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(10),
-                      borderSide: BorderSide(
-                        color: Theme.of(context).colorScheme.primary,
-                        width: 1.5,
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(Icons.edit_rounded,
+                              size: 16,
+                              color: Theme.of(context).colorScheme.primary),
+                          const SizedBox(width: 6),
+                          Text(
+                            'Or type a custom duration',
+                            style: Theme.of(context)
+                                .textTheme
+                                .labelMedium
+                                ?.copyWith(
+                                  color: Theme.of(context).colorScheme.primary,
+                                  fontWeight: FontWeight.w600,
+                                  letterSpacing: 0.3,
+                                ),
+                          ),
+                        ],
                       ),
-                    ),
-                    contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 14, vertical: 12),
+                      const SizedBox(height: 10),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              controller: customController,
+                              keyboardType: TextInputType.number,
+                              onTap: () =>
+                                  setLocalState(() => customActive = true),
+                              onChanged: (_) =>
+                                  setLocalState(() => customActive = true),
+                              decoration: InputDecoration(
+                                hintText:
+                                    customUnitHours ? 'e.g. 2' : 'e.g. 45',
+                                filled: true,
+                                fillColor:
+                                    Theme.of(context).colorScheme.surface,
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(10),
+                                  borderSide: BorderSide.none,
+                                ),
+                                focusedBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(10),
+                                  borderSide: BorderSide(
+                                    color:
+                                        Theme.of(context).colorScheme.primary,
+                                    width: 1.5,
+                                  ),
+                                ),
+                                contentPadding: const EdgeInsets.symmetric(
+                                    horizontal: 14, vertical: 12),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          // Unit toggle: minutes | hours.
+                          SegmentedButton<bool>(
+                            segments: const [
+                              ButtonSegment(value: false, label: Text('min')),
+                              ButtonSegment(value: true, label: Text('hr')),
+                            ],
+                            selected: {customUnitHours},
+                            showSelectedIcon: false,
+                            style: ButtonStyle(
+                              visualDensity: VisualDensity.compact,
+                              textStyle: WidgetStatePropertyAll(
+                                Theme.of(context)
+                                    .textTheme
+                                    .labelMedium
+                                    ?.copyWith(fontWeight: FontWeight.w600),
+                              ),
+                            ),
+                            onSelectionChanged: (sel) => setLocalState(() {
+                              customUnitHours = sel.first;
+                              if (customController.text.trim().isNotEmpty) {
+                                customActive = true;
+                              }
+                            }),
+                          ),
+                        ],
+                      ),
+                    ],
                   ),
                 ),
-                const SizedBox(height: 12),
+                const SizedBox(height: 14),
                 Row(
                   children: [
                     Expanded(
@@ -2045,16 +2142,17 @@ class LocationDetailSheet extends ConsumerWidget {
                     const SizedBox(width: 10),
                     Expanded(
                       child: FilledButton(
-                        onPressed: () {
-                          final minutes = int.tryParse(customController.text);
-                          if (minutes != null && minutes > 0) {
-                            ref
-                                .read(tripProvider.notifier)
-                                .updateLocationStayDuration(
-                                    location.id, Duration(minutes: minutes));
-                            Navigator.of(ctx).pop();
-                          }
-                        },
+                        // The ONLY commit path — quick-selects and custom
+                        // input both just stage until this confirms.
+                        onPressed: staged == null
+                            ? null
+                            : () {
+                                ref
+                                    .read(tripProvider.notifier)
+                                    .updateLocationStayDuration(
+                                        location.id, staged);
+                                Navigator.of(ctx).pop();
+                              },
                         style: FilledButton.styleFrom(
                           backgroundColor:
                               Theme.of(context).colorScheme.primary,
@@ -2063,8 +2161,12 @@ class LocationDetailSheet extends ConsumerWidget {
                           shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(10)),
                         ),
-                        child: const Text('Set',
-                            style: TextStyle(fontWeight: FontWeight.w600)),
+                        child: Text(
+                          staged == null
+                              ? 'Set'
+                              : 'Set ${_formatDuration(staged)}',
+                          style: const TextStyle(fontWeight: FontWeight.w600),
+                        ),
                       ),
                     ),
                   ],

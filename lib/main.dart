@@ -6,6 +6,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:voyza/screens/splash_screen.dart';
 import 'package:voyza/screens/reset_password_screen.dart';
 import 'package:voyza/screens/login_screen.dart';
+import 'package:voyza/screens/trip_details_screen.dart';
+import 'package:voyza/repositories/trip_repository.dart';
 import 'screens/main_screen.dart';
 
 import 'core/theme.dart';
@@ -279,6 +281,30 @@ class MyApp extends ConsumerStatefulWidget {
 class _MyAppState extends ConsumerState<MyApp> with WidgetsBindingObserver {
   StreamSubscription<AuthState>? _authSubscription;
 
+  /// Notification tap → the trip's details page. For location_added taps
+  /// [locationId] is set and the details screen auto-opens that location's
+  /// detail sheet once its data is in.
+  Future<void> _openTripFromNotification(
+      String tripId, String? locationId) async {
+    try {
+      final trip = await TripRepository().getTripById(tripId);
+      if (trip == null) {
+        debugPrint('Main: notification trip $tripId not found or no access');
+        return;
+      }
+      navigatorKey.currentState?.push(
+        MaterialPageRoute(
+          builder: (_) => TripDetailsScreen(
+            trip: trip,
+            initialLocationId: locationId,
+          ),
+        ),
+      );
+    } catch (e) {
+      debugPrint('Main: failed to open trip from notification: $e');
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -340,6 +366,13 @@ class _MyAppState extends ConsumerState<MyApp> with WidgetsBindingObserver {
         debugPrint('Main: Widget not mounted, aborting initialization');
         return;
       }
+
+      // Notification taps: open the trip's details page (and, for
+      // location_added, that location's detail sheet). Registered here —
+      // after Supabase is ready and the navigator exists — then replay any
+      // tap that launched the app from the terminated state.
+      NotificationService.onOpenTripRequest = _openTripFromNotification;
+      NotificationService.consumePendingOpenTrip();
 
       // Listen for auth state changes (password recovery deep links + forced sign-outs)
       _authSubscription =

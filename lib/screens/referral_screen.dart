@@ -8,6 +8,7 @@ import '../providers/referral_provider.dart';
 import '../services/referral_service.dart';
 import '../services/supabase_service.dart';
 import '../widgets/app_toast.dart';
+import 'package:voyza/widgets/rotating_globe_background.dart';
 
 /// "Invite friends" — the referral home. Share your code (give a month,
 /// get a month), track earned months against the 12/yr cap, and — for
@@ -83,253 +84,268 @@ class _ReferralScreenState extends ConsumerState<ReferralScreen> {
       if (months > 0) ReferralService.instance.noteRewardedMonths(months);
     });
 
-    return Scaffold(
-      appBar: AppBar(title: const Text('Invite friends')),
-      body: RefreshIndicator(
-        onRefresh: () async {
-          ref.invalidate(myReferralsProvider);
-          await ref.read(myReferralsProvider.future);
-        },
-        child: ListView(
-          padding: const EdgeInsets.all(16),
-          children: [
-            // ── Offer + code card ─────────────────────────────────────
-            Container(
-              padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                color: theme.cardColor,
-                borderRadius: BorderRadius.circular(20),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.06),
-                    blurRadius: 12,
-                    offset: const Offset(0, 4),
+    return Stack(
+      children: [
+        // Ambient rotating globe behind the page (app-wide treatment).
+        Positioned.fill(
+          child: ColoredBox(
+            color: Theme.of(context).scaffoldBackgroundColor,
+            child: const RotatingGlobeBackground(),
+          ),
+        ),
+        Scaffold(
+          backgroundColor: Colors.transparent,
+          appBar: AppBar(title: const Text('Invite friends')),
+          body: RefreshIndicator(
+            onRefresh: () async {
+              ref.invalidate(myReferralsProvider);
+              await ref.read(myReferralsProvider.future);
+            },
+            child: ListView(
+              padding: const EdgeInsets.all(16),
+              children: [
+                // ── Offer + code card ─────────────────────────────────────
+                Container(
+                  padding: const EdgeInsets.all(20),
+                  decoration: BoxDecoration(
+                    color: theme.cardColor,
+                    borderRadius: BorderRadius.circular(20),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.06),
+                        blurRadius: 12,
+                        offset: const Offset(0, 4),
+                      ),
+                    ],
                   ),
-                ],
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Icon(Icons.card_giftcard_rounded,
-                          color: theme.colorScheme.primary, size: 28),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Text(
-                          'Give a month, get a month',
-                          style: theme.textTheme.titleLarge
-                              ?.copyWith(fontWeight: FontWeight.bold),
+                      Row(
+                        children: [
+                          Icon(Icons.card_giftcard_rounded,
+                              color: theme.colorScheme.primary, size: 28),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Text(
+                              'Give a month, get a month',
+                              style: theme.textTheme.titleLarge
+                                  ?.copyWith(fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Friends who join with your code get 1 month of VoyZa Pro '
+                        'free. When they start using it, you get a free month too.',
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant),
+                      ),
+                      const SizedBox(height: 18),
+                      codeAsync.when(
+                        loading: () => const Center(
+                            child: Padding(
+                          padding: EdgeInsets.all(12),
+                          child: CircularProgressIndicator(),
+                        )),
+                        error: (_, __) => Text(
+                          'Couldn\'t load your code — pull to refresh.',
+                          style: TextStyle(color: theme.colorScheme.error),
+                        ),
+                        data: (code) => code == null
+                            ? const SizedBox.shrink()
+                            : Column(
+                                children: [
+                                  InkWell(
+                                    borderRadius: BorderRadius.circular(14),
+                                    onTap: () async {
+                                      await Clipboard.setData(
+                                          ClipboardData(text: code));
+                                      if (context.mounted) {
+                                        AppToast.success(context,
+                                            'Code copied to clipboard');
+                                      }
+                                    },
+                                    child: Container(
+                                      width: double.infinity,
+                                      padding: const EdgeInsets.symmetric(
+                                          vertical: 14, horizontal: 16),
+                                      decoration: BoxDecoration(
+                                        color: theme.colorScheme.primary
+                                            .withValues(alpha: 0.08),
+                                        borderRadius: BorderRadius.circular(14),
+                                        border: Border.all(
+                                            color: theme.colorScheme.primary
+                                                .withValues(alpha: 0.4)),
+                                      ),
+                                      child: Row(
+                                        mainAxisAlignment:
+                                            MainAxisAlignment.center,
+                                        children: [
+                                          Text(
+                                            code,
+                                            style: const TextStyle(
+                                              fontFamily: 'monospace',
+                                              fontSize: 20,
+                                              fontWeight: FontWeight.w800,
+                                              letterSpacing: 1.5,
+                                            ),
+                                          ),
+                                          const SizedBox(width: 10),
+                                          Icon(Icons.copy_rounded,
+                                              size: 18,
+                                              color: theme.colorScheme.primary),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 12),
+                                  SizedBox(
+                                    width: double.infinity,
+                                    child: FilledButton.icon(
+                                      onPressed: () => ReferralService.instance
+                                          .shareInvite(code),
+                                      icon: const Icon(Icons.ios_share_rounded,
+                                          size: 20),
+                                      label: const Text(
+                                        'Share your invite',
+                                        style: TextStyle(
+                                            fontWeight: FontWeight.w700),
+                                      ),
+                                      style: FilledButton.styleFrom(
+                                        padding: const EdgeInsets.symmetric(
+                                            vertical: 14),
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius:
+                                              BorderRadius.circular(12),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 16),
+
+                // ── Earned meter ──────────────────────────────────────────
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: theme.cardColor,
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '$monthsEarned of $_capMonths free months earned this year',
+                        style: theme.textTheme.titleSmall
+                            ?.copyWith(fontWeight: FontWeight.w700),
+                      ),
+                      const SizedBox(height: 10),
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(4),
+                        child: LinearProgressIndicator(
+                          value: monthsEarned / _capMonths,
+                          minHeight: 8,
+                          backgroundColor: theme.colorScheme.onSurfaceVariant
+                              .withValues(alpha: 0.15),
                         ),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Friends who join with your code get 1 month of VoyZa Pro '
-                    'free. When they start using it, you get a free month too.',
-                    style: theme.textTheme.bodyMedium
-                        ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-                  ),
-                  const SizedBox(height: 18),
-                  codeAsync.when(
-                    loading: () => const Center(
-                        child: Padding(
-                      padding: EdgeInsets.all(12),
-                      child: CircularProgressIndicator(),
-                    )),
-                    error: (_, __) => Text(
-                      'Couldn\'t load your code — pull to refresh.',
-                      style: TextStyle(color: theme.colorScheme.error),
-                    ),
-                    data: (code) => code == null
-                        ? const SizedBox.shrink()
-                        : Column(
-                            children: [
-                              InkWell(
-                                borderRadius: BorderRadius.circular(14),
-                                onTap: () async {
-                                  await Clipboard.setData(
-                                      ClipboardData(text: code));
-                                  if (context.mounted) {
-                                    AppToast.success(
-                                        context, 'Code copied to clipboard');
-                                  }
-                                },
-                                child: Container(
-                                  width: double.infinity,
-                                  padding: const EdgeInsets.symmetric(
-                                      vertical: 14, horizontal: 16),
-                                  decoration: BoxDecoration(
-                                    color: theme.colorScheme.primary
-                                        .withValues(alpha: 0.08),
-                                    borderRadius: BorderRadius.circular(14),
-                                    border: Border.all(
-                                        color: theme.colorScheme.primary
-                                            .withValues(alpha: 0.4)),
-                                  ),
-                                  child: Row(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    children: [
-                                      Text(
-                                        code,
-                                        style: const TextStyle(
-                                          fontFamily: 'monospace',
-                                          fontSize: 20,
-                                          fontWeight: FontWeight.w800,
-                                          letterSpacing: 1.5,
-                                        ),
-                                      ),
-                                      const SizedBox(width: 10),
-                                      Icon(Icons.copy_rounded,
-                                          size: 18,
-                                          color: theme.colorScheme.primary),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(height: 12),
-                              SizedBox(
-                                width: double.infinity,
-                                child: FilledButton.icon(
-                                  onPressed: () => ReferralService.instance
-                                      .shareInvite(code),
-                                  icon: const Icon(Icons.ios_share_rounded,
-                                      size: 20),
-                                  label: const Text(
-                                    'Share your invite',
-                                    style:
-                                        TextStyle(fontWeight: FontWeight.w700),
-                                  ),
-                                  style: FilledButton.styleFrom(
-                                    padding: const EdgeInsets.symmetric(
-                                        vertical: 14),
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(12),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 16),
-
-            // ── Earned meter ──────────────────────────────────────────
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: theme.cardColor,
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    '$monthsEarned of $_capMonths free months earned this year',
-                    style: theme.textTheme.titleSmall
-                        ?.copyWith(fontWeight: FontWeight.w700),
-                  ),
-                  const SizedBox(height: 10),
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(4),
-                    child: LinearProgressIndicator(
-                      value: monthsEarned / _capMonths,
-                      minHeight: 8,
-                      backgroundColor: theme.colorScheme.onSurfaceVariant
-                          .withValues(alpha: 0.15),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 16),
-
-            // ── Late code entry (fresh accounts only) ────────────────
-            if (_accountYoungEnoughToRedeem) ...[
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: theme.cardColor,
-                  borderRadius: BorderRadius.circular(16),
                 ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('Have a referral code?',
-                        style: theme.textTheme.titleSmall
-                            ?.copyWith(fontWeight: FontWeight.w700)),
-                    const SizedBox(height: 10),
-                    Row(
+                const SizedBox(height: 16),
+
+                // ── Late code entry (fresh accounts only) ────────────────
+                if (_accountYoungEnoughToRedeem) ...[
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: theme.cardColor,
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Expanded(
-                          child: TextField(
-                            controller: _codeController,
-                            textCapitalization: TextCapitalization.characters,
-                            decoration: const InputDecoration(
-                              hintText: 'VOYZA-XXXXXX',
-                              isDense: true,
-                              border: OutlineInputBorder(),
+                        Text('Have a referral code?',
+                            style: theme.textTheme.titleSmall
+                                ?.copyWith(fontWeight: FontWeight.w700)),
+                        const SizedBox(height: 10),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: TextField(
+                                controller: _codeController,
+                                textCapitalization:
+                                    TextCapitalization.characters,
+                                decoration: const InputDecoration(
+                                  hintText: 'VOYZA-XXXXXX',
+                                  isDense: true,
+                                  border: OutlineInputBorder(),
+                                ),
+                              ),
                             ),
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        FilledButton(
-                          onPressed: _redeeming ? null : _redeem,
-                          child: _redeeming
-                              ? const SizedBox(
-                                  width: 16,
-                                  height: 16,
-                                  child:
-                                      CircularProgressIndicator(strokeWidth: 2),
-                                )
-                              : const Text('Redeem'),
+                            const SizedBox(width: 10),
+                            FilledButton(
+                              onPressed: _redeeming ? null : _redeem,
+                              child: _redeeming
+                                  ? const SizedBox(
+                                      width: 16,
+                                      height: 16,
+                                      child: CircularProgressIndicator(
+                                          strokeWidth: 2),
+                                    )
+                                  : const Text('Redeem'),
+                            ),
+                          ],
                         ),
                       ],
                     ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 16),
-            ],
+                  ),
+                  const SizedBox(height: 16),
+                ],
 
-            // ── Referral history ──────────────────────────────────────
-            Text('Your invites',
-                style: theme.textTheme.titleMedium
-                    ?.copyWith(fontWeight: FontWeight.bold)),
-            const SizedBox(height: 8),
-            referralsAsync.when(
-              loading: () => const Padding(
-                padding: EdgeInsets.all(24),
-                child: Center(child: CircularProgressIndicator()),
-              ),
-              error: (_, __) => Text(
-                'Couldn\'t load your invites — pull to refresh.',
-                style: TextStyle(color: theme.colorScheme.error),
-              ),
-              data: (referrals) => referrals.isEmpty
-                  ? Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 20),
-                      child: Text(
-                        'No invites yet — share your code to start earning '
-                        'free months.',
-                        style: theme.textTheme.bodyMedium?.copyWith(
-                            color: theme.colorScheme.onSurfaceVariant),
-                      ),
-                    )
-                  : Column(
-                      children: referrals
-                          .map((r) => _ReferralTile(entry: r))
-                          .toList(),
-                    ),
+                // ── Referral history ──────────────────────────────────────
+                Text('Your invites',
+                    style: theme.textTheme.titleMedium
+                        ?.copyWith(fontWeight: FontWeight.bold)),
+                const SizedBox(height: 8),
+                referralsAsync.when(
+                  loading: () => const Padding(
+                    padding: EdgeInsets.all(24),
+                    child: Center(child: CircularProgressIndicator()),
+                  ),
+                  error: (_, __) => Text(
+                    'Couldn\'t load your invites — pull to refresh.',
+                    style: TextStyle(color: theme.colorScheme.error),
+                  ),
+                  data: (referrals) => referrals.isEmpty
+                      ? Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 20),
+                          child: Text(
+                            'No invites yet — share your code to start earning '
+                            'free months.',
+                            style: theme.textTheme.bodyMedium?.copyWith(
+                                color: theme.colorScheme.onSurfaceVariant),
+                          ),
+                        )
+                      : Column(
+                          children: referrals
+                              .map((r) => _ReferralTile(entry: r))
+                              .toList(),
+                        ),
+                ),
+                const SizedBox(height: 32),
+              ],
             ),
-            const SizedBox(height: 32),
-          ],
+          ),
         ),
-      ),
+      ],
     );
   }
 }

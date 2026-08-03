@@ -5,6 +5,7 @@ import '../models/trip_collaborator.dart';
 import '../providers/trip_collaborator_provider.dart';
 import 'app_toast.dart';
 import 'collaborators_sheet.dart';
+import 'package:voyza/core/theme.dart';
 
 /// Collaborator display for a home-page trip card.
 ///
@@ -56,6 +57,8 @@ class TripCollaboratorsRow extends ConsumerWidget {
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
+      // Light barrier so the page stays visible behind the glass sheet.
+      barrierColor: AppTheme.sheetBarrierColor(context),
       builder: (_) => CollaboratorsSheet(tripId: tripId, tripName: tripName),
     );
   }

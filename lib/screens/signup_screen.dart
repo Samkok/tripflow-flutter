@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:voyza/screens/forgot_password_screen.dart';
 import 'package:voyza/screens/terms_screen.dart';
+import 'package:voyza/widgets/rotating_globe_background.dart';
 import '../providers/auth_provider.dart';
 import '../services/auth_service.dart';
 import '../widgets/app_toast.dart';
@@ -171,177 +172,193 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Scaffold(
-      // An AppBar is useful on secondary screens for the back button
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-      ),
-      body: Center(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(24.0, 0, 24.0, 24.0),
-          child: Form(
-            key: _formKey,
-            // AutofillGroup binds the three fields together so the platform
-            // autofill service treats them as one credential. Submitting
-            // via TextInput.finishAutofillContext (in _signUp) then shows
-            // the OS save prompt for the email + new-password pair, and
-            // on iOS the Suggested Strong Password fills BOTH password
-            // fields simultaneously because they share the same
-            // AutofillHints.newPassword tag inside the group.
-            child: AutofillGroup(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Text(
-                    'Create Your Account',
-                    textAlign: TextAlign.center,
-                    style: theme.textTheme.headlineMedium
-                        ?.copyWith(fontWeight: FontWeight.bold),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Start planning your next adventure',
-                    textAlign: TextAlign.center,
-                    style: theme.textTheme.titleMedium
-                        ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-                  ),
-                  const SizedBox(height: 40),
-                  TextFormField(
-                    controller: _emailController,
-                    keyboardType: TextInputType.emailAddress,
-                    // username + email is the order iOS's Strong-Password
-                    // pairing heuristic prefers — it tells the platform
-                    // "this is the login identifier; the newPassword
-                    // field below pairs with me". email alone sometimes
-                    // makes iOS treat the form as sign-in instead of
-                    // sign-up and skip the Strong Password offer.
-                    autofillHints: const [
-                      AutofillHints.username,
-                      AutofillHints.email,
-                    ],
-                    textInputAction: TextInputAction.next,
-                    autocorrect: false,
-                    enableSuggestions: false,
-                    decoration: const InputDecoration(
-                      labelText: 'Email',
-                      prefixIcon: Icon(Icons.email_outlined),
-                    ),
-                    validator: (val) {
-                      if (val == null || val.isEmpty || !val.contains('@')) {
-                        return 'Please enter a valid email';
-                      }
-                      return null;
-                    },
-                  ),
-                  const SizedBox(height: 20),
-                  _NewPasswordField(
-                    controller: _passwordController,
-                    label: 'Password',
-                    textInputAction: TextInputAction.next,
-                    validator: (val) => (val?.length ?? 0) < 6
-                        ? 'Password must be at least 6 characters'
-                        : null,
-                  ),
-                  // In-app strong-password generator. Independent of iOS
-                  // Suggested Strong Password — which is slow on focus
-                  // because the system has to negotiate with the
-                  // QuickType bar / iCloud Keychain before the keyboard
-                  // is even usable, and doesn't exist at all on Android.
-                  // Tapping this is instant: generate, fill both fields,
-                  // done.
-                  Align(
-                    alignment: Alignment.centerRight,
-                    child: TextButton.icon(
-                      onPressed: _useSuggestedStrongPassword,
-                      icon: const Icon(Icons.password_rounded, size: 18),
-                      label: const Text('Suggest strong password'),
-                      style: TextButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 8, vertical: 4),
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        visualDensity: VisualDensity.compact,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  _NewPasswordField(
-                    controller: _confirmPasswordController,
-                    label: 'Confirm Password',
-                    textInputAction: TextInputAction.done,
-                    validator: (val) => val != _passwordController.text
-                        ? 'Passwords do not match'
-                        : null,
-                  ),
-                  const SizedBox(height: 16),
-                  TextFormField(
-                    controller: _referralCodeController,
-                    textCapitalization: TextCapitalization.characters,
-                    decoration: const InputDecoration(
-                      labelText: 'Referral code (optional)',
-                      hintText: 'VOYZA-XXXXXX',
-                      prefixIcon: Icon(Icons.card_giftcard_rounded),
-                      border: OutlineInputBorder(),
-                    ),
-                    validator: (val) {
-                      final v = (val ?? '').trim();
-                      if (v.isEmpty) return null;
-                      return RegExp(r'^[A-Za-z0-9-]{4,12}$').hasMatch(v)
-                          ? null
-                          : 'That code doesn\'t look right';
-                    },
-                  ),
-                  const SizedBox(height: 24),
-                  Row(
+    return Stack(
+      children: [
+        // Ambient rotating globe behind the sign-up surface.
+        Positioned.fill(
+          child: ColoredBox(
+            color: theme.scaffoldBackgroundColor,
+            child: const RotatingGlobeBackground(),
+          ),
+        ),
+        Scaffold(
+          backgroundColor: Colors.transparent,
+          // An AppBar is useful on secondary screens for the back button
+          appBar: AppBar(
+            backgroundColor: Colors.transparent,
+            elevation: 0,
+          ),
+          body: Center(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(24.0, 0, 24.0, 24.0),
+              child: Form(
+                key: _formKey,
+                // AutofillGroup binds the three fields together so the platform
+                // autofill service treats them as one credential. Submitting
+                // via TextInput.finishAutofillContext (in _signUp) then shows
+                // the OS save prompt for the email + new-password pair, and
+                // on iOS the Suggested Strong Password fills BOTH password
+                // fields simultaneously because they share the same
+                // AutofillHints.newPassword tag inside the group.
+                child: AutofillGroup(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      Checkbox(
-                        value: _agreedToTerms,
-                        onChanged: (value) {
-                          setState(() {
-                            _agreedToTerms = value ?? false;
-                          });
+                      Text(
+                        'Create Your Account',
+                        textAlign: TextAlign.center,
+                        style: theme.textTheme.headlineMedium
+                            ?.copyWith(fontWeight: FontWeight.bold),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Start planning your next adventure',
+                        textAlign: TextAlign.center,
+                        style: theme.textTheme.titleMedium?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant),
+                      ),
+                      const SizedBox(height: 40),
+                      TextFormField(
+                        controller: _emailController,
+                        keyboardType: TextInputType.emailAddress,
+                        // username + email is the order iOS's Strong-Password
+                        // pairing heuristic prefers — it tells the platform
+                        // "this is the login identifier; the newPassword
+                        // field below pairs with me". email alone sometimes
+                        // makes iOS treat the form as sign-in instead of
+                        // sign-up and skip the Strong Password offer.
+                        autofillHints: const [
+                          AutofillHints.username,
+                          AutofillHints.email,
+                        ],
+                        textInputAction: TextInputAction.next,
+                        autocorrect: false,
+                        enableSuggestions: false,
+                        decoration: const InputDecoration(
+                          labelText: 'Email',
+                          prefixIcon: Icon(Icons.email_outlined),
+                        ),
+                        validator: (val) {
+                          if (val == null ||
+                              val.isEmpty ||
+                              !val.contains('@')) {
+                            return 'Please enter a valid email';
+                          }
+                          return null;
                         },
                       ),
-                      Expanded(
-                        child: Wrap(
-                          alignment: WrapAlignment.start,
-                          crossAxisAlignment: WrapCrossAlignment.center,
-                          children: [
-                            const Text('I agree to the '),
-                            GestureDetector(
-                              onTap: () => Navigator.of(context).push(
-                                  MaterialPageRoute(
-                                      builder: (_) => const TermsScreen())),
-                              child: Text(
-                                'Terms & Conditions',
-                                style: TextStyle(
-                                  color: theme.colorScheme.primary,
-                                  decoration: TextDecoration.underline,
-                                ),
-                              ),
-                            ),
-                          ],
+                      const SizedBox(height: 20),
+                      _NewPasswordField(
+                        controller: _passwordController,
+                        label: 'Password',
+                        textInputAction: TextInputAction.next,
+                        validator: (val) => (val?.length ?? 0) < 6
+                            ? 'Password must be at least 6 characters'
+                            : null,
+                      ),
+                      // In-app strong-password generator. Independent of iOS
+                      // Suggested Strong Password — which is slow on focus
+                      // because the system has to negotiate with the
+                      // QuickType bar / iCloud Keychain before the keyboard
+                      // is even usable, and doesn't exist at all on Android.
+                      // Tapping this is instant: generate, fill both fields,
+                      // done.
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: TextButton.icon(
+                          onPressed: _useSuggestedStrongPassword,
+                          icon: const Icon(Icons.password_rounded, size: 18),
+                          label: const Text('Suggest strong password'),
+                          style: TextButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 8, vertical: 4),
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            visualDensity: VisualDensity.compact,
+                          ),
                         ),
+                      ),
+                      const SizedBox(height: 4),
+                      _NewPasswordField(
+                        controller: _confirmPasswordController,
+                        label: 'Confirm Password',
+                        textInputAction: TextInputAction.done,
+                        validator: (val) => val != _passwordController.text
+                            ? 'Passwords do not match'
+                            : null,
+                      ),
+                      const SizedBox(height: 16),
+                      TextFormField(
+                        controller: _referralCodeController,
+                        textCapitalization: TextCapitalization.characters,
+                        decoration: const InputDecoration(
+                          labelText: 'Referral code (optional)',
+                          hintText: 'VOYZA-XXXXXX',
+                          prefixIcon: Icon(Icons.card_giftcard_rounded),
+                          border: OutlineInputBorder(),
+                        ),
+                        validator: (val) {
+                          final v = (val ?? '').trim();
+                          if (v.isEmpty) return null;
+                          return RegExp(r'^[A-Za-z0-9-]{4,12}$').hasMatch(v)
+                              ? null
+                              : 'That code doesn\'t look right';
+                        },
+                      ),
+                      const SizedBox(height: 24),
+                      Row(
+                        children: [
+                          Checkbox(
+                            value: _agreedToTerms,
+                            onChanged: (value) {
+                              setState(() {
+                                _agreedToTerms = value ?? false;
+                              });
+                            },
+                          ),
+                          Expanded(
+                            child: Wrap(
+                              alignment: WrapAlignment.start,
+                              crossAxisAlignment: WrapCrossAlignment.center,
+                              children: [
+                                const Text('I agree to the '),
+                                GestureDetector(
+                                  onTap: () => Navigator.of(context).push(
+                                      MaterialPageRoute(
+                                          builder: (_) => const TermsScreen())),
+                                  child: Text(
+                                    'Terms & Conditions',
+                                    style: TextStyle(
+                                      color: theme.colorScheme.primary,
+                                      decoration: TextDecoration.underline,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 24),
+                      ElevatedButton(
+                        onPressed:
+                            (_isLoading || !_agreedToTerms) ? null : _signUp,
+                        child: _isLoading
+                            ? const SizedBox(
+                                height: 24,
+                                width: 24,
+                                child:
+                                    CircularProgressIndicator(strokeWidth: 3))
+                            : const Text('Sign Up'),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 24),
-                  ElevatedButton(
-                    onPressed: (_isLoading || !_agreedToTerms) ? null : _signUp,
-                    child: _isLoading
-                        ? const SizedBox(
-                            height: 24,
-                            width: 24,
-                            child: CircularProgressIndicator(strokeWidth: 3))
-                        : const Text('Sign Up'),
-                  ),
-                ],
+                ),
               ),
             ),
           ),
         ),
-      ),
+      ],
     );
   }
 

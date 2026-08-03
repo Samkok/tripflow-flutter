@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:voyza/providers/auth_provider.dart';
 import 'package:voyza/services/supabase_service.dart';
 import 'package:voyza/widgets/app_toast.dart';
+import 'package:voyza/widgets/rotating_globe_background.dart';
 
 class SecurityScreen extends ConsumerStatefulWidget {
   const SecurityScreen({super.key});
@@ -205,40 +206,52 @@ class _SecurityScreenState extends ConsumerState<SecurityScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Security'),
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        centerTitle: true,
-      ),
-      body: ListView(
-        padding: const EdgeInsets.all(20),
-        children: [
-          // Section header
-          const _SectionHeader(
-            icon: Icons.lock_outline_rounded,
-            title: 'Change Password',
-            subtitle: 'Update your account password',
+    return Stack(
+      children: [
+        // Ambient rotating globe behind the page (app-wide treatment).
+        Positioned.fill(
+          child: ColoredBox(
+            color: Theme.of(context).scaffoldBackgroundColor,
+            child: const RotatingGlobeBackground(),
           ),
-          const SizedBox(height: 20),
-
-          AnimatedSwitcher(
-            duration: const Duration(milliseconds: 300),
-            transitionBuilder: (child, animation) => FadeTransition(
-              opacity: animation,
-              child: SlideTransition(
-                position: Tween<Offset>(
-                  begin: const Offset(0.05, 0),
-                  end: Offset.zero,
-                ).animate(animation),
-                child: child,
+        ),
+        Scaffold(
+          backgroundColor: Colors.transparent,
+          appBar: AppBar(
+            title: const Text('Security'),
+            backgroundColor: Colors.transparent,
+            elevation: 0,
+            centerTitle: true,
+          ),
+          body: ListView(
+            padding: const EdgeInsets.all(20),
+            children: [
+              // Section header
+              const _SectionHeader(
+                icon: Icons.lock_outline_rounded,
+                title: 'Change Password',
+                subtitle: 'Update your account password',
               ),
-            ),
-            child: _verified == true ? _buildStep2() : _buildStep1(),
+              const SizedBox(height: 20),
+
+              AnimatedSwitcher(
+                duration: const Duration(milliseconds: 300),
+                transitionBuilder: (child, animation) => FadeTransition(
+                  opacity: animation,
+                  child: SlideTransition(
+                    position: Tween<Offset>(
+                      begin: const Offset(0.05, 0),
+                      end: Offset.zero,
+                    ).animate(animation),
+                    child: child,
+                  ),
+                ),
+                child: _verified == true ? _buildStep2() : _buildStep1(),
+              ),
+            ],
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 

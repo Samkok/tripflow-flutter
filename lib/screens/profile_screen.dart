@@ -4,6 +4,7 @@ import 'package:voyza/core/theme.dart';
 import 'package:voyza/models/user_profile.dart';
 import 'package:voyza/providers/auth_provider.dart';
 import 'package:voyza/widgets/app_toast.dart';
+import 'package:voyza/widgets/rotating_globe_background.dart';
 
 // Provider to fetch and cache the current user's profile
 final userProfileProvider =
@@ -90,142 +91,154 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     final profileAsync = ref.watch(userProfileProvider);
     final user = ref.watch(currentUserProvider);
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Profile'),
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        centerTitle: true,
-        actions: [
-          if (_hasChanges)
-            TextButton(
-              onPressed: _isSaving ? null : _save,
-              child: _isSaving
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Text('Save'),
-            ),
-        ],
-      ),
-      body: profileAsync.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.error_outline, size: 48, color: Colors.red),
-              const SizedBox(height: 12),
-              const Text('Failed to load profile'),
-              const SizedBox(height: 12),
-              OutlinedButton(
-                onPressed: () => ref.invalidate(userProfileProvider),
-                child: const Text('Retry'),
-              ),
-            ],
+    return Stack(
+      children: [
+        // Ambient rotating globe behind the page (app-wide treatment).
+        Positioned.fill(
+          child: ColoredBox(
+            color: Theme.of(context).scaffoldBackgroundColor,
+            child: const RotatingGlobeBackground(),
           ),
         ),
-        data: (profile) {
-          if (profile != null) _populateFields(profile);
-
-          final initials = _initials(
-            profile?.firstName,
-            profile?.lastName,
-            user?.email,
-          );
-
-          return ListView(
-            padding: const EdgeInsets.all(20),
-            children: [
-              // Avatar
-              Center(
-                child: CircleAvatar(
-                  radius: 44,
-                  backgroundColor: AppTheme.primaryColor,
-                  child: Text(
-                    initials,
-                    style: const TextStyle(
-                      fontSize: 32,
-                      color: Colors.black,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 24),
-
-              // Email (read-only)
-              _InfoTile(
-                icon: Icons.email_outlined,
-                label: 'Email',
-                value: user?.email ?? '—',
-                note: 'Email cannot be changed',
-              ),
-              const SizedBox(height: 24),
-
-              // Editable fields
-              Text(
-                'Personal Details',
-                style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                      color: Theme.of(context).colorScheme.primary,
-                      fontWeight: FontWeight.bold,
-                    ),
-              ),
-              const SizedBox(height: 12),
-
-              Form(
-                key: _formKey,
-                child: Column(
-                  children: [
-                    _buildField(
-                      controller: _firstNameController,
-                      label: 'First Name',
-                      icon: Icons.person_outline,
-                    ),
-                    const SizedBox(height: 16),
-                    _buildField(
-                      controller: _lastNameController,
-                      label: 'Last Name',
-                      icon: Icons.person_outline,
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 32),
-
-              // Save button (also in app bar, but visible here on mobile)
+        Scaffold(
+          backgroundColor: Colors.transparent,
+          appBar: AppBar(
+            title: const Text('Profile'),
+            backgroundColor: Colors.transparent,
+            elevation: 0,
+            centerTitle: true,
+            actions: [
               if (_hasChanges)
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton(
-                    onPressed: _isSaving ? null : _save,
-                    style: ElevatedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                    ),
-                    child: _isSaving
-                        ? const SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: Colors.white,
-                            ),
-                          )
-                        : const Text(
-                            'Save Changes',
-                            style: TextStyle(fontWeight: FontWeight.w600),
-                          ),
-                  ),
+                TextButton(
+                  onPressed: _isSaving ? null : _save,
+                  child: _isSaving
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Text('Save'),
                 ),
             ],
-          );
-        },
-      ),
+          ),
+          body: profileAsync.when(
+            loading: () => const Center(child: CircularProgressIndicator()),
+            error: (e, _) => Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.error_outline, size: 48, color: Colors.red),
+                  const SizedBox(height: 12),
+                  const Text('Failed to load profile'),
+                  const SizedBox(height: 12),
+                  OutlinedButton(
+                    onPressed: () => ref.invalidate(userProfileProvider),
+                    child: const Text('Retry'),
+                  ),
+                ],
+              ),
+            ),
+            data: (profile) {
+              if (profile != null) _populateFields(profile);
+
+              final initials = _initials(
+                profile?.firstName,
+                profile?.lastName,
+                user?.email,
+              );
+
+              return ListView(
+                padding: const EdgeInsets.all(20),
+                children: [
+                  // Avatar
+                  Center(
+                    child: CircleAvatar(
+                      radius: 44,
+                      backgroundColor: AppTheme.primaryColor,
+                      child: Text(
+                        initials,
+                        style: const TextStyle(
+                          fontSize: 32,
+                          color: Colors.black,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+
+                  // Email (read-only)
+                  _InfoTile(
+                    icon: Icons.email_outlined,
+                    label: 'Email',
+                    value: user?.email ?? '—',
+                    note: 'Email cannot be changed',
+                  ),
+                  const SizedBox(height: 24),
+
+                  // Editable fields
+                  Text(
+                    'Personal Details',
+                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                          color: Theme.of(context).colorScheme.primary,
+                          fontWeight: FontWeight.bold,
+                        ),
+                  ),
+                  const SizedBox(height: 12),
+
+                  Form(
+                    key: _formKey,
+                    child: Column(
+                      children: [
+                        _buildField(
+                          controller: _firstNameController,
+                          label: 'First Name',
+                          icon: Icons.person_outline,
+                        ),
+                        const SizedBox(height: 16),
+                        _buildField(
+                          controller: _lastNameController,
+                          label: 'Last Name',
+                          icon: Icons.person_outline,
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 32),
+
+                  // Save button (also in app bar, but visible here on mobile)
+                  if (_hasChanges)
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton(
+                        onPressed: _isSaving ? null : _save,
+                        style: ElevatedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                        child: _isSaving
+                            ? const SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.white,
+                                ),
+                              )
+                            : const Text(
+                                'Save Changes',
+                                style: TextStyle(fontWeight: FontWeight.w600),
+                              ),
+                      ),
+                    ),
+                ],
+              );
+            },
+          ),
+        ),
+      ],
     );
   }
 

@@ -16,6 +16,7 @@ import 'package:voyza/services/location_add_service.dart';
 import 'package:voyza/services/places_service.dart';
 import 'package:voyza/widgets/app_toast.dart';
 import 'package:voyza/widgets/google_maps_url_dialog.dart';
+import 'package:voyza/widgets/rotating_globe_background.dart';
 import 'package:voyza/widgets/search_widget.dart' show searchQueryProvider;
 
 /// Full-screen replacement for the inline search-bar focus flow. Pushed
@@ -372,103 +373,145 @@ class _LocationSearchScreenState extends ConsumerState<LocationSearchScreen> {
     final theme = Theme.of(context);
     final searchQuery = ref.watch(searchQueryProvider);
 
-    return Scaffold(
-      appBar: AppBar(
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: () => Navigator.of(context).pop(),
-        ),
-        titleSpacing: 0,
-        title: TextField(
-          controller: _searchController,
-          focusNode: _focusNode,
-          // No `autofocus: true` — focus is requested manually in
-          // didChangeDependencies after the route animation completes,
-          // so the keyboard never opens during the slide-in. (Opening
-          // during the transition propagates a MediaQuery viewInsets
-          // change to the still-mounted map screen behind us and
-          // visually "pulls it down" for a moment.)
-          onChanged: _onSearchChanged,
-          decoration: const InputDecoration(
-            hintText: 'Search for places...',
-            border: InputBorder.none,
+    return Stack(
+      children: [
+        // Ambient rotating globe behind the search surface (same treatment
+        // as home/settings/trip details).
+        Positioned.fill(
+          child: ColoredBox(
+            color: theme.scaffoldBackgroundColor,
+            child: const RotatingGlobeBackground(),
           ),
-          style: theme.textTheme.titleMedium,
         ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.link),
-            tooltip: 'Paste Google Maps link',
-            onPressed: _isPastingUrl ? null : _showUrlInputDialog,
-          ),
-          if (searchQuery.isNotEmpty)
-            IconButton(
-              icon: const Icon(Icons.clear),
-              tooltip: 'Clear',
-              onPressed: () {
-                _searchController.clear();
-                ref.read(searchQueryProvider.notifier).state = '';
-                ref.read(paginatedSearchProvider.notifier).clear();
-              },
+        Scaffold(
+          backgroundColor: Colors.transparent,
+          appBar: AppBar(
+            backgroundColor: Colors.transparent,
+            elevation: 0,
+            leading: IconButton(
+              icon: const Icon(Icons.arrow_back),
+              onPressed: () => Navigator.of(context).pop(),
             ),
-        ],
-      ),
-      body: Stack(
-        children: [
-          _buildResults(),
-          // Full-area busy overlay shown during either add path. Absorbs
-          // taps via the AbsorbPointer so a user can't trigger a second
-          // _selectPlace while the first round-trip is mid-flight, AND
-          // gives them visual feedback that the tap "took". Translucent
-          // background tints toward black in light mode / lifts the
-          // surface in dark mode — either way the card behind it dims.
-          if (_isAddingPlace || _isPastingUrl)
-            Positioned.fill(
-              child: AbsorbPointer(
-                child: ColoredBox(
-                  color: Colors.black.withValues(alpha: 0.25),
-                  child: Center(
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 24, vertical: 20),
-                      decoration: BoxDecoration(
-                        color: Theme.of(context).colorScheme.surface,
-                        borderRadius: BorderRadius.circular(16),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.2),
-                            blurRadius: 16,
-                            offset: const Offset(0, 4),
+            titleSpacing: 0,
+            title: TextField(
+              controller: _searchController,
+              focusNode: _focusNode,
+              // No `autofocus: true` — focus is requested manually in
+              // didChangeDependencies after the route animation completes,
+              // so the keyboard never opens during the slide-in. (Opening
+              // during the transition propagates a MediaQuery viewInsets
+              // change to the still-mounted map screen behind us and
+              // visually "pulls it down" for a moment.)
+              onChanged: _onSearchChanged,
+              // Rounded, transparent, bordered — a floating pill over the
+              // globe rather than a flat strip welded to the app bar.
+              decoration: InputDecoration(
+                hintText: 'Search for places...',
+                hintStyle: theme.textTheme.titleMedium?.copyWith(
+                  color: theme.textTheme.bodyMedium?.color
+                      ?.withValues(alpha: 0.45),
+                ),
+                filled: false,
+                isDense: true,
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(28),
+                  borderSide: BorderSide(
+                    color: theme.colorScheme.onSurface.withValues(alpha: 0.18),
+                  ),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(28),
+                  borderSide: BorderSide(
+                    color: theme.colorScheme.onSurface.withValues(alpha: 0.18),
+                  ),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(28),
+                  borderSide:
+                      BorderSide(color: theme.colorScheme.primary, width: 1.4),
+                ),
+              ),
+              style: theme.textTheme.titleMedium,
+            ),
+            actions: [
+              IconButton(
+                icon: const Icon(Icons.link),
+                tooltip: 'Paste Google Maps link',
+                onPressed: _isPastingUrl ? null : _showUrlInputDialog,
+              ),
+              if (searchQuery.isNotEmpty)
+                IconButton(
+                  icon: const Icon(Icons.clear),
+                  tooltip: 'Clear',
+                  onPressed: () {
+                    _searchController.clear();
+                    ref.read(searchQueryProvider.notifier).state = '';
+                    ref.read(paginatedSearchProvider.notifier).clear();
+                  },
+                ),
+            ],
+          ),
+          body: Stack(
+            children: [
+              _buildResults(),
+              // Full-area busy overlay shown during either add path. Absorbs
+              // taps via the AbsorbPointer so a user can't trigger a second
+              // _selectPlace while the first round-trip is mid-flight, AND
+              // gives them visual feedback that the tap "took". Translucent
+              // background tints toward black in light mode / lifts the
+              // surface in dark mode — either way the card behind it dims.
+              if (_isAddingPlace || _isPastingUrl)
+                Positioned.fill(
+                  child: AbsorbPointer(
+                    child: ColoredBox(
+                      color: Colors.black.withValues(alpha: 0.25),
+                      child: Center(
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 24, vertical: 20),
+                          decoration: BoxDecoration(
+                            color: Theme.of(context).colorScheme.surface,
+                            borderRadius: BorderRadius.circular(16),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withValues(alpha: 0.2),
+                                blurRadius: 16,
+                                offset: const Offset(0, 4),
+                              ),
+                            ],
                           ),
-                        ],
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const SizedBox(
-                            width: 22,
-                            height: 22,
-                            child: CircularProgressIndicator(strokeWidth: 2.4),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const SizedBox(
+                                width: 22,
+                                height: 22,
+                                child:
+                                    CircularProgressIndicator(strokeWidth: 2.4),
+                              ),
+                              const SizedBox(width: 14),
+                              Text(
+                                _isPastingUrl
+                                    ? 'Decoding link…'
+                                    : 'Adding location…',
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .bodyMedium
+                                    ?.copyWith(fontWeight: FontWeight.w600),
+                              ),
+                            ],
                           ),
-                          const SizedBox(width: 14),
-                          Text(
-                            _isPastingUrl
-                                ? 'Decoding link…'
-                                : 'Adding location…',
-                            style: Theme.of(context)
-                                .textTheme
-                                .bodyMedium
-                                ?.copyWith(fontWeight: FontWeight.w600),
-                          ),
-                        ],
+                        ),
                       ),
                     ),
                   ),
                 ),
-              ),
-            ),
-        ],
-      ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 

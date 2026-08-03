@@ -16,6 +16,7 @@ import '../services/supabase_service.dart';
 import '../widgets/app_toast.dart';
 import '../widgets/referral_prompt.dart';
 import '../repositories/user_profile_repository.dart';
+import 'package:voyza/widgets/rotating_globe_background.dart';
 
 /// Reasons the paywall might be shown — drives the headline copy.
 enum PaywallTrigger {
@@ -98,77 +99,92 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
     final theme = Theme.of(context);
     _logIntroOfferDiagnostic();
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('VoyZa Pro'),
-        leading: IconButton(
-          icon: const Icon(Icons.close),
-          onPressed: () => Navigator.of(context).pop(),
+    return Stack(
+      children: [
+        // Ambient rotating globe behind the paywall (same treatment as the
+        // home / settings / trip-details surfaces).
+        Positioned.fill(
+          child: ColoredBox(
+            color: Theme.of(context).scaffoldBackgroundColor,
+            child: const RotatingGlobeBackground(),
+          ),
         ),
-      ),
-      body: _isLoading || subscriptionState.isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : SingleChildScrollView(
-              child: Padding(
-                padding: const EdgeInsets.all(24.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    // Hero section
-                    _buildHeroSection(context),
-
-                    // Trial-expired value recap — reminds the user what they've
-                    // already built so subscribing feels like "keep my work,"
-                    // not an abstract upsell. Renders nothing for first-time /
-                    // trial-eligible users or when there's nothing to recap.
-                    _buildTrialValueRecap(context),
-                    const SizedBox(height: 32),
-
-                    // Features list
-                    _buildFeaturesList(context),
-                    const SizedBox(height: 32),
-
-                    // Subscription options
-                    _buildSubscriptionOptions(context),
-                    const SizedBox(height: 24),
-
-                    // Subscribe button
-                    _buildSubscribeButton(context),
-                    const SizedBox(height: 12),
-
-                    // Reassurance microcopy — reduces trial-start friction.
-                    _buildReassuranceLine(context),
-                    const SizedBox(height: 8),
-
-                    // Restore purchases button
-                    _buildRestoreButton(context),
-                    const SizedBox(height: 16),
-
-                    // Terms and privacy
-                    _buildLegalLinks(context),
-
-                    // Error message if any
-                    if (subscriptionState.errorMessage != null) ...[
-                      const SizedBox(height: 16),
-                      Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: theme.colorScheme.errorContainer,
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Text(
-                          subscriptionState.errorMessage!,
-                          style: TextStyle(
-                            color: theme.colorScheme.onErrorContainer,
-                          ),
-                          textAlign: TextAlign.center,
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
+        Scaffold(
+          backgroundColor: Colors.transparent,
+          appBar: AppBar(
+            backgroundColor: Colors.transparent,
+            elevation: 0,
+            title: const Text('VoyZa Pro'),
+            leading: IconButton(
+              icon: const Icon(Icons.close),
+              onPressed: () => Navigator.of(context).pop(),
             ),
+          ),
+          body: _isLoading || subscriptionState.isLoading
+              ? const Center(child: CircularProgressIndicator())
+              : SingleChildScrollView(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24.0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        // Hero section
+                        _buildHeroSection(context),
+
+                        // Trial-expired value recap — reminds the user what they've
+                        // already built so subscribing feels like "keep my work,"
+                        // not an abstract upsell. Renders nothing for first-time /
+                        // trial-eligible users or when there's nothing to recap.
+                        _buildTrialValueRecap(context),
+                        const SizedBox(height: 32),
+
+                        // Features list
+                        _buildFeaturesList(context),
+                        const SizedBox(height: 32),
+
+                        // Subscription options
+                        _buildSubscriptionOptions(context),
+                        const SizedBox(height: 24),
+
+                        // Subscribe button
+                        _buildSubscribeButton(context),
+                        const SizedBox(height: 12),
+
+                        // Reassurance microcopy — reduces trial-start friction.
+                        _buildReassuranceLine(context),
+                        const SizedBox(height: 8),
+
+                        // Restore purchases button
+                        _buildRestoreButton(context),
+                        const SizedBox(height: 16),
+
+                        // Terms and privacy
+                        _buildLegalLinks(context),
+
+                        // Error message if any
+                        if (subscriptionState.errorMessage != null) ...[
+                          const SizedBox(height: 16),
+                          Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: theme.colorScheme.errorContainer,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Text(
+                              subscriptionState.errorMessage!,
+                              style: TextStyle(
+                                color: theme.colorScheme.onErrorContainer,
+                              ),
+                              textAlign: TextAlign.center,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+        ),
+      ],
     );
   }
 
@@ -602,7 +618,9 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
               ? theme.colorScheme.primaryContainer
               : (isRecommended
                   ? theme.colorScheme.primaryContainer.withValues(alpha: 0.3)
-                  : theme.colorScheme.surfaceContainerHighest),
+                  // Translucent so the ambient globe shows through.
+                  : theme.colorScheme.surfaceContainerHighest
+                      .withValues(alpha: 0.55)),
           borderRadius: BorderRadius.circular(16),
           border: Border.all(
             color: isSelected
