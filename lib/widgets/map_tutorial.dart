@@ -101,15 +101,51 @@ TutorialCoachMark buildMapTutorial(
     colorShadow: Colors.black,
     opacityShadow: 0.75,
     paddingFocus: 6,
-    textSkip: 'Skip',
-    textStyleSkip: const TextStyle(
-      color: Colors.white70,
-      fontWeight: FontWeight.w600,
-    ),
+    // A real, legible "Skip tour" button rather than the package's faint
+    // default label — an escape hatch the user can't find is no escape hatch.
+    alignSkip: Alignment.topRight,
+    skipWidget: const _SkipButton(),
+    // Snappier hops between steps. The package defaults (600/600/500ms) make
+    // a 3-step tour feel sluggish; these keep the motion readable without
+    // making the user wait for it.
+    focusAnimationDuration: const Duration(milliseconds: 250),
+    unFocusAnimationDuration: const Duration(milliseconds: 200),
+    pulseAnimationDuration: const Duration(milliseconds: 300),
     beforeFocus: (target) => lastStep = (target.identify as int?) ?? 0,
     onFinish: onFinish,
     onSkip: () => onSkip(lastStep),
   );
+}
+
+/// Skip affordance for the tour. Pill-shaped so it reads as tappable against
+/// the dark scrim, and padded clear of the status bar via SafeArea.
+class _SkipButton extends StatelessWidget {
+  const _SkipButton();
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.only(top: 8, right: 16),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.15),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.35)),
+          ),
+          child: const Text(
+            'Skip tour',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 14,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 bool _isLaidOut(GlobalKey key) {

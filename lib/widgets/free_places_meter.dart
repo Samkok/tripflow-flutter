@@ -6,6 +6,24 @@ import '../providers/location_provider.dart';
 import '../providers/subscription_provider.dart';
 import '../services/subscription_limit_service.dart';
 
+/// Colour of a FILLED allowance segment. The last two escalate — amber at the
+/// second-to-last, red at the last — so running out is telegraphed a place in
+/// advance instead of arriving as a surprise at the paywall.
+///
+/// Shared by both meters below so the two can't drift apart.
+Color freePlaceSegmentColor(BuildContext context, int index) {
+  const total = SubscriptionLimitService.freePlaceAllowance;
+  if (index >= total - 1) return const Color(0xFFE5484D); // last → red
+  if (index == total - 2) return const Color(0xFFF5A623); // second-last → amber
+  return Theme.of(context).colorScheme.primary;
+}
+
+/// Session-scoped dismissal for the at-limit chip. The ✕ only appears once the
+/// allowance is spent — before that the chip is live progress, not a nag, so
+/// there's nothing to dismiss. Resets on relaunch by design: still being at
+/// the limit is worth surfacing again next session.
+final freePlacesChipDismissedProvider = StateProvider<bool>((_) => false);
+
 /// Segmented "N of 5 free places used" goal-gradient meter. Pure UI —
 /// used inside the first-trip celebration and the map-screen progress chip.
 class FreePlacesMeter extends StatelessWidget {
@@ -28,7 +46,7 @@ class FreePlacesMeter extends StatelessWidget {
                 margin: EdgeInsets.only(right: i == total - 1 ? 0 : 6),
                 decoration: BoxDecoration(
                   color: filled
-                      ? theme.colorScheme.primary
+                      ? freePlaceSegmentColor(context, i)
                       : theme.colorScheme.onSurfaceVariant
                           .withValues(alpha: 0.2),
                   borderRadius: BorderRadius.circular(4),
@@ -71,20 +89,44 @@ class FreePlacesProgressChip extends ConsumerWidget {
             : all.where((l) => l.userId == userId).length)
         .clamp(0, SubscriptionLimitService.freePlaceAllowance);
     const total = SubscriptionLimitService.freePlaceAllowance;
+    final atLimit = used >= total;
 
+    // Only dismissible once spent — and staying dismissed only matters while
+    // it's still at the limit (delete a place and the live meter returns).
+    if (atLimit && ref.watch(freePlacesChipDismissedProvider)) {
+      return const SizedBox.shrink();
+    }
+
+    const limitRed = Color(0xFFE5484D);
     final theme = Theme.of(context);
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+      padding: EdgeInsets.only(
+        left: 12,
+        right: atLimit ? 4 : 12,
+        top: 7,
+        bottom: 7,
+      ),
       decoration: BoxDecoration(
-        color: theme.colorScheme.surface.withValues(alpha: 0.92),
+        // At the limit the whole chip goes red — it's no longer progress,
+        // it's a blocker, and it should read as one at a glance.
+        color: atLimit
+            ? Color.alphaBlend(
+                limitRed.withValues(alpha: 0.16),
+                theme.colorScheme.surface,
+              ).withValues(alpha: 0.96)
+            : theme.colorScheme.surface.withValues(alpha: 0.92),
         borderRadius: BorderRadius.circular(20),
         border: Border.all(
-          color: theme.dividerColor.withValues(alpha: 0.2),
+          color: atLimit
+              ? limitRed.withValues(alpha: 0.85)
+              : theme.dividerColor.withValues(alpha: 0.2),
           width: 1.5,
         ),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.12),
+            color: atLimit
+                ? limitRed.withValues(alpha: 0.28)
+                : Colors.black.withValues(alpha: 0.12),
             blurRadius: 12,
             offset: const Offset(0, 3),
           ),
@@ -101,7 +143,7 @@ class FreePlacesProgressChip extends ConsumerWidget {
               margin: EdgeInsets.only(right: i == total - 1 ? 8 : 4),
               decoration: BoxDecoration(
                 color: filled
-                    ? theme.colorScheme.primary
+                    ? freePlaceSegmentColor(context, i)
                     : theme.colorScheme.onSurfaceVariant
                         .withValues(alpha: 0.25),
                 borderRadius: BorderRadius.circular(3),
@@ -109,12 +151,27 @@ class FreePlacesProgressChip extends ConsumerWidget {
             );
           }),
           Text(
-            '$used of $total free places',
+            atLimit ? 'Free limit reached' : '$used of $total free places',
             style: theme.textTheme.bodySmall?.copyWith(
-              color: theme.colorScheme.onSurfaceVariant,
-              fontWeight: FontWeight.w600,
+              color: atLimit ? limitRed : theme.colorScheme.onSurfaceVariant,
+              fontWeight: atLimit ? FontWeight.w700 : FontWeight.w600,
             ),
           ),
+          if (atLimit)
+            Semantics(
+              button: true,
+              label: 'Dismiss free limit notice',
+              child: InkWell(
+                customBorder: const CircleBorder(),
+                onTap: () => ref
+                    .read(freePlacesChipDismissedProvider.notifier)
+                    .state = true,
+                child: const Padding(
+                  padding: EdgeInsets.all(6),
+                  child: Icon(Icons.close_rounded, size: 15, color: limitRed),
+                ),
+              ),
+            ),
         ],
       ),
     );

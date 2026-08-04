@@ -23,6 +23,35 @@ class LocationService {
   }
 
   /// Request location permission using both Geolocator and permission_handler
+  /// True when location can be read RIGHT NOW without showing any prompt.
+  ///
+  /// For opportunistic, non-user-initiated work (arrival polling, background
+  /// refreshes) — those must never be what raises the OS permission dialog.
+  /// Only in-context, user-visible flows should call
+  /// [requestLocationPermission].
+  static Future<bool> hasLocationPermissionAlready() async {
+    try {
+      if (!await isLocationServiceEnabled()) return false;
+      final permission = await checkLocationPermission();
+      return permission == LocationPermission.whileInUse ||
+          permission == LocationPermission.always;
+    } catch (e) {
+      debugPrint('hasLocationPermissionAlready: $e');
+      return false;
+    }
+  }
+
+  /// Global latch: the OS permission dialog is HARD-SUPPRESSED until the app
+  /// reaches a surface where asking makes sense (the map actually visible, or
+  /// an explicit user action like the my-location button). Opened by
+  /// MapScreen's location gate.
+  ///
+  /// This exists because gating individual call sites kept leaking — any
+  /// launch-time code path that reaches [requestLocationPermission] while the
+  /// latch is closed now gets the current status WITHOUT a prompt, and in
+  /// debug builds logs the caller's stack so the leak is identifiable.
+  static bool promptsAllowed = false;
+
   static Future<bool> requestLocationPermission() async {
     // First check if location services are enabled
     final serviceEnabled = await isLocationServiceEnabled();
@@ -42,6 +71,13 @@ class LocationService {
 
     // If denied, request permission
     if (permission == LocationPermission.denied) {
+      if (!promptsAllowed) {
+        if (kDebugMode) {
+          debugPrint('Location prompt SUPPRESSED (latch closed). Caller was:\n'
+              '${StackTrace.current}');
+        }
+        return false;
+      }
       debugPrint('Requesting location permission...');
       permission = await Geolocator.requestPermission();
 

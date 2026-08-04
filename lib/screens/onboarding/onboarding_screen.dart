@@ -11,6 +11,8 @@ import '../../services/review_prompt_service.dart';
 import '../../services/subscription_limit_service.dart';
 import '../../utils/countries.dart';
 import '../../widgets/country_picker_sheet.dart';
+import '../../widgets/rotating_globe_background.dart';
+import '../signup_screen.dart';
 
 /// One-time first-run onboarding: two quick questions (traveler type, next
 /// destination) + a "how VoyZa works" page that funnels straight into
@@ -40,6 +42,14 @@ Future<void> maybeShowOnboarding(BuildContext context, WidgetRef ref) async {
           fullscreenDialog: true,
           builder: (_) => OnboardingScreen(userId: anonId, isAnonymous: true),
         ),
+      );
+      // Fresh install, no account: offer sign-up straight after onboarding —
+      // it's the moment intent is highest, and an account is what unlocks
+      // trips + sync. Its "Continue as guest" button drops them on the map
+      // instead, so this is an offer, not a wall.
+      if (!context.mounted) return;
+      await Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => const SignupScreen()),
       );
       return;
     }
@@ -225,43 +235,55 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
       onPopInvokedWithResult: (didPop, _) {
         if (!didPop) _skip(); // system back = skip
       },
-      child: Scaffold(
-        body: SafeArea(
-          child: Column(
-            children: [
-              // Top bar: dots + Skip
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 8, 8, 0),
-                child: Row(
-                  children: [
-                    Expanded(child: _buildDots(theme)),
-                    TextButton(
-                      onPressed: _skip,
-                      child: Text(
-                        'Skip',
-                        style: TextStyle(
-                          color: theme.colorScheme.onSurfaceVariant,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              Expanded(
-                child: PageView(
-                  controller: _pageController,
-                  physics: const NeverScrollableScrollPhysics(),
-                  onPageChanged: (i) => setState(() => _page = i),
-                  children: [
-                    _buildTravelerPage(theme),
-                    _buildDestinationPage(theme),
-                    _buildValuePage(theme),
-                  ],
-                ),
-              ),
-            ],
+      child: Stack(
+        children: [
+          // Ambient rotating globe behind onboarding (app-wide treatment).
+          Positioned.fill(
+            child: ColoredBox(
+              color: theme.scaffoldBackgroundColor,
+              child: const RotatingGlobeBackground(),
+            ),
           ),
-        ),
+          Scaffold(
+            backgroundColor: Colors.transparent,
+            body: SafeArea(
+              child: Column(
+                children: [
+                  // Top bar: dots + Skip
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 8, 8, 0),
+                    child: Row(
+                      children: [
+                        Expanded(child: _buildDots(theme)),
+                        TextButton(
+                          onPressed: _skip,
+                          child: Text(
+                            'Skip',
+                            style: TextStyle(
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Expanded(
+                    child: PageView(
+                      controller: _pageController,
+                      physics: const NeverScrollableScrollPhysics(),
+                      onPageChanged: (i) => setState(() => _page = i),
+                      children: [
+                        _buildTravelerPage(theme),
+                        _buildDestinationPage(theme),
+                        _buildValuePage(theme),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -505,14 +527,14 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
             ),
           ),
           const Spacer(),
-          // Anonymous users get the sample trip as the PRIMARY CTA: it's their
-          // one-tap path to the optimize aha (no account, no cold empty map).
-          // Authenticated users keep "plan my trip" primary with the sample as
-          // the secondary escape hatch.
+          // Anonymous users go straight into the app ("Start exploring") —
+          // seeding sample places on their behalf put content they didn't
+          // choose into their map. Authenticated users keep "plan my trip"
+          // primary with the sample as a secondary escape hatch.
           SizedBox(
             width: double.infinity,
             child: FilledButton(
-              onPressed: widget.isAnonymous ? _trySampleTrip : _planFirstTrip,
+              onPressed: _planFirstTrip,
               style: FilledButton.styleFrom(
                 padding: const EdgeInsets.symmetric(vertical: 16),
                 shape: RoundedRectangleBorder(
@@ -521,7 +543,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
               ),
               child: Text(
                 widget.isAnonymous
-                    ? 'Try a sample trip'
+                    ? 'Start exploring'
                     : _destination != null
                         ? 'Plan my ${_destination!.name} trip'
                         : 'Plan my first trip',
@@ -530,14 +552,13 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
               ),
             ),
           ),
-          Center(
-            child: TextButton(
-              onPressed: widget.isAnonymous ? _planFirstTrip : _trySampleTrip,
-              child: Text(widget.isAnonymous
-                  ? 'Start adding my own places'
-                  : 'Try a sample trip instead'),
+          if (!widget.isAnonymous)
+            Center(
+              child: TextButton(
+                onPressed: _trySampleTrip,
+                child: const Text('Try a sample trip instead'),
+              ),
             ),
-          ),
           const SizedBox(height: 12),
         ],
       ),

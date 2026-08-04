@@ -7,8 +7,11 @@ import 'package:voyza/screens/forgot_password_screen.dart';
 import 'package:voyza/screens/terms_screen.dart';
 import 'package:voyza/widgets/rotating_globe_background.dart';
 import '../providers/auth_provider.dart';
+import '../providers/onboarding_provider.dart';
 import '../services/auth_service.dart';
+import '../services/email_history_service.dart';
 import '../widgets/app_toast.dart';
+import '../widgets/email_suggestions.dart';
 import '../widgets/save_password_prompt.dart';
 
 class SignupScreen extends ConsumerStatefulWidget {
@@ -23,9 +26,27 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
   final _passwordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
   final _referralCodeController = TextEditingController();
+  final _emailFocusNode = FocusNode();
   final _formKey = GlobalKey<FormState>();
   bool _isLoading = false;
   bool _agreedToTerms = false;
+  // Referral field starts collapsed — see the AnimatedSize block in build.
+  bool _showReferralField = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // Suggestions react to BOTH focus and typing, so rebuild on either.
+    _emailFocusNode.addListener(_onEmailUiChanged);
+    _emailController.addListener(_onEmailUiChanged);
+    EmailHistoryService.instance.load().then((_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  void _onEmailUiChanged() {
+    if (mounted) setState(() {});
+  }
   // Visibility state moved into the per-field [_NewPasswordField] widgets
   // below so tapping the eye toggle only rebuilds that one field instead
   // of the entire SignupScreen / AutofillGroup — the rebuild cascade
@@ -97,6 +118,8 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
         // still mounted to commit their values into the autofill
         // context.
         await promptSavePasswordIfNeeded(context, _emailController.text.trim());
+        // Offer this address back next time the user lands on an auth screen.
+        await EmailHistoryService.instance.remember(_emailController.text);
         if (!mounted) return;
 
         AppToast.success(
@@ -169,6 +192,20 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
     }
   }
 
+  /// Leaves sign-up without an account: back to whatever pushed us, or —
+  /// when we ARE the first screen (post-onboarding on a fresh install) —
+  /// into the app on the Map tab, where an anonymous user can search and
+  /// save places right away.
+  void _continueAsGuest() {
+    final navigator = Navigator.of(context);
+    ref.read(mainTabRequestProvider.notifier).state = 1; // Map tab
+    if (navigator.canPop()) {
+      navigator.pop();
+    } else {
+      navigator.pushReplacementNamed('/home_anonymous');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -188,170 +225,246 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
             backgroundColor: Colors.transparent,
             elevation: 0,
           ),
-          body: Center(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.fromLTRB(24.0, 0, 24.0, 24.0),
-              child: Form(
-                key: _formKey,
-                // AutofillGroup binds the three fields together so the platform
-                // autofill service treats them as one credential. Submitting
-                // via TextInput.finishAutofillContext (in _signUp) then shows
-                // the OS save prompt for the email + new-password pair, and
-                // on iOS the Suggested Strong Password fills BOTH password
-                // fields simultaneously because they share the same
-                // AutofillHints.newPassword tag inside the group.
-                child: AutofillGroup(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Text(
-                        'Create Your Account',
-                        textAlign: TextAlign.center,
-                        style: theme.textTheme.headlineMedium
-                            ?.copyWith(fontWeight: FontWeight.bold),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Start planning your next adventure',
-                        textAlign: TextAlign.center,
-                        style: theme.textTheme.titleMedium?.copyWith(
-                            color: theme.colorScheme.onSurfaceVariant),
-                      ),
-                      const SizedBox(height: 40),
-                      TextFormField(
-                        controller: _emailController,
-                        keyboardType: TextInputType.emailAddress,
-                        // username + email is the order iOS's Strong-Password
-                        // pairing heuristic prefers — it tells the platform
-                        // "this is the login identifier; the newPassword
-                        // field below pairs with me". email alone sometimes
-                        // makes iOS treat the form as sign-in instead of
-                        // sign-up and skip the Strong Password offer.
-                        autofillHints: const [
-                          AutofillHints.username,
-                          AutofillHints.email,
-                        ],
-                        textInputAction: TextInputAction.next,
-                        autocorrect: false,
-                        enableSuggestions: false,
-                        decoration: const InputDecoration(
-                          labelText: 'Email',
-                          prefixIcon: Icon(Icons.email_outlined),
+          // Tap anywhere outside a field to dismiss the keyboard. Translucent
+          // so the fields and buttons still get their own taps first.
+          body: GestureDetector(
+            onTap: () => FocusScope.of(context).unfocus(),
+            behavior: HitTestBehavior.translucent,
+            child: Center(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(24.0, 0, 24.0, 24.0),
+                child: Form(
+                  key: _formKey,
+                  // AutofillGroup binds the three fields together so the platform
+                  // autofill service treats them as one credential. Submitting
+                  // via TextInput.finishAutofillContext (in _signUp) then shows
+                  // the OS save prompt for the email + new-password pair, and
+                  // on iOS the Suggested Strong Password fills BOTH password
+                  // fields simultaneously because they share the same
+                  // AutofillHints.newPassword tag inside the group.
+                  child: AutofillGroup(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Text(
+                          'Create Your Account',
+                          textAlign: TextAlign.center,
+                          style: theme.textTheme.headlineMedium
+                              ?.copyWith(fontWeight: FontWeight.bold),
                         ),
-                        validator: (val) {
-                          if (val == null ||
-                              val.isEmpty ||
-                              !val.contains('@')) {
-                            return 'Please enter a valid email';
-                          }
-                          return null;
-                        },
-                      ),
-                      const SizedBox(height: 20),
-                      _NewPasswordField(
-                        controller: _passwordController,
-                        label: 'Password',
-                        textInputAction: TextInputAction.next,
-                        validator: (val) => (val?.length ?? 0) < 6
-                            ? 'Password must be at least 6 characters'
-                            : null,
-                      ),
-                      // In-app strong-password generator. Independent of iOS
-                      // Suggested Strong Password — which is slow on focus
-                      // because the system has to negotiate with the
-                      // QuickType bar / iCloud Keychain before the keyboard
-                      // is even usable, and doesn't exist at all on Android.
-                      // Tapping this is instant: generate, fill both fields,
-                      // done.
-                      Align(
-                        alignment: Alignment.centerRight,
-                        child: TextButton.icon(
-                          onPressed: _useSuggestedStrongPassword,
-                          icon: const Icon(Icons.password_rounded, size: 18),
-                          label: const Text('Suggest strong password'),
-                          style: TextButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 8, vertical: 4),
-                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                            visualDensity: VisualDensity.compact,
+                        const SizedBox(height: 8),
+                        Text(
+                          'Start planning your next adventure',
+                          textAlign: TextAlign.center,
+                          style: theme.textTheme.titleMedium?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant),
+                        ),
+                        const SizedBox(height: 40),
+                        TextFormField(
+                          controller: _emailController,
+                          focusNode: _emailFocusNode,
+                          keyboardType: TextInputType.emailAddress,
+                          // username + email is the order iOS's Strong-Password
+                          // pairing heuristic prefers — it tells the platform
+                          // "this is the login identifier; the newPassword
+                          // field below pairs with me". email alone sometimes
+                          // makes iOS treat the form as sign-in instead of
+                          // sign-up and skip the Strong Password offer.
+                          autofillHints: const [
+                            AutofillHints.username,
+                            AutofillHints.email,
+                          ],
+                          textInputAction: TextInputAction.next,
+                          autocorrect: false,
+                          enableSuggestions: false,
+                          decoration: const InputDecoration(
+                            labelText: 'Email',
+                            prefixIcon: Icon(Icons.email_outlined),
                           ),
+                          validator: (val) {
+                            if (val == null ||
+                                val.isEmpty ||
+                                !val.contains('@')) {
+                              return 'Please enter a valid email';
+                            }
+                            return null;
+                          },
                         ),
-                      ),
-                      const SizedBox(height: 4),
-                      _NewPasswordField(
-                        controller: _confirmPasswordController,
-                        label: 'Confirm Password',
-                        textInputAction: TextInputAction.done,
-                        validator: (val) => val != _passwordController.text
-                            ? 'Passwords do not match'
-                            : null,
-                      ),
-                      const SizedBox(height: 16),
-                      TextFormField(
-                        controller: _referralCodeController,
-                        textCapitalization: TextCapitalization.characters,
-                        decoration: const InputDecoration(
-                          labelText: 'Referral code (optional)',
-                          hintText: 'VOYZA-XXXXXX',
-                          prefixIcon: Icon(Icons.card_giftcard_rounded),
-                          border: OutlineInputBorder(),
+                        // Emails this device has used before — offered on
+                        // focus, narrowed as they type.
+                        EmailSuggestions(
+                          visible: _emailFocusNode.hasFocus,
+                          query: _emailController.text,
+                          onSelected: (email) {
+                            _emailController.text = email;
+                            _emailFocusNode.unfocus();
+                          },
+                          onForget: (email) async {
+                            await EmailHistoryService.instance.forget(email);
+                            if (mounted) setState(() {});
+                          },
                         ),
-                        validator: (val) {
-                          final v = (val ?? '').trim();
-                          if (v.isEmpty) return null;
-                          return RegExp(r'^[A-Za-z0-9-]{4,12}$').hasMatch(v)
-                              ? null
-                              : 'That code doesn\'t look right';
-                        },
-                      ),
-                      const SizedBox(height: 24),
-                      Row(
-                        children: [
-                          Checkbox(
-                            value: _agreedToTerms,
-                            onChanged: (value) {
-                              setState(() {
-                                _agreedToTerms = value ?? false;
-                              });
-                            },
-                          ),
-                          Expanded(
-                            child: Wrap(
-                              alignment: WrapAlignment.start,
-                              crossAxisAlignment: WrapCrossAlignment.center,
-                              children: [
-                                const Text('I agree to the '),
-                                GestureDetector(
-                                  onTap: () => Navigator.of(context).push(
-                                      MaterialPageRoute(
-                                          builder: (_) => const TermsScreen())),
-                                  child: Text(
-                                    'Terms & Conditions',
-                                    style: TextStyle(
-                                      color: theme.colorScheme.primary,
-                                      decoration: TextDecoration.underline,
-                                    ),
-                                  ),
-                                ),
-                              ],
+                        const SizedBox(height: 20),
+                        _NewPasswordField(
+                          controller: _passwordController,
+                          label: 'Password',
+                          textInputAction: TextInputAction.next,
+                          validator: (val) => (val?.length ?? 0) < 6
+                              ? 'Password must be at least 6 characters'
+                              : null,
+                        ),
+                        // In-app strong-password generator. Independent of iOS
+                        // Suggested Strong Password — which is slow on focus
+                        // because the system has to negotiate with the
+                        // QuickType bar / iCloud Keychain before the keyboard
+                        // is even usable, and doesn't exist at all on Android.
+                        // Tapping this is instant: generate, fill both fields,
+                        // done.
+                        Align(
+                          alignment: Alignment.centerRight,
+                          child: TextButton.icon(
+                            onPressed: _useSuggestedStrongPassword,
+                            icon: const Icon(Icons.password_rounded, size: 18),
+                            label: const Text('Suggest strong password'),
+                            style: TextButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 4),
+                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              visualDensity: VisualDensity.compact,
                             ),
                           ),
-                        ],
-                      ),
-                      const SizedBox(height: 24),
-                      ElevatedButton(
-                        onPressed:
-                            (_isLoading || !_agreedToTerms) ? null : _signUp,
-                        child: _isLoading
-                            ? const SizedBox(
-                                height: 24,
-                                width: 24,
-                                child:
-                                    CircularProgressIndicator(strokeWidth: 3))
-                            : const Text('Sign Up'),
-                      ),
-                    ],
+                        ),
+                        const SizedBox(height: 4),
+                        _NewPasswordField(
+                          controller: _confirmPasswordController,
+                          label: 'Confirm Password',
+                          textInputAction: TextInputAction.done,
+                          validator: (val) => val != _passwordController.text
+                              ? 'Passwords do not match'
+                              : null,
+                        ),
+                        const SizedBox(height: 8),
+                        // Referral code: collapsed by default — most signups
+                        // come from a link that carries the code automatically,
+                        // so the typed field is the exception, not a fourth
+                        // form row. Expands into a field styled by the SAME
+                        // input theme as the rest of the form (the old one
+                        // overrode the theme with a bare OutlineInputBorder
+                        // and read as a foreign element).
+                        AnimatedSize(
+                          duration: const Duration(milliseconds: 200),
+                          curve: Curves.easeOut,
+                          alignment: Alignment.topCenter,
+                          child: !_showReferralField
+                              ? Align(
+                                  alignment: Alignment.centerLeft,
+                                  child: TextButton.icon(
+                                    onPressed: () => setState(
+                                        () => _showReferralField = true),
+                                    icon: const Icon(
+                                        Icons.card_giftcard_rounded,
+                                        size: 18),
+                                    label: const Text('Have a referral code?'),
+                                  ),
+                                )
+                              : Padding(
+                                  padding: const EdgeInsets.only(top: 8),
+                                  child: TextFormField(
+                                    controller: _referralCodeController,
+                                    autofocus: true,
+                                    textCapitalization:
+                                        TextCapitalization.characters,
+                                    decoration: InputDecoration(
+                                      labelText: 'Referral code',
+                                      hintText: 'VOYZA-XXXXXX',
+                                      prefixIcon: const Icon(
+                                          Icons.card_giftcard_rounded),
+                                      suffixIcon: IconButton(
+                                        tooltip: 'Remove code',
+                                        icon: const Icon(Icons.close, size: 18),
+                                        onPressed: () => setState(() {
+                                          // Collapse AND clear — a hidden
+                                          // field must never submit a code.
+                                          _referralCodeController.clear();
+                                          _showReferralField = false;
+                                        }),
+                                      ),
+                                    ),
+                                    validator: (val) {
+                                      final v = (val ?? '').trim();
+                                      if (v.isEmpty) return null;
+                                      return RegExp(r'^[A-Za-z0-9-]{4,12}$')
+                                              .hasMatch(v)
+                                          ? null
+                                          : 'That code doesn\'t look right';
+                                    },
+                                  ),
+                                ),
+                        ),
+                        const SizedBox(height: 24),
+                        Row(
+                          children: [
+                            Checkbox(
+                              value: _agreedToTerms,
+                              onChanged: (value) {
+                                setState(() {
+                                  _agreedToTerms = value ?? false;
+                                });
+                              },
+                            ),
+                            Expanded(
+                              child: Wrap(
+                                alignment: WrapAlignment.start,
+                                crossAxisAlignment: WrapCrossAlignment.center,
+                                children: [
+                                  const Text('I agree to the '),
+                                  GestureDetector(
+                                    onTap: () => Navigator.of(context).push(
+                                        MaterialPageRoute(
+                                            builder: (_) =>
+                                                const TermsScreen())),
+                                    child: Text(
+                                      'Terms & Conditions',
+                                      style: TextStyle(
+                                        color: theme.colorScheme.primary,
+                                        decoration: TextDecoration.underline,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 24),
+                        ElevatedButton(
+                          onPressed:
+                              (_isLoading || !_agreedToTerms) ? null : _signUp,
+                          child: _isLoading
+                              ? const SizedBox(
+                                  height: 24,
+                                  width: 24,
+                                  child:
+                                      CircularProgressIndicator(strokeWidth: 3))
+                              : const Text('Sign Up'),
+                        ),
+                        const SizedBox(height: 8),
+                        // Escape hatch for first-run users who don't want an
+                        // account yet — drops them on the map as an anonymous
+                        // user (where search + adding places already works).
+                        TextButton(
+                          onPressed: _isLoading ? null : _continueAsGuest,
+                          child: Text(
+                            'Continue as guest',
+                            style: theme.textTheme.bodyMedium?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -364,6 +477,9 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
 
   @override
   void dispose() {
+    _emailFocusNode.removeListener(_onEmailUiChanged);
+    _emailController.removeListener(_onEmailUiChanged);
+    _emailFocusNode.dispose();
     _emailController.dispose();
     _passwordController.dispose();
     _confirmPasswordController.dispose();

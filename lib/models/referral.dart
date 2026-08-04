@@ -3,9 +3,13 @@
 /// with dates and status only.
 class ReferralEntry {
   final String id;
-  final String status; // pending | qualified | rewarded
+  final String status; // pending | qualified | banked | rewarded
   final DateTime createdAt;
   final DateTime? qualifiedAt;
+
+  /// Set when the month was earned while the referrer was on active paid
+  /// coverage — it pays out automatically when that coverage lapses.
+  final DateTime? bankedAt;
   final DateTime? rewardedAt;
 
   const ReferralEntry({
@@ -13,6 +17,7 @@ class ReferralEntry {
     required this.status,
     required this.createdAt,
     this.qualifiedAt,
+    this.bankedAt,
     this.rewardedAt,
   });
 
@@ -23,10 +28,14 @@ class ReferralEntry {
         qualifiedAt: json['qualified_at'] != null
             ? DateTime.tryParse(json['qualified_at'] as String)
             : null,
+        bankedAt: json['banked_at'] != null
+            ? DateTime.tryParse(json['banked_at'] as String)
+            : null,
         rewardedAt: json['rewarded_at'] != null
             ? DateTime.tryParse(json['rewarded_at'] as String)
             : null,
       );
 
   bool get isRewarded => status == 'rewarded';
+  bool get isBanked => status == 'banked';
 }

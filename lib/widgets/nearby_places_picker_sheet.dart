@@ -1,3 +1,5 @@
+import 'dart:ui' show ImageFilter;
+import 'package:voyza/core/theme.dart';
 import 'package:flutter/material.dart';
 import 'package:voyza/services/places_service.dart';
 import 'package:voyza/widgets/location_photo_gallery.dart';
@@ -57,118 +59,139 @@ class _NearbyPlacesPickerSheetState extends State<NearbyPlacesPickerSheet> {
     final theme = Theme.of(context);
     final places = widget.places;
     final visible = _filtered(places);
-    return DraggableScrollableSheet(
-      initialChildSize: 0.6,
-      minChildSize: 0.4,
-      maxChildSize: 0.9,
-      expand: false,
-      builder: (context, scrollController) {
-        return Column(
-          children: [
-            Center(
-              child: Container(
-                width: 40,
-                height: 4,
-                margin: const EdgeInsets.only(top: 12, bottom: 12),
-                decoration: BoxDecoration(
-                  color: theme.dividerColor,
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
+    return ClipRRect(
+      borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(
+            sigmaX: AppTheme.sheetBlurSigma, sigmaY: AppTheme.sheetBlurSigma),
+        child: Container(
+          decoration: BoxDecoration(
+            color: theme.scaffoldBackgroundColor
+                .withValues(alpha: AppTheme.sheetFillAlpha(context)),
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+            border: Border.all(
+              color: AppTheme.sheetBorderColor(context),
+              width: 0.8,
             ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
+          ),
+          child: DraggableScrollableSheet(
+            initialChildSize: 0.6,
+            minChildSize: 0.4,
+            maxChildSize: 0.9,
+            expand: false,
+            builder: (context, scrollController) {
+              return Column(
                 children: [
-                  Expanded(
-                    child: Column(
+                  Center(
+                    child: Container(
+                      width: 40,
+                      height: 4,
+                      margin: const EdgeInsets.only(top: 12, bottom: 12),
+                      decoration: BoxDecoration(
+                        color: theme.dividerColor,
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+                    child: Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          places.isEmpty ? 'No places found' : 'Nearby places',
-                          style: theme.textTheme.titleLarge?.copyWith(
-                            fontWeight: FontWeight.bold,
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                places.isEmpty
+                                    ? 'No places found'
+                                    : 'Nearby places',
+                                style: theme.textTheme.titleLarge?.copyWith(
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                places.isEmpty
+                                    ? 'Try a larger radius in Settings.'
+                                    : 'Within ${_formatRadius(widget.radiusMeters)} of where you tapped',
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: theme.colorScheme.onSurfaceVariant,
+                                ),
+                              ),
+                            ],
                           ),
                         ),
-                        const SizedBox(height: 2),
-                        Text(
-                          places.isEmpty
-                              ? 'Try a larger radius in Settings.'
-                              : 'Within ${_formatRadius(widget.radiusMeters)} of where you tapped',
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: theme.colorScheme.onSurfaceVariant,
-                          ),
+                        IconButton(
+                          icon: const Icon(Icons.close),
+                          onPressed: () => Navigator.of(context).pop(),
+                          tooltip: 'Cancel',
                         ),
                       ],
                     ),
                   ),
-                  IconButton(
-                    icon: const Icon(Icons.close),
-                    onPressed: () => Navigator.of(context).pop(),
-                    tooltip: 'Cancel',
-                  ),
-                ],
-              ),
-            ),
-            if (places.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
-                child: TextField(
-                  controller: _searchController,
-                  onChanged: (v) => setState(() => _query = v.trim()),
-                  decoration: InputDecoration(
-                    isDense: true,
-                    hintText: 'Search this list…',
-                    prefixIcon: const Icon(Icons.search, size: 20),
-                    suffixIcon: _query.isEmpty
-                        ? null
-                        : IconButton(
-                            tooltip: 'Clear',
-                            icon: const Icon(Icons.clear, size: 18),
-                            onPressed: () {
-                              _searchController.clear();
-                              setState(() => _query = '');
-                            },
+                  if (places.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
+                      child: TextField(
+                        controller: _searchController,
+                        onChanged: (v) => setState(() => _query = v.trim()),
+                        decoration: InputDecoration(
+                          isDense: true,
+                          hintText: 'Search this list…',
+                          prefixIcon: const Icon(Icons.search, size: 20),
+                          suffixIcon: _query.isEmpty
+                              ? null
+                              : IconButton(
+                                  tooltip: 'Clear',
+                                  icon: const Icon(Icons.clear, size: 18),
+                                  onPressed: () {
+                                    _searchController.clear();
+                                    setState(() => _query = '');
+                                  },
+                                ),
+                          contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 10),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide(
+                              color: theme.dividerColor.withValues(alpha: 0.4),
+                            ),
                           ),
-                    contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 12, vertical: 10),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      borderSide: BorderSide(
-                        color: theme.dividerColor.withValues(alpha: 0.4),
-                      ),
-                    ),
-                    enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      borderSide: BorderSide(
-                        color: theme.dividerColor.withValues(alpha: 0.4),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            const Divider(height: 1),
-            Expanded(
-              child: places.isEmpty
-                  ? _buildEmpty(context)
-                  : visible.isEmpty
-                      ? _buildNoMatches(context)
-                      : ListView.separated(
-                          controller: scrollController,
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 12, vertical: 8),
-                          itemCount: visible.length,
-                          separatorBuilder: (_, __) =>
-                              const SizedBox(height: 4),
-                          itemBuilder: (context, i) =>
-                              _buildPlaceTile(context, visible[i]),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide(
+                              color: theme.dividerColor.withValues(alpha: 0.4),
+                            ),
+                          ),
                         ),
-            ),
-            if (places.isNotEmpty) _buildBottomBar(context, scrollController),
-          ],
-        );
-      },
+                      ),
+                    ),
+                  const Divider(height: 1),
+                  Expanded(
+                    child: places.isEmpty
+                        ? _buildEmpty(context)
+                        : visible.isEmpty
+                            ? _buildNoMatches(context)
+                            : ListView.separated(
+                                controller: scrollController,
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 12, vertical: 8),
+                                itemCount: visible.length,
+                                separatorBuilder: (_, __) =>
+                                    const SizedBox(height: 4),
+                                itemBuilder: (context, i) =>
+                                    _buildPlaceTile(context, visible[i]),
+                              ),
+                  ),
+                  if (places.isNotEmpty)
+                    _buildBottomBar(context, scrollController),
+                ],
+              );
+            },
+          ),
+        ),
+      ),
     );
   }
 
@@ -389,10 +412,11 @@ Future<List<NearbyPlace>> showNearbyPlacesPicker(
   final result = await showModalBottomSheet<List<NearbyPlace>>(
     context: context,
     isScrollControlled: true,
-    backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-    shape: const RoundedRectangleBorder(
-      borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-    ),
+    // Glass: the sheet paints its own frosted pane (see build), so the
+    // modal itself stays transparent with a light barrier — same treatment
+    // as the trip plan / search / collaborators sheets.
+    backgroundColor: Colors.transparent,
+    barrierColor: AppTheme.sheetBarrierColor(context),
     builder: (_) => NearbyPlacesPickerSheet(
       places: places,
       radiusMeters: radiusMeters,

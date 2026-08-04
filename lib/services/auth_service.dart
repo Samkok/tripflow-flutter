@@ -97,9 +97,11 @@ class AuthService {
           // Don't fail the whole login if RevenueCat fails
         }
 
-        // Register device for push notifications (fire-and-forget)
+        // Register device for push notifications (fire-and-forget). This is
+        // the ONE place allowed to show the OS prompt — and only on the very
+        // first sign-in (the service persists a "already asked" flag).
         try {
-          await NotificationService().registerToken();
+          await NotificationService().registerToken(allowPrompt: true);
         } catch (e) {
           debugPrint('AuthService: Failed to register push token: $e');
         }

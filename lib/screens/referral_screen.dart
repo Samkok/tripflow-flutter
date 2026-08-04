@@ -77,6 +77,7 @@ class _ReferralScreenState extends ConsumerState<ReferralScreen> {
     final codeAsync = ref.watch(myReferralCodeProvider);
     final referralsAsync = ref.watch(myReferralsProvider);
     final monthsEarned = ref.watch(referralMonthsEarnedProvider);
+    final monthsBanked = ref.watch(referralMonthsBankedProvider);
 
     // Client-side "reward earned" analytics moment (idempotent via prefs).
     ref.listen(myReferralsProvider, (prev, next) {
@@ -138,7 +139,8 @@ class _ReferralScreenState extends ConsumerState<ReferralScreen> {
                       const SizedBox(height: 8),
                       Text(
                         'Friends who join with your code get 1 month of VoyZa Pro '
-                        'free. When they start using it, you get a free month too.',
+                        'free. When they upgrade to a paid plan, you get a free '
+                        'month too.',
                         style: theme.textTheme.bodyMedium?.copyWith(
                             color: theme.colorScheme.onSurfaceVariant),
                       ),
@@ -261,6 +263,55 @@ class _ReferralScreenState extends ConsumerState<ReferralScreen> {
                 ),
                 const SizedBox(height: 16),
 
+                // ── Banked months ─────────────────────────────────────────
+                // Earned while the user was on active paid coverage — the
+                // month starts automatically the moment their plan ends, so
+                // nothing burns underneath a subscription they already paid
+                // for. Hidden when there's nothing banked.
+                if (monthsBanked > 0) ...[
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF38BDF8).withValues(alpha: 0.10),
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(
+                        color: const Color(0xFF38BDF8).withValues(alpha: 0.45),
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.savings_rounded,
+                            color: Color(0xFF38BDF8), size: 28),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                monthsBanked == 1
+                                    ? '1 free month banked'
+                                    : '$monthsBanked free months banked',
+                                style: theme.textTheme.titleSmall
+                                    ?.copyWith(fontWeight: FontWeight.w700),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                'You\'re already subscribed, so these start '
+                                'automatically when your current plan ends — '
+                                'no days wasted.',
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: theme.colorScheme.onSurfaceVariant,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                ],
+
                 // ── Late code entry (fresh accounts only) ────────────────
                 if (_accountYoungEnoughToRedeem) ...[
                   Container(
@@ -365,8 +416,9 @@ class _ReferralTile extends StatelessWidget {
           const Color(0xFF22C55E),
           Icons.check_circle_rounded
         ),
+      'banked' => ('Banked', const Color(0xFF38BDF8), Icons.savings_rounded),
       'qualified' => (
-          'Cap reached',
+          'On the way',
           const Color(0xFFF59E0B),
           Icons.hourglass_top_rounded
         ),

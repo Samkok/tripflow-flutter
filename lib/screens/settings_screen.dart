@@ -18,6 +18,7 @@ import '../providers/nearby_radius_provider.dart';
 import '../providers/zoom_fit_settings_provider.dart';
 import '../services/notification_service.dart';
 import '../services/analytics_consent_service.dart';
+import '../providers/referral_provider.dart';
 import '../providers/trip_collaborator_provider.dart';
 import '../providers/user_trip_provider.dart';
 import '../providers/trip_provider.dart';
@@ -118,7 +119,7 @@ class SettingsScreen extends ConsumerWidget {
               // Invite friends — referral program (signed-in users only).
               if (ref.watch(currentUserProvider) != null) ...[
                 _buildSectionHeader(context, 'Invite friends'),
-                _buildInviteFriendsTile(context),
+                _buildInviteFriendsTile(context, ref),
                 const SizedBox(height: 24),
               ],
 
@@ -459,7 +460,14 @@ class SettingsScreen extends ConsumerWidget {
     );
   }
 
-  Widget _buildInviteFriendsTile(BuildContext context) {
+  Widget _buildInviteFriendsTile(BuildContext context, WidgetRef ref) {
+    // Mirror the referral screen's banked-months card: when the user has
+    // earned months parked behind an active paid plan, this tile says so
+    // instead of the generic pitch.
+    final monthsBanked = ref.watch(referralMonthsBankedProvider);
+    const bankedColor = Color(0xFF38BDF8);
+    final banked = monthsBanked > 0;
+
     return Container(
       decoration: BoxDecoration(
         color: Theme.of(context).cardColor.withValues(alpha: 0.55),
@@ -481,16 +489,27 @@ class SettingsScreen extends ConsumerWidget {
         leading: Container(
           padding: const EdgeInsets.all(8),
           decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.1),
+            color: banked
+                ? bankedColor.withValues(alpha: 0.12)
+                : Theme.of(context).colorScheme.primary.withValues(alpha: 0.1),
             borderRadius: BorderRadius.circular(10),
           ),
           child: Icon(
-            Icons.card_giftcard_rounded,
-            color: Theme.of(context).colorScheme.primary,
+            banked ? Icons.savings_rounded : Icons.card_giftcard_rounded,
+            color: banked ? bankedColor : Theme.of(context).colorScheme.primary,
           ),
         ),
         title: const Text('Invite friends'),
-        subtitle: const Text('Give a month of Pro, get a month free'),
+        subtitle: Text(
+          banked
+              ? (monthsBanked == 1
+                  ? '1 free month banked — starts when your plan ends'
+                  : '$monthsBanked free months banked — start when your plan ends')
+              : 'Give a month of Pro, get a month free',
+          style: banked
+              ? const TextStyle(color: bankedColor, fontWeight: FontWeight.w600)
+              : null,
+        ),
         trailing: const Icon(Icons.arrow_forward_ios, size: 16),
       ),
     );

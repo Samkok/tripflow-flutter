@@ -19,12 +19,20 @@ final myReferralsProvider = FutureProvider<List<ReferralEntry>>((ref) async {
   if (userId == null) return const [];
   final rows = await SupabaseService.instance.client
       .from('referrals')
-      .select('id, status, created_at, qualified_at, rewarded_at')
+      .select('id, status, created_at, qualified_at, banked_at, rewarded_at')
       .eq('referrer_user_id', userId)
       .order('created_at', ascending: false);
   return (rows as List)
       .map((r) => ReferralEntry.fromJson(Map<String, dynamic>.from(r as Map)))
       .toList();
+});
+
+/// Months earned but BANKED: the referrer was on active paid coverage when
+/// the referee converted, so the free month starts automatically when their
+/// current plan ends. Drives the "banked" card on the referral screen.
+final referralMonthsBankedProvider = Provider<int>((ref) {
+  final referrals = ref.watch(myReferralsProvider).asData?.value ?? const [];
+  return referrals.where((r) => r.isBanked).length;
 });
 
 /// Months earned in the trailing 365 days (the 12/yr cap window).

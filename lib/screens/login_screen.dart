@@ -9,7 +9,9 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../providers/auth_provider.dart';
 import '../providers/subscription_provider.dart';
 import '../services/auth_service.dart';
+import '../services/email_history_service.dart';
 import '../widgets/app_toast.dart';
+import '../widgets/email_suggestions.dart';
 import '../widgets/save_password_prompt.dart';
 import '../widgets/sync_confirmation_dialog.dart';
 
@@ -24,6 +26,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   final _formKey = GlobalKey<FormState>();
+  final _emailFocusNode = FocusNode();
   bool _isLoading = false;
   bool _isPasswordVisible = false;
   bool _rememberMe = true;
@@ -32,6 +35,16 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   void initState() {
     super.initState();
     _loadRememberMe();
+    // Suggestions react to BOTH focus and typing, so rebuild on either.
+    _emailFocusNode.addListener(_onEmailUiChanged);
+    _emailController.addListener(_onEmailUiChanged);
+    EmailHistoryService.instance.load().then((_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  void _onEmailUiChanged() {
+    if (mounted) setState(() {});
   }
 
   Future<void> _loadRememberMe() async {
@@ -95,6 +108,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
       // Save preference before async gap (fire-and-forget is safe for prefs)
       AuthService.saveRememberMe(_rememberMe, _emailController.text.trim());
+      // Offer this address back next time an auth screen opens.
+      await EmailHistoryService.instance.remember(_emailController.text);
       if (mounted) {
         // If we were pushed on top of an existing screen (e.g. settings),
         // just pop back. If we ARE the root route — typically after a
@@ -154,166 +169,192 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
           ),
           Scaffold(
             backgroundColor: Colors.transparent,
-            body: SafeArea(
-              child: Stack(
-                children: [
-                  Center(
-                    child: SingleChildScrollView(
-                      padding: const EdgeInsets.all(24.0),
-                      child: Form(
-                        key: _formKey,
-                        // AutofillGroup pairs the email + password fields as
-                        // one credential, so the platform autofill picker
-                        // (iOS Passwords AutoFill / Android Google Password
-                        // Manager / etc.) fills both at once when the user
-                        // picks a saved login.
-                        child: AutofillGroup(
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              Image.asset(
-                                'assets/images/logo.png',
-                                width: 100,
-                                height: 100,
-                              ),
-                              const SizedBox(height: 16),
-                              Text(
-                                'Welcome Back',
-                                textAlign: TextAlign.center,
-                                style: theme.textTheme.headlineMedium?.copyWith(
-                                  fontWeight: FontWeight.bold,
+            // Tap anywhere outside a field to dismiss the keyboard.
+            // Translucent so fields and buttons still get their taps first.
+            body: GestureDetector(
+              onTap: () => FocusScope.of(context).unfocus(),
+              behavior: HitTestBehavior.translucent,
+              child: SafeArea(
+                child: Stack(
+                  children: [
+                    Center(
+                      child: SingleChildScrollView(
+                        padding: const EdgeInsets.all(24.0),
+                        child: Form(
+                          key: _formKey,
+                          // AutofillGroup pairs the email + password fields as
+                          // one credential, so the platform autofill picker
+                          // (iOS Passwords AutoFill / Android Google Password
+                          // Manager / etc.) fills both at once when the user
+                          // picks a saved login.
+                          child: AutofillGroup(
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                Image.asset(
+                                  'assets/images/logo.png',
+                                  width: 100,
+                                  height: 100,
                                 ),
-                              ),
-                              const SizedBox(height: 8),
-                              Text(
-                                'Sign in to continue your journey',
-                                textAlign: TextAlign.center,
-                                style: theme.textTheme.titleMedium?.copyWith(
-                                    color: theme.colorScheme.onSurfaceVariant),
-                              ),
-                              const SizedBox(height: 40),
-                              TextFormField(
-                                controller: _emailController,
-                                keyboardType: TextInputType.emailAddress,
-                                // username + email pair maximises coverage: iOS
-                                // matches saved logins by `username`, Android
-                                // by `email`. The Passwords / yellow-key bar
-                                // above the keyboard appears once the field
-                                // focuses.
-                                autofillHints: const [
-                                  AutofillHints.username,
-                                  AutofillHints.email,
-                                ],
-                                textInputAction: TextInputAction.next,
-                                decoration: const InputDecoration(
-                                  labelText: 'Email',
-                                  prefixIcon: Icon(Icons.email_outlined),
+                                const SizedBox(height: 16),
+                                Text(
+                                  'Welcome Back',
+                                  textAlign: TextAlign.center,
+                                  style:
+                                      theme.textTheme.headlineMedium?.copyWith(
+                                    fontWeight: FontWeight.bold,
+                                  ),
                                 ),
-                                validator: (val) {
-                                  if (val == null ||
-                                      val.isEmpty ||
-                                      !val.contains('@')) {
-                                    return 'Please enter a valid email';
-                                  }
-                                  return null;
-                                },
-                              ),
-                              const SizedBox(height: 20),
-                              TextFormField(
-                                controller: _passwordController,
-                                obscureText: !_isPasswordVisible,
-                                autofillHints: const [AutofillHints.password],
-                                textInputAction: TextInputAction.done,
-                                onFieldSubmitted: (_) {
-                                  if (!_isLoading) _signIn();
-                                },
-                                decoration: InputDecoration(
-                                  labelText: 'Password',
-                                  prefixIcon: const Icon(Icons.lock_outline),
-                                  suffixIcon: IconButton(
-                                    icon: Icon(
-                                      _isPasswordVisible
-                                          ? Icons.visibility_off_outlined
-                                          : Icons.visibility_outlined,
+                                const SizedBox(height: 8),
+                                Text(
+                                  'Sign in to continue your journey',
+                                  textAlign: TextAlign.center,
+                                  style: theme.textTheme.titleMedium?.copyWith(
+                                      color:
+                                          theme.colorScheme.onSurfaceVariant),
+                                ),
+                                const SizedBox(height: 40),
+                                TextFormField(
+                                  controller: _emailController,
+                                  focusNode: _emailFocusNode,
+                                  keyboardType: TextInputType.emailAddress,
+                                  // username + email pair maximises coverage: iOS
+                                  // matches saved logins by `username`, Android
+                                  // by `email`. The Passwords / yellow-key bar
+                                  // above the keyboard appears once the field
+                                  // focuses.
+                                  autofillHints: const [
+                                    AutofillHints.username,
+                                    AutofillHints.email,
+                                  ],
+                                  textInputAction: TextInputAction.next,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Email',
+                                    prefixIcon: Icon(Icons.email_outlined),
+                                  ),
+                                  validator: (val) {
+                                    if (val == null ||
+                                        val.isEmpty ||
+                                        !val.contains('@')) {
+                                      return 'Please enter a valid email';
+                                    }
+                                    return null;
+                                  },
+                                ),
+                                // Emails this device has used before.
+                                EmailSuggestions(
+                                  visible: _emailFocusNode.hasFocus,
+                                  query: _emailController.text,
+                                  onSelected: (email) {
+                                    _emailController.text = email;
+                                    _emailFocusNode.unfocus();
+                                  },
+                                  onForget: (email) async {
+                                    await EmailHistoryService.instance
+                                        .forget(email);
+                                    if (mounted) setState(() {});
+                                  },
+                                ),
+                                const SizedBox(height: 20),
+                                TextFormField(
+                                  controller: _passwordController,
+                                  obscureText: !_isPasswordVisible,
+                                  autofillHints: const [AutofillHints.password],
+                                  textInputAction: TextInputAction.done,
+                                  onFieldSubmitted: (_) {
+                                    if (!_isLoading) _signIn();
+                                  },
+                                  decoration: InputDecoration(
+                                    labelText: 'Password',
+                                    prefixIcon: const Icon(Icons.lock_outline),
+                                    suffixIcon: IconButton(
+                                      icon: Icon(
+                                        _isPasswordVisible
+                                            ? Icons.visibility_off_outlined
+                                            : Icons.visibility_outlined,
+                                      ),
+                                      onPressed: () {
+                                        setState(() {
+                                          _isPasswordVisible =
+                                              !_isPasswordVisible;
+                                        });
+                                      },
                                     ),
-                                    onPressed: () {
-                                      setState(() {
-                                        _isPasswordVisible =
-                                            !_isPasswordVisible;
-                                      });
-                                    },
                                   ),
+                                  validator: (val) => val == null || val.isEmpty
+                                      ? 'Please enter your password'
+                                      : null,
                                 ),
-                                validator: (val) => val == null || val.isEmpty
-                                    ? 'Please enter your password'
-                                    : null,
-                              ),
-                              const SizedBox(height: 8),
-                              Row(
-                                children: [
-                                  Checkbox(
-                                    value: _rememberMe,
-                                    onChanged: (val) => setState(
-                                        () => _rememberMe = val ?? true),
-                                    activeColor: theme.colorScheme.primary,
-                                  ),
-                                  const Text('Remember Me'),
-                                ],
-                              ),
-                              const SizedBox(height: 16),
-                              ElevatedButton(
-                                onPressed: _isLoading ? null : _signIn,
-                                child: _isLoading
-                                    ? const SizedBox(
-                                        height: 24,
-                                        width: 24,
-                                        child: CircularProgressIndicator(
-                                            strokeWidth: 3),
-                                      )
-                                    : const Text('Sign In'),
-                              ),
-                              const SizedBox(height: 24),
-                              TextButton(
-                                onPressed: () {
-                                  Navigator.of(context).push(MaterialPageRoute(
-                                      builder: (_) => const SignupScreen()));
-                                },
-                                child: const Text(
-                                    "Don't have an account? Sign Up"),
-                              ),
-                              const SizedBox(height: 8),
-                              TextButton(
-                                onPressed: () {
-                                  Navigator.of(context).push(MaterialPageRoute(
-                                      builder: (_) =>
-                                          const ForgotPasswordScreen()));
-                                },
-                                child: const Text('Forgot Password?'),
-                              ),
-                              if (isRootRoute) ...[
+                                const SizedBox(height: 8),
+                                Row(
+                                  children: [
+                                    Checkbox(
+                                      value: _rememberMe,
+                                      onChanged: (val) => setState(
+                                          () => _rememberMe = val ?? true),
+                                      activeColor: theme.colorScheme.primary,
+                                    ),
+                                    const Text('Remember Me'),
+                                  ],
+                                ),
+                                const SizedBox(height: 16),
+                                ElevatedButton(
+                                  onPressed: _isLoading ? null : _signIn,
+                                  child: _isLoading
+                                      ? const SizedBox(
+                                          height: 24,
+                                          width: 24,
+                                          child: CircularProgressIndicator(
+                                              strokeWidth: 3),
+                                        )
+                                      : const Text('Sign In'),
+                                ),
+                                const SizedBox(height: 24),
+                                TextButton(
+                                  onPressed: () {
+                                    Navigator.of(context).push(
+                                        MaterialPageRoute(
+                                            builder: (_) =>
+                                                const SignupScreen()));
+                                  },
+                                  child: const Text(
+                                      "Don't have an account? Sign Up"),
+                                ),
                                 const SizedBox(height: 8),
                                 TextButton(
-                                  onPressed: dismiss,
-                                  child: const Text('Continue as guest'),
+                                  onPressed: () {
+                                    Navigator.of(context).push(
+                                        MaterialPageRoute(
+                                            builder: (_) =>
+                                                const ForgotPasswordScreen()));
+                                  },
+                                  child: const Text('Forgot Password?'),
                                 ),
+                                if (isRootRoute) ...[
+                                  const SizedBox(height: 8),
+                                  TextButton(
+                                    onPressed: dismiss,
+                                    child: const Text('Continue as guest'),
+                                  ),
+                                ],
                               ],
-                            ],
+                            ),
                           ),
                         ),
                       ),
                     ),
-                  ),
-                  Positioned(
-                    top: 8,
-                    right: 8,
-                    child: IconButton(
-                      icon: const Icon(Icons.close),
-                      onPressed: dismiss,
-                      tooltip: isRootRoute ? 'Continue as guest' : 'Dismiss',
+                    Positioned(
+                      top: 8,
+                      right: 8,
+                      child: IconButton(
+                        icon: const Icon(Icons.close),
+                        onPressed: dismiss,
+                        tooltip: isRootRoute ? 'Continue as guest' : 'Dismiss',
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
           ),
@@ -324,6 +365,9 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
   @override
   void dispose() {
+    _emailFocusNode.removeListener(_onEmailUiChanged);
+    _emailController.removeListener(_onEmailUiChanged);
+    _emailFocusNode.dispose();
     _emailController.dispose();
     _passwordController.dispose();
     super.dispose();

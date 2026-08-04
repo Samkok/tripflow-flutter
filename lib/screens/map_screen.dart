@@ -116,7 +116,11 @@ class _MapScreenState extends ConsumerState<MapScreen>
     // OPTIMIZATION: Register as lifecycle observer to handle app state changes
     WidgetsBinding.instance.addObserver(this);
     _sheetController = DraggableScrollableController();
-    _initializeLocation();
+    // NOT here: MapScreen is built inside MainScreen's IndexedStack, so its
+    // initState runs at launch even when the Map tab is offstage — which
+    // fired the OS location prompt on the very first frame, before the user
+    // had seen a map. Deferred to _maybeInitLocationForVisibleMap(), which
+    // runs when the Map tab is actually shown (see build + didChangeDeps).
     // Session 2+: an anonymous user lands directly on the map tab with no
     // provider event, so check once after the first frame.
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -241,6 +245,45 @@ class _MapScreenState extends ConsumerState<MapScreen>
     }
   }
 
+  /// True once the Map tab has been visible at least once, so the location
+  /// permission prompt fires in context (on the map) rather than at launch.
+  bool _locationInitStarted = false;
+
+  /// Kicks off location setup the first time the Map tab is actually on
+  /// screen. Both Apple and Google recommend asking in context like this —
+  /// it's also where the permission finally makes sense to the user.
+  /// Opened only by an explicit "the user is now looking at the map, and
+  /// nothing is covering it" signal — see [_openLocationGate].
+  ///
+  /// A plain "is the Map tab selected + is my route on top?" test is NOT
+  /// enough: MainScreen switches anonymous users to the Map tab
+  /// synchronously at launch, but doesn't push onboarding until after a
+  /// multi-second sync await. In that gap the tab IS the map and nothing IS
+  /// on top yet — so the prompt fired seconds before onboarding appeared.
+  bool _locationGateOpen = false;
+
+  /// Marks the map as the user's current, uncovered surface and takes the
+  /// first location reading. Called from the two signals that genuinely mean
+  /// that: startup chrome (consent + onboarding + sign-up) having fully
+  /// resolved, and the user tapping over to the Map tab.
+  void _openLocationGate() {
+    _locationGateOpen = true;
+    // From here on the OS dialog is allowed — the map is what the user is
+    // looking at, so the request finally has context.
+    LocationService.promptsAllowed = true;
+    _maybeInitLocationForVisibleMap();
+  }
+
+  void _maybeInitLocationForVisibleMap() {
+    if (_locationInitStarted || !_locationGateOpen || !mounted) return;
+    if (ref.read(selectedTabIndexProvider) != 1) return;
+    // Belt and braces: never prompt while any route sits above the map.
+    final route = ModalRoute.of(context);
+    if (route != null && !route.isCurrent) return;
+    _locationInitStarted = true;
+    _initializeLocation();
+  }
+
   Future<void> _initializeLocation() async {
     try {
       final currentLocation = await LocationService.getCurrentLocation();
@@ -356,6 +399,13 @@ class _MapScreenState extends ConsumerState<MapScreen>
         _lastLifecycleState != AppLifecycleState.resumed) {
       return;
     }
+    // Arrival polling starts at LAUNCH (initState post-frame) so arriving
+    // while the app was closed is noticed immediately — which means it must
+    // never be the thing that raises the permission dialog. Without this
+    // gate, a user with an active trip got the OS location prompt on top of
+    // onboarding. Opportunistic feature: run only if already permitted.
+    if (!await LocationService.hasLocationPermissionAlready()) return;
+    if (!mounted) return;
     // Cheap pre-checks before spending a GPS fix.
     if (ref.read(realtimeActiveTripProvider).valueOrNull == null) return;
     final now = DateTime.now();
@@ -716,11 +766,10 @@ class _MapScreenState extends ConsumerState<MapScreen>
     final showPlaceNames = ref.read(showPlaceNamesProvider);
     final style = await MapWidget.getMapStyle(themeMode, showPlaceNames);
     _mapController!.setMapStyle(style);
-    // Now that the controller is ready, animate to current location.
-    // _initializeLocation() was already called from initState() but _mapController
-    // was null then so animateCamera was skipped. _startLocationTracking() has its
-    // own guard so calling this again is safe.
-    _initializeLocation();
+    // Controller is ready — animate to current location. The map only gets
+    // created when the tab is visible, so this is also a valid in-context
+    // trigger; the guard inside keeps it to one run.
+    _maybeInitLocationForVisibleMap();
   }
 
   Future<void> _onMapLongPress(LatLng coordinates) async {
@@ -1202,10 +1251,22 @@ class _MapScreenState extends ConsumerState<MapScreen>
     // flow is already ON the map tab when onboarding pops, so no tab event
     // fires for them).
     ref.listen<int>(selectedTabIndexProvider, (prev, next) {
-      if (next == 1 && prev != 1) _maybeStartMapTutorial();
+      if (next == 1 && prev != 1) {
+        _maybeStartMapTutorial();
+        // User deliberately switched to the map — an unambiguous
+        // "I'm looking at the map now" signal.
+        _openLocationGate();
+      }
     });
     ref.listen<int>(mapTutorialRecheckProvider, (prev, next) {
-      if (next != (prev ?? 0)) _maybeStartMapTutorial();
+      if (next != (prev ?? 0)) {
+        _maybeStartMapTutorial();
+        // MainScreen bumps this at the END of its startup chain — after the
+        // analytics-consent dialog, onboarding, and the sign-up screen have
+        // all resolved. For a launch that lands on the map, this is the
+        // first moment the map is genuinely uncovered.
+        _openLocationGate();
+      }
     });
 
     ref.listen<int>(firstOptimizeCelebrationTrigger, (previous, next) {
@@ -2026,6 +2087,9 @@ class _MapScreenState extends ConsumerState<MapScreen>
   }
 
   Future<void> _goToCurrentLocation() async {
+    // Explicit user action on the map — the OS prompt is legitimate here
+    // even if the startup gate never opened (e.g. user raced past it).
+    LocationService.promptsAllowed = true;
     // Try to get current location from state first
     LatLng? currentLocation = ref.read(tripProvider).currentLocation;
 

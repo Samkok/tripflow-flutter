@@ -340,7 +340,11 @@ function determineSubscriptionStatus(
 //
 // State machine (referrals table): pending → qualified → rewarded.
 // pending   — created by redeem-referral (referee already got their 30 days)
-// qualified — the referee's first real INITIAL_PURCHASE landed (trial or paid)
+// qualified — the referee's first PAID event landed: a non-trial
+//             INITIAL_PURCHASE, or any RENEWAL (which is how a trial
+//             converts). Trial STARTS alone no longer qualify.
+// banked    — earned while the referrer was on active paid coverage; pays
+//             out when that coverage lapses (EXPIRATION hook / reconciler)
 // rewarded  — the referrer's promotional grant succeeded (cap-checked)
 //
 // Invariants: the pending→qualified transition is a compare-and-swap, and the
@@ -409,8 +413,20 @@ async function grantPromotionalMonth(
   return true;
 }
 
-/** Referrer's current promotional-entitlement expiry (ms), or null. */
-async function getPromoExpiryMs(rcAppUserId: string): Promise<number | null> {
+/**
+ * Referrer's entitlement state, read once from RevenueCat:
+ *   promoExpiresMs — expiry of a PROMOTIONAL 'premium' entitlement (for the
+ *                    extend-don't-overwrite grant math), null when none.
+ *   paidActive     — true when the entitlement is backed by a real STORE
+ *                    product that hasn't expired. Drives BANKING: a paying
+ *                    referrer's reward is parked until their plan lapses,
+ *                    instead of burning under coverage they already bought.
+ * Returns null when RC is unreachable — callers must treat that as
+ * "unknown, change nothing" and rely on a later event / the reconciler.
+ */
+async function getReferrerEntitlementState(
+  rcAppUserId: string,
+): Promise<{ promoExpiresMs: number | null; paidActive: boolean } | null> {
   if (!revenueCatSecretApiKey) return null;
   try {
     const res = await fetch(
@@ -420,17 +436,143 @@ async function getPromoExpiryMs(rcAppUserId: string): Promise<number | null> {
     if (!res.ok) return null;
     const data = await res.json();
     const ent = data?.subscriber?.entitlements?.[REFERRAL_ENTITLEMENT];
-    if (!ent?.expires_date) return null;
-    // Only treat as "promo time to extend" when the entitlement is backed by
-    // a promotional product — a paying store subscriber gets a plain month
-    // (overlap accepted in v1; banking on EXPIRATION is a v1.1 upgrade).
+    if (!ent) return { promoExpiresMs: null, paidActive: false };
     const isPromo = typeof ent.product_identifier === 'string' &&
       ent.product_identifier.startsWith('rc_promo_');
-    if (!isPromo) return null;
-    const ms = Date.parse(ent.expires_date);
-    return Number.isFinite(ms) ? ms : null;
+    const expiresMs = ent.expires_date ? Date.parse(ent.expires_date) : null;
+    if (isPromo) {
+      return {
+        promoExpiresMs:
+          expiresMs !== null && Number.isFinite(expiresMs) ? expiresMs : null,
+        paidActive: false,
+      };
+    }
+    // Store-backed entitlement: active while unexpired (null expiry =
+    // lifetime/non-expiring → treat as active).
+    const paidActive = expiresMs === null || expiresMs > Date.now();
+    return { promoExpiresMs: null, paidActive };
   } catch (_) {
     return null;
+  }
+}
+
+/** In-app + email notice that a month was BANKED (not yet started). */
+async function notifyMonthBanked(userId: string) {
+  try {
+    await supabase.from('notifications').insert({
+      user_id: userId,
+      type: 'referral_reward',
+      title: 'Free month earned — banked for later 🎉',
+      body: 'A friend you invited just went Pro. Since you already have an ' +
+        'active plan, your free month is banked and starts automatically ' +
+        'when your current plan ends.',
+      data: { screen: 'referral' },
+    });
+  } catch (e) {
+    console.error('referral: banked notification failed (non-fatal):', e);
+  }
+  const resendKey = Deno.env.get('RESEND_API_KEY');
+  if (!resendKey) return;
+  try {
+    const from = Deno.env.get('LIFECYCLE_FROM') ?? 'VoyZa <onboarding@resend.dev>';
+    const { data: profile } = await supabase
+      .from('user_profiles').select('email').eq('user_id', userId).maybeSingle();
+    if (!profile?.email) return;
+    const p = 'margin:0 0 12px;color:#46535f;font-size:15px;line-height:1.5';
+    const html =
+      `<div style="background:#f4f6f8;padding:24px;font-family:-apple-system,'Segoe UI',Roboto,sans-serif">` +
+      `<div style="max-width:520px;margin:0 auto;background:#fff;border-radius:16px;overflow:hidden;border:1px solid #e6e9ee">` +
+      `<div style="background:linear-gradient(135deg,#2B1D70,#2E5BD0 60%,#15BFB6);padding:22px 24px;color:#fff;font-weight:800;font-size:20px">VoyZa</div>` +
+      `<div style="padding:24px">` +
+      `<h1 style="margin:0 0 14px;font-size:22px;color:#16202b">You earned a free month — it's banked! 🎉</h1>` +
+      `<p style="${p}">A friend you invited just started using VoyZa Pro, so you've earned <strong>30 days of Pro</strong>.</p>` +
+      `<p style="${p}">You're already subscribed, so we've banked it: your free month starts <strong>automatically when your current plan ends</strong> — no action needed, no days wasted.</p>` +
+      `</div>` +
+      `<div style="padding:16px 24px;color:#9aa4ad;font-size:12px;border-top:1px solid #eef1f4">VoyZa · voyza.xtremon.com</div>` +
+      `</div></div>`;
+    await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${resendKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        from, to: profile.email,
+        subject: 'Your free month of VoyZa Pro is banked', html,
+      }),
+    });
+  } catch (e) {
+    console.error('referral: banked email failed (non-fatal):', e);
+  }
+}
+
+/**
+ * The user's PAID coverage just ended (EXPIRATION / REFUND) — pay out any
+ * months they banked as a REFERRER while they were still paying. Sequential:
+ * each payout is cap-checked and CAS-claimed exactly like the direct path.
+ * Never throws; anything deferred stays 'banked' for the daily reconciler.
+ */
+async function processBankedPayouts(userId: string) {
+  try {
+    const { data: rows } = await supabase
+      .from('referrals')
+      .select('id')
+      .eq('referrer_user_id', userId)
+      .eq('status', 'banked')
+      .is('rewarded_at', null)
+      .order('banked_at', { ascending: true })
+      .limit(REFERRAL_CAP_PER_365D);
+    if (!rows || rows.length === 0) return;
+
+    // Confirm with RC that paid coverage is REALLY gone — the event we're
+    // reacting to may concern one of several products (crossgrade, resub).
+    let entState = await getReferrerEntitlementState(userId);
+    if (entState === null || entState.paidActive) return;
+
+    for (const row of rows) {
+      const since = new Date(Date.now() - 365 * 86_400_000).toISOString();
+      const { count } = await supabase
+        .from('referrals')
+        .select('id', { count: 'exact', head: true })
+        .eq('referrer_user_id', userId)
+        .eq('status', 'rewarded')
+        .gte('rewarded_at', since);
+      if ((count ?? 0) >= REFERRAL_CAP_PER_365D) return; // cap — stays banked
+
+      const { data: claimed } = await supabase
+        .from('referrals')
+        .update({ status: 'rewarded', rewarded_at: new Date().toISOString() })
+        .eq('id', row.id)
+        .eq('status', 'banked')
+        .is('rewarded_at', null)
+        .select('id');
+      if (!claimed || claimed.length === 0) continue; // lost a race
+
+      const granted =
+        await grantPromotionalMonth(userId, entState.promoExpiresMs);
+      if (!granted) {
+        // Revert; the reconciler (or the next lapse event) retries.
+        await supabase
+          .from('referrals')
+          .update({ status: 'banked', rewarded_at: null })
+          .eq('id', row.id);
+        return;
+      }
+
+      const monthsThisYear = (count ?? 0) + 1;
+      await supabase.from('notifications').insert({
+        user_id: userId,
+        type: 'referral_reward',
+        title: 'Your banked free month just started 🎉',
+        body:
+          `Your plan ended, so a banked referral month kicked in — 30 days ` +
+          `of Pro, on us. ${monthsThisYear} of 12 free months this year.`,
+        data: { screen: 'referral' },
+      });
+      await sendReferralRewardEmail(userId, monthsThisYear);
+
+      // Refresh promo expiry so the NEXT iteration extends, not overwrites.
+      entState = (await getReferrerEntitlementState(userId)) ?? entState;
+    }
+  } catch (e) {
+    console.error('referral: processBankedPayouts failed (non-fatal):', e);
   }
 }
 
@@ -492,13 +634,22 @@ async function processReferralReward(event: any, refereeUserId: string) {
       .maybeSingle();
     if (!referral) return;
 
-    // 2. pending → qualified fires ONLY on the referee's first real
-    // purchase/trial event. Already-qualified rows, by contrast, may
-    // self-heal a transiently failed reward on ANY of the referee's later
-    // events (RENEWAL etc.) — INITIAL_PURCHASE never recurs for the same
-    // subscription, so gating everything on it would strand them.
+    // 2. pending → qualified fires ONLY once the referee's money has
+    // actually cleared (tightened from trial-start to PAID conversion):
+    //   • INITIAL_PURCHASE with a non-TRIAL period — a direct paid start
+    //     (paid intro pricing included), or
+    //   • any RENEWAL — renewals are always charged, and the first renewal
+    //     after a trial IS the trial→paid conversion.
+    // A trial start alone no longer qualifies, which removes the
+    // start-a-trial-then-cancel farming vector. Already-qualified rows, by
+    // contrast, may self-heal a transiently failed reward on ANY of the
+    // referee's later events.
     if (referral.status === 'pending') {
-      if (event.type !== 'INITIAL_PURCHASE') return;
+      const periodType = (event.period_type ?? '').toUpperCase();
+      const paidInitial =
+        event.type === 'INITIAL_PURCHASE' && periodType !== 'TRIAL';
+      const paidRenewal = event.type === 'RENEWAL';
+      if (!paidInitial && !paidRenewal) return;
       await supabase
         .from('referrals')
         .update({ status: 'qualified', qualified_at: new Date().toISOString() })
@@ -508,7 +659,32 @@ async function processReferralReward(event: any, refereeUserId: string) {
 
     if (referral.rewarded_at != null) return; // already rewarded
 
-    // 3. Cap: 12 rewarded referrals per trailing 365 days. (Best-effort,
+    // 3. One RC read powers both banking and the grant math below. Null =
+    // RC unreachable → change nothing; a later event or the daily
+    // reconciler retries.
+    const entState =
+      await getReferrerEntitlementState(referral.referrer_user_id);
+    if (entState === null) return;
+
+    // 3a. BANKING: while the referrer is on ACTIVE PAID coverage a promo
+    // month would just run underneath it and be wasted. Park the earned
+    // month as 'banked' — the EXPIRATION/REFUND hook and the daily
+    // reconciler pay it out the moment their plan actually lapses.
+    if (entState.paidActive) {
+      const { data: banked } = await supabase
+        .from('referrals')
+        .update({ status: 'banked', banked_at: new Date().toISOString() })
+        .eq('id', referral.id)
+        .eq('status', 'qualified')
+        .is('rewarded_at', null)
+        .select('id');
+      if (banked && banked.length > 0) {
+        await notifyMonthBanked(referral.referrer_user_id);
+      }
+      return;
+    }
+
+    // 4. Cap: 12 rewarded referrals per trailing 365 days. (Best-effort,
     // not atomic across concurrent qualifications of DIFFERENT referees —
     // worst case the cap overshoots by one month. Accepted.)
     const since = new Date(Date.now() - 365 * 86_400_000).toISOString();
@@ -523,7 +699,7 @@ async function processReferralReward(event: any, refereeUserId: string) {
       return; // stays 'qualified'; UI shows "cap reached"
     }
 
-    // 4. CLAIM before granting — the rewarded_at CAS is the mutex, so two
+    // 5. CLAIM before granting — the rewarded_at CAS is the mutex, so two
     // concurrent deliveries of the same event can't double-grant. If the
     // grant then fails, the claim is reverted and a later event retries.
     const { data: claimed } = await supabase
@@ -534,10 +710,9 @@ async function processReferralReward(event: any, refereeUserId: string) {
       .select('id');
     if (!claimed || claimed.length === 0) return; // lost the race
 
-    // 5. Grant the referrer 30 days (extend when they have promo time left).
-    const promoExpiry = await getPromoExpiryMs(referral.referrer_user_id);
+    // 6. Grant the referrer 30 days (extend when they have promo time left).
     const granted = await grantPromotionalMonth(
-      referral.referrer_user_id, promoExpiry);
+      referral.referrer_user_id, entState.promoExpiresMs);
     if (!granted) {
       // Revert the claim so the row self-heals on a later referee event.
       await supabase
@@ -1050,6 +1225,11 @@ serve(async (req) => {
     // non-fatal: userId here is always a resolved Supabase UUID (anonymous
     // events either returned early or were mapped by resolveAuthenticatedOwner).
     await processReferralReward(event, userId);
+
+    // 9b. Paid coverage lapsing is the moment BANKED referral months start.
+    if (event.type === 'EXPIRATION' || event.type === 'REFUND') {
+      await processBankedPayouts(userId);
+    }
 
     // 10. Return success response
     return new Response(

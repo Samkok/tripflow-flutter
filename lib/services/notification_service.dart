@@ -111,11 +111,19 @@ class NotificationService {
     }
   }
 
-  /// Requests push notification permission and registers the FCM token in
-  /// the `device_tokens` table for the currently signed-in user.
+  /// SharedPreferences flag: have we ever shown the OS notification prompt?
+  /// Push only matters once you're signed in (collab invites, trip activity),
+  /// so the prompt fires on the FIRST sign-in and never again on its own —
+  /// later sign-ins and restored sessions just reuse whatever the user chose.
+  /// Settings → Notifications still lets them turn it on explicitly.
+  static const _kNotifPromptShown = 'notif_permission_prompted_v1';
+
+  /// Registers the FCM token for the signed-in user.
   ///
-  /// Call this after a successful sign-in.
-  Future<void> registerToken() async {
+  /// [allowPrompt] permits showing the OS permission dialog — pass true ONLY
+  /// from a real sign-in. Restored sessions pass false so a returning user
+  /// isn't re-prompted at launch.
+  Future<void> registerToken({bool allowPrompt = false}) async {
     try {
       if (!_initialized) await initialize();
 
@@ -126,16 +134,30 @@ class NotificationService {
         return;
       }
 
-      // Request permission (iOS shows a dialog; Android 13+ requires runtime permission)
-      final settings = await FirebaseMessaging.instance.requestPermission(
-        alert: true,
-        badge: true,
-        sound: true,
-        provisional: false,
-      );
+      // SharedPreferences directly (not SharedPrefsCache) — this service
+      // never imports main.dart, see the circular-dependency note below.
+      final prefs = await SharedPreferences.getInstance();
+      final alreadyPrompted = prefs.getBool(_kNotifPromptShown) ?? false;
 
-      if (settings.authorizationStatus == AuthorizationStatus.denied) {
-        debugPrint('NotificationService: Push permission denied by user');
+      final NotificationSettings settings;
+      if (allowPrompt && !alreadyPrompted) {
+        // First sign-in on this device: ask (iOS dialog; Android 13+ runtime).
+        settings = await FirebaseMessaging.instance.requestPermission(
+          alert: true,
+          badge: true,
+          sound: true,
+          provisional: false,
+        );
+        await prefs.setBool(_kNotifPromptShown, true);
+      } else {
+        // Never re-prompt on our own — just read what the user already chose.
+        settings = await FirebaseMessaging.instance.getNotificationSettings();
+      }
+
+      if (settings.authorizationStatus != AuthorizationStatus.authorized &&
+          settings.authorizationStatus != AuthorizationStatus.provisional) {
+        debugPrint('NotificationService: Push not authorized '
+            '(${settings.authorizationStatus}) — skipping token registration');
         return;
       }
 
@@ -211,6 +233,9 @@ class NotificationService {
 
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_prefKey, granted);
+    // The user has now seen the OS prompt (from Settings), so a later first
+    // sign-in shouldn't try to raise it again.
+    await prefs.setBool(_kNotifPromptShown, true);
     return granted;
   }
 

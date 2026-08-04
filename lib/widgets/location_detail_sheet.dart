@@ -88,54 +88,69 @@ class LocationDetailSheet extends ConsumerWidget {
       // a scroll view keeps every section reachable (and constraint-safe) on
       // small screens now that the photo strip adds height; when the content
       // fits, MainAxisSize.min keeps the sheet hugging it exactly as before.
-      child: SingleChildScrollView(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Header with stop number
-            _buildHeader(context, ref, updatedLocation, isPastDate),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // DRAG ZONE — deliberately OUTSIDE the scroll view below. A
+          // vertical drag here isn't consumed by a scrollable, so it reaches
+          // showModalBottomSheet's own drag handling and dismisses the sheet
+          // with the native follow-and-spring. Spans the top of the modal
+          // down through the location name.
+          _buildHeader(context, ref, updatedLocation, isPastDate),
+          Flexible(
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _buildHeaderBody(context, ref, updatedLocation, isPastDate),
 
-            // Photos section — Google Places photos for this stop. The strip is
-            // bounded on both axes (fixed-height SizedBox hosting a horizontal
-            // ListView), so it cannot introduce unbounded-constraint errors in
-            // this intrinsically-sized Column. Tapping a photo opens the
-            // full-screen swipe-to-dismiss gallery viewer.
-            if (updatedLocation.photoReferences.isNotEmpty) ...[
-              const Divider(height: 32),
-              _buildPhotosSection(context, updatedLocation),
-            ],
+                  // Photos section — Google Places photos for this stop. The strip is
+                  // bounded on both axes (fixed-height SizedBox hosting a horizontal
+                  // ListView), so it cannot introduce unbounded-constraint errors in
+                  // this intrinsically-sized Column. Tapping a photo opens the
+                  // full-screen swipe-to-dismiss gallery viewer.
+                  if (updatedLocation.photoReferences.isNotEmpty) ...[
+                    const Divider(height: 32),
+                    _buildPhotosSection(context, updatedLocation),
+                  ],
 
-            // Hours section — Google's hours for the planned day + user override
-            // for the closing-time-aware optimizer. Only shown when there's
-            // something to show (Google data, user override, or a placeId that
-            // makes refresh actionable) so empty manual-coord rows don't get a
-            // dead section.
-            if (_hasAnyHoursAffordance(updatedLocation)) ...[
-              const Divider(height: 32),
-              _buildHoursSection(context, ref, updatedLocation, isPastDate),
-            ],
+                  // Hours section — Google's hours for the planned day + user override
+                  // for the closing-time-aware optimizer. Only shown when there's
+                  // something to show (Google data, user override, or a placeId that
+                  // makes refresh actionable) so empty manual-coord rows don't get a
+                  // dead section.
+                  if (_hasAnyHoursAffordance(updatedLocation)) ...[
+                    const Divider(height: 32),
+                    _buildHoursSection(
+                        context, ref, updatedLocation, isPastDate),
+                  ],
 
-            // Accommodation section — flag this place as the stay for a day
-            // or the whole trip (one accommodation per day, DB-enforced).
-            const Divider(height: 32),
-            _buildAccommodationSection(context, ref, updatedLocation),
+                  // Accommodation section — flag this place as the stay for a day
+                  // or the whole trip (one accommodation per day, DB-enforced).
+                  const Divider(height: 32),
+                  _buildAccommodationSection(context, ref, updatedLocation),
 
-            // Multi-day stay section — lets the user mark this location as an
-            // accommodation that spans multiple days, with quick actions for
-            // single-day / pick-range / entire-trip. Shown for any editable
-            // stop (no extra gating; useful for hotels, residencies, etc.).
-            const Divider(height: 32),
-            _buildMultiDaySection(context, ref, updatedLocation, isPastDate),
+                  // Multi-day stay section — lets the user mark this location as an
+                  // accommodation that spans multiple days, with quick actions for
+                  // single-day / pick-range / entire-trip. Shown for any editable
+                  // stop (no extra gating; useful for hotels, residencies, etc.).
+                  const Divider(height: 32),
+                  _buildMultiDaySection(
+                      context, ref, updatedLocation, isPastDate),
 
-            // Travel info (if available)
-            if (updatedLocation.travelTimeFromPrevious != null &&
-                updatedLocation.distanceFromPrevious != null) ...[
-              const Divider(height: 32),
-              _buildTravelInfo(context, ref, updatedLocation),
-            ],
-          ],
-        ),
+                  // Travel info (if available)
+                  if (updatedLocation.travelTimeFromPrevious != null &&
+                      updatedLocation.distanceFromPrevious != null) ...[
+                    const Divider(height: 32),
+                    _buildTravelInfo(context, ref, updatedLocation),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -451,13 +466,13 @@ class LocationDetailSheet extends ConsumerWidget {
     final hasWriteAccess =
         hasWriteAccessAsync.whenOrNull(data: (value) => value) ?? false;
 
-    // Disable editing if past date OR no write access
-    final canEdit = !isPastDate && hasWriteAccess;
-
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Stop number and label row
+        // Action buttons — one row, each labelled. The old "Stop N" /
+        // "Stay: 30m" column is gone: the avatar already carries the stop
+        // number, and the stay duration has its own row further down, so
+        // the freed width goes to the labels.
         Row(
           children: [
             CircleAvatar(
@@ -466,151 +481,76 @@ class LocationDetailSheet extends ConsumerWidget {
                   : updatedLocation.isSkipped
                       ? Colors.grey.shade600
                       : Theme.of(context).colorScheme.primary,
-              radius: 24,
+              radius: 22,
               child: updatedLocation.isDone
-                  ? const Icon(Icons.check, color: Colors.white, size: 24)
+                  ? const Icon(Icons.check, color: Colors.white, size: 22)
                   : updatedLocation.isSkipped
                       // Skipped stops drop out of the optimized route, so
-                      // the index number is meaningless — replace it with
-                      // a minus glyph and let the label below say just
-                      // "Stop" (no number).
-                      ? const Icon(Icons.remove, color: Colors.white, size: 24)
+                      // the index number is meaningless — a minus glyph
+                      // reads better than a stale number.
+                      ? const Icon(Icons.remove, color: Colors.white, size: 22)
                       : Text(
                           '$number',
                           style: const TextStyle(
                             color: Colors.black,
                             fontWeight: FontWeight.bold,
-                            fontSize: 20,
+                            fontSize: 18,
                           ),
                         ),
             ),
-            const SizedBox(width: 16),
-            // Flexible so the title/stay column yields (ellipsis) instead of
-            // shoving the fixed action buttons off-screen. A plain Spacer
-            // can't do this — it only shrinks to zero, never negative, so a
-            // long "Planned Stay" line overflowed the row on the right.
+            const SizedBox(width: 12),
+            // Equal-width so the three never overflow, whatever the labels
+            // become at large text scales.
             Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    updatedLocation.isDone
-                        ? 'Done'
-                        : updatedLocation.isSkipped
-                            ? 'Stop'
-                            : 'Stop $number',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                          color: updatedLocation.isDone
-                              ? Colors.green.shade500
-                              : updatedLocation.isSkipped
-                                  ? Colors.grey.shade600
-                                  : Theme.of(context).colorScheme.primary,
-                          fontWeight: FontWeight.w600,
-                        ),
-                  ),
-                  Text(
-                    'Stay: ${_formatDuration(updatedLocation.stayDuration)}',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: Colors.grey[500],
-                        ),
-                  ),
-                ],
+              child: _LabeledAction(
+                icon: Icons.delete_outline,
+                label: 'Delete',
+                color: Colors.red[600]!,
+                enabled: hasWriteAccess,
+                onTap: () => _showDeleteConfirmationDialog(
+                    context, ref, updatedLocation),
               ),
             ),
             const SizedBox(width: 8),
-            // Delete button
-            GestureDetector(
-              onTap: hasWriteAccess
-                  ? () => _showDeleteConfirmationDialog(
-                      context, ref, updatedLocation)
-                  : null,
-              child: Container(
-                width: 44,
-                height: 44,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: hasWriteAccess ? Colors.red[600] : Colors.grey[400],
-                ),
-                child: const Icon(Icons.delete_outline,
-                    color: Colors.white, size: 22),
+            // Skip / Unskip — a skipped stop stays pinned but drops out of
+            // the optimized route.
+            Expanded(
+              child: _LabeledAction(
+                icon: updatedLocation.isSkipped
+                    ? Icons.refresh_rounded
+                    : Icons.remove_circle_outline,
+                label: updatedLocation.isSkipped ? 'Unskip' : 'Skip',
+                color: updatedLocation.isSkipped
+                    ? Colors.grey[700]!
+                    : Colors.orange[700]!,
+                enabled: hasWriteAccess,
+                onTap: () {
+                  final notifier = ref.read(tripProvider.notifier);
+                  if (updatedLocation.isSkipped) {
+                    notifier.unskipMultipleLocations({updatedLocation.id});
+                  } else {
+                    notifier.skipMultipleLocations({updatedLocation.id});
+                  }
+                },
               ),
             ),
             const SizedBox(width: 8),
-            // Skip / Unskip button — when skipped, the location stays
-            // pinned but the route optimizer excludes it. Lets the user
-            // temporarily pull a stop out of the plan without losing
-            // it. Toggle reflects the current state.
-            Tooltip(
-              message: updatedLocation.isSkipped ? 'Unskip' : 'Skip',
-              child: GestureDetector(
-                onTap: hasWriteAccess
-                    ? () {
-                        final notifier = ref.read(tripProvider.notifier);
-                        if (updatedLocation.isSkipped) {
-                          notifier
-                              .unskipMultipleLocations({updatedLocation.id});
-                        } else {
-                          notifier.skipMultipleLocations({updatedLocation.id});
-                        }
-                      }
-                    : null,
-                child: Container(
-                  width: 44,
-                  height: 44,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: !hasWriteAccess
-                        ? Colors.grey[400]
-                        : updatedLocation.isSkipped
-                            ? Colors.grey[700]
-                            : Colors.orange[700],
-                  ),
-                  child: Icon(
-                    updatedLocation.isSkipped
-                        ? Icons.refresh_rounded
-                        : Icons.remove_circle_outline,
-                    color: Colors.white,
-                    size: 22,
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(width: 8),
-            // Mark as done button
-            GestureDetector(
-              onTap: hasWriteAccess
-                  ? () {
-                      if (updatedLocation.isDone) {
-                        ref
-                            .read(tripProvider.notifier)
-                            .unmarkLocationsAsDone({updatedLocation.id});
-                      } else {
-                        ref
-                            .read(tripProvider.notifier)
-                            .markLocationsAsDone({updatedLocation.id});
-                      }
-                    }
-                  : null,
-              child: Container(
-                width: 44,
-                height: 44,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: !hasWriteAccess
-                      ? Colors.grey[400]
-                      : updatedLocation.isDone
-                          ? Colors.grey[700]
-                          : Colors.green[600],
-                ),
-                child: Icon(
-                  updatedLocation.isDone ? Icons.close : Icons.check,
-                  color: Colors.white,
-                  size: 22,
-                ),
+            Expanded(
+              child: _LabeledAction(
+                icon: updatedLocation.isDone ? Icons.close : Icons.check,
+                label: updatedLocation.isDone ? 'Undo' : 'Done',
+                color: updatedLocation.isDone
+                    ? Colors.grey[700]!
+                    : Colors.green[600]!,
+                enabled: hasWriteAccess,
+                onTap: () {
+                  final notifier = ref.read(tripProvider.notifier);
+                  if (updatedLocation.isDone) {
+                    notifier.unmarkLocationsAsDone({updatedLocation.id});
+                  } else {
+                    notifier.markLocationsAsDone({updatedLocation.id});
+                  }
+                },
               ),
             ),
           ],
@@ -626,8 +566,22 @@ class LocationDetailSheet extends ConsumerWidget {
           maxLines: 3,
           overflow: TextOverflow.ellipsis,
         ),
-        const SizedBox(height: 16),
+      ],
+    );
+  }
 
+  /// Everything below the drag zone: the 2×2 action grid and the rows that
+  /// follow. Lives INSIDE the sheet's scroll view.
+  Widget _buildHeaderBody(BuildContext context, WidgetRef ref,
+      LocationModel updatedLocation, bool isPastDate) {
+    final hasWriteAccessAsync = ref.watch(hasActiveTripWriteAccessProvider);
+    final hasWriteAccess =
+        hasWriteAccessAsync.whenOrNull(data: (value) => value) ?? false;
+    final canEdit = !isPastDate && hasWriteAccess;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
         // Action buttons — 2×2 grid
         Row(
           children: [
@@ -2212,44 +2166,89 @@ class LocationDetailSheet extends ConsumerWidget {
                   '${DateFormat('MMM d').format(start)} – ${DateFormat('MMM d').format(end)}. '
                   'Remove it from this day only, or delete it from every day?'
               : 'Are you sure you want to delete "${location.name}"? This action cannot be undone.'),
+          // Three actions don't fit across an AlertDialog's default
+          // OverflowBar, which silently stacks them vertically. An explicit
+          // equal-width Row keeps them on one line; the dialog body carries
+          // the full wording, so the buttons can stay short.
+          actionsPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
           actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(),
-              child: Text('Cancel',
-                  style: TextStyle(
-                      color: Theme.of(context).textTheme.bodyMedium?.color)),
-            ),
-            if (spansHere) ...[
+            if (spansHere)
+              Row(
+                children: [
+                  Expanded(
+                    child: TextButton(
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 4),
+                      ),
+                      onPressed: () => Navigator.of(dialogContext).pop(),
+                      child: Text(
+                        'Cancel',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                            color:
+                                Theme.of(context).textTheme.bodyMedium?.color),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: TextButton(
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 4),
+                      ),
+                      onPressed: () {
+                        Navigator.of(dialogContext).pop();
+                        Navigator.of(context).pop();
+                        ref
+                            .read(locationRepositoryProvider)
+                            .deleteLocation(location.id);
+                        if (context.mounted) {
+                          AppToast.error(context, 'Deleted ${location.name}');
+                        }
+                      },
+                      child: Text(
+                        'All days',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                            color: Theme.of(context).colorScheme.error),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: FilledButton(
+                      style: FilledButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 4),
+                      ),
+                      onPressed: () {
+                        Navigator.of(dialogContext).pop();
+                        Navigator.of(context).pop();
+                        ref
+                            .read(tripProvider.notifier)
+                            .removeLocationFromDay(location.id, day);
+                        if (context.mounted) {
+                          AppToast.success(context,
+                              '${location.name} removed from ${DateFormat('MMM d').format(day)}');
+                        }
+                      },
+                      child: const Text(
+                        'This day',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ),
+                ],
+              )
+            else ...[
               TextButton(
-                onPressed: () {
-                  Navigator.of(dialogContext).pop();
-                  Navigator.of(context).pop();
-                  ref
-                      .read(locationRepositoryProvider)
-                      .deleteLocation(location.id);
-                  if (context.mounted) {
-                    AppToast.error(context, 'Deleted ${location.name}');
-                  }
-                },
-                child: Text('Delete everywhere',
-                    style:
-                        TextStyle(color: Theme.of(context).colorScheme.error)),
+                onPressed: () => Navigator.of(dialogContext).pop(),
+                child: Text('Cancel',
+                    style: TextStyle(
+                        color: Theme.of(context).textTheme.bodyMedium?.color)),
               ),
-              FilledButton(
-                onPressed: () {
-                  Navigator.of(dialogContext).pop();
-                  Navigator.of(context).pop();
-                  ref
-                      .read(tripProvider.notifier)
-                      .removeLocationFromDay(location.id, day);
-                  if (context.mounted) {
-                    AppToast.success(context,
-                        '${location.name} removed from ${DateFormat('MMM d').format(day)}');
-                  }
-                },
-                child: const Text('Remove from this day'),
-              ),
-            ] else
               ElevatedButton(
                 onPressed: () {
                   // Pop both the dialog and the detail sheet
@@ -2273,6 +2272,7 @@ class LocationDetailSheet extends ConsumerWidget {
                 ),
                 child: const Text('Delete'),
               ),
+            ],
           ],
         );
       },
@@ -2479,6 +2479,63 @@ class _RouteEndpointPicker extends StatelessWidget {
           ],
         );
       },
+    );
+  }
+}
+
+/// One of the three primary stop actions (Delete / Skip / Done) in the
+/// detail sheet header. Icon + word label, sized to fill an [Expanded] slot
+/// so all three stay on one row at any text scale.
+class _LabeledAction extends StatelessWidget {
+  const _LabeledAction({
+    required this.icon,
+    required this.label,
+    required this.color,
+    required this.enabled,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final Color color;
+  final bool enabled;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final background = enabled ? color : Colors.grey[400]!;
+    return Material(
+      color: background,
+      borderRadius: BorderRadius.circular(12),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: enabled ? onTap : null,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, color: Colors.white, size: 18),
+              const SizedBox(width: 6),
+              // Flexible + ellipsis: a longer label ("Unskip") at a large
+              // accessibility text scale shrinks rather than overflowing.
+              Flexible(
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
