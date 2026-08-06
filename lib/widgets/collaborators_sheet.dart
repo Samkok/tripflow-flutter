@@ -71,7 +71,8 @@ class _CollaboratorsSheetState extends ConsumerState<CollaboratorsSheet> {
       case BuddyAddStatus.invited:
         _emailController.clear();
         AppToast.success(context,
-            'Invite ready to share — they\'ll join when they sign up.');
+            result.error ?? 'Invite sent — they\'ll join when they sign up.');
+        ref.invalidate(pendingInvitesProvider(widget.tripId));
       case BuddyAddStatus.cancelled:
         break;
       case BuddyAddStatus.error:
@@ -501,21 +502,51 @@ class _CollaboratorsSheetState extends ConsumerState<CollaboratorsSheet> {
                           );
                         }
 
+                        // Pending (not-yet-signed-up) invites render as
+                        // extra rows after the real members: index 0..n-1 =
+                        // members, n = section header, n+1.. = invites.
+                        final pending = ref
+                                .watch(pendingInvitesProvider(widget.tripId))
+                                .valueOrNull ??
+                            const <Map<String, dynamic>>[];
+                        final extra = pending.isEmpty ? 0 : pending.length + 1;
                         return ListView.separated(
                           controller: scrollController,
                           padding: const EdgeInsets.symmetric(
                               horizontal: 16, vertical: 8),
-                          itemCount: collaborators.length,
+                          itemCount: collaborators.length + extra,
                           separatorBuilder: (context, index) =>
                               const SizedBox(height: 8),
                           itemBuilder: (context, index) {
-                            final collaborator = collaborators[index];
-                            return _buildCollaboratorCard(
-                              collaborator,
-                              isOwner: isOwner,
-                              isCurrentUser:
-                                  collaborator.userId == currentUserId,
-                            );
+                            if (index < collaborators.length) {
+                              final collaborator = collaborators[index];
+                              return _buildCollaboratorCard(
+                                collaborator,
+                                isOwner: isOwner,
+                                isCurrentUser:
+                                    collaborator.userId == currentUserId,
+                              );
+                            }
+                            if (index == collaborators.length) {
+                              return Padding(
+                                padding: const EdgeInsets.only(top: 8),
+                                child: Text(
+                                  'INVITED — WAITING TO JOIN',
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .labelSmall
+                                      ?.copyWith(
+                                        letterSpacing: 1.1,
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .onSurfaceVariant,
+                                      ),
+                                ),
+                              );
+                            }
+                            final invite =
+                                pending[index - collaborators.length - 1];
+                            return _buildPendingInviteCard(invite);
                           },
                         );
                       },
@@ -592,6 +623,61 @@ class _CollaboratorsSheetState extends ConsumerState<CollaboratorsSheet> {
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildPendingInviteCard(Map<String, dynamic> invite) {
+    final theme = Theme.of(context);
+    const amber = Color(0xFFF5A623);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color:
+            theme.cardColor.withValues(alpha: AppTheme.sheetCardAlpha(context)),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: amber.withValues(alpha: 0.45)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.hourglass_top_rounded, size: 20, color: amber),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  (invite['email'] as String?) ?? '',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodyMedium
+                      ?.copyWith(fontWeight: FontWeight.w600),
+                ),
+                Text(
+                  'Invited — joins automatically at sign-up',
+                  style: theme.textTheme.bodySmall
+                      ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.close, size: 18),
+            tooltip: 'Revoke invite',
+            color: theme.colorScheme.onSurfaceVariant,
+            onPressed: () async {
+              final repo = ref.read(tripCollaboratorRepositoryProvider);
+              final ok = await repo.revokePendingInvite(invite['id'] as String);
+              if (!mounted) return;
+              if (ok) {
+                ref.invalidate(pendingInvitesProvider(widget.tripId));
+                AppToast.info(context, 'Invite revoked');
+              } else {
+                AppToast.error(context, 'Could not revoke the invite.');
+              }
+            },
+          ),
+        ],
       ),
     );
   }

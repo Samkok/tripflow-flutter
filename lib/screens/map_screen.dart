@@ -1322,6 +1322,24 @@ class _MapScreenState extends ConsumerState<MapScreen>
         _openLocationGate();
       }
     });
+    // Location card's map button → collapse the plan sheet and fly to the
+    // spot. Listen is safe: the tap happens on this (onstage) screen.
+    ref.listen<MapZoomToLocationRequest?>(mapZoomToLocationRequestProvider,
+        (prev, next) {
+      if (next == null) return;
+      ref.read(mapZoomToLocationRequestProvider.notifier).state = null;
+      _sheetController?.animateTo(
+        0.15,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeInOut,
+      );
+      _mapController?.animateCamera(
+        CameraUpdate.newCameraPosition(
+          CameraPosition(target: next.target, zoom: 16.5),
+        ),
+      );
+    });
+
     // A route-leg chip was tapped → open its sheet. The markers live in a
     // FutureProvider with no BuildContext, so the tap arrives as a request
     // that we consume here.
@@ -1963,143 +1981,167 @@ class _MapScreenState extends ConsumerState<MapScreen>
               return Positioned(
                 bottom: screenH * 0.23 + 16,
                 right: 16,
-                child: AnimatedSize(
-                  duration: const Duration(milliseconds: 250),
-                  curve: Curves.easeInOut,
-                  alignment: Alignment.bottomRight,
-                  child: Consumer(
-                    builder: (context, ref, _) {
-                      final locationsForDate =
-                          ref.watch(locationsForSelectedDateProvider);
-                      final hasSelectedDayRoute = ref.watch(tripProvider
-                          .select((s) => s.optimizedRoute.isNotEmpty));
-                      // In All-days mode the share/fit affordances key off the
-                      // whole-trip overlays instead of the selected-date route.
-                      final allDaysActive = ref.watch(allDaysModeProvider) &&
-                          (ref
-                                  .watch(allDayRoutesProvider)
-                                  .valueOrNull
-                                  ?.isNotEmpty ??
-                              false);
-                      final hasRoute = hasSelectedDayRoute || allDaysActive;
-                      final isGenerating = ref.watch(isGeneratingRouteProvider);
-                      final currentUserId = ref.watch(currentUserIdProvider);
-                      final allSaved =
-                          ref.watch(savedLocationsProvider).asData?.value ??
-                              const [];
-                      final unassigned = allSaved
-                          .where((l) =>
-                              l.tripId == null && l.userId == currentUserId)
-                          .toList();
-                      final showPlaceNames = ref.watch(showPlaceNamesProvider);
+                child: AnimatedBuilder(
+                  // Fade the FAB column as the plan sheet expands over its
+                  // zone — half-visible buttons ghosting through the glass
+                  // read as tappable (the confusion that briefly sent this
+                  // sheet chasing a globe background). Fully gone by 0.5
+                  // extent; IgnorePointer so invisible buttons can't be hit.
+                  animation:
+                      _sheetController ?? const AlwaysStoppedAnimation(0.0),
+                  builder: (context, child) {
+                    final extent = (_sheetController?.isAttached ?? false)
+                        ? _sheetController!.size
+                        : 0.15;
+                    final covered = ((extent - 0.30) / 0.20).clamp(0.0, 1.0);
+                    return IgnorePointer(
+                      ignoring: covered > 0.95,
+                      child: Opacity(opacity: 1.0 - covered, child: child),
+                    );
+                  },
+                  child: AnimatedSize(
+                    duration: const Duration(milliseconds: 250),
+                    curve: Curves.easeInOut,
+                    alignment: Alignment.bottomRight,
+                    child: Consumer(
+                      builder: (context, ref, _) {
+                        final locationsForDate =
+                            ref.watch(locationsForSelectedDateProvider);
+                        final hasSelectedDayRoute = ref.watch(tripProvider
+                            .select((s) => s.optimizedRoute.isNotEmpty));
+                        // In All-days mode the share/fit affordances key off the
+                        // whole-trip overlays instead of the selected-date route.
+                        final allDaysActive = ref.watch(allDaysModeProvider) &&
+                            (ref
+                                    .watch(allDayRoutesProvider)
+                                    .valueOrNull
+                                    ?.isNotEmpty ??
+                                false);
+                        final hasRoute = hasSelectedDayRoute || allDaysActive;
+                        final isGenerating =
+                            ref.watch(isGeneratingRouteProvider);
+                        final currentUserId = ref.watch(currentUserIdProvider);
+                        final allSaved =
+                            ref.watch(savedLocationsProvider).asData?.value ??
+                                const [];
+                        final unassigned = allSaved
+                            .where((l) =>
+                                l.tripId == null && l.userId == currentUserId)
+                            .toList();
+                        final showPlaceNames =
+                            ref.watch(showPlaceNamesProvider);
 
-                      final fabs = <Widget>[
-                        FloatingActionButton(
-                          heroTag: 'currentLocationFab',
-                          mini: true,
-                          onPressed: _goToCurrentLocation,
-                          child: const Icon(Icons.my_location),
-                        ),
-                        if (locationsForDate.isNotEmpty)
+                        final fabs = <Widget>[
                           FloatingActionButton(
-                            heroTag: 'zoomToFitFab',
+                            heroTag: 'currentLocationFab',
                             mini: true,
-                            onPressed: _zoomToFitTrip,
-                            child: const Icon(Icons.zoom_out_map),
+                            onPressed: _goToCurrentLocation,
+                            child: const Icon(Icons.my_location),
                           ),
-                        // The share FAB is the growth surface — a pulsing glow
-                        // makes it the standout affordance in the column.
-                        if (hasRoute && !isGenerating)
-                          PulsingGlow(
-                            glowColor: Theme.of(context).colorScheme.primary,
-                            child: FloatingActionButton(
-                              heroTag: 'shareRouteFab',
+                          if (locationsForDate.isNotEmpty)
+                            FloatingActionButton(
+                              heroTag: 'zoomToFitFab',
+                              mini: true,
+                              onPressed: _zoomToFitTrip,
+                              child: const Icon(Icons.zoom_out_map),
+                            ),
+                          // The share FAB is the growth surface — a pulsing glow
+                          // makes it the standout affordance in the column.
+                          if (hasRoute && !isGenerating)
+                            PulsingGlow(
+                              glowColor: Theme.of(context).colorScheme.primary,
+                              child: FloatingActionButton(
+                                heroTag: 'shareRouteFab',
+                                mini: true,
+                                backgroundColor:
+                                    Theme.of(context).colorScheme.primary,
+                                foregroundColor:
+                                    Theme.of(context).colorScheme.onPrimary,
+                                onPressed: _preparingShare
+                                    ? null
+                                    : _shareRouteMapImage,
+                                tooltip: 'Share route',
+                                child: _preparingShare
+                                    ? const SizedBox(
+                                        width: 18,
+                                        height: 18,
+                                        child: CircularProgressIndicator(
+                                            strokeWidth: 2,
+                                            color: Colors.white),
+                                      )
+                                    : const Icon(Icons.ios_share_rounded),
+                              ),
+                            ),
+                          // Clearing operates on the SELECTED day's optimized
+                          // route — in pure All-days viewing there's nothing to
+                          // clear, so key this off the day route only.
+                          if (hasSelectedDayRoute && !isGenerating)
+                            FloatingActionButton(
+                              heroTag: 'clearRouteFab',
                               mini: true,
                               backgroundColor:
-                                  Theme.of(context).colorScheme.primary,
-                              foregroundColor:
-                                  Theme.of(context).colorScheme.onPrimary,
-                              onPressed:
-                                  _preparingShare ? null : _shareRouteMapImage,
-                              tooltip: 'Share route',
-                              child: _preparingShare
-                                  ? const SizedBox(
-                                      width: 18,
-                                      height: 18,
-                                      child: CircularProgressIndicator(
-                                          strokeWidth: 2, color: Colors.white),
-                                    )
-                                  : const Icon(Icons.ios_share_rounded),
+                                  Theme.of(context).colorScheme.errorContainer,
+                              foregroundColor: Theme.of(context)
+                                  .colorScheme
+                                  .onErrorContainer,
+                              onPressed: () => ref
+                                  .read(tripProvider.notifier)
+                                  .clearOptimizedRoute(),
+                              tooltip: 'Clear Route',
+                              child: const Icon(Icons.clear_outlined),
                             ),
-                          ),
-                        // Clearing operates on the SELECTED day's optimized
-                        // route — in pure All-days viewing there's nothing to
-                        // clear, so key this off the day route only.
-                        if (hasSelectedDayRoute && !isGenerating)
+                          if (unassigned.isNotEmpty)
+                            FloatingActionButton(
+                              heroTag: 'addToTripFab',
+                              mini: true,
+                              onPressed: () {
+                                showModalBottomSheet(
+                                  context: context,
+                                  isScrollControlled: true,
+                                  backgroundColor: Colors.transparent,
+                                  builder: (context) => AddToTripSheet(
+                                    availableLocations: unassigned,
+                                    onSuccess: () {},
+                                  ),
+                                );
+                              },
+                              tooltip: 'Add Locations to Trip',
+                              child: const Icon(Icons.playlist_add),
+                            ),
                           FloatingActionButton(
-                            heroTag: 'clearRouteFab',
-                            mini: true,
-                            backgroundColor:
-                                Theme.of(context).colorScheme.errorContainer,
-                            foregroundColor:
-                                Theme.of(context).colorScheme.onErrorContainer,
-                            onPressed: () => ref
-                                .read(tripProvider.notifier)
-                                .clearOptimizedRoute(),
-                            tooltip: 'Clear Route',
-                            child: const Icon(Icons.clear_outlined),
-                          ),
-                        if (unassigned.isNotEmpty)
-                          FloatingActionButton(
-                            heroTag: 'addToTripFab',
+                            heroTag: 'togglePlaceNamesFab',
                             mini: true,
                             onPressed: () {
-                              showModalBottomSheet(
-                                context: context,
-                                isScrollControlled: true,
-                                backgroundColor: Colors.transparent,
-                                builder: (context) => AddToTripSheet(
-                                  availableLocations: unassigned,
-                                  onSuccess: () {},
-                                ),
-                              );
+                              ref.read(showPlaceNamesProvider.notifier).state =
+                                  !showPlaceNames;
                             },
-                            tooltip: 'Add Locations to Trip',
-                            child: const Icon(Icons.playlist_add),
+                            tooltip: 'Toggle Place Names',
+                            child: Icon(
+                              showPlaceNames
+                                  ? Icons.visibility_off_outlined
+                                  : Icons.visibility_outlined,
+                            ),
                           ),
-                        FloatingActionButton(
-                          heroTag: 'togglePlaceNamesFab',
-                          mini: true,
-                          onPressed: () {
-                            ref.read(showPlaceNamesProvider.notifier).state =
-                                !showPlaceNames;
-                          },
-                          tooltip: 'Toggle Place Names',
-                          child: Icon(
-                            showPlaceNames
-                                ? Icons.visibility_off_outlined
-                                : Icons.visibility_outlined,
-                          ),
-                        ),
-                      ];
+                        ];
 
-                      // Always vertical now — the inline search bar
-                      // (which previously flipped this to horizontal on
-                      // focus) is gone, replaced by a button that pushes
-                      // a separate screen.
-                      const gap = SizedBox(height: 12);
-                      final children = <Widget>[];
-                      for (var i = 0; i < fabs.length; i++) {
-                        if (i > 0) children.add(gap);
-                        children.add(fabs[i]);
-                      }
+                        // Always vertical now — the inline search bar
+                        // (which previously flipped this to horizontal on
+                        // focus) is gone, replaced by a button that pushes
+                        // a separate screen.
+                        const gap = SizedBox(height: 12);
+                        final children = <Widget>[];
+                        for (var i = 0; i < fabs.length; i++) {
+                          if (i > 0) children.add(gap);
+                          children.add(fabs[i]);
+                        }
 
-                      return Column(
-                        mainAxisSize: MainAxisSize.min,
-                        crossAxisAlignment: CrossAxisAlignment.center,
-                        children: children,
-                      );
-                    },
+                        return Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.center,
+                          children: children,
+                        );
+                      },
+                    ),
                   ),
                 ),
               );

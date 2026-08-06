@@ -35,6 +35,10 @@ class ChecklistState {
   final bool loaded;
   final bool celebrated;
 
+  /// User opted out (skip button), or joined via a trip invite — their aha
+  /// is the shared trip, not building one. Hides every checklist surface.
+  final bool skipped;
+
   /// Highest location count reported for any single trip (badge shows n/3).
   final int locCount;
 
@@ -42,6 +46,7 @@ class ChecklistState {
     this.done = const {},
     this.loaded = false,
     this.celebrated = false,
+    this.skipped = false,
     this.locCount = 0,
   });
 
@@ -69,12 +74,14 @@ class ChecklistState {
     Set<ChecklistStep>? done,
     bool? loaded,
     bool? celebrated,
+    bool? skipped,
     int? locCount,
   }) =>
       ChecklistState(
         done: done ?? this.done,
         loaded: loaded ?? this.loaded,
         celebrated: celebrated ?? this.celebrated,
+        skipped: skipped ?? this.skipped,
         locCount: locCount ?? this.locCount,
       );
 }
@@ -132,8 +139,12 @@ class ChecklistNotifier extends StateNotifier<ChecklistState> {
       if (celebrated) {
         await prefs.setBool('checklist_celebrated_${_userId!}', true);
       }
+      final skipped =
+          (prefs.getBool('checklist_skipped_${_userId!}') ?? false) ||
+              (prefs.getBool('checklist_skipped_$anonId') ?? false);
       if (!mounted) return;
-      state = state.copyWith(done: done, loaded: true, celebrated: celebrated);
+      state = state.copyWith(
+          done: done, loaded: true, celebrated: celebrated, skipped: skipped);
     } catch (e) {
       debugPrint('ChecklistNotifier: load failed: $e');
       if (mounted) state = state.copyWith(loaded: true);
@@ -151,7 +162,7 @@ class ChecklistNotifier extends StateNotifier<ChecklistState> {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setBool(_key(step, uid), true);
 
-      if (state.isComplete && !state.celebrated) {
+      if (state.isComplete && !state.celebrated && !state.skipped) {
         state = state.copyWith(celebrated: true);
         await prefs.setBool('checklist_celebrated_$uid', true);
         // The checklist celebration REPLACES the generic first-optimize one
@@ -162,6 +173,22 @@ class ChecklistNotifier extends StateNotifier<ChecklistState> {
       }
     } catch (e) {
       debugPrint('ChecklistNotifier: mark($step) failed: $e');
+    }
+  }
+
+  /// Opt out — via the Skip button, or automatically when the user joined
+  /// through a trip invite. Persisted per identity; steps keep recording
+  /// silently underneath (no celebration) in case analytics ever care.
+  Future<void> skip() async {
+    if (state.skipped) return;
+    state = state.copyWith(skipped: true, celebrated: true);
+    try {
+      final uid = _userId ?? await _resolveUserId();
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('checklist_skipped_$uid', true);
+      await prefs.setBool('checklist_celebrated_$uid', true);
+    } catch (e) {
+      debugPrint('ChecklistNotifier: skip failed: $e');
     }
   }
 

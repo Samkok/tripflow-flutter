@@ -77,6 +77,14 @@ class SettingsScreen extends ConsumerWidget {
               _buildProfileCard(context, ref),
               const SizedBox(height: 24),
 
+              // Invite friends — referral program (signed-in users only).
+              // Top of the page (owner call): the growth surface leads.
+              if (ref.watch(currentUserProvider) != null) ...[
+                _buildSectionHeader(context, 'Invite friends'),
+                _buildInviteFriendsTile(context, ref),
+                const SizedBox(height: 24),
+              ],
+
               // Free Trial Section — visible only while a native intro free
               // trial is active (RevenueCat reports periodType == trial).
               if (ref.watch(isInTrialProvider)) ...[
@@ -115,13 +123,6 @@ class SettingsScreen extends ConsumerWidget {
               const SizedBox(height: 12),
               const _AnalyticsTile(),
               const SizedBox(height: 24),
-
-              // Invite friends — referral program (signed-in users only).
-              if (ref.watch(currentUserProvider) != null) ...[
-                _buildSectionHeader(context, 'Invite friends'),
-                _buildInviteFriendsTile(context, ref),
-                const SizedBox(height: 24),
-              ],
 
               // About Section
               _buildSectionHeader(context, 'About'),

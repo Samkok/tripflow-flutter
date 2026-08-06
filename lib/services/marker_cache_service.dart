@@ -9,7 +9,10 @@ class MarkerCacheService {
   MarkerCacheService._internal();
 
   final LinkedHashMap<String, MarkerBitmapResult> _cache = LinkedHashMap();
-  static const int _maxCacheSize = 100;
+  // 400, not 100: one busy day is ~40 name-labeled pins × light/dark ×
+  // renumbering after each optimize. At 100 the LRU thrashed and pins
+  // regenerated on every revisit; bitmaps are tens of KB, so 400 is ~MBs.
+  static const int _maxCacheSize = 400;
   MarkerBitmapResult? _currentLocationIcon;
   bool _isPrewarming = false;
   bool _isPrewarmed = false;

@@ -59,6 +59,10 @@ final tripSimulationProvider = Provider<TimingSimulationResult?>((ref) {
       DateTime(selectedDate.year, selectedDate.month, selectedDate.day);
   if (selectedDay.isBefore(today)) return null;
 
+  // Point-to-point previews ("route from A to B") aren't a plan for the
+  // day — timing warnings there are noise, so no simulation runs at all.
+  if (ref.watch(tripProvider.select((s) => s.isRoutePreview))) return null;
+
   final ordered = ref
       .watch(tripProvider.select((s) => s.optimizedLocationsForSelectedDate));
   if (ordered.isEmpty) return null;

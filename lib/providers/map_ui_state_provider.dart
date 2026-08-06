@@ -1,4 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
 
 class MapUIState {
   final bool isFabMenuOpen;
@@ -140,3 +141,15 @@ final selectedDateProvider = StateProvider<DateTime>((ref) {
 /// its locations toggle back to "Selected Day", which otherwise retains
 /// whatever the user last used and made the landing look un-focused.
 final mapDayFocusRequestProvider = StateProvider<int>((ref) => 0);
+
+/// One-shot "collapse the plan sheet and zoom the map to this spot"
+/// request, fired by a location card's map button and consumed by
+/// MapScreen. A fresh object every time (no ==) so repeat taps on the
+/// same location still fire.
+class MapZoomToLocationRequest {
+  MapZoomToLocationRequest(this.target);
+  final LatLng target;
+}
+
+final mapZoomToLocationRequestProvider =
+    StateProvider<MapZoomToLocationRequest?>((_) => null);

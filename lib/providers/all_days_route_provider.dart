@@ -236,7 +236,18 @@ final allDaysMarkersProvider = FutureProvider<Set<Marker>>((ref) async {
   final isDarkMode = ref.watch(themeProvider) == ThemeMode.dark;
 
   final markerCache = MarkerCacheService();
-  final markers = <Marker>{};
+
+  // Numbering is order-dependent per day → compute all specs synchronously,
+  // THEN rasterize every bitmap in PARALLEL. The serial awaits here were
+  // why tapping "All" left the map bare for seconds: every location of
+  // every day queued one-by-one through the canvas→PNG pipeline.
+  final specs = <({
+    LocationModel loc,
+    DateTime day,
+    int number,
+    Color color,
+    String dayLabel,
+  })>[];
   for (final entry in stopsByDay.entries) {
     final day = entry.key;
     final color = colors[day] ?? kDayRouteColors.first;
@@ -248,25 +259,41 @@ final allDaysMarkersProvider = FutureProvider<Set<Marker>>((ref) async {
     var seq = 0;
     for (final loc in entry.value) {
       if (!loc.isDone) seq++;
-      final result = await markerCache.getNumberedMarker(
-        isStart: false,
+      specs.add((
+        loc: loc,
+        day: day,
         number: loc.isDone ? -2 : seq,
-        name: loc.name,
-        backgroundColor: color,
-        textColor: Colors.white,
-        isDarkMode: isDarkMode,
-        isSkipped: false,
-        isDone: loc.isDone,
-      );
-      markers.add(Marker(
-        markerId: MarkerId('$kAllDaysMarkerIdPrefix${day.toIso8601String()}'
-            '|${loc.id}'),
-        position: loc.coordinates,
-        icon: result.bitmap,
-        anchor: result.anchor,
-        infoWindow: InfoWindow(title: loc.name, snippet: dayLabel),
+        color: color,
+        dayLabel: dayLabel,
       ));
     }
+  }
+
+  final results = await Future.wait(specs.map(
+    (spec) => markerCache.getNumberedMarker(
+      isStart: false,
+      number: spec.number,
+      name: spec.loc.name,
+      backgroundColor: spec.color,
+      textColor: Colors.white,
+      isDarkMode: isDarkMode,
+      isSkipped: false,
+      isDone: spec.loc.isDone,
+    ),
+  ));
+
+  final markers = <Marker>{};
+  for (var i = 0; i < specs.length; i++) {
+    final spec = specs[i];
+    final result = results[i];
+    markers.add(Marker(
+      markerId: MarkerId('$kAllDaysMarkerIdPrefix${spec.day.toIso8601String()}'
+          '|${spec.loc.id}'),
+      position: spec.loc.coordinates,
+      icon: result.bitmap,
+      anchor: result.anchor,
+      infoWindow: InfoWindow(title: spec.loc.name, snippet: spec.dayLabel),
+    ));
   }
   return markers;
 });

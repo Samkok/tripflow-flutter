@@ -12,6 +12,7 @@ import 'screens/main_screen.dart';
 
 import 'core/theme.dart';
 import 'providers/theme_provider.dart';
+import 'providers/onboarding_checklist_provider.dart';
 import 'providers/trip_collaborator_provider.dart';
 import 'providers/subscription_provider.dart';
 import 'providers/auth_provider.dart';
@@ -401,7 +402,14 @@ class _MyAppState extends ConsumerState<MyApp> with WidgetsBindingObserver {
             unawaited(ReferralService.instance.redeemPendingCodeIfAny());
             // Collaboration invites: auto-join any trips this email was
             // invited to (as a non-user) + reward both sides. Idempotent.
-            unawaited(ReferralService.instance.claimInvites());
+            // Joining via invite also skips the getting-started checklist:
+            // this user's aha is the trip they were invited to, not
+            // building one from scratch.
+            unawaited(ReferralService.instance.claimInvites().then((joined) {
+              if (joined > 0 && mounted) {
+                ref.read(checklistProvider.notifier).skip();
+              }
+            }));
           }
         },
       );
@@ -410,7 +418,11 @@ class _MyAppState extends ConsumerState<MyApp> with WidgetsBindingObserver {
       // path where no signedIn event fires this run.
       if (SupabaseService.instance.client.auth.currentSession != null) {
         unawaited(ReferralService.instance.redeemPendingCodeIfAny());
-        unawaited(ReferralService.instance.claimInvites());
+        unawaited(ReferralService.instance.claimInvites().then((joined) {
+          if (joined > 0 && mounted) {
+            ref.read(checklistProvider.notifier).skip();
+          }
+        }));
       }
 
       // PERFORMANCE: Defer collaborator realtime to let UI render first

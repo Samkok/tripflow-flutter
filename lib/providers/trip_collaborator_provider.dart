@@ -220,6 +220,16 @@ final sharedTripsProvider =
   );
 });
 
+/// Pending invites this user has sent for a trip (email not signed up yet).
+/// Shown in the collaborators sheet as "waiting to join" rows.
+final pendingInvitesProvider = FutureProvider.autoDispose
+    .family<List<Map<String, dynamic>>, String>((ref, tripId) async {
+  if (ref.watch(currentUserIdProvider) == null) return [];
+  ref.watch(_collaboratorRefreshCounterProvider);
+  final repository = ref.watch(tripCollaboratorRepositoryProvider);
+  return repository.getPendingInvites(tripId);
+});
+
 /// Provider to check if user is the owner of a trip
 final isTripOwnerProvider =
     FutureProvider.family<bool, String>((ref, tripId) async {

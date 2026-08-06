@@ -43,6 +43,12 @@ class TripState {
   /// successful optimize alongside [optimizedLocationsForSelectedDate].
   final List<LocationModel> originalOrderForSelectedDate;
   final List<LatLng> optimizedRoute;
+
+  /// True while [optimizedLocationsForSelectedDate] holds a two-stop
+  /// point-to-point PREVIEW (previewRouteBetween) rather than a real
+  /// optimized day. The map's marker source uses this to keep every other
+  /// location of the day visible around the previewed pair.
+  final bool isRoutePreview;
   final List<List<LatLng>> legPolylines;
   final List<Map<String, dynamic>> legDetails;
   final LatLng? currentLocation;
@@ -65,6 +71,7 @@ class TripState {
     this.optimizedLocationsForSelectedDate = const [],
     this.originalOrderForSelectedDate = const [],
     this.optimizedRoute = const [],
+    this.isRoutePreview = false,
     this.legPolylines = const [],
     this.legDetails = const [],
     this.currentLocation,
@@ -81,6 +88,7 @@ class TripState {
     List<LocationModel>? optimizedLocationsForSelectedDate,
     List<LocationModel>? originalOrderForSelectedDate,
     List<LatLng>? optimizedRoute,
+    bool? isRoutePreview,
     List<List<LatLng>>? legPolylines,
     List<Map<String, dynamic>>? legDetails,
     LatLng? currentLocation,
@@ -98,6 +106,7 @@ class TripState {
       originalOrderForSelectedDate:
           originalOrderForSelectedDate ?? this.originalOrderForSelectedDate,
       optimizedRoute: optimizedRoute ?? this.optimizedRoute,
+      isRoutePreview: isRoutePreview ?? this.isRoutePreview,
       legPolylines: legPolylines ?? this.legPolylines,
       legDetails: legDetails ?? this.legDetails,
       currentLocation: currentLocation ?? this.currentLocation,
@@ -233,6 +242,7 @@ class TripNotifier extends StateNotifier<TripState> {
             state = state.copyWith(
               pinnedLocations: [],
               optimizedLocationsForSelectedDate: [],
+              isRoutePreview: false,
               optimizedRoute: [],
               legPolylines: [],
               legDetails: [],
@@ -289,6 +299,7 @@ class TripNotifier extends StateNotifier<TripState> {
           pinnedLocations: newPinnedLocations,
           // Clear optimized route when locations change (different trip's locations)
           optimizedLocationsForSelectedDate: [],
+          isRoutePreview: false,
           optimizedRoute: [],
           legPolylines: [],
           legDetails: [],
@@ -364,6 +375,7 @@ class TripNotifier extends StateNotifier<TripState> {
       // Clear optimized route when location is added
       state = state.copyWith(
         optimizedLocationsForSelectedDate: [],
+        isRoutePreview: false,
         optimizedRoute: [],
         legPolylines: [],
         legDetails: [],
@@ -438,6 +450,7 @@ class TripNotifier extends StateNotifier<TripState> {
     // Clear optimized route data when a location is removed
     state = state.copyWith(
       optimizedLocationsForSelectedDate: [],
+      isRoutePreview: false,
       optimizedRoute: [],
       legPolylines: [],
       legDetails: [],
@@ -466,7 +479,8 @@ class TripNotifier extends StateNotifier<TripState> {
 
     // Clear optimized route data when locations are removed
     state = state.copyWith(
-      optimizedLocationsForSelectedDate: [], // Clear optimized list
+      optimizedLocationsForSelectedDate: [],
+      isRoutePreview: false, // Clear optimized list
       optimizedRoute: [],
       legPolylines: [],
       legDetails: [],
@@ -499,7 +513,8 @@ class TripNotifier extends StateNotifier<TripState> {
     // Clear optimized route
     state = state.copyWith(
       optimizedRoute: [],
-      optimizedLocationsForSelectedDate: [], // Clear optimized list
+      optimizedLocationsForSelectedDate: [],
+      isRoutePreview: false, // Clear optimized list
       legPolylines: [],
       legDetails: [],
       totalTravelTime: Duration.zero,
@@ -530,7 +545,8 @@ class TripNotifier extends StateNotifier<TripState> {
     // Clear optimized route
     state = state.copyWith(
       optimizedRoute: [],
-      optimizedLocationsForSelectedDate: [], // Clear optimized list
+      optimizedLocationsForSelectedDate: [],
+      isRoutePreview: false, // Clear optimized list
       legPolylines: [],
       legDetails: [],
       totalTravelTime: Duration.zero,
@@ -571,6 +587,7 @@ class TripNotifier extends StateNotifier<TripState> {
     state = state.copyWith(
       optimizedRoute: [],
       optimizedLocationsForSelectedDate: [],
+      isRoutePreview: false,
       legPolylines: [],
       legDetails: [],
       totalTravelTime: Duration.zero,
@@ -645,6 +662,7 @@ class TripNotifier extends StateNotifier<TripState> {
     state = state.copyWith(
       optimizedRoute: [],
       optimizedLocationsForSelectedDate: [],
+      isRoutePreview: false,
       legPolylines: [],
       legDetails: [],
       totalTravelTime: Duration.zero,
@@ -686,7 +704,8 @@ class TripNotifier extends StateNotifier<TripState> {
     state = state.copyWith(
       pinnedLocations: updatedLocations,
       optimizedRoute: [],
-      optimizedLocationsForSelectedDate: [], // Clear optimized list
+      optimizedLocationsForSelectedDate: [],
+      isRoutePreview: false, // Clear optimized list
       legPolylines: [],
       legDetails: [],
       totalTravelTime: Duration.zero,
@@ -1609,6 +1628,7 @@ class TripNotifier extends StateNotifier<TripState> {
 
       state = state.copyWith(
         pinnedLocations: updatedPinnedLocations,
+        isRoutePreview: false,
         optimizedLocationsForSelectedDate: finalOptimizedLocationsForDate,
         optimizedRoute: routePoints,
         legPolylines: legPolylines,
@@ -1764,7 +1784,8 @@ class TripNotifier extends StateNotifier<TripState> {
     // This is used when switching dates to prevent showing an old route.
     state = state.copyWith(
       optimizedRoute: [],
-      optimizedLocationsForSelectedDate: [], // Clear optimized list
+      optimizedLocationsForSelectedDate: [],
+      isRoutePreview: false, // Clear optimized list
       legPolylines: [],
       legDetails: [],
       totalTravelTime: Duration.zero,
@@ -1843,6 +1864,7 @@ class TripNotifier extends StateNotifier<TripState> {
 
       state = state.copyWith(
         pinnedLocations: updatedPinned,
+        isRoutePreview: true,
         optimizedLocationsForSelectedDate: [updatedFrom, updatedTo],
         optimizedRoute: routePoints,
         legPolylines: legPolylines,
@@ -1864,7 +1886,8 @@ class TripNotifier extends StateNotifier<TripState> {
     // Reset trip data and clear all locations from local storage
     state = state.copyWith(
       pinnedLocations: [],
-      optimizedLocationsForSelectedDate: [], // Clear optimized list
+      optimizedLocationsForSelectedDate: [],
+      isRoutePreview: false, // Clear optimized list
       optimizedRoute: [],
       legPolylines: [],
       legDetails: [],
@@ -1982,9 +2005,13 @@ final locationsForSelectedDateProvider = Provider<List<LocationModel>>((ref) {
       // Skipped/done locations active on this date, minus anything already
       // present in the optimized list. Multi-day stays match via the range
       // check, so a "done" hotel still shows on every day it covers.
+      final isPreview = ref.watch(tripProvider.select((s) => s.isRoutePreview));
       final skippedForDate = pinnedLocations.where((loc) {
         if (optimizedIds.contains(loc.id)) return false;
-        if (!loc.isSkipped && !loc.isDone) return false;
+        // Point-to-point preview: EVERY other location of the day stays on
+        // the map around the previewed pair — only a real optimized route
+        // narrows the extras down to skipped/done.
+        if (!isPreview && !loc.isSkipped && !loc.isDone) return false;
         return loc.isActiveOnDate(selectedDate);
       }).toList();
       // Return the optimized locations first, followed by the skipped ones.

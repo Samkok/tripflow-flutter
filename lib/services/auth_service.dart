@@ -145,6 +145,12 @@ class AuthService {
     }
   }
 
+  /// Re-sends the signup verification email. Supabase rate-limits this
+  /// server-side; the UI adds its own cooldown so users can't hammer it.
+  Future<void> resendVerificationEmail(String email) async {
+    await _supabase.auth.resend(type: OtpType.signup, email: email.trim());
+  }
+
   /// Performs the sync of local locations to the cloud
   /// Also sets the sync choice flag to allow auto-sync in providers
   Future<void> syncLocalLocations() async {

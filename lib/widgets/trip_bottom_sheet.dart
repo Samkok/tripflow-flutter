@@ -298,8 +298,12 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
         // at without participating in layout or gestures.
         final scrollController = _listScrollController;
         // Glass sheet — same blur/fill as the Search for Location and
-        // Collaborators sheets (AppTheme.sheet* is the one source of truth),
-        // so the map reads through while the plan stays legible.
+        // Collaborators sheets (AppTheme.sheet* is the one source of truth).
+        // The old "buttons ghosting through the glass" confusion is solved
+        // at the SOURCE: map_screen fades its FAB column out as this sheet
+        // expands over it, so nothing interactive-looking sits behind the
+        // blur (the globe experiment is reverted — it was composed for full
+        // screens and cropped badly in a sheet).
         return ClipRRect(
           borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
           child: BackdropFilter(

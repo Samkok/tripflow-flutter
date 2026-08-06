@@ -11,6 +11,7 @@ import '../providers/onboarding_provider.dart';
 import '../services/auth_service.dart';
 import '../services/email_history_service.dart';
 import '../widgets/sync_confirmation_dialog.dart';
+import 'login_screen.dart';
 import '../widgets/app_toast.dart';
 import '../widgets/email_suggestions.dart';
 import '../widgets/save_password_prompt.dart';
@@ -158,8 +159,30 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
         await EmailHistoryService.instance.remember(_emailController.text);
         if (!mounted) return;
 
-        AppToast.success(
-            context, 'Success! Please check your email to verify.');
+        // A blocking dialog, not a toast: "verify before you can sign in"
+        // is the one thing they must absorb before leaving this screen.
+        await showDialog<void>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            title: const Text('Verify your email'),
+            content: Text(
+              'We sent a verification link to '
+              '${_emailController.text.trim()}.\n\n'
+              'You need to open it before you can sign in. If it '
+              "doesn't arrive within a minute or two, check your spam "
+              'folder.',
+            ),
+            actions: [
+              FilledButton(
+                onPressed: () => Navigator.of(ctx).pop(),
+                child: const Text('Got it'),
+              ),
+            ],
+          ),
+        );
+        if (!mounted) return;
         // Pop back to the login screen after successful sign-up
         if (Navigator.canPop(context)) {
           Navigator.of(context).pop();
@@ -232,6 +255,17 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
   /// when we ARE the first screen (post-onboarding on a fresh install) —
   /// into the app on the Map tab, where an anonymous user can search and
   /// save places right away.
+  void _goToSignIn() {
+    final navigator = Navigator.of(context);
+    if (navigator.canPop()) {
+      navigator.pop(); // pushed from LoginScreen — just go back
+    } else {
+      navigator.pushReplacement(
+        MaterialPageRoute(builder: (_) => const LoginScreen()),
+      );
+    }
+  }
+
   void _continueAsGuest() {
     final navigator = Navigator.of(context);
     // Home tab: first thing a guest sees is the getting-started
@@ -518,6 +552,31 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
                           ),
                         ],
                         const SizedBox(height: 8),
+                        // Existing users who landed here (first-run flow
+                        // shows sign-up first): back to sign-in. Pops when
+                        // this screen was pushed FROM login (no stacking
+                        // login→signup→login→…), replaces when it's the root.
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Text(
+                              'Already have an account?',
+                              style: theme.textTheme.bodyMedium?.copyWith(
+                                color: theme.colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                            TextButton(
+                              onPressed: _isLoading ? null : _goToSignIn,
+                              style: TextButton.styleFrom(
+                                visualDensity: VisualDensity.compact,
+                              ),
+                              child: const Text(
+                                'Sign in',
+                                style: TextStyle(fontWeight: FontWeight.w700),
+                              ),
+                            ),
+                          ],
+                        ),
                         // Escape hatch for first-run users who don't want an
                         // account yet — drops them on the map as an anonymous
                         // user (where search + adding places already works).

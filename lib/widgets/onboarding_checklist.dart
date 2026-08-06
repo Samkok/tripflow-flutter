@@ -104,6 +104,21 @@ class _ChecklistBody extends ConsumerWidget {
               state: s,
               onTap: () => onStepTap(step),
             )),
+        const SizedBox(height: 4),
+        Align(
+          alignment: Alignment.centerRight,
+          child: TextButton(
+            onPressed: () {
+              if (inSheet) Navigator.of(context).pop();
+              ref.read(checklistProvider.notifier).skip();
+            },
+            style: TextButton.styleFrom(
+              visualDensity: VisualDensity.compact,
+              foregroundColor: theme.colorScheme.onSurfaceVariant,
+            ),
+            child: const Text('Skip the tour'),
+          ),
+        ),
       ],
     );
   }
@@ -272,7 +287,7 @@ class ChecklistHeaderChip extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final s = ref.watch(checklistProvider);
-    if (!s.loaded || s.isComplete) return const SizedBox.shrink();
+    if (!s.loaded || s.isComplete || s.skipped) return const SizedBox.shrink();
     const amber = Color(0xFFF5A623);
     // Same corner radius as the New Trip button beside it; height comes
     // from the parent (IntrinsicHeight row stretches both to match).
@@ -381,6 +396,7 @@ class AddLocationsProgressBadge extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final s = ref.watch(checklistProvider);
     final active = s.loaded &&
+        !s.skipped &&
         s.isDone(ChecklistStep.createTrip) &&
         !s.isDone(ChecklistStep.addLocations);
     if (!active) return const SizedBox.shrink();

@@ -64,6 +64,68 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     }
   }
 
+  /// Cooldown so the resend button can't be hammered (Supabase also
+  /// rate-limits server-side; this keeps the UI honest about it).
+  DateTime? _resendAvailableAt;
+
+  void _showVerifyEmailDialog(String email) {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) {
+          final now = DateTime.now();
+          final coolingDown =
+              _resendAvailableAt != null && now.isBefore(_resendAvailableAt!);
+          return AlertDialog(
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            title: const Text('Email not verified yet'),
+            content: Text(
+              'Your account exists, but $email hasn\'t been verified. '
+              'Open the verification link we emailed you, then sign in '
+              'again.\n\nNo email? Check your spam folder — or resend it '
+              'below.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: coolingDown
+                    ? null
+                    : () async {
+                        try {
+                          await ref
+                              .read(authServiceProvider)
+                              .resendVerificationEmail(email);
+                          _resendAvailableAt = DateTime.now()
+                              .add(const Duration(seconds: 60));
+                          setDialogState(() {});
+                          if (ctx.mounted) {
+                            AppToast.success(
+                                ctx, 'Verification email sent to $email');
+                          }
+                        } on AuthException catch (e) {
+                          if (ctx.mounted) AppToast.error(ctx, e.message);
+                        } catch (_) {
+                          if (ctx.mounted) {
+                            AppToast.error(ctx,
+                                'Could not resend right now — try again shortly.');
+                          }
+                        }
+                      },
+                child: Text(coolingDown
+                    ? 'Sent — wait a minute'
+                    : 'Resend verification email'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(ctx).pop(),
+                child: const Text('OK'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
   static String _syncSummary(int trips, int places) {
     final parts = <String>[
       if (trips > 0) '$trips trip${trips != 1 ? 's' : ''}',
@@ -173,7 +235,12 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
       }
     } on AuthException catch (e) {
       if (mounted) {
-        AppToast.error(context, e.message);
+        final msg = e.message.toLowerCase();
+        if (e.code == 'email_not_confirmed' || msg.contains('not confirmed')) {
+          _showVerifyEmailDialog(_emailController.text.trim());
+        } else {
+          AppToast.error(context, e.message);
+        }
       }
     } catch (e) {
       if (mounted) {

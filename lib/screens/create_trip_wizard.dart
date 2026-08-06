@@ -236,7 +236,9 @@ class _CreateTripWizardState extends ConsumerState<CreateTripWizard> {
       ref.read(checklistProvider.notifier).mark(ChecklistStep.createTrip);
       // Pre-arm the add-locations spotlight only while step 2 is still the
       // goal — veterans creating their fifth trip shouldn't get a tour.
-      if (!ref.read(checklistProvider).isDone(ChecklistStep.addLocations)) {
+      final checklist = ref.read(checklistProvider);
+      if (!checklist.skipped &&
+          !checklist.isDone(ChecklistStep.addLocations)) {
         ref.read(checklistGuideRequestProvider.notifier).state =
             ChecklistGuide.addLocations;
       }

@@ -4,6 +4,7 @@ import 'package:share_plus/share_plus.dart';
 
 import '../providers/trip_collaborator_provider.dart';
 import 'analytics_service.dart';
+import 'supabase_service.dart';
 
 /// What happened to one add-a-buddy attempt.
 enum BuddyAddStatus {
@@ -137,13 +138,35 @@ class TripBuddyService {
           'Couldn\'t create the invite. Please try again.');
     }
     AnalyticsService.instance.referralPromptShown('collab_invite');
-    await SharePlus.instance.share(ShareParams(
-      text: 'Join me on VoyZa to plan "$tripName" together — '
-          'and we\'ll both get a free month of Pro. Use my code $code when '
-          'you sign up: https://voyza.xtremon.com/r/$code',
-      subject: 'Plan "$tripName" with me on VoyZa',
-    ));
-    return const BuddyAddResult(BuddyAddStatus.invited);
+
+    // The invite email is sent automatically (server-side, with the code
+    // and store links). The OS share sheet only appears as the FALLBACK
+    // when the email couldn't be sent — the invite must reach them somehow.
+    var emailed = false;
+    try {
+      final res = await SupabaseService.instance.client.functions
+          .invoke('send-invite-email', body: {
+        'trip_id': tripId,
+        'email': normalized,
+      });
+      emailed = (res.data is Map) && (res.data as Map)['ok'] == true;
+    } catch (e) {
+      debugPrint('TripBuddyService: invite email failed: $e');
+    }
+    if (!emailed) {
+      await SharePlus.instance.share(ShareParams(
+        text: 'Join me on VoyZa to plan "$tripName" together — '
+            'you\'ll start with a free month of Pro. Use my code $code when '
+            'you sign up: https://voyza.xtremon.com/r/$code',
+        subject: 'Plan "$tripName" with me on VoyZa',
+      ));
+    }
+    return BuddyAddResult(
+        BuddyAddStatus.invited,
+        emailed
+            ? 'Invite emailed to $normalized — they\'ll join the trip '
+                'automatically when they sign up.'
+            : null);
   }
 
   /// Fast existence probe for pre-creation surfaces (the wizard checks at
@@ -171,9 +194,10 @@ Future<bool?> showInviteBuddyDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         title: const Text('They\'re not on VoyZa yet'),
         content: Text(
-          '$email doesn\'t have an account. Invite them to plan '
-          '"$tripName" with you — you\'ll both get a free month of '
-          'Pro, and they\'ll join this trip automatically when they sign up.',
+          '$email doesn\'t have an account. We\'ll email them an invite '
+          'to plan "$tripName" with you — they start with a free month of '
+          'Pro and join this trip automatically when they sign up (and '
+          'you\'ll earn rewards too).',
           style: theme.textTheme.bodyMedium,
         ),
         actions: [

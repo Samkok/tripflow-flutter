@@ -30,6 +30,7 @@ import 'package:voyza/widgets/country_picker_sheet.dart';
 import 'package:voyza/widgets/pulsing_glow.dart';
 import 'package:voyza/providers/onboarding_checklist_provider.dart';
 import 'package:voyza/widgets/onboarding_checklist.dart';
+import 'package:voyza/widgets/promo_days_card.dart';
 import 'package:voyza/screens/create_trip_wizard.dart';
 import 'package:voyza/widgets/referral_prompt.dart';
 import 'package:voyza/widgets/rotating_globe_background.dart';
@@ -793,6 +794,11 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                 if (!_selectionMode)
                   const SliverToBoxAdapter(child: ReferralHomeBanner()),
 
+                // Referral-promo status: dismissible "N free days" card,
+                // promotional entitlements only (store subs have their own
+                // trial banner).
+                const SliverToBoxAdapter(child: PromoDaysCard()),
+
                 // Active Trip Section
                 SliverToBoxAdapter(
                   child: activeTripAsync.when(
@@ -1035,8 +1041,9 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                       // pitch — unless it's already finished (e.g. every trip
                       // deleted): then a completed list is noise, acknowledge
                       // and point at New Trip instead.
+                      final checklist = ref.watch(checklistProvider);
                       final checklistDone =
-                          ref.watch(checklistProvider).isComplete;
+                          checklist.isComplete || checklist.skipped;
                       return SliverToBoxAdapter(
                         child: checklistDone
                             ? const ChecklistAllSetCard()
@@ -2840,16 +2847,25 @@ class _TripScreenState extends ConsumerState<TripScreen> {
       if (tripLocations.isNotEmpty) {
         if (!mounted) return;
         var shifted = false;
-        if (newStartDate != null && trip.startDate != null) {
+        // Runs for a RESCHEDULE and for the FIRST date set alike. A trip
+        // that had no dates still anchors the shift — on the earliest
+        // scheduled day among its places — otherwise setting dates left
+        // every place stranded on whatever "today" it was added under
+        // (the July-dates bug this repairs).
+        if (newStartDate != null) {
           final mode = await _askRescheduleMode(
             count: tripLocations.length,
             newStart: newStartDate,
           );
           if (mode == null) return; // cancelled
           if (mode == 'move') {
+            final anchor = trip.startDate ??
+                tripLocations
+                    .map((l) => l.scheduledDate!)
+                    .reduce((a, b) => a.isBefore(b) ? a : b);
             pendingShift = _planTripShift(
               tripLocations,
-              oldStart: trip.startDate!,
+              oldStart: anchor,
               newStart: newStartDate,
               newEnd: newEndDate ?? newStartDate,
             );

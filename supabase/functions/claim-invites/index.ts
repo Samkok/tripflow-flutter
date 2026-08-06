@@ -168,6 +168,35 @@ serve(async (req) => {
           if (insErr && (insErr as { code?: string }).code !== "23505") {
             console.error("claim-invites: referrals insert failed", insErr);
             referralDone = false;
+          } else if (!insErr) {
+            // Exactly-once side effects (this call created the referral):
+            // same instant rewards as redeem-referral — +2 place slots
+            // (LEAST-capped at 10 inside the SQL function) and a heads-up
+            // to the inviter. Both non-fatal.
+            const { error: bonusErr } = await supabase.rpc(
+              "increment_referral_bonus_places",
+              { target_user: referrerId },
+            );
+            if (bonusErr) {
+              console.error(
+                "claim-invites: bonus slots failed (non-fatal):",
+                bonusErr,
+              );
+            }
+            try {
+              await supabase.from("notifications").insert({
+                user_id: referrerId,
+                type: "referral_redeemed",
+                title: "Your invite worked 🎉",
+                body:
+                  "The friend you invited just joined VoyZa — you earned " +
+                  "+2 free place slots right now, and they're on your " +
+                  "trip. Your free month unlocks when they go Pro.",
+                data: { screen: "referral" },
+              });
+            } catch (e) {
+              console.error("claim-invites: notify failed (non-fatal):", e);
+            }
           }
         } else {
           referralDone = false; // keep pending rows for a retry

@@ -320,7 +320,13 @@ class SavedLocation extends HiveObject {
       'is_skipped': isSkipped,
       'is_done': isDone,
       'stay_duration': stayDuration,
-      'scheduled_date': scheduledDate?.toIso8601String(),
+      // Calendar day, never a timestamp: a raw now() slipping in here once
+      // stranded rows under phantom dates (Hong Kong trip, Jul 2026).
+      'scheduled_date': scheduledDate == null
+          ? null
+          : DateTime(
+                  scheduledDate!.year, scheduledDate!.month, scheduledDate!.day)
+              .toIso8601String(),
       'photo_reference': photoReference,
       'photo_references': photoReferences,
       'photo_attributions': photoAttributions,
@@ -330,7 +336,11 @@ class SavedLocation extends HiveObject {
           googleOpeningHours?.map((p) => p.toJson()).toList(),
       'user_closing_minute_override': userClosingMinuteOverride,
       'hours_last_refreshed_at': hoursLastRefreshedAt?.toIso8601String(),
-      'scheduled_end_date': scheduledEndDate?.toIso8601String(),
+      'scheduled_end_date': scheduledEndDate == null
+          ? null
+          : DateTime(scheduledEndDate!.year, scheduledEndDate!.month,
+                  scheduledEndDate!.day)
+              .toIso8601String(),
       'is_accommodation': isAccommodation,
     };
   }

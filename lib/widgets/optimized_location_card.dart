@@ -249,7 +249,7 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
               onPressed: () => setState(() => _isExpanded = !_isExpanded),
               style: style(primary.withValues(alpha: 0.30)),
               child: Text(
-                _isExpanded ? 'Hide photos' : 'More photos',
+                _isExpanded ? 'Hide' : 'Photos',
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),
@@ -262,6 +262,22 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
             context,
             ref,
             style(theme.colorScheme.onSurface.withValues(alpha: 0.10)),
+          ),
+        ),
+        const SizedBox(width: 10),
+        // Square map button: collapses the plan sheet and flies the camera
+        // to this stop (request consumed by MapScreen).
+        SizedBox(
+          width: 44,
+          child: FilledButton(
+            onPressed: () {
+              ref.read(mapZoomToLocationRequestProvider.notifier).state =
+                  MapZoomToLocationRequest(widget.location.coordinates);
+            },
+            style: style(primary.withValues(alpha: 0.18)).copyWith(
+              padding: const WidgetStatePropertyAll(EdgeInsets.zero),
+            ),
+            child: Icon(Icons.map_rounded, size: 20, color: primary),
           ),
         ),
       ],

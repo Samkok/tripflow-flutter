@@ -169,17 +169,22 @@ class ReferralService {
   /// Auto-join any trips this user's email was invited to as a non-user,
   /// and reward both sides. Idempotent server-side; safe to call on every
   /// sign-in. No-op without a session.
-  Future<void> claimInvites() async {
+  /// Returns how many trips were newly joined (0 on failure/no-op) so the
+  /// caller can adapt onboarding — invite-joined users skip the checklist.
+  Future<int> claimInvites() async {
     try {
       final client = SupabaseService.instance.client;
-      if (client.auth.currentSession == null) return;
+      if (client.auth.currentSession == null) return 0;
       // device_id powers the server's self-referral check (same-device
       // second account farming) — identical to the redeemCode path.
-      await client.functions.invoke('claim-invites', body: {
+      final res = await client.functions.invoke('claim-invites', body: {
         'device_id': await _deviceId(),
       });
+      final data = res.data is Map ? res.data as Map : const {};
+      return (data['joined'] as num?)?.toInt() ?? 0;
     } catch (e) {
       debugPrint('ReferralService.claimInvites: $e');
+      return 0;
     }
   }
 

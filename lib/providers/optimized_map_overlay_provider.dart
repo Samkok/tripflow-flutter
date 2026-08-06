@@ -39,40 +39,42 @@ String _generateLocationsCacheKey(List<LocationModel> locations,
 /// This is the expensive part that should only run when location data changes.
 final cachedMarkerBitmapsProvider =
     FutureProvider<CachedMarkersState>((ref) async {
-  // OPTIMIZED: Use select() to only rebuild when locations or currentLocation change
   final locationsForDate = ref.watch(
       locationsForSelectedDateProvider); // This will now be the optimized list if available
   final selectedDate = ref.watch(selectedDateProvider);
-  final tripState = ref.watch(tripProvider);
-  final currentLocation =
-      ref.watch(tripProvider.select((state) => state.currentLocation));
+  // NARROW watches (pin-appearance fix): this used to watch the ENTIRE
+  // tripProvider plus the live GPS position — every location tick and any
+  // trip-state mutation re-ran the whole bitmap pass. Only two fields
+  // actually influence the bitmaps:
+  final routeActive =
+      ref.watch(tripProvider.select((s) => s.optimizedRoute.isNotEmpty));
+  final startLocationId =
+      ref.watch(tripProvider.select((s) => s.startLocationId));
   final isDarkMode = ref.watch(themeProvider) == ThemeMode.dark;
 
-  final cacheKey = _generateLocationsCacheKey(
-      locationsForDate, currentLocation, selectedDate);
-
-  // DEBUG: Uncomment to track marker generation
-  // debugPrint('🎨 Generating cached markers - locations: ${pinnedLocations.length}, showNames: $showPlaceNames');
+  // currentLocation deliberately excluded from the key: the marker's
+  // POSITION is applied downstream in finalMarkersProvider — its ICON is
+  // static, so the moving dot must not invalidate this cache.
+  final cacheKey =
+      _generateLocationsCacheKey(locationsForDate, null, selectedDate);
 
   final Map<String, MarkerBitmapResult> markerIcons = {};
   final markerCache = MarkerCacheService();
 
-  if (currentLocation != null) {
-    final currentLocationIcon = await markerCache.getCurrentLocationMarker();
-    markerIcons['current_location'] = currentLocationIcon;
-  }
+  // Static, cached after first build — generated unconditionally so this
+  // provider needn't watch the live position at all.
+  markerIcons['current_location'] =
+      await markerCache.getCurrentLocationMarker();
 
-  // OPTIMIZED: Use batch marker generation for better performance
-  int nonSkippedIndex =
-      0; // This index will now correctly reflect the optimized order
+  // Numbering is order-dependent → compute it synchronously first, THEN
+  // rasterize every bitmap in PARALLEL. The serial awaits here were the
+  // "pins take seconds to appear" lag: 40 places meant 40 back-to-back
+  // canvas→GPU→PNG round-trips.
+  var nonSkippedIndex = 0;
+  final specs = <({LocationModel loc, int number, bool isStart})>[];
   for (final location in locationsForDate) {
-    // Iterate over the correctly ordered list
+    final isStartLocation = routeActive && startLocationId == location.id;
     int markerNumber;
-
-    // Check if this location is the designated start location for the route
-    final isStartLocation = tripState.optimizedRoute.isNotEmpty &&
-        tripState.startLocationId == location.id;
-
     if (isStartLocation) {
       markerNumber = 0;
     } else if (location.isDone) {
@@ -83,23 +85,24 @@ final cachedMarkerBitmapsProvider =
       nonSkippedIndex++;
       markerNumber = nonSkippedIndex;
     }
+    specs.add((loc: location, number: markerNumber, isStart: isStartLocation));
+  }
 
-    final customIconResult = await markerCache.getNumberedMarker(
-      isStart: isStartLocation,
-      number: markerNumber,
-      name: location.name,
+  final results = await Future.wait(specs.map(
+    (spec) => markerCache.getNumberedMarker(
+      isStart: spec.isStart,
+      number: spec.number,
+      name: spec.loc.name,
       backgroundColor: AppTheme.accentColor,
       textColor: Colors.white,
       isDarkMode: isDarkMode,
-      isSkipped: location.isSkipped,
-      isDone: location.isDone,
-    );
-
-    markerIcons[location.id] = customIconResult;
+      isSkipped: spec.loc.isSkipped,
+      isDone: spec.loc.isDone,
+    ),
+  ));
+  for (var i = 0; i < specs.length; i++) {
+    markerIcons[specs[i].loc.id] = results[i];
   }
-
-  // DEBUG: Uncomment to track marker generation completion
-  // debugPrint('✅ Generated ${markers.length} cached markers');
 
   return CachedMarkersState(markerIcons: markerIcons, cacheKey: cacheKey);
 });

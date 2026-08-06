@@ -134,6 +134,37 @@ class TripCollaboratorRepository {
     }
   }
 
+  /// Pending (not-yet-signed-up) invites for a trip. RLS returns only rows
+  /// this user created — a co-collaborator sees their own invites, not
+  /// everyone's.
+  Future<List<Map<String, dynamic>>> getPendingInvites(String tripId) async {
+    try {
+      final rows = await _supabase
+          .from('pending_trip_invites')
+          .select('id, email, permission, created_at')
+          .eq('trip_id', tripId)
+          .order('created_at', ascending: true);
+      return (rows as List).cast<Map<String, dynamic>>();
+    } catch (e) {
+      debugPrint('Error loading pending invites: $e');
+      return [];
+    }
+  }
+
+  /// Revoke a pending invite (RLS: only the inviter can).
+  Future<bool> revokePendingInvite(String inviteId) async {
+    try {
+      await _supabase
+          .from('pending_trip_invites')
+          .delete()
+          .eq('id', inviteId);
+      return true;
+    } catch (e) {
+      debugPrint('Error revoking pending invite: $e');
+      return false;
+    }
+  }
+
   /// Get all collaborators for a trip
   Future<List<TripCollaborator>> getCollaborators(String tripId) async {
     try {
