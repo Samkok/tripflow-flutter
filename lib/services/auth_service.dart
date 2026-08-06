@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:voyza/repositories/location_repository.dart';
+import 'package:voyza/repositories/trip_repository.dart';
 import 'package:voyza/repositories/user_profile_repository.dart';
 import 'package:voyza/services/supabase_service.dart';
 import 'package:voyza/services/revenuecat_service.dart';
@@ -52,15 +53,38 @@ class AuthService {
       : _userProfileRepository =
             userProfileRepository ?? UserProfileRepository();
 
+  final TripRepository _tripRepository = TripRepository();
+
+  /// Pre-auth counts of guest data on this device — the sync question is
+  /// asked BEFORE authenticating, so it can't depend on a session.
+  Future<({int trips, int places})> getLocalDataCounts() async {
+    await _locationRepository.init();
+    return (
+      trips: await _tripRepository.getLocalTripCount(),
+      places: await _locationRepository.getLocalLocationCount(),
+    );
+  }
+
+  /// Records the sync decision taken before authentication. Consequences
+  /// (upload or deletion) only run after a session exists.
+  static Future<void> presetSyncChoice(bool choice) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_syncChoiceKey, choice);
+  }
+
   User? get currentUser => _supabase.auth.currentUser;
 
-  /// Returns the count of local locations that need syncing
-  Future<int> signIn(String email, String password) async {
+  /// Returns how much guest data is waiting on this device (drives the
+  /// "sync your trips & places?" prompt after sign-in).
+  Future<({int trips, int places})> signIn(String email, String password,
+      {void Function(String label, double progress)? onStage}) async {
     try {
+      onStage?.call('Verifying your credentials…', 0.15);
       final response = await _supabase.auth
           .signInWithPassword(email: email, password: password);
 
       if (response.user != null) {
+        onStage?.call('Linking your subscription…', 0.45);
         // Link RevenueCat user identity with Supabase user
         try {
           await RevenueCatService().login(response.user!.id);
@@ -100,19 +124,22 @@ class AuthService {
         // Register device for push notifications (fire-and-forget). This is
         // the ONE place allowed to show the OS prompt — and only on the very
         // first sign-in (the service persists a "already asked" flag).
+        onStage?.call('Setting up notifications…', 0.75);
         try {
           await NotificationService().registerToken(allowPrompt: true);
         } catch (e) {
           debugPrint('AuthService: Failed to register push token: $e');
         }
 
-        // Check if there are local locations before syncing
+        onStage?.call('Almost there…', 0.92);
+        // Count guest data before offering the sync
         await _locationRepository.init();
         final localLocationCount =
             await _locationRepository.getLocalLocationCount();
-        return localLocationCount;
+        final localTripCount = await _tripRepository.getLocalTripCount();
+        return (trips: localTripCount, places: localLocationCount);
       }
-      return 0;
+      return (trips: 0, places: 0);
     } catch (e) {
       rethrow;
     }
@@ -125,6 +152,14 @@ class AuthService {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_syncChoiceKey, true);
 
+    // Trips FIRST: guest locations carry trip_id pointing at local trip
+    // UUIDs, and the locations upload would violate the FK before the trip
+    // rows exist. Same ids are kept, so the references just work.
+    final userId = _supabase.auth.currentUser?.id;
+    if (userId != null) {
+      await _tripRepository.syncLocalTripsToAccount(userId);
+    }
+
     await _locationRepository.syncOnLogin();
   }
 
@@ -135,6 +170,9 @@ class AuthService {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_syncChoiceKey, false);
     await _locationRepository.cleanUpAnonymousData();
+    // Guest trips go with their locations — keeping them would resurface
+    // orphaned trips the next time this device is signed out.
+    await _tripRepository.clearLocalTrips();
   }
 
   /// Checks if user has chosen to sync anonymous locations
@@ -217,9 +255,11 @@ class AuthService {
     String? lastName,
     String? phoneNumber,
     String? referralCode,
+    void Function(String label, double progress)? onStage,
   }) async {
     try {
       // Create user account
+      onStage?.call('Creating your account…', 0.25);
       final response = await _supabase.auth.signUp(
         email: email,
         password: password,
@@ -251,6 +291,7 @@ class AuthService {
       }
 
       if (response.user != null) {
+        onStage?.call('Preparing your account…', 0.65);
         // Link RevenueCat user identity with Supabase user
         try {
           await RevenueCatService().login(response.user!.id);

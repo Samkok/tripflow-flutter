@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/auth_provider.dart';
 import '../providers/location_provider.dart';
 import '../providers/subscription_provider.dart';
+import '../providers/referral_provider.dart';
 import '../services/subscription_limit_service.dart';
 
 /// Colour of a FILLED allowance segment. The last two escalate — amber at the
@@ -11,8 +12,8 @@ import '../services/subscription_limit_service.dart';
 /// advance instead of arriving as a surprise at the paywall.
 ///
 /// Shared by both meters below so the two can't drift apart.
-Color freePlaceSegmentColor(BuildContext context, int index) {
-  const total = SubscriptionLimitService.freePlaceAllowance;
+Color freePlaceSegmentColor(BuildContext context, int index,
+    {int total = SubscriptionLimitService.freePlaceAllowance}) {
   if (index >= total - 1) return const Color(0xFFE5484D); // last → red
   if (index == total - 2) return const Color(0xFFF5A623); // second-last → amber
   return Theme.of(context).colorScheme.primary;
@@ -29,12 +30,21 @@ final freePlacesChipDismissedProvider = StateProvider<bool>((_) => false);
 class FreePlacesMeter extends StatelessWidget {
   final int used;
 
-  const FreePlacesMeter({super.key, required this.used});
+  /// Effective allowance (base + referral bonus slots). Callers with a ref
+  /// pass SubscriptionLimitService.effectiveAllowanceOf; the default keeps
+  /// ref-less call sites compiling on the base allowance.
+  final int total;
+
+  const FreePlacesMeter({
+    super.key,
+    required this.used,
+    this.total = SubscriptionLimitService.freePlaceAllowance,
+  });
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    const total = SubscriptionLimitService.freePlaceAllowance;
+    final total = this.total;
     return Column(
       children: [
         Row(
@@ -46,7 +56,7 @@ class FreePlacesMeter extends StatelessWidget {
                 margin: EdgeInsets.only(right: i == total - 1 ? 0 : 6),
                 decoration: BoxDecoration(
                   color: filled
-                      ? freePlaceSegmentColor(context, i)
+                      ? freePlaceSegmentColor(context, i, total: total)
                       : theme.colorScheme.onSurfaceVariant
                           .withValues(alpha: 0.2),
                   borderRadius: BorderRadius.circular(4),
@@ -84,11 +94,14 @@ class FreePlacesProgressChip extends ConsumerWidget {
     if (all == null) return const SizedBox.shrink(); // stream not ready yet
 
     final userId = ref.watch(currentUserIdProvider);
+    // Base 5 + permanent referral bonus slots (loads async; base until then).
+    final totalAllowance = SubscriptionLimitService.freePlaceAllowance +
+        (ref.watch(referralBonusPlacesProvider).valueOrNull ?? 0);
     final used = (userId == null
             ? all.length
             : all.where((l) => l.userId == userId).length)
-        .clamp(0, SubscriptionLimitService.freePlaceAllowance);
-    const total = SubscriptionLimitService.freePlaceAllowance;
+        .clamp(0, totalAllowance);
+    final total = totalAllowance;
     final atLimit = used >= total;
 
     // Only dismissible once spent — and staying dismissed only matters while
@@ -143,7 +156,7 @@ class FreePlacesProgressChip extends ConsumerWidget {
               margin: EdgeInsets.only(right: i == total - 1 ? 8 : 4),
               decoration: BoxDecoration(
                 color: filled
-                    ? freePlaceSegmentColor(context, i)
+                    ? freePlaceSegmentColor(context, i, total: total)
                     : theme.colorScheme.onSurfaceVariant
                         .withValues(alpha: 0.25),
                 borderRadius: BorderRadius.circular(3),

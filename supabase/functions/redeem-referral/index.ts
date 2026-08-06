@@ -185,11 +185,48 @@ serve(async (req) => {
       // code and retries later; retries land in the branch above.
       return reply(502, { ok: false, reason: "grant_failed" });
     }
-    await supabase
+    const { data: completedRow } = await supabase
       .from("referrals")
       .update({ referee_rewarded_at: new Date().toISOString() })
       .eq("id", referralId)
-      .is("referee_rewarded_at", null);
+      .is("referee_rewarded_at", null)
+      .select("id")
+      .maybeSingle();
+
+    // Exactly-once side effects: only the call that flipped
+    // referee_rewarded_at runs them. A lost-response retry lands in the
+    // already_redeemed branch above; a concurrent double-grant loses this
+    // guarded update and skips.
+    if (completedRow) {
+      // Instant referrer reward: +2 free place slots, capped at +10 by the
+      // SQL function itself (LEAST), so no client math to trust.
+      const { error: bonusErr } = await supabase.rpc(
+        "increment_referral_bonus_places",
+        { target_user: referrerId },
+      );
+      if (bonusErr) {
+        console.error(
+          "redeem-referral: bonus slots failed (non-fatal):",
+          bonusErr,
+        );
+      }
+      // Tell the referrer the moment it happens. The month-at-conversion
+      // wait starts NOW — silence here made the program feel dead.
+      try {
+        await supabase.from("notifications").insert({
+          user_id: referrerId,
+          type: "referral_redeemed",
+          title: "Your code was just used 🎉",
+          body:
+            "A friend joined VoyZa with your code — you earned +2 free " +
+            "place slots right now. Your free month unlocks when they go " +
+            "Pro (usually within a month).",
+          data: { screen: "referral" },
+        });
+      } catch (e) {
+        console.error("redeem-referral: notify failed (non-fatal):", e);
+      }
+    }
 
     console.log(
       `redeem-referral: ${referee.id} redeemed ${code} (referrer ${referrerId})`,

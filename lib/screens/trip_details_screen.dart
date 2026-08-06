@@ -18,6 +18,9 @@ import 'package:voyza/services/places_service.dart';
 import 'package:voyza/providers/auth_provider.dart';
 import 'package:voyza/widgets/app_toast.dart';
 import 'package:voyza/widgets/collaborators_sheet.dart';
+import 'package:voyza/widgets/sign_up_required_sheet.dart';
+import 'package:voyza/providers/onboarding_checklist_provider.dart';
+import 'package:voyza/widgets/onboarding_checklist.dart';
 import 'package:voyza/widgets/google_maps_url_dialog.dart';
 import 'package:voyza/services/location_add_service.dart';
 import 'package:voyza/services/onboarding_service.dart';
@@ -71,6 +74,8 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
   // Stream created once so rebuilds (e.g. typing in search) don't recreate it,
   // which would cause StreamBuilder to briefly flash ConnectionState.waiting.
   late final Stream<List<SavedLocation>> _locationsStream;
+
+  final _addLocationFabKey = GlobalKey();
 
   // ─── Multi-select state ────────────────────────────────────────────────
   bool _selectionMode = false;
@@ -178,6 +183,26 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
   void initState() {
     super.initState();
     _locationsStream = ref.read(locationRepositoryProvider).watchLocations();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      // Checklist: the add-locations guide is pre-armed by the wizard (or a
+      // checklist tap on home). Consume it once the FAB is laid out.
+      if (ref.read(checklistGuideRequestProvider) ==
+          ChecklistGuide.addLocations) {
+        ref.read(checklistGuideRequestProvider.notifier).state = null;
+        Future.delayed(const Duration(milliseconds: 450), () {
+          if (!mounted) return;
+          showChecklistCoach(
+            context,
+            targetKey: _addLocationFabKey,
+            title: 'Add 3 places',
+            body: 'Search for spots you want to visit — cafés, sights, your '
+                'hotel. Add 3 and step 2 is done; the badge up top keeps '
+                'count.',
+            align: ContentAlign.top,
+          );
+        });
+      }
+    });
     WidgetsBinding.instance.addPostFrameCallback((_) {
       // Invalidate permissions when screen is first created to ensure fresh data
       ref.invalidate(hasWriteAccessProvider(widget.trip.id));
@@ -390,13 +415,33 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
                     overflow: TextOverflow.ellipsis,
                   ),
                   actions: [
-                    // Team members button - only visible to trip owner
+                    // Team members button - only visible to trip owner.
+                    // Guests see it too (they own their local trips), but
+                    // tapping it prompts sign-up: collaboration needs an
+                    // account, and hiding the button would keep guests from
+                    // ever learning the feature exists.
                     isOwnerAsync.when(
                       data: (isOwner) => isOwner
                           ? IconButton(
                               icon: const Icon(Icons.group_outlined),
                               tooltip: 'Travel buddies',
-                              onPressed: () => _showCollaboratorsSheet(),
+                              onPressed: () {
+                                if (ref.read(currentUserIdProvider) == null) {
+                                  showSignUpRequiredSheet(
+                                    context,
+                                    icon: Icons.group_add_rounded,
+                                    title: 'Sign up to invite travel buddies',
+                                    message: 'Trip collaboration needs a free '
+                                        'account — your buddies get live '
+                                        'access, and every change syncs to '
+                                        'everyone instantly. This trip stays '
+                                        'on your device and comes with you '
+                                        'when you sign up.',
+                                  );
+                                  return;
+                                }
+                                _showCollaboratorsSheet();
+                              },
                             )
                           : const SizedBox.shrink(),
                       loading: () => const SizedBox.shrink(),
@@ -448,6 +493,7 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
                           borderRadius: BorderRadius.circular(16),
                           glowColor: Theme.of(context).colorScheme.primary,
                           child: FloatingActionButton.extended(
+                            key: _addLocationFabKey,
                             heroTag: 'fab_add_location',
                             onPressed: () => _showAddLocationDialog(),
                             icon: const Icon(Icons.add_location_alt_outlined),
@@ -461,6 +507,18 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
                   loading: () => null,
                   error: (_, __) => null,
                 ),
+        ),
+        // Floating step-2 progress badge (checklist): visible only while
+        // "add 3 places" is the active goal — the checklist lives on home,
+        // so this is the on-screen definition of done.
+        Positioned(
+          top: MediaQuery.of(context).padding.top + kToolbarHeight + 6,
+          left: 0,
+          right: 0,
+          child: Center(
+            child: AddLocationsProgressBadge(
+                count: ref.watch(checklistProvider).locCount),
+          ),
         ),
       ],
     );
@@ -563,6 +621,17 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
         // Filter by trip ID
         var tripLocations =
             allLocations.where((loc) => loc.tripId == widget.trip.id).toList();
+
+        // Checklist step 2 progress: report this trip's live count (marks
+        // the step at 3). Post-frame — never mutate providers during build.
+        final checklistCount = tripLocations.length;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            ref
+                .read(checklistProvider.notifier)
+                .reportTripLocationCount(checklistCount);
+          }
+        });
 
         // Apply search filter if query is not empty
         if (_searchQuery.isNotEmpty) {

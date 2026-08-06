@@ -183,6 +183,25 @@ class MarkerCacheService {
     return result;
   }
 
+  /// Cached per distance+duration pair — the label is baked into the
+  /// bitmap, so each distinct pair is its own image.
+  Future<MarkerBitmapResult> getRouteLegChipMarker({
+    required String distanceLabel,
+    String? durationLabel,
+  }) async {
+    final key = 'leg_chip_${distanceLabel}_${durationLabel ?? ''}';
+    if (_cache.containsKey(key)) {
+      return _cache[key]!;
+    }
+
+    final result = await MarkerUtils.getRouteLegChipMarker(
+      distanceLabel: distanceLabel,
+      durationLabel: durationLabel,
+    );
+    _addToCache(key, result);
+    return result;
+  }
+
   Future<MarkerBitmapResult> getGrabButtonMarker() async {
     const key = 'grab_button_v2';
     if (_cache.containsKey(key)) {

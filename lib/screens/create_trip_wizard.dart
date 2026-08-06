@@ -5,6 +5,8 @@ import 'package:intl/intl.dart';
 import '../providers/auth_provider.dart';
 import '../providers/user_trip_provider.dart';
 import '../services/analytics_service.dart';
+import '../services/anonymous_user_service.dart';
+import '../providers/onboarding_checklist_provider.dart';
 import '../services/trip_buddy_service.dart';
 import '../widgets/app_toast.dart';
 import '../utils/trip_dates.dart';
@@ -40,7 +42,13 @@ class CreateTripWizard extends ConsumerStatefulWidget {
 class _CreateTripWizardState extends ConsumerState<CreateTripWizard> {
   final _pageController = PageController();
   int _step = 0;
-  static const _stepCount = 4;
+
+  /// Guests skip the buddies step — inviting collaborators needs an
+  /// account (trip_shares rows, invite emails). Their trips live on-device
+  /// until the sign-in sync.
+  bool get _isGuest => ref.read(currentUserIdProvider) == null;
+
+  int get _stepCount => _isGuest ? 3 : 4;
 
   // Collected answers.
   String? _countryCode;
@@ -186,11 +194,11 @@ class _CreateTripWizardState extends ConsumerState<CreateTripWizard> {
     final name = _nameController.text.trim();
     final dates = _dates;
     if (name.isEmpty || dates == null) return;
-    final userId = ref.read(currentUserIdProvider);
-    if (userId == null) {
-      AppToast.warning(context, 'Please sign in to create a trip.');
-      return;
-    }
+    // Guests get the device's stable anonymous id — same convention as
+    // SavedLocation rows, re-stamped with the real uid at sync time.
+    final userId =
+        ref.read(currentUserIdProvider) ?? await AnonymousUserService.id;
+    if (!mounted) return;
 
     // An email typed but never added via + would be silently discarded —
     // run it through the add flow first (it clears the field on success).
@@ -223,6 +231,15 @@ class _CreateTripWizardState extends ConsumerState<CreateTripWizard> {
           );
       ref.invalidate(userTripsProvider);
       AnalyticsService.instance.tripCreated();
+      // Checklist step 1 — and pre-arm the add-locations spotlight for the
+      // trip details screen this wizard navigates to next.
+      ref.read(checklistProvider.notifier).mark(ChecklistStep.createTrip);
+      // Pre-arm the add-locations spotlight only while step 2 is still the
+      // goal — veterans creating their fifth trip shouldn't get a tour.
+      if (!ref.read(checklistProvider).isDone(ChecklistStep.addLocations)) {
+        ref.read(checklistGuideRequestProvider.notifier).state =
+            ChecklistGuide.addLocations;
+      }
     } catch (e) {
       debugPrint('CreateTripWizard._confirm create: $e');
       if (mounted) {
@@ -338,7 +355,7 @@ class _CreateTripWizardState extends ConsumerState<CreateTripWizard> {
                       _buildCountryStep(theme),
                       _buildDatesStep(theme),
                       _buildNameStep(theme),
-                      _buildBuddyStep(theme),
+                      if (!_isGuest) _buildBuddyStep(theme),
                     ],
                   ),
                 ),
@@ -382,7 +399,9 @@ class _CreateTripWizardState extends ConsumerState<CreateTripWizard> {
                           onPressed: _creating ? null : () => _goTo(1),
                           child: const Text('Skip — no country'),
                         ),
-                      if (_step == _stepCount - 1 && _buddies.isEmpty)
+                      if (!_isGuest &&
+                          _step == _stepCount - 1 &&
+                          _buddies.isEmpty)
                         TextButton(
                           onPressed: _creating ? null : _confirm,
                           child: const Text('Skip — invite them later'),

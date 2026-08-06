@@ -2,11 +2,23 @@ import 'package:flutter/material.dart';
 
 class SyncConfirmationDialog extends StatelessWidget {
   final int localLocationCount;
+  final int localTripCount;
 
   const SyncConfirmationDialog({
     super.key,
     required this.localLocationCount,
+    this.localTripCount = 0,
   });
+
+  String get _whatsLocal {
+    final parts = <String>[
+      if (localTripCount > 0)
+        '$localTripCount trip${localTripCount != 1 ? 's' : ''}',
+      if (localLocationCount > 0)
+        '$localLocationCount place${localLocationCount != 1 ? 's' : ''}',
+    ];
+    return parts.join(' and ');
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -20,7 +32,7 @@ class SyncConfirmationDialog extends StatelessWidget {
             color: Theme.of(context).colorScheme.primary,
           ),
           const SizedBox(width: 12),
-          const Expanded(child: Text('Sync Your Locations?')),
+          const Expanded(child: Text('Keep What You Created?')),
         ],
       ),
       content: Column(
@@ -28,7 +40,7 @@ class SyncConfirmationDialog extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'You have $localLocationCount location${localLocationCount != 1 ? 's' : ''} saved locally.',
+            'You have $_whatsLocal saved on this device.',
             style: Theme.of(context).textTheme.bodyLarge,
           ),
           const SizedBox(height: 16),
@@ -62,7 +74,7 @@ class SyncConfirmationDialog extends StatelessWidget {
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    'Synced locations will be available across all your devices.',
+                    'Synced trips and places will be available across all your devices. Skipping removes them from this device.',
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
                 ),

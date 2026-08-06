@@ -10,6 +10,7 @@ import '../providers/auth_provider.dart';
 import '../providers/onboarding_provider.dart';
 import '../services/auth_service.dart';
 import '../services/email_history_service.dart';
+import '../widgets/sync_confirmation_dialog.dart';
 import '../widgets/app_toast.dart';
 import '../widgets/email_suggestions.dart';
 import '../widgets/save_password_prompt.dart';
@@ -29,6 +30,8 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
   final _emailFocusNode = FocusNode();
   final _formKey = GlobalKey<FormState>();
   bool _isLoading = false;
+  String _authStage = '';
+  double _authProgress = 0;
   bool _agreedToTerms = false;
   // Referral field starts collapsed — see the AnimatedSize block in build.
   bool _showReferralField = false;
@@ -97,15 +100,48 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
 
   Future<void> _signUp() async {
     if (!_formKey.currentState!.validate()) return;
-    setState(() => _isLoading = true);
+
+    // Sync question comes BEFORE authenticating. The decision is only
+    // recorded here; upload/deletion run after a session exists (most
+    // sign-ups go through email verification first — the recorded "yes"
+    // makes the first sign-in sync automatically without re-asking).
+    final counts = await ref.read(authServiceProvider).getLocalDataCounts();
+    if (counts.trips > 0 || counts.places > 0) {
+      if (!mounted) return;
+      final keep = await showDialog<bool>(
+            context: context,
+            barrierDismissible: false,
+            builder: (context) => SyncConfirmationDialog(
+              localLocationCount: counts.places,
+              localTripCount: counts.trips,
+            ),
+          ) ??
+          false;
+      await AuthService.presetSyncChoice(keep);
+    }
+    if (!mounted) return;
+
+    setState(() {
+      _isLoading = true;
+      _authStage = 'Starting…';
+      _authProgress = 0.05;
+    });
     try {
       await ref.read(authServiceProvider).signUp(
-            _emailController.text,
-            _passwordController.text,
-            referralCode: _referralCodeController.text.trim().isEmpty
-                ? null
-                : _referralCodeController.text.trim(),
-          );
+        _emailController.text,
+        _passwordController.text,
+        referralCode: _referralCodeController.text.trim().isEmpty
+            ? null
+            : _referralCodeController.text.trim(),
+        onStage: (label, progress) {
+          if (mounted) {
+            setState(() {
+              _authStage = label;
+              _authProgress = progress;
+            });
+          }
+        },
+      );
       if (mounted) {
         // Ask the user (once per email) whether to save the credential
         // to the device's password manager. Same dialog + per-email
@@ -198,7 +234,9 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
   /// save places right away.
   void _continueAsGuest() {
     final navigator = Navigator.of(context);
-    ref.read(mainTabRequestProvider.notifier).state = 1; // Map tab
+    // Home tab: first thing a guest sees is the getting-started
+    // checklist, which walks them to the map through their own trip.
+    ref.read(mainTabRequestProvider.notifier).state = 0;
     if (navigator.canPop()) {
       navigator.pop();
     } else {
@@ -449,6 +487,36 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
                                       CircularProgressIndicator(strokeWidth: 3))
                               : const Text('Sign Up'),
                         ),
+                        // Staged progress — account creation does real work
+                        // (RevenueCat link, referral, notifications); naming
+                        // the running step keeps a slow network from reading
+                        // as a frozen app.
+                        if (_isLoading) ...[
+                          const SizedBox(height: 14),
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(3),
+                            child: TweenAnimationBuilder<double>(
+                              tween: Tween(end: _authProgress),
+                              duration: const Duration(milliseconds: 350),
+                              builder: (_, v, __) => LinearProgressIndicator(
+                                value: v,
+                                minHeight: 5,
+                                color: Theme.of(context).colorScheme.primary,
+                                backgroundColor: Theme.of(context)
+                                    .colorScheme
+                                    .primary
+                                    .withValues(alpha: 0.15),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            _authStage,
+                            textAlign: TextAlign.center,
+                            style: theme.textTheme.bodySmall?.copyWith(
+                                color: theme.colorScheme.onSurfaceVariant),
+                          ),
+                        ],
                         const SizedBox(height: 8),
                         // Escape hatch for first-run users who don't want an
                         // account yet — drops them on the map as an anonymous

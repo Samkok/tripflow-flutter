@@ -30,6 +30,7 @@ import 'trip_listener_provider.dart';
 import '../utils/same_day_place_guard.dart';
 import '../utils/trip_dates.dart';
 import 'trip_collaborator_provider.dart';
+import 'onboarding_checklist_provider.dart';
 
 class TripState {
   final List<LocationModel> pinnedLocations;
@@ -1653,6 +1654,13 @@ class TripNotifier extends StateNotifier<TripState> {
       unawaited(() async {
         var celebrationPending = false;
         if (optimizeSucceeded) {
+          // Checklist step 4. If this completes the list, the notifier
+          // marks the firstOptimize milestone celebrated itself, so the
+          // generic celebration below is skipped in favor of the
+          // checklist one — never two dialogs for one optimize.
+          await _ref
+              .read(checklistProvider.notifier)
+              .mark(ChecklistStep.optimizeRoute);
           // Anonymous users celebrate too (flags keyed to the persistent
           // device UUID) — the optimize "aha" is the conversion moment.
           final userId =

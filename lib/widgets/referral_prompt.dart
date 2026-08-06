@@ -53,8 +53,9 @@ Future<void> showReferralAfterPurchase(
               ),
               const SizedBox(height: 8),
               Text(
-                'Know someone else planning a trip? Invite them — they get a '
-                'free month, and so do you.',
+                'Know someone else planning a trip? Invite them — they get '
+                'a month of Pro today, and you get yours when they go Pro '
+                '(plus 2 bonus place slots the moment they join).',
                 style: theme.textTheme.bodyMedium
                     ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
                 textAlign: TextAlign.center,
@@ -150,7 +151,8 @@ class ReferralHomeBanner extends ConsumerWidget {
                         ),
                         const SizedBox(height: 2),
                         Text(
-                          'Invite a friend — you both get a free month of Pro.',
+                          'They get a month free today — yours unlocks '
+                          'when they go Pro.',
                           style: theme.textTheme.bodySmall?.copyWith(
                               color: theme.colorScheme.onSurfaceVariant),
                         ),

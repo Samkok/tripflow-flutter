@@ -134,6 +134,11 @@ class CollaboratorRealtimeNotifier extends StateNotifier<int> {
   /// fresh RLS-gated query instead of an event payload that never arrives).
   Future<void> _recheckActiveTripMembership() async {
     try {
+      // Guests can't lose membership of their own local trips — and the raw
+      // isOwner() below would return false with no session, wrongly
+      // deactivating the trip if an event ever slipped through.
+      if (_ref.read(currentUserIdProvider) == null) return;
+
       final activeTrip = _ref.read(realtimeActiveTripProvider).valueOrNull;
       if (activeTrip == null) return;
 
@@ -179,6 +184,10 @@ final tripCollaboratorsProvider = FutureProvider.autoDispose
   // showing a stale cached result from an unauthenticated context.
   final authState = ref.watch(authStateProvider);
 
+  // Guests: local trips have no collaborators, and the query below would
+  // just error against RLS with no session.
+  if (ref.watch(currentUserIdProvider) == null) return [];
+
   // Watch refresh counter to trigger rebuild on realtime collaborator changes
   ref.watch(_collaboratorRefreshCounterProvider);
 
@@ -214,6 +223,10 @@ final sharedTripsProvider =
 /// Provider to check if user is the owner of a trip
 final isTripOwnerProvider =
     FutureProvider.family<bool, String>((ref, tripId) async {
+  // Guests own everything on their device: local trips have no
+  // collaborator rows, and the Supabase isOwner lookup would return false
+  // and lock them out of their own trip's CRUD.
+  if (ref.watch(currentUserIdProvider) == null) return true;
   final repository = ref.watch(tripCollaboratorRepositoryProvider);
   return repository.isOwner(tripId);
 });
@@ -233,6 +246,9 @@ final hasWriteAccessProvider =
     FutureProvider.family<bool, String>((ref, tripId) async {
   // Watch refresh counter to trigger rebuild on permission changes
   ref.watch(_collaboratorRefreshCounterProvider);
+
+  // Guests: same reasoning as isTripOwnerProvider — local trips are theirs.
+  if (ref.watch(currentUserIdProvider) == null) return true;
 
   final repository = ref.watch(tripCollaboratorRepositoryProvider);
 

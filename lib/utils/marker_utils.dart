@@ -318,6 +318,149 @@ class MarkerUtils {
   /// Creates a combined distance label + Open Maps button as one bitmap.
   /// Draws: [ distance chip ] on top, [ OPEN MAPS button ] below, with a gap.
   /// Anchor is set to bottom-center so the whole stack sits above the midpoint.
+  /// Single compact leg chip drawn ON the route line:
+  ///   [car icon]  4.4 km · 12 min  (>)
+  ///
+  /// Replaces the old stacked distance-chip + OPEN MAPS button pair, which
+  /// buried the very polyline the user tapped. Tapping this opens the leg
+  /// sheet (see showRouteLegSheet) where the actions live.
+  ///
+  /// Rendered at device pixel ratio and handed to the map with a matching
+  /// imagePixelRatio, so the text stays crisp instead of being upscaled.
+  static Future<MarkerBitmapResult> getRouteLegChipMarker({
+    required String distanceLabel,
+    String? durationLabel,
+  }) async {
+    final double dpr = (WidgetsBinding
+                .instance.platformDispatcher.implicitView?.devicePixelRatio ??
+            3.0)
+        .clamp(1.0, 4.0);
+
+    final ui.PictureRecorder pictureRecorder = ui.PictureRecorder();
+    final Canvas canvas = Canvas(pictureRecorder);
+    canvas.scale(dpr);
+
+    const double hPad = 11.0;
+    const double vPad = 8.0;
+    const double gap = 6.0;
+    const double chevronDiameter = 22.0;
+    const double shadowExtra = 5.0;
+    const Color cyan = Color(0xFF00D4FF);
+
+    const IconData carIcon = Icons.directions_car_rounded;
+    final iconPainter = TextPainter(
+      text: TextSpan(
+        text: String.fromCharCode(carIcon.codePoint),
+        style: TextStyle(
+            fontSize: 15, fontFamily: carIcon.fontFamily, color: Colors.white),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+
+    // "4.4 km · 12 min" — the middle dot is dropped when the route service
+    // gave us no duration for this leg.
+    final label = (durationLabel == null || durationLabel.isEmpty)
+        ? distanceLabel
+        : '$distanceLabel · $durationLabel';
+    final textPainter = TextPainter(
+      text: TextSpan(
+        text: label,
+        style: const TextStyle(
+            color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+
+    const IconData chevronIcon = Icons.chevron_right_rounded;
+    final chevronPainter = TextPainter(
+      text: TextSpan(
+        text: String.fromCharCode(chevronIcon.codePoint),
+        style: TextStyle(
+            fontSize: 17,
+            fontFamily: chevronIcon.fontFamily,
+            color: const Color(0xFF17263C)),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+
+    final double contentHeight = [
+      iconPainter.height,
+      textPainter.height,
+      chevronDiameter,
+    ].reduce((a, b) => a > b ? a : b);
+    final double chipHeight = contentHeight + vPad * 2;
+    final double chipWidth = hPad +
+        iconPainter.width +
+        gap +
+        textPainter.width +
+        gap +
+        chevronDiameter +
+        hPad;
+    final double totalHeight = chipHeight + shadowExtra;
+
+    final chipRect = RRect.fromRectAndRadius(
+      Rect.fromLTWH(0, 0, chipWidth, chipHeight),
+      Radius.circular(chipHeight / 2),
+    );
+
+    canvas.drawShadow(
+      Path()
+        ..addRRect(RRect.fromRectAndRadius(
+          Rect.fromLTWH(0, 2, chipWidth, chipHeight),
+          Radius.circular(chipHeight / 2),
+        )),
+      Colors.black.withValues(alpha: 0.45),
+      4.0,
+      true,
+    );
+    // Near-opaque navy so the label stays readable over any map tile.
+    canvas.drawRRect(chipRect, Paint()..color = const Color(0xF01B2A3F));
+    canvas.drawRRect(
+      chipRect,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1
+        ..color = cyan.withValues(alpha: 0.45),
+    );
+
+    double x = hPad;
+    iconPainter.paint(
+        canvas, Offset(x, (chipHeight - iconPainter.height) / 2));
+    x += iconPainter.width + gap;
+    textPainter.paint(
+        canvas, Offset(x, (chipHeight - textPainter.height) / 2));
+    x += textPainter.width + gap;
+
+    // Cyan affordance dot — signals "there is more behind this".
+    canvas.drawCircle(
+      Offset(x + chevronDiameter / 2, chipHeight / 2),
+      chevronDiameter / 2,
+      Paint()..color = cyan,
+    );
+    chevronPainter.paint(
+      canvas,
+      Offset(
+        x + (chevronDiameter - chevronPainter.width) / 2,
+        (chipHeight - chevronPainter.height) / 2,
+      ),
+    );
+
+    final ui.Image img = await pictureRecorder
+        .endRecording()
+        .toImage((chipWidth * dpr).round(), (totalHeight * dpr).round());
+    final ByteData? data = await img.toByteData(format: ui.ImageByteFormat.png);
+    if (data == null) {
+      return MarkerBitmapResult(
+          BitmapDescriptor.defaultMarker, const Offset(0.5, 0.5));
+    }
+
+    // Centred on the leg midpoint so the chip straddles the polyline.
+    return MarkerBitmapResult(
+      BitmapDescriptor.bytes(data.buffer.asUint8List(), imagePixelRatio: dpr),
+      const Offset(0.5, 0.5),
+    );
+  }
+
   static Future<MarkerBitmapResult> getDistanceAndMapsMarker(
       String distanceLabel) async {
     final ui.PictureRecorder pictureRecorder = ui.PictureRecorder();

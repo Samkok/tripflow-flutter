@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/auth_provider.dart';
 import '../providers/location_provider.dart';
 import '../providers/subscription_provider.dart';
+import '../providers/referral_provider.dart';
 import '../screens/paywall_screen.dart';
 import 'analytics_service.dart';
 
@@ -28,6 +29,13 @@ class SubscriptionLimitService {
   /// together if it ever changes.
   static const int freePlaceAllowance = 5;
 
+  /// The user's ACTUAL allowance: the base 5 plus permanent bonus slots
+  /// earned from referrals (+2 per redemption, capped server-side at +10).
+  /// Falls back to the base while the profile row is still loading.
+  static int effectiveAllowanceOf(WidgetRef ref) =>
+      freePlaceAllowance +
+      (ref.read(referralBonusPlacesProvider).valueOrNull ?? 0);
+
   /// Returns true when adding a NEW place may proceed. Returns false when the
   /// paywall was shown and the user dismissed it without subscribing.
   ///
@@ -45,11 +53,33 @@ class SubscriptionLimitService {
   Future<bool> canAddPlace(BuildContext context) async {
     if (_ref.read(isProProvider)) return true;
 
-    if (ownPlaceCount(_ref) < freePlaceAllowance) return true;
+    if (ownPlaceCount(_ref) < effectiveAllowanceOf(_ref)) return true;
 
     if (!context.mounted) return false;
     AnalyticsService.instance.paywallViewed('place_limit');
     return await showPaywall(context, trigger: PaywallTrigger.placeLimit);
+  }
+
+  /// Batch variant for multi-select adds (map long-press picker): ONE
+  /// decision — and at most one paywall — for the whole selection, instead
+  /// of re-showing the paywall for every picked place past the allowance.
+  ///
+  /// Returns how many of [count] requested adds may proceed: all of them
+  /// (Pro, within allowance, or upgraded at the paywall), or whatever
+  /// allowance remains if the paywall was declined (possibly 0).
+  Future<int> canAddPlaces(BuildContext context, int count) async {
+    if (count <= 0) return 0;
+    if (_ref.read(isProProvider)) return count;
+
+    final remaining = effectiveAllowanceOf(_ref) - ownPlaceCount(_ref);
+    if (count <= remaining) return count;
+
+    if (!context.mounted) return remaining.clamp(0, count);
+    AnalyticsService.instance.paywallViewed('place_limit');
+    final upgraded =
+        await showPaywall(context, trigger: PaywallTrigger.placeLimit);
+    if (upgraded) return count;
+    return remaining.clamp(0, count);
   }
 
   /// Live count of places the current user created themselves. Anonymous

@@ -186,9 +186,16 @@ class LocationAddService {
     BuildContext context,
     LocationModel location, {
     String? locationCountryCode,
+    /// Batch callers (nearby-places multi-select) run ONE
+    /// [SubscriptionLimitService.canAddPlaces] gate up front and pass true
+    /// here — otherwise every place past the allowance would pop its own
+    /// paywall.
+    bool skipLimitCheck = false,
   }) async {
-    final canAdd = await SubscriptionLimitService(_ref).canAddPlace(context);
-    if (!canAdd) return false;
+    if (!skipLimitCheck) {
+      final canAdd = await SubscriptionLimitService(_ref).canAddPlace(context);
+      if (!canAdd) return false;
+    }
 
     final activeTrip = _ref.read(realtimeActiveTripProvider).valueOrNull;
 

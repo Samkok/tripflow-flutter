@@ -138,12 +138,36 @@ class _ReferralScreenState extends ConsumerState<ReferralScreen> {
                       ),
                       const SizedBox(height: 8),
                       Text(
-                        'Friends who join with your code get 1 month of VoyZa Pro '
-                        'free. When they upgrade to a paid plan, you get a free '
-                        'month too.',
+                        'Friends who join with your code get 1 month of VoyZa '
+                        'Pro free. The moment they join, you earn +2 free '
+                        'place slots — and when they upgrade to a paid plan, '
+                        'you get a free month too.',
                         style: theme.textTheme.bodyMedium?.copyWith(
                             color: theme.colorScheme.onSurfaceVariant),
                       ),
+                      Consumer(builder: (context, ref, _) {
+                        final bonus = ref
+                                .watch(referralBonusPlacesProvider)
+                                .valueOrNull ??
+                            0;
+                        if (bonus <= 0) return const SizedBox.shrink();
+                        const amber = Color(0xFFF5A623);
+                        return Padding(
+                          padding: const EdgeInsets.only(top: 10),
+                          child: Row(
+                            children: [
+                              const Icon(Icons.add_location_alt_rounded,
+                                  size: 16, color: amber),
+                              const SizedBox(width: 6),
+                              Text(
+                                '+$bonus bonus place slots earned',
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                    color: amber, fontWeight: FontWeight.w700),
+                              ),
+                            ],
+                          ),
+                        );
+                      }),
                       const SizedBox(height: 18),
                       codeAsync.when(
                         loading: () => const Center(

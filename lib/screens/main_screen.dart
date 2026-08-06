@@ -12,6 +12,8 @@ import 'package:voyza/screens/map_screen.dart';
 import 'package:voyza/screens/settings_screen.dart';
 import 'package:voyza/screens/onboarding/onboarding_screen.dart';
 import 'package:voyza/widgets/analytics_consent_dialog.dart';
+import 'package:voyza/providers/onboarding_checklist_provider.dart';
+import 'package:voyza/widgets/onboarding_checklist.dart';
 
 class MainScreen extends ConsumerStatefulWidget {
   const MainScreen({super.key});
@@ -104,6 +106,16 @@ class _MainScreenState extends ConsumerState<MainScreen> {
     // Watch the sync manager so it re-evaluates when connectivity/auth changes,
     // ensuring the realtime subscription is re-established after reconnects.
     ref.watch(syncManagerProvider);
+
+    // Checklist completed (4/4) → celebrate once, wherever the user is.
+    // MainScreen is always on stage, so a plain listen is safe here.
+    ref.listen<int>(checklistCelebrationTrigger, (prev, next) {
+      if (next <= (prev ?? 0)) return;
+      Future.delayed(const Duration(milliseconds: 600), () {
+        if (!mounted || !context.mounted) return;
+        showChecklistCompleteCelebration(context);
+      });
+    });
 
     // One-shot tab-switch requests (e.g. trip activated → jump to Map).
     ref.listen<int?>(mainTabRequestProvider, (prev, next) {

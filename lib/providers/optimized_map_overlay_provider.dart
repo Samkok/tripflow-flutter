@@ -279,9 +279,8 @@ final styledPolylinesProvider = Provider<Set<Polyline>>((ref) {
           // neutral grey, the tapped one is the brand color (plus extra
           // width and the white inner border added below). Same-color
           // opacity tweaks were indistinguishable on a real map.
-          color: isHighlighted
-              ? AppTheme.primaryColor
-              : const Color(0xFFB9C1CC),
+          color:
+              isHighlighted ? AppTheme.primaryColor : const Color(0xFFB9C1CC),
           // Professional width: thicker when highlighted
           width: isHighlighted ? 8 : 6,
           // No patterns for cleaner, more professional look
@@ -326,6 +325,36 @@ final styledPolylinesProvider = Provider<Set<Polyline>>((ref) {
   return polylines;
 });
 
+/// A leg chip was tapped — MapScreen listens for this and opens
+/// [showRouteLegSheet]. Routed through a provider because the markers are
+/// built inside a FutureProvider, which has no BuildContext of its own.
+class RouteLegSheetRequest {
+  const RouteLegSheetRequest({
+    required this.origin,
+    required this.destination,
+    required this.distanceLabel,
+    this.durationLabel,
+  });
+
+  final LocationModel origin;
+  final LocationModel destination;
+  final String distanceLabel;
+  final String? durationLabel;
+}
+
+/// Set by a chip tap, cleared by MapScreen once the sheet is shown.
+final routeLegSheetRequestProvider =
+    StateProvider<RouteLegSheetRequest?>((_) => null);
+
+/// "12 min" / "1h 5m" — compact enough for the on-map chip.
+String formatLegDuration(Duration d) {
+  final totalMinutes = d.inMinutes;
+  if (totalMinutes < 60) return '$totalMinutes min';
+  final h = totalMinutes ~/ 60;
+  final m = totalMinutes % 60;
+  return m == 0 ? '${h}h' : '${h}h ${m}m';
+}
+
 final routeInfoMarkersProvider = FutureProvider<Set<Marker>>((ref) async {
   // This provider now only generates a marker for the *tapped* route segment.
   final tappedPolylineId = ref.watch(tappedPolylineIdProvider);
@@ -359,11 +388,19 @@ final routeInfoMarkersProvider = FutureProvider<Set<Marker>>((ref) async {
   final String distanceLabel = distanceMeters >= 1000
       ? '${(distanceMeters / 1000).toStringAsFixed(1)} km'
       : '${distanceMeters.round()} m';
+  final legDuration = legData['duration'] as Duration?;
+  final String? durationLabel =
+      legDuration == null ? null : formatLegDuration(legDuration);
 
   final markerCache = MarkerCacheService();
-  // Combined bitmap: distance chip + Open Maps button drawn as one image (no overlap risk)
-  final mapsResult = await markerCache.getDistanceAndMapsMarker(distanceLabel);
-  final grabResult = await markerCache.getGrabButtonMarker();
+  // ONE compact chip on the polyline: [car] 4.4 km · 12 min (>). Replaces
+  // the old stacked distance-chip + OPEN MAPS + OPEN GRAB bitmaps, which
+  // covered the route the user had just tapped. Actions moved into the leg
+  // sheet that this chip opens.
+  final chipResult = await markerCache.getRouteLegChipMarker(
+    distanceLabel: distanceLabel,
+    durationLabel: durationLabel,
+  );
 
   final start = legPoints.first;
   final end = legPoints.last;
@@ -389,29 +426,47 @@ final routeInfoMarkersProvider = FutureProvider<Set<Marker>>((ref) async {
       ? ordered[toIdx]
       : _coordOnlyLocation(end);
 
-  // mapsResult anchor=(0.5, 1.0) → entire combined stack renders above midpoint
-  // grabResult anchor=(0.5, 0.0) → renders below midpoint
+  // anchor=(0.5, 0.5) → the chip straddles the leg midpoint, so the route
+  // line reads through on both sides of it.
   return {
     Marker(
-        markerId: MarkerId('route_maps_$legIndex'),
+        markerId: MarkerId('route_leg_chip_$legIndex'),
         position: midpoint,
-        icon: mapsResult.bitmap,
-        anchor: mapsResult.anchor,
+        icon: chipResult.bitmap,
+        anchor: chipResult.anchor,
         zIndex: 100,
         consumeTapEvents: true,
         onTap: () {
-          openDirectionsInGoogleMaps(origin: fromLoc, destination: toLoc);
+          ref.read(routeLegSheetRequestProvider.notifier).state =
+              RouteLegSheetRequest(
+            origin: fromLoc,
+            destination: toLoc,
+            distanceLabel: distanceLabel,
+            durationLabel: durationLabel,
+          );
         }),
-    Marker(
-        markerId: MarkerId('route_grab_$legIndex'),
-        position: midpoint,
-        icon: grabResult.bitmap,
-        anchor: grabResult.anchor,
-        zIndex: 100,
-        consumeTapEvents: true,
-        onTap: () {
-          openGrabRoute(origin: fromLoc, destination: toLoc);
-        }),
+    // ── RIDE PROVIDER BUTTON — DISABLED 2026-08-05 ────────────────────────
+    // Was an unconditional "OPEN GRAB" button. Grab only operates in eight
+    // SEA countries (SG, MY, ID, TH, VN, PH, MM, KH), so on a Hong Kong (or
+    // any non-SEA) trip it deep-linked to an app that cannot serve the city
+    // and fell through to an install page for an app useless there.
+    //
+    // Kept commented rather than deleted: it returns once the country →
+    // provider table lands, gated on the leg's country and hidden entirely
+    // where no provider is known. openGrabRoute() and
+    // MarkerCacheService.getGrabButtonMarker() are intentionally left in
+    // place so re-enabling is a matter of uncommenting + adding the gate.
+    //
+    // Marker(
+    //     markerId: MarkerId('route_grab_$legIndex'),
+    //     position: midpoint,
+    //     icon: grabResult.bitmap,      // grabResult declared above
+    //     anchor: grabResult.anchor,    // anchor=(0.5, 0.0) → below midpoint
+    //     zIndex: 100,
+    //     consumeTapEvents: true,
+    //     onTap: () {
+    //       openGrabRoute(origin: fromLoc, destination: toLoc);
+    //     }),
   };
 });
 

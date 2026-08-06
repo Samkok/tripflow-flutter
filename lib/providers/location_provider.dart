@@ -2,6 +2,8 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../repositories/location_repository.dart';
+import '../repositories/trip_repository.dart';
+import '../services/supabase_service.dart';
 import '../models/saved_location.dart';
 import '../services/auth_service.dart';
 import 'auth_provider.dart';
@@ -159,6 +161,12 @@ Future<void> _runBackgroundLocationSync(LocationRepository repository) async {
 
     final syncChoice = await AuthService.getSyncChoice();
     if (syncChoice == true) {
+      // Retry any guest trips that failed to upload during the sign-in sync
+      // — must precede syncOnLogin (locations.trip_id FK onto trips).
+      final userId = SupabaseService.instance.client.auth.currentUser?.id;
+      if (userId != null) {
+        await TripRepository().syncLocalTripsToAccount(userId);
+      }
       await repository.syncOnLogin();
     }
   } catch (e) {

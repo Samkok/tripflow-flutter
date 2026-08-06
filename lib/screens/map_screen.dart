@@ -14,6 +14,9 @@ import 'package:voyza/screens/location_search_screen.dart';
 import 'package:voyza/screens/login_screen.dart';
 import 'package:voyza/widgets/add_to_trip_sheet.dart';
 import 'package:voyza/widgets/pulsing_glow.dart';
+import 'package:voyza/widgets/route_leg_sheet.dart';
+import 'package:voyza/providers/onboarding_checklist_provider.dart';
+import 'package:voyza/widgets/onboarding_checklist.dart';
 import 'package:voyza/widgets/review_sentiment_dialog.dart';
 import 'package:voyza/widgets/location_detail_sheet.dart';
 import 'package:uuid/uuid.dart';
@@ -32,6 +35,7 @@ import '../providers/all_days_route_provider.dart';
 import '../providers/map_ui_state_provider.dart';
 import '../providers/debounced_settings_provider.dart';
 import '../providers/trip_collaborator_provider.dart';
+import '../providers/user_trip_provider.dart';
 import '../providers/trip_listener_provider.dart';
 import '../providers/local_active_trip_provider.dart';
 import '../providers/onboarding_provider.dart';
@@ -40,6 +44,7 @@ import '../services/location_service.dart';
 import '../services/places_service.dart';
 import '../services/anonymous_user_service.dart';
 import '../services/location_add_service.dart';
+import '../services/subscription_limit_service.dart';
 import '../services/onboarding_service.dart';
 import '../providers/nearby_radius_provider.dart';
 import '../providers/zoom_fit_settings_provider.dart';
@@ -96,6 +101,15 @@ class _MapScreenState extends ConsumerState<MapScreen>
   // optimize button is passed down into TripBottomSheet.
   final _searchBarKey = GlobalKey();
   final _optimizeButtonKey = GlobalKey();
+
+  // Checklist guide consumption. Watch-and-compare, NOT ref.listen: this
+  // tab is offstage in the IndexedStack when the request is set from home,
+  // and listeners in offstage children never fire (riverpod-offstage-listen).
+  ChecklistGuide? _lastConsumedGuide;
+
+  /// Guards the manual refresh FAB against double-taps and drives its
+  /// in-button spinner.
+  bool _isManualRefreshing = false;
   bool _tutorialCheckInFlight = false;
   TutorialCoachMark? _activeTutorial;
 
@@ -836,7 +850,16 @@ class _MapScreenState extends ConsumerState<MapScreen>
   /// runs once per pick. Picks within the same radius are essentially
   /// always in the same country as each other, so in practice the first
   /// mismatch dialog (if any) covers the whole batch.
-  Future<void> _addNearbyPlaces(List<NearbyPlace> picked) async {
+  Future<void> _addNearbyPlaces(List<NearbyPlace> pickedAll) async {
+    // ONE allowance decision for the whole batch. Without this, every
+    // selected place past the free limit re-opened its own paywall — pick
+    // 4 places with the allowance full and 4 paywalls stacked up.
+    final allowed = await SubscriptionLimitService(ref)
+        .canAddPlaces(context, pickedAll.length);
+    if (!mounted) return;
+    if (allowed == 0) return; // paywall declined, nothing fits
+    final picked = pickedAll.take(allowed).toList();
+
     final enriched = await Future.wait(
       picked.map((p) => PlacesService.getPlaceDetails(p.placeId)),
     );
@@ -874,9 +897,19 @@ class _MapScreenState extends ConsumerState<MapScreen>
         context,
         location,
         locationCountryCode: details?.countryCode,
+        skipLimitCheck: true, // batch gate ran once above
       );
       if (!mounted) return;
       if (added) addedLocations.add(location);
+    }
+
+    // Partial batch: tell the user why the rest didn't make it.
+    if (allowed < pickedAll.length && addedLocations.isNotEmpty && mounted) {
+      AppToast.info(
+        context,
+        'Added $allowed of ${pickedAll.length} — your free allowance is '
+        '${SubscriptionLimitService.effectiveAllowanceOf(ref)} places.',
+      );
     }
 
     if (!mounted || addedLocations.isEmpty) return;
@@ -1175,6 +1208,37 @@ class _MapScreenState extends ConsumerState<MapScreen>
     // Note: Collaborator realtime listener is now initialized at app root (main.dart)
     // No need to initialize it here anymore
 
+    // Checklist "optimize" spotlight: requested on home, fulfilled here once
+    // the tab is on stage. Collapse the plan sheet first so the header
+    // optimize button is where the spotlight expects it.
+    final guideReq = ref.watch(checklistGuideRequestProvider);
+    if (guideReq == ChecklistGuide.optimizeRoute &&
+        _lastConsumedGuide != guideReq) {
+      _lastConsumedGuide = guideReq;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        ref.read(checklistGuideRequestProvider.notifier).state = null;
+        _sheetController?.animateTo(
+          0.15,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeInOut,
+        );
+        Future.delayed(const Duration(milliseconds: 500), () {
+          if (!mounted) return;
+          showChecklistCoach(
+            context,
+            targetKey: _optimizeButtonKey,
+            title: 'Optimize your route',
+            body: 'One tap reorders your day into the smartest route — less '
+                'backtracking, more time at the places themselves.',
+            align: ContentAlign.top,
+          );
+        });
+      });
+    } else if (guideReq == null && _lastConsumedGuide != null) {
+      _lastConsumedGuide = null;
+    }
+
     // OPTIMIZATION: Move listeners to separate effect to prevent rebuilding entire widget tree
     // Use a dedicated build widget for listener side effects
     return _buildMapScreenContent(context);
@@ -1258,6 +1322,22 @@ class _MapScreenState extends ConsumerState<MapScreen>
         _openLocationGate();
       }
     });
+    // A route-leg chip was tapped → open its sheet. The markers live in a
+    // FutureProvider with no BuildContext, so the tap arrives as a request
+    // that we consume here.
+    ref.listen<RouteLegSheetRequest?>(routeLegSheetRequestProvider,
+        (prev, next) {
+      if (next == null) return;
+      ref.read(routeLegSheetRequestProvider.notifier).state = null; // consume
+      showRouteLegSheet(
+        context,
+        origin: next.origin,
+        destination: next.destination,
+        distanceLabel: next.distanceLabel,
+        durationLabel: next.durationLabel,
+      );
+    });
+
     ref.listen<int>(mapTutorialRecheckProvider, (prev, next) {
       if (next != (prev ?? 0)) {
         _maybeStartMapTutorial();
@@ -1818,6 +1898,37 @@ class _MapScreenState extends ConsumerState<MapScreen>
                     padding: EdgeInsets.only(top: 8),
                     child: FreePlacesProgressChip(),
                   ),
+                  // Manual refresh — realtime escape hatch. Right-aligned so
+                  // it shares the vertical axis of the FAB column below.
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: Padding(
+                      padding: const EdgeInsets.only(top: 10),
+                      // Bare icon (owner call): no box, tinted the color
+                      // the box used to be, soft shadow for map legibility.
+                      child: IconButton(
+                        tooltip: 'Refresh data',
+                        onPressed: _isManualRefreshing ? null : _manualRefresh,
+                        icon: _isManualRefreshing
+                            ? SizedBox(
+                                width: 22,
+                                height: 22,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2.4,
+                                  color: Theme.of(context).colorScheme.primary,
+                                ),
+                              )
+                            : Icon(
+                                Icons.refresh_rounded,
+                                size: 28,
+                                color: Theme.of(context).colorScheme.primary,
+                                shadows: const [
+                                  Shadow(color: Colors.black45, blurRadius: 8),
+                                ],
+                              ),
+                      ),
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -2084,6 +2195,33 @@ class _MapScreenState extends ConsumerState<MapScreen>
         ),
       ),
     );
+  }
+
+  /// Manual "pull everything again" for when realtime missed something:
+  /// the same work the app does at start — remote locations into the Hive
+  /// cache (the repository skips Supabase for guests on its own) plus a
+  /// trips/shared-trips refetch (guests re-read the local store).
+  Future<void> _manualRefresh() async {
+    if (_isManualRefreshing) return;
+    setState(() => _isManualRefreshing = true);
+    try {
+      await Future.wait([
+        performInitialLocationSync(ref.read(locationRepositoryProvider)),
+        // Floor so the spinner reads as action, not flicker.
+        Future.delayed(const Duration(milliseconds: 600)),
+      ]);
+      ref.invalidate(userTripsProvider);
+      ref.invalidate(sharedTripsProvider);
+      if (mounted) AppToast.success(context, 'Everything is up to date');
+    } catch (e) {
+      debugPrint('Manual refresh failed: $e');
+      if (mounted) {
+        AppToast.error(
+            context, 'Refresh failed. Please check your connection.');
+      }
+    } finally {
+      if (mounted) setState(() => _isManualRefreshing = false);
+    }
   }
 
   Future<void> _goToCurrentLocation() async {

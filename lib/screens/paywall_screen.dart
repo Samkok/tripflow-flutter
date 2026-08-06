@@ -11,10 +11,13 @@ import '../providers/user_trip_provider.dart';
 import '../services/analytics_service.dart';
 import '../providers/location_provider.dart';
 import '../services/revenuecat_service.dart';
+import '../services/referral_service.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../services/subscription_limit_service.dart';
 import '../services/supabase_service.dart';
 import '../widgets/app_toast.dart';
 import '../widgets/referral_prompt.dart';
+import '../widgets/sign_up_required_sheet.dart';
 import '../repositories/user_profile_repository.dart';
 import 'package:voyza/widgets/rotating_globe_background.dart';
 
@@ -52,6 +55,111 @@ class PaywallScreen extends ConsumerStatefulWidget {
 class _PaywallScreenState extends ConsumerState<PaywallScreen> {
   bool _isLoading = false;
   Package? _selectedPackage;
+
+  // ── Referral-at-paywall ──────────────────────────────────────────────
+  // A code saved at sign-up that never got redeemed surfaces as a banner;
+  // anyone else can open a small entry field. A successful redemption
+  // replaces the subscribe CTA with the promo-applied card.
+  String? _pendingReferralCode;
+  bool _showCodeField = false;
+  bool _redeemingCode = false;
+  DateTime? _promoExpiresAt;
+  final _codeController = TextEditingController();
+
+  bool get _signedIn =>
+      SupabaseService.instance.client.auth.currentSession != null;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadPendingReferralCode();
+  }
+
+  @override
+  void dispose() {
+    _codeController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadPendingReferralCode() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final code = prefs.getString('pending_referral_code');
+      if (mounted && code != null && code.isNotEmpty) {
+        setState(() => _pendingReferralCode = code);
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _applyReferralCode(String rawCode) async {
+    final code = rawCode.trim().toUpperCase();
+    if (code.isEmpty || _redeemingCode) return;
+    // Belt-and-braces: the redeem UI is hidden for guests, but if this is
+    // ever reached without a session, route to auth instead of failing
+    // with a misleading "check your connection" toast.
+    if (!_signedIn) {
+      showSignUpRequiredSheet(
+        context,
+        icon: Icons.redeem_rounded,
+        title: 'Sign in to redeem your code',
+        message: 'Referral codes attach to an account. Signing in redeems '
+            'yours automatically — 30 days of Pro, no payment.',
+      );
+      return;
+    }
+    setState(() => _redeemingCode = true);
+    try {
+      final result = await ReferralService.instance.redeemCode(code);
+      if (!mounted) return;
+      switch (result) {
+        case RedeemResult.redeemed:
+          await ReferralService.instance.clearPendingCode();
+          // Flip isPro so the rest of the app (and this screen) sees the
+          // promotional entitlement immediately.
+          await ref.read(subscriptionProvider.notifier).reinitialize();
+          DateTime? expires;
+          try {
+            final info = await RevenueCatService().getCustomerInfo();
+            final raw = info.entitlements.active['premium']?.expirationDate;
+            if (raw != null) expires = DateTime.tryParse(raw)?.toLocal();
+          } catch (_) {}
+          if (!mounted) return;
+          setState(() {
+            _promoExpiresAt =
+                expires ?? DateTime.now().add(const Duration(days: 30));
+            _pendingReferralCode = null;
+            _showCodeField = false;
+          });
+        case RedeemResult.alreadyRedeemed:
+          await ReferralService.instance.clearPendingCode();
+          if (mounted) {
+            setState(() => _pendingReferralCode = null);
+            AppToast.info(context,
+                'A referral code was already redeemed on this account.');
+          }
+        case RedeemResult.invalidCode:
+          AppToast.error(
+              context, "That code doesn't look right — double-check it.");
+        case RedeemResult.selfReferral:
+          AppToast.error(context, "You can't redeem your own code.");
+        case RedeemResult.windowExpired:
+          await ReferralService.instance.clearPendingCode();
+          if (mounted) {
+            setState(() => _pendingReferralCode = null);
+            AppToast.error(
+                context, "This code's redemption window has passed.");
+          }
+        case RedeemResult.rateLimited:
+          AppToast.error(
+              context, 'Too many attempts — try again in a few minutes.');
+        case RedeemResult.transientFailure:
+          AppToast.error(context,
+              'Could not apply the code. Check your connection and try again.');
+      }
+    } finally {
+      if (mounted) setState(() => _redeemingCode = false);
+    }
+  }
 
   /// One-shot diagnostic so we can verify whether the App Store / Play Store
   /// intro offer is reaching the app. Look for `[Paywall diag]` in logs.
@@ -136,26 +244,39 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
                         // not an abstract upsell. Renders nothing for first-time /
                         // trial-eligible users or when there's nothing to recap.
                         _buildTrialValueRecap(context),
+
+                        // A sign-up referral code that never got redeemed —
+                        // the user may not need to pay at all; say so before
+                        // showing them prices.
+                        _buildPendingCodeBanner(context),
                         const SizedBox(height: 32),
 
                         // Features list
                         _buildFeaturesList(context),
                         const SizedBox(height: 32),
 
-                        // Subscription options
-                        _buildSubscriptionOptions(context),
-                        const SizedBox(height: 24),
+                        if (_promoExpiresAt == null) ...[
+                          // Subscription options
+                          _buildSubscriptionOptions(context),
+                          const SizedBox(height: 24),
 
-                        // Subscribe button
-                        _buildSubscribeButton(context),
-                        const SizedBox(height: 12),
+                          // Subscribe button
+                          _buildSubscribeButton(context),
+                          const SizedBox(height: 12),
 
-                        // Reassurance microcopy — reduces trial-start friction.
-                        _buildReassuranceLine(context),
-                        const SizedBox(height: 8),
+                          // Reassurance microcopy — reduces trial-start friction.
+                          _buildReassuranceLine(context),
+                          const SizedBox(height: 8),
+                        ] else
+                          // Code redeemed on this visit: the CTA becomes
+                          // "use your free month", not "start paying".
+                          _buildPromoAppliedCard(context),
 
                         // Restore purchases button
                         _buildRestoreButton(context),
+                        // Manual code entry for everyone else — small, out of
+                        // the purchase path.
+                        _buildHaveCodeEntry(context),
                         const SizedBox(height: 16),
 
                         // Terms and privacy
@@ -202,7 +323,7 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
       // The user hit the gate mid-flow with a trip in progress — frame the
       // upgrade around continuing what they're building right now.
       headline =
-          "You've used all ${SubscriptionLimitService.freePlaceAllowance} free places";
+          "You've used all ${SubscriptionLimitService.effectiveAllowanceOf(ref)} free places";
       subheadline = hasEligibleTrial
           ? 'Go unlimited with Pro — try it free for 3 days.'
           : 'Go unlimited with VoyZa Pro to keep building your trip.';
@@ -436,15 +557,24 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
   Widget _buildFeaturesList(BuildContext context) {
     final theme = Theme.of(context);
 
-    // Verified, real Pro capabilities only — no phantom features (App Store
-    // Guideline 2.3.1). Leads with the core differentiator: route optimization.
+    // Verified 2026-08-06: the ONLY paid gate in the app is the saved-place
+    // allowance (SubscriptionLimitService). Optimization, multi-day
+    // itineraries, collaboration, sync — and trip creation itself — are
+    // free for everyone, so listing them as Pro was misleading (and an App
+    // Store 2.3.1 risk). One honest differentiator, stated plainly.
     final features = [
-      ('Smart route optimization', Icons.route_rounded),
-      ('Unlimited trips', Icons.all_inclusive),
-      ('Unlimited saved places', Icons.place_outlined),
-      ('Multi-day itineraries', Icons.calendar_month_rounded),
-      ('Trip collaboration', Icons.group),
-      ('Cross-device sync', Icons.devices_rounded),
+      (
+        'Unlimited saved places',
+        Icons.all_inclusive,
+        'The free plan includes '
+            '${SubscriptionLimitService.freePlaceAllowance} — Pro removes '
+            'the cap entirely',
+      ),
+      (
+        'Back an independent travel app',
+        Icons.favorite_rounded,
+        'Pro keeps VoyZa growing — new features land here first',
+      ),
     ];
 
     return Container(
@@ -481,9 +611,19 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
                     ),
                     const SizedBox(width: 12),
                     Expanded(
-                      child: Text(
-                        feature.$1,
-                        style: theme.textTheme.bodyLarge,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            feature.$1,
+                            style: theme.textTheme.bodyLarge,
+                          ),
+                          Text(
+                            feature.$3,
+                            style: theme.textTheme.bodySmall?.copyWith(
+                                color: theme.colorScheme.onSurfaceVariant),
+                          ),
+                        ],
                       ),
                     ),
                     Icon(
@@ -494,6 +634,13 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
                   ],
                 ),
               )),
+          const SizedBox(height: 4),
+          Text(
+            'Route optimization, multi-day itineraries, collaboration and '
+            'cross-device sync are free for everyone.',
+            style: theme.textTheme.bodySmall
+                ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+          ),
         ],
       ),
     );
@@ -744,6 +891,230 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
       ),
       child: const Center(
         child: CircularProgressIndicator(strokeWidth: 2),
+      ),
+    );
+  }
+
+  Widget _buildPendingCodeBanner(BuildContext context) {
+    final code = _pendingReferralCode;
+    if (code == null || _promoExpiresAt != null) {
+      return const SizedBox.shrink();
+    }
+    // Guest with a code saved at sign-up: they CAN buy here (RevenueCat
+    // anonymous ids), so before showing them prices, say the free month is
+    // one sign-in away. Redemption itself still requires the session — the
+    // CTA routes to auth, and main.dart auto-redeems right after sign-in.
+    if (!_signedIn) {
+      return _pendingBannerShell(
+        context,
+        title: 'Your free month is waiting',
+        body: 'Code $code from your sign-up gives you 30 days of Pro, '
+            'free. Sign in to claim it — no need to pay anything today.',
+        button: FilledButton.icon(
+          onPressed: () => showSignUpRequiredSheet(
+            context,
+            icon: Icons.redeem_rounded,
+            title: 'Sign in to claim your free month',
+            message: 'Your referral code $code is saved on this device. '
+                'Signing in redeems it automatically — 30 days of Pro, '
+                'no payment, no card.',
+          ),
+          icon: const Icon(Icons.login_rounded, size: 18),
+          label: const Text('Sign in to claim it'),
+          style: FilledButton.styleFrom(
+            backgroundColor: const Color(0xFFF5A623),
+            foregroundColor: Colors.black,
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          ),
+        ),
+      );
+    }
+    return _pendingBannerShell(
+      context,
+      title: 'Your referral code is ready',
+      body: 'Code $code from your sign-up gives you 30 days of Pro, free — '
+          'no payment needed.',
+      button: FilledButton.icon(
+        onPressed: _redeemingCode ? null : () => _applyReferralCode(code),
+        icon: _redeemingCode
+            ? const SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(strokeWidth: 2))
+            : const Icon(Icons.card_giftcard_rounded, size: 18),
+        label: Text(_redeemingCode ? 'Applying…' : 'Redeem my 30 free days'),
+        style: FilledButton.styleFrom(
+          backgroundColor: const Color(0xFFF5A623),
+          foregroundColor: Colors.black,
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        ),
+      ),
+    );
+  }
+
+  /// Shared amber shell for both pending-code banners (guest and signed-in)
+  /// so the two states can't drift visually.
+  Widget _pendingBannerShell(
+    BuildContext context, {
+    required String title,
+    required String body,
+    required Widget button,
+  }) {
+    final theme = Theme.of(context);
+    const amber = Color(0xFFF5A623);
+    return Container(
+      margin: const EdgeInsets.only(top: 20),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: amber.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: amber.withValues(alpha: 0.55)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.redeem_rounded, color: amber, size: 22),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  title,
+                  style: theme.textTheme.titleSmall
+                      ?.copyWith(fontWeight: FontWeight.w700),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            body,
+            style: theme.textTheme.bodyMedium
+                ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+          ),
+          const SizedBox(height: 12),
+          SizedBox(width: double.infinity, child: button),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPromoAppliedCard(BuildContext context) {
+    final theme = Theme.of(context);
+    const green = Color(0xFF23A55A);
+    final until = _promoExpiresAt!;
+    final days = until.difference(DateTime.now()).inDays;
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: green.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: green.withValues(alpha: 0.55)),
+      ),
+      child: Column(
+        children: [
+          const Icon(Icons.check_circle_rounded, color: green, size: 40),
+          const SizedBox(height: 10),
+          Text(
+            'Code applied — Pro is yours, free',
+            textAlign: TextAlign.center,
+            style: theme.textTheme.titleMedium
+                ?.copyWith(fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Everything is unlocked until '
+            '${DateFormat('MMM d, yyyy').format(until)} '
+            '(${days <= 0 ? 'today' : '$days days'}). No payment, no card — '
+            'nothing starts automatically when it ends.',
+            textAlign: TextAlign.center,
+            style: theme.textTheme.bodyMedium
+                ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+          ),
+          const SizedBox(height: 16),
+          SizedBox(
+            width: double.infinity,
+            height: 52,
+            child: FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              style: FilledButton.styleFrom(
+                backgroundColor: green,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14)),
+                textStyle: theme.textTheme.titleMedium
+                    ?.copyWith(fontWeight: FontWeight.bold),
+              ),
+              child: const Text('Start exploring'),
+            ),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            'Subscribing is always available in Settings. Billing starts '
+            'when you subscribe — it does not wait for your free days to '
+            'end, so most people enjoy those first.',
+            textAlign: TextAlign.center,
+            style: theme.textTheme.bodySmall
+                ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHaveCodeEntry(BuildContext context) {
+    // Signed-in only: redemption is an authenticated server call. Guests
+    // already get the code field on the sign-up screen itself.
+    if (!_signedIn || _promoExpiresAt != null || _pendingReferralCode != null) {
+      return const SizedBox.shrink();
+    }
+    final theme = Theme.of(context);
+    if (!_showCodeField) {
+      return Center(
+        child: TextButton.icon(
+          onPressed: () => setState(() => _showCodeField = true),
+          icon: const Icon(Icons.redeem_rounded, size: 18),
+          label: const Text('Have a referral code?'),
+        ),
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.only(top: 4),
+      child: Row(
+        children: [
+          Expanded(
+            child: TextField(
+              controller: _codeController,
+              autofocus: true,
+              textCapitalization: TextCapitalization.characters,
+              decoration: InputDecoration(
+                isDense: true,
+                hintText: 'Referral code',
+                suffixIcon: IconButton(
+                  icon: const Icon(Icons.close, size: 18),
+                  onPressed: () => setState(() {
+                    _showCodeField = false;
+                    _codeController.clear();
+                  }),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+          FilledButton(
+            onPressed: _redeemingCode
+                ? null
+                : () => _applyReferralCode(_codeController.text),
+            child: _redeemingCode
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2))
+                : const Text('Apply'),
+          ),
+        ],
       ),
     );
   }

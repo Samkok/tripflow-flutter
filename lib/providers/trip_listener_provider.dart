@@ -70,12 +70,10 @@ final tripEventStreamProvider = StreamProvider<TripEvent>((ref) {
 final realtimeActiveTripProvider = StreamProvider<Trip?>((ref) async* {
   // currentUserIdProvider is a Provider<String?> whose value only changes on
   // login/logout (not on token refresh), preventing unnecessary stream restarts.
-  final userId = ref.watch(currentUserIdProvider);
-
-  if (userId == null) {
-    yield null;
-    return;
-  }
+  // Guests flow through too: their active trip resolves from the local
+  // trip store via localActiveTripProvider (userTripsProvider serves local
+  // trips when signed out).
+  ref.watch(currentUserIdProvider);
 
   // Watch the local active trip provider
   // This emits whenever the locally stored active trip ID changes

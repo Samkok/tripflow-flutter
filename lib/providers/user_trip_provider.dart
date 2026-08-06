@@ -3,6 +3,7 @@ import '../models/trip.dart';
 import '../repositories/trip_repository.dart';
 import '../services/trip_event_service.dart';
 import '../repositories/trip_repository_with_events.dart';
+import '../services/anonymous_user_service.dart';
 import 'auth_provider.dart';
 
 final tripRepositoryProvider = Provider<TripRepository>((ref) {
@@ -32,9 +33,11 @@ final userTripsProvider = FutureProvider<List<Trip>>((ref) async {
   final tripRepository = ref.watch(tripRepositoryProvider);
 
   return authState.when(
-    data: (state) {
-      final userId = state.session?.user.id;
-      if (userId == null) return [];
+    data: (state) async {
+      // Guests keep the same trips surface, served from the local store —
+      // the repository branches on auth internally.
+      final userId =
+          state.session?.user.id ?? await AnonymousUserService.id;
       return tripRepository.getUserTrips(userId);
     },
     loading: () => [],
@@ -48,9 +51,9 @@ final activeTripsProvider = FutureProvider<Trip?>((ref) async {
   final tripRepository = ref.watch(tripRepositoryProvider);
 
   return authState.when(
-    data: (state) {
-      final userId = state.session?.user.id;
-      if (userId == null) return null;
+    data: (state) async {
+      final userId =
+          state.session?.user.id ?? await AnonymousUserService.id;
       return tripRepository.getActiveTrip(userId);
     },
     loading: () => null,

@@ -6,6 +6,8 @@ import 'package:voyza/screens/signup_screen.dart';
 import 'package:voyza/screens/forgot_password_screen.dart';
 import 'package:voyza/widgets/rotating_globe_background.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../providers/trip_collaborator_provider.dart';
+import '../providers/user_trip_provider.dart';
 import '../providers/auth_provider.dart';
 import '../providers/subscription_provider.dart';
 import '../services/auth_service.dart';
@@ -28,6 +30,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   final _formKey = GlobalKey<FormState>();
   final _emailFocusNode = FocusNode();
   bool _isLoading = false;
+  String _authStage = '';
+  double _authProgress = 0;
   bool _isPasswordVisible = false;
   bool _rememberMe = true;
 
@@ -60,14 +64,61 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     }
   }
 
+  static String _syncSummary(int trips, int places) {
+    final parts = <String>[
+      if (trips > 0) '$trips trip${trips != 1 ? 's' : ''}',
+      if (places > 0) '$places place${places != 1 ? 's' : ''}',
+    ];
+    return parts.join(' and ');
+  }
+
   Future<void> _signIn() async {
     if (!_formKey.currentState!.validate()) return;
-    setState(() => _isLoading = true);
+
+    // Ask the sync question BEFORE authenticating (owner decision): the
+    // answer is taken up front, its consequences run only after a session
+    // exists — so a failed password never costs the guest their data.
+    bool? syncDecision;
+    final localCounts =
+        await ref.read(authServiceProvider).getLocalDataCounts();
+    if (localCounts.trips > 0 || localCounts.places > 0) {
+      // Already answered "yes" at sign-up (email-verify flow) → don't
+      // re-ask, just carry the sync out after auth.
+      if (await AuthService.getSyncChoice() == true) {
+        syncDecision = true;
+      } else {
+        if (!mounted) return;
+        syncDecision = await showDialog<bool>(
+              context: context,
+              barrierDismissible: false,
+              builder: (context) => SyncConfirmationDialog(
+                localLocationCount: localCounts.places,
+                localTripCount: localCounts.trips,
+              ),
+            ) ??
+            false;
+      }
+    }
+    if (!mounted) return;
+
+    setState(() {
+      _isLoading = true;
+      _authStage = 'Starting…';
+      _authProgress = 0.05;
+    });
     try {
-      final localLocationCount = await ref.read(authServiceProvider).signIn(
-            _emailController.text,
-            _passwordController.text,
-          );
+      await ref.read(authServiceProvider).signIn(
+        _emailController.text,
+        _passwordController.text,
+        onStage: (label, progress) {
+          if (mounted) {
+            setState(() {
+              _authStage = label;
+              _authProgress = progress;
+            });
+          }
+        },
+      );
 
       if (!mounted) return;
 
@@ -78,29 +129,27 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
       await promptSavePasswordIfNeeded(context, _emailController.text.trim());
       if (!mounted) return;
 
-      // If there are local locations, ask user if they want to sync
-      if (localLocationCount > 0) {
-        final shouldSync = await showDialog<bool>(
-          context: context,
-          barrierDismissible: false,
-          builder: (context) => SyncConfirmationDialog(
-            localLocationCount: localLocationCount,
-          ),
-        );
-
-        // Perform sync if user confirmed
-        if (shouldSync == true) {
-          await ref.read(authServiceProvider).syncLocalLocations();
-          if (mounted) {
-            AppToast.success(
-              context,
-              'Successfully synced $localLocationCount location${localLocationCount != 1 ? 's' : ''}!',
-            );
-          }
-        } else {
-          // User declined to sync - record their choice
-          await ref.read(authServiceProvider).declineSync();
+      // Carry out the decision taken before authentication.
+      if (syncDecision == true) {
+        setState(() {
+          _authStage = 'Syncing your trips and places…';
+          _authProgress = 0.97;
+        });
+        await ref.read(authServiceProvider).syncLocalLocations();
+        // Surface the freshly synced trips immediately — without this the
+        // home list stays on its pre-sync fetch until a manual refresh.
+        ref.invalidate(userTripsProvider);
+        ref.invalidate(sharedTripsProvider);
+        if (mounted) {
+          AppToast.success(
+            context,
+            'Synced ${_syncSummary(localCounts.trips, localCounts.places)} to your account!',
+          );
         }
+      } else if (syncDecision == false) {
+        await ref.read(authServiceProvider).declineSync();
+        ref.invalidate(userTripsProvider);
+        ref.invalidate(sharedTripsProvider);
       }
 
       // Reinitialize subscription for the newly signed-in user (fire-and-forget)
@@ -310,6 +359,45 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                                         )
                                       : const Text('Sign In'),
                                 ),
+                                // Staged progress: signing in does real work
+                                // (subscription link, notifications, sync) —
+                                // show which step is running so a slow network
+                                // never reads as a frozen app.
+                                if (_isLoading) ...[
+                                  const SizedBox(height: 14),
+                                  ClipRRect(
+                                    borderRadius: BorderRadius.circular(3),
+                                    child: TweenAnimationBuilder<double>(
+                                      tween: Tween(end: _authProgress),
+                                      duration:
+                                          const Duration(milliseconds: 350),
+                                      builder: (_, v, __) =>
+                                          LinearProgressIndicator(
+                                        value: v,
+                                        minHeight: 5,
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .primary,
+                                        backgroundColor: Theme.of(context)
+                                            .colorScheme
+                                            .primary
+                                            .withValues(alpha: 0.15),
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 6),
+                                  Text(
+                                    _authStage,
+                                    textAlign: TextAlign.center,
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .bodySmall
+                                        ?.copyWith(
+                                            color: Theme.of(context)
+                                                .colorScheme
+                                                .onSurfaceVariant),
+                                  ),
+                                ],
                                 const SizedBox(height: 24),
                                 TextButton(
                                   onPressed: () {

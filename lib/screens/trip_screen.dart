@@ -1,6 +1,3 @@
-import 'dart:ui' show ImageFilter;
-
-import 'package:voyza/core/theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
@@ -17,7 +14,6 @@ import 'package:voyza/providers/local_active_trip_provider.dart';
 import 'package:voyza/providers/map_ui_state_provider.dart';
 import 'package:voyza/providers/all_days_route_provider.dart';
 import 'package:voyza/providers/onboarding_provider.dart';
-import 'package:voyza/screens/login_screen.dart';
 import 'package:voyza/screens/trip_details_screen.dart';
 import 'package:voyza/services/analytics_service.dart';
 import 'package:voyza/services/anonymous_user_service.dart';
@@ -32,6 +28,8 @@ import 'package:voyza/utils/same_day_place_guard.dart';
 import 'package:voyza/utils/trip_dates.dart';
 import 'package:voyza/widgets/country_picker_sheet.dart';
 import 'package:voyza/widgets/pulsing_glow.dart';
+import 'package:voyza/providers/onboarding_checklist_provider.dart';
+import 'package:voyza/widgets/onboarding_checklist.dart';
 import 'package:voyza/screens/create_trip_wizard.dart';
 import 'package:voyza/widgets/referral_prompt.dart';
 import 'package:voyza/widgets/rotating_globe_background.dart';
@@ -52,6 +50,18 @@ class _TripScreenState extends ConsumerState<TripScreen> {
   // section (pinned at the top) is immediately in view.
   final ScrollController _tripsScrollController = ScrollController();
 
+  // Checklist spotlight anchors. GlobalKeys must be unique, so the two
+  // card keys are attached per call site (first list card / active card).
+  // Home trip search + start-date sort (toggle asc/desc; dateless trips
+  // sink to the end either way).
+  final _tripSearchController = TextEditingController();
+  String _tripQuery = '';
+  bool _tripSortAsc = false;
+
+  final _newTripBtnKey = GlobalKey();
+  final _cardActivateKey = GlobalKey();
+  final _activeGoToMapKey = GlobalKey();
+
   // Multi-select state
   bool _selectionMode = false;
   final Set<String> _selectedTripIds = {};
@@ -59,6 +69,7 @@ class _TripScreenState extends ConsumerState<TripScreen> {
   @override
   void dispose() {
     _tripsScrollController.dispose();
+    _tripSearchController.dispose();
     super.dispose();
   }
 
@@ -80,7 +91,7 @@ class _TripScreenState extends ConsumerState<TripScreen> {
     try {
       if (!mounted) return;
       final userId = ref.read(currentUserIdProvider);
-      if (userId == null) return; // trips (and their dates) are authed-only
+      if (userId == null) return; // recap is a signed-in feature for now
       final trips = await ref.read(userTripsProvider.future);
       final now = DateTime.now();
       final today = DateTime(now.year, now.month, now.day);
@@ -139,136 +150,89 @@ class _TripScreenState extends ConsumerState<TripScreen> {
     }
   }
 
-  void _showLoginRequiredModal(BuildContext context) {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      barrierColor: AppTheme.sheetBarrierColor(context),
-      // Same glass as the trip plan / search / collaborators sheets — all
-      // four read their blur + fill from AppTheme.sheet*.
-      builder: (_) => ClipRRect(
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-        child: BackdropFilter(
-          filter: ImageFilter.blur(
-              sigmaX: AppTheme.sheetBlurSigma, sigmaY: AppTheme.sheetBlurSigma),
-          child: Container(
-            decoration: BoxDecoration(
-              color: Theme.of(context)
-                  .scaffoldBackgroundColor
-                  .withValues(alpha: AppTheme.sheetFillAlpha(context)),
-              borderRadius:
-                  const BorderRadius.vertical(top: Radius.circular(24)),
-              border: Border.all(
-                color: AppTheme.sheetBorderColor(context),
-                width: 0.8,
-              ),
-            ),
-            padding: const EdgeInsets.fromLTRB(24, 12, 24, 40),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // Drag handle
-                Container(
-                  width: 40,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: Colors.grey[400],
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-                const SizedBox(height: 28),
-                Container(
-                  padding: const EdgeInsets.all(20),
-                  decoration: BoxDecoration(
-                    color: Theme.of(context)
-                        .colorScheme
-                        .primary
-                        .withValues(alpha: 0.1),
-                    shape: BoxShape.circle,
-                  ),
-                  child: Icon(
-                    Icons.lock_outline_rounded,
-                    size: 40,
-                    color: Theme.of(context).colorScheme.primary,
-                  ),
-                ),
-                const SizedBox(height: 20),
-                Text(
-                  'Sign in to Create Trips',
-                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                        fontWeight: FontWeight.bold,
-                      ),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  'You need to be signed in to create and manage trips.',
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        color: Theme.of(context)
-                            .textTheme
-                            .bodyMedium
-                            ?.color
-                            ?.withValues(alpha: 0.6),
-                      ),
-                ),
-                const SizedBox(height: 28),
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton(
-                    onPressed: () {
-                      Navigator.pop(context);
-                      Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) => const LoginScreen(),
-                        ),
-                      );
-                    },
-                    style: ElevatedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                    ),
-                    child: const Text(
-                      'Sign In',
-                      style: TextStyle(fontWeight: FontWeight.w600),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                SizedBox(
-                  width: double.infinity,
-                  child: TextButton(
-                    onPressed: () => Navigator.pop(context),
-                    style: TextButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                    ),
-                    child: Text(
-                      'Not now',
-                      style: TextStyle(
-                        color: Theme.of(context)
-                            .textTheme
-                            .bodyMedium
-                            ?.color
-                            ?.withValues(alpha: 0.5),
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
+  bool _matchesTripQuery(String name) {
+    final q = _tripQuery.trim().toLowerCase();
+    return q.isEmpty || name.toLowerCase().contains(q);
+  }
+
+  int _compareTripStart(DateTime? sa, DateTime? sb) {
+    if (sa == null && sb == null) return 0;
+    if (sa == null) return 1; // dateless last in both directions
+    if (sb == null) return -1;
+    return _tripSortAsc ? sa.compareTo(sb) : sb.compareTo(sa);
+  }
+
+  List<Trip> _filterAndSortTrips(List<Trip> trips) {
+    final out = trips.where((t) => _matchesTripQuery(t.name)).toList();
+    out.sort((a, b) => _compareTripStart(a.startDate, b.startDate));
+    return out;
+  }
+
+  /// Same search + sort for the shared list, which arrives as raw
+  /// collaborator rows ({'trips': {...}, 'permission': ...}) instead of Trip
+  /// objects. Rows with a null embed are dropped here so the section can't
+  /// render a blank card, and the active trip is excluded (it has its own
+  /// section above).
+  List<Map<String, dynamic>> _filterAndSortSharedTrips(
+      List<Map<String, dynamic>> rows, String? activeTripId) {
+    final out = rows.where((d) {
+      final t = d['trips'] as Map<String, dynamic>?;
+      if (t == null || t['id'] == activeTripId) return false;
+      return _matchesTripQuery((t['name'] as String?) ?? '');
+    }).toList();
+    DateTime? startOf(Map<String, dynamic> d) {
+      final raw = (d['trips'] as Map<String, dynamic>)['start_date'] as String?;
+      return raw == null ? null : DateTime.tryParse(raw);
+    }
+
+    out.sort((a, b) => _compareTripStart(startOf(a), startOf(b)));
+    return out;
+  }
+
+  /// Checklist tap → set the guide bus and put the right screen on stage.
+  /// This screen fulfils createTrip / activateTrip / goToMap itself; trip
+  /// details fulfils addLocations; the map fulfils optimizeRoute.
+  void _onChecklistStep(ChecklistStep step) {
+    final guide = ref.read(checklistGuideRequestProvider.notifier);
+    switch (step) {
+      case ChecklistStep.createTrip:
+        guide.state = ChecklistGuide.createTrip;
+      case ChecklistStep.addLocations:
+        final trips = ref.read(userTripsProvider).valueOrNull ?? [];
+        if (trips.isEmpty) return;
+        guide.state = ChecklistGuide.addLocations;
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+              builder: (_) => TripDetailsScreen(trip: trips.first)),
+        );
+      case ChecklistStep.activateTrip:
+        guide.state = ChecklistGuide.activateTrip;
+      case ChecklistStep.optimizeRoute:
+        guide.state = ChecklistGuide.optimizeRoute;
+        ref.read(mainTabRequestProvider.notifier).state = 1; // Map tab
+    }
+  }
+
+  /// Scroll home to the top (where every spotlight target lives), wait for
+  /// the scroll + layout to settle, then run the coach mark.
+  void _coachAfterScroll(GlobalKey key, String title, String body,
+      {int settleMs = 400}) {
+    if (_tripsScrollController.hasClients &&
+        _tripsScrollController.offset > 0) {
+      _tripsScrollController.animateTo(0,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOutCubic);
+    }
+    Future.delayed(Duration(milliseconds: settleMs), () {
+      if (!mounted) return;
+      showChecklistCoach(context, targetKey: key, title: title, body: body);
+    });
   }
 
   void _openCreateWizard() {
-    final userId = ref.read(currentUserIdProvider);
-    if (userId == null) {
-      _showLoginRequiredModal(context);
-      return;
-    }
+    // Guests create trips too — stored on-device (TripRepository's local
+    // branch) and offered for sync at sign-in.
     Navigator.push(
       context,
       MaterialPageRoute(builder: (_) => const CreateTripWizard()),
@@ -287,6 +251,15 @@ class _TripScreenState extends ConsumerState<TripScreen> {
 
       if (mounted) {
         AppToast.success(context, '${trip.name} is now active');
+        // Checklist: first-ever activation completes step 3 and chains the
+        // "Go to map" spotlight on the just-revealed active card.
+        final wasFirstActivation =
+            !ref.read(checklistProvider).isDone(ChecklistStep.activateTrip);
+        ref.read(checklistProvider.notifier).mark(ChecklistStep.activateTrip);
+        if (wasFirstActivation) {
+          ref.read(checklistGuideRequestProvider.notifier).state =
+              ChecklistGuide.goToMap;
+        }
         // Bring the Active Trip section (top of the page) into view so the
         // just-activated trip is immediately visible and actionable.
         if (_tripsScrollController.hasClients) {
@@ -576,12 +549,6 @@ class _TripScreenState extends ConsumerState<TripScreen> {
     ref.listen<String?>(tripFormPrefillProvider, (prev, code) {
       if (code == null) return;
       ref.read(tripFormPrefillProvider.notifier).state = null; // consume
-      // Same auth gate as the New Trip button — without it a signed-out
-      // user could fill all four wizard steps and only learn at Confirm.
-      if (ref.read(currentUserIdProvider) == null) {
-        _showLoginRequiredModal(context);
-        return;
-      }
       // '' = "start without a country" (user skipped the question) — the
       // wizard shows its country step either way so they can revise.
       Navigator.push(
@@ -597,6 +564,40 @@ class _TripScreenState extends ConsumerState<TripScreen> {
     });
 
     final tripsAsync = ref.watch(userTripsProvider);
+
+    // Keep the checklist truthful for work done outside the guided path
+    // (or before the feature existed).
+    ref.listen(userTripsProvider, (prev, next) {
+      final trips = next.valueOrNull;
+      if (trips != null && trips.isNotEmpty) {
+        ref.read(checklistProvider.notifier).deriveFromTrips(trips);
+      }
+    });
+
+    // Fulfil the guides this screen owns. Safe as ref.listen: these are
+    // only requested while the home tab is on stage.
+    ref.listen<ChecklistGuide?>(checklistGuideRequestProvider, (prev, next) {
+      if (next == null) return;
+      final guide = ref.read(checklistGuideRequestProvider.notifier);
+      switch (next) {
+        case ChecklistGuide.createTrip:
+          guide.state = null;
+          _coachAfterScroll(_newTripBtnKey, 'Create your first trip',
+              'Tap New Trip — pick a country, dates, and a name. About 30 seconds.');
+        case ChecklistGuide.activateTrip:
+          guide.state = null;
+          _coachAfterScroll(_cardActivateKey, 'Activate your trip',
+              'Activating puts this trip on your map so you can navigate it day by day.');
+        case ChecklistGuide.goToMap:
+          guide.state = null;
+          _coachAfterScroll(_activeGoToMapKey, 'See it on the map',
+              'Your trip is live! Go to the map to see your places and plan the route.',
+              settleMs: 700);
+        case ChecklistGuide.addLocations:
+        case ChecklistGuide.optimizeRoute:
+          break; // consumed by trip details / map screen
+      }
+    });
     final activeTripAsync = ref.watch(localActiveTripProvider);
     final sharedTripsAsync = ref.watch(sharedTripsProvider);
 
@@ -612,8 +613,20 @@ class _TripScreenState extends ConsumerState<TripScreen> {
     // "Active Trip" section at the top.
     final activeTrip = activeTripAsync.valueOrNull;
     final activeTripId = activeTrip?.id;
-    final hideYourTripsHeader =
-        ownedTrips.isNotEmpty && ownedTrips.every((t) => t.id == activeTripId);
+    // Search/sort results for BOTH sections, computed once: the sections
+    // need to know about each other so the "no matches" message appears
+    // exactly once, and never above a section that does have results.
+    final ownedMatches = _filterAndSortTrips(
+        ownedTrips.where((t) => t.id != activeTripId).toList());
+    final sharedMatches = _filterAndSortSharedTrips(
+        sharedTripsAsync.valueOrNull ?? const [], activeTripId);
+    final searching = _tripQuery.trim().isNotEmpty;
+
+    final hideYourTripsHeader = (ownedTrips.isNotEmpty &&
+            ownedTrips.every((t) => t.id == activeTripId)) ||
+        // A search that matches nothing here shouldn't leave a bare
+        // "Your Trips" heading over empty space.
+        (searching && ownedMatches.isEmpty);
 
     return Scaffold(
       bottomNavigationBar: _selectionMode && _selectedTripIds.isNotEmpty
@@ -803,7 +816,7 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                   ),
                 ),
 
-                const SliverPadding(padding: EdgeInsets.symmetric(vertical: 8)),
+                const SliverPadding(padding: EdgeInsets.symmetric(vertical: 2)),
 
                 // Create Trip Button or Form (hidden during multi-select)
                 if (!_selectionMode)
@@ -822,25 +835,126 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                         maxSpread: 2,
                         minAlpha: 0.15,
                         maxAlpha: 0.4,
-                        child: SizedBox(
-                          width: double.infinity,
-                          child: FilledButton(
-                            onPressed: _openCreateWizard,
-                            style: FilledButton.styleFrom(
-                              padding: const EdgeInsets.symmetric(vertical: 18),
-                              shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(18)),
-                              textStyle: Theme.of(context)
-                                  .textTheme
-                                  .titleMedium
-                                  ?.copyWith(
-                                    fontWeight: FontWeight.w800,
-                                    letterSpacing: 0.6,
+                        child: IntrinsicHeight(
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              if ((tripsAsync.valueOrNull?.isNotEmpty ?? false))
+                                ChecklistHeaderChip(
+                                    onStepTap: _onChecklistStep),
+                              Expanded(
+                                child: FilledButton(
+                                  key: _newTripBtnKey,
+                                  onPressed: _openCreateWizard,
+                                  style: FilledButton.styleFrom(
+                                    padding: const EdgeInsets.symmetric(
+                                        vertical: 18),
+                                    shape: RoundedRectangleBorder(
+                                        borderRadius:
+                                            BorderRadius.circular(18)),
+                                    textStyle: Theme.of(context)
+                                        .textTheme
+                                        .titleMedium
+                                        ?.copyWith(
+                                          fontWeight: FontWeight.w800,
+                                          letterSpacing: 0.6,
+                                        ),
                                   ),
-                            ),
-                            child: const Text('New Trip'),
+                                  child: const Text('New Trip'),
+                                ),
+                              ),
+                            ],
                           ),
                         ),
+                      ),
+                    ),
+                  ),
+
+                // Breathing room so the big New Trip button and the
+                // search field can't be mis-tapped for each other.
+                const SliverPadding(
+                    padding: EdgeInsets.symmetric(vertical: 14)),
+
+                // Trip search + start-date sort. Only once there's a list
+                // worth filtering — same pill language as the map search.
+                if (tripsAsync.valueOrNull?.isNotEmpty ?? false)
+                  SliverToBoxAdapter(
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: SizedBox(
+                              height: 44,
+                              child: TextField(
+                                controller: _tripSearchController,
+                                onChanged: (v) =>
+                                    setState(() => _tripQuery = v),
+                                textAlignVertical: TextAlignVertical.center,
+                                decoration: InputDecoration(
+                                  isDense: true,
+                                  filled: false,
+                                  hintText: 'Search trips…',
+                                  prefixIcon:
+                                      const Icon(Icons.search, size: 20),
+                                  suffixIcon: _tripQuery.isEmpty
+                                      ? null
+                                      : IconButton(
+                                          icon:
+                                              const Icon(Icons.close, size: 18),
+                                          onPressed: () {
+                                            _tripSearchController.clear();
+                                            setState(() => _tripQuery = '');
+                                          },
+                                        ),
+                                  contentPadding: const EdgeInsets.symmetric(
+                                      horizontal: 16),
+                                  enabledBorder: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(22),
+                                    borderSide: BorderSide(
+                                        color: Theme.of(context)
+                                            .dividerColor
+                                            .withValues(alpha: 0.35)),
+                                  ),
+                                  focusedBorder: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(22),
+                                    borderSide: BorderSide(
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .primary,
+                                        width: 1.4),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Container(
+                            height: 44,
+                            width: 44,
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(22),
+                              border: Border.all(
+                                  color: Theme.of(context)
+                                      .dividerColor
+                                      .withValues(alpha: 0.35)),
+                            ),
+                            child: IconButton(
+                              tooltip: _tripSortAsc
+                                  ? 'Start date — earliest first'
+                                  : 'Start date — latest first',
+                              onPressed: () =>
+                                  setState(() => _tripSortAsc = !_tripSortAsc),
+                              icon: Icon(
+                                _tripSortAsc
+                                    ? Icons.arrow_upward_rounded
+                                    : Icons.arrow_downward_rounded,
+                                size: 20,
+                                color: Theme.of(context).colorScheme.primary,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ),
@@ -893,7 +1007,8 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                           return _buildSharedTripCard(
                               context, activeTrip, sharedPermission);
                         }
-                        return _buildTripCard(context, activeTrip);
+                        return _buildTripCard(context, activeTrip,
+                            spotlightGoToMap: true);
                       }),
                     ),
                   ),
@@ -916,70 +1031,49 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                 tripsAsync.when(
                   data: (trips) {
                     if (trips.isEmpty) {
-                      // Activation empty state: the lever for the ~77% who never
-                      // create a trip. Teach the 3-step value (save places →
-                      // optimize → smarter route) so the first trip feels worth it.
-                      final t = Theme.of(context);
-                      Widget step(IconData icon, String text) => Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 4),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(icon,
-                                    size: 18, color: t.colorScheme.primary),
-                                const SizedBox(width: 10),
-                                Flexible(
-                                  child: Text(text,
-                                      style: t.textTheme.bodyMedium?.copyWith(
-                                          color:
-                                              t.colorScheme.onSurfaceVariant)),
-                                ),
-                              ],
-                            ),
-                          );
+                      // Getting-started checklist replaces the old sample-trip
+                      // pitch — unless it's already finished (e.g. every trip
+                      // deleted): then a completed list is noise, acknowledge
+                      // and point at New Trip instead.
+                      final checklistDone =
+                          ref.watch(checklistProvider).isComplete;
+                      return SliverToBoxAdapter(
+                        child: checklistDone
+                            ? const ChecklistAllSetCard()
+                            : OnboardingChecklistCard(
+                                onStepTap: _onChecklistStep),
+                      );
+                    }
+
+                    // The active trip already has its own section above.
+                    final listTrips = _filterAndSortTrips(
+                        trips.where((t) => t.id != activeTripId).toList());
+                    if (listTrips.isEmpty && searching) {
+                      // Only claim "nothing matches" when the shared section
+                      // is empty under this query too — otherwise the message
+                      // would sit directly above visible shared results.
+                      if (sharedMatches.isNotEmpty) {
+                        return const SliverToBoxAdapter(
+                            child: SizedBox.shrink());
+                      }
                       return SliverToBoxAdapter(
                         child: Padding(
-                          padding: const EdgeInsets.fromLTRB(28, 20, 28, 8),
+                          padding: const EdgeInsets.all(28),
                           child: Center(
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(Icons.route_rounded,
-                                    size: 46, color: t.colorScheme.primary),
-                                const SizedBox(height: 14),
-                                Text('Plan your first trip',
-                                    style: t.textTheme.titleMedium?.copyWith(
-                                        fontWeight: FontWeight.bold)),
-                                const SizedBox(height: 14),
-                                step(Icons.place_outlined,
-                                    'Save 3+ places you want to visit'),
-                                step(Icons.auto_awesome_rounded,
-                                    'Tap Optimize — VoyZa orders them smartly'),
-                                step(Icons.timelapse_rounded,
-                                    'See more, backtrack less'),
-                                const SizedBox(height: 18),
-                                ElevatedButton.icon(
-                                  onPressed: _createSampleTrip,
-                                  icon: const Icon(Icons.auto_awesome_rounded,
-                                      size: 18),
-                                  label: const Text('Try a sample trip'),
-                                ),
-                                const SizedBox(height: 8),
-                                Text(
-                                    'or tap "New Trip" above to start from scratch',
-                                    textAlign: TextAlign.center,
-                                    style: t.textTheme.bodySmall?.copyWith(
-                                        color: t.colorScheme.onSurfaceVariant)),
-                              ],
+                            child: Text(
+                              'No trips match "${_tripQuery.trim()}"',
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .bodyMedium
+                                  ?.copyWith(
+                                      color: Theme.of(context)
+                                          .colorScheme
+                                          .onSurfaceVariant),
                             ),
                           ),
                         ),
                       );
                     }
-
-                    // The active trip already has its own section above.
-                    final listTrips =
-                        trips.where((t) => t.id != activeTripId).toList();
                     if (listTrips.isEmpty) {
                       return const SliverToBoxAdapter(child: SizedBox.shrink());
                     }
@@ -997,7 +1091,8 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                             final trip = listTrips[index];
                             return Padding(
                               padding: const EdgeInsets.only(bottom: 12),
-                              child: _buildTripCard(context, trip),
+                              child: _buildTripCard(context, trip,
+                                  spotlightActivate: index == 0),
                             );
                           },
                           childCount: listTrips.length,
@@ -1016,12 +1111,13 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                 // Shared Trips Section
                 sharedTripsAsync.when(
                   data: (allSharedTrips) {
-                    // The active trip already has its own section above.
-                    final sharedTrips = allSharedTrips.where((d) {
-                      final t = d['trips'] as Map<String, dynamic>?;
-                      return t?['id'] != activeTripId;
-                    }).toList();
+                    // Excludes the active trip (own section above), applies
+                    // the same name search and start-date sort as Your Trips.
+                    final sharedTrips =
+                        _filterAndSortSharedTrips(allSharedTrips, activeTripId);
                     if (sharedTrips.isEmpty) {
+                      // Also covers "filtered to nothing": the heading stays
+                      // hidden rather than labelling an empty section.
                       return const SliverToBoxAdapter(child: SizedBox.shrink());
                     }
 
@@ -1054,12 +1150,10 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                           ),
                           const SizedBox(height: 12),
                           ...sharedTrips.map((data) {
+                            // Null embeds were already dropped by the filter.
                             final tripData =
-                                data['trips'] as Map<String, dynamic>?;
+                                data['trips'] as Map<String, dynamic>;
                             final permission = data['permission'] as String;
-                            if (tripData == null)
-                              return const SizedBox.shrink();
-
                             final trip = Trip.fromJson(tripData);
                             return Padding(
                               padding: const EdgeInsets.only(
@@ -1274,7 +1368,8 @@ class _TripScreenState extends ConsumerState<TripScreen> {
     );
   }
 
-  Widget _buildTripCard(BuildContext context, Trip trip) {
+  Widget _buildTripCard(BuildContext context, Trip trip,
+      {bool spotlightActivate = false, bool spotlightGoToMap = false}) {
     final locationsAsync = ref.watch(savedLocationsProvider);
     final isSelected = _selectedTripIds.contains(trip.id);
 
@@ -1287,6 +1382,8 @@ class _TripScreenState extends ConsumerState<TripScreen> {
         startDate,
         endDate,
         isSelected: isSelected,
+        spotlightActivate: spotlightActivate,
+        spotlightGoToMap: spotlightGoToMap,
       );
     }
 
@@ -1789,6 +1886,8 @@ class _TripScreenState extends ConsumerState<TripScreen> {
     DateTime? startDate,
     DateTime? endDate, {
     bool isSelected = false,
+    bool spotlightActivate = false,
+    bool spotlightGoToMap = false,
   }) {
     final localActiveTripId = ref.watch(localActiveTripIdProvider);
     final isActive = localActiveTripId == trip.id;
@@ -2137,6 +2236,9 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                               SizedBox(
                                 height: 32,
                                 child: ElevatedButton.icon(
+                                  key: spotlightGoToMap
+                                      ? _activeGoToMapKey
+                                      : null,
                                   onPressed: () => _goToMapForTrip(trip),
                                   icon: const Icon(Icons.map_rounded, size: 18),
                                   label: const Text('Go to map'),
@@ -2161,6 +2263,8 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                             SizedBox(
                               height: 32,
                               child: ElevatedButton.icon(
+                                key:
+                                    spotlightActivate ? _cardActivateKey : null,
                                 onPressed: () {
                                   if (isActive) {
                                     _deactivateTrip(trip);
