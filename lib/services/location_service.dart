@@ -164,12 +164,15 @@ class LocationService {
     final hasPermission = await requestLocationPermission();
     if (!hasPermission) return;
 
-    // PERFORMANCE: Increased distance filter from 10m to 50m
-    // This dramatically reduces updates and battery drain
-    // 50m is enough to track movement without excessive updates
+    // 5m native filter: emits only on real movement (a stationary device
+    // produces ZERO events — the OS suppresses them), yet the pin tracks a
+    // walking user every few steps, Google-Maps-like. The old 50m throttle
+    // existed because every tick used to regenerate every marker bitmap;
+    // that pipeline is fixed (bitmaps cached, position applied downstream),
+    // so the coarse filter's reason is gone.
     const locationSettings = LocationSettings(
       accuracy: LocationAccuracy.high,
-      distanceFilter: 50, // Only update when moved 50+ meters
+      distanceFilter: 5,
     );
 
     await for (final position in Geolocator.getPositionStream(
@@ -180,11 +183,12 @@ class LocationService {
   }
 
   static Stream<double?> getCompassStream() {
-    // PERFORMANCE: Increased throttle from 100ms to 500ms (2 updates/sec)
-    // This is sufficient for compass UI and reduces CPU/battery usage by 80%
-    // Most users don't need real-time compass updates
+    // 250ms: fast enough that the map's heading beam tracks a turning
+    // device without visible stepping, and an upper bound of 4 events/sec.
+    // The consumer (MapScreen) additionally gates on a ≥3° change, so a
+    // stationary phone's magnetometer noise produces zero downstream work.
     return FlutterCompass.events!
-        .transform(StreamUtils.throttle(const Duration(milliseconds: 500)))
+        .transform(StreamUtils.throttle(const Duration(milliseconds: 250)))
         .map((event) => event.heading);
   }
 }

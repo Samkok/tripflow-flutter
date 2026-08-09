@@ -14,6 +14,7 @@ class MarkerCacheService {
   // regenerated on every revisit; bitmaps are tens of KB, so 400 is ~MBs.
   static const int _maxCacheSize = 400;
   MarkerBitmapResult? _currentLocationIcon;
+  MarkerBitmapResult? _currentLocationHeadingIcon;
   bool _isPrewarming = false;
   bool _isPrewarmed = false;
 
@@ -33,6 +34,7 @@ class MarkerCacheService {
         // to minimize initial load while still providing benefit
         await Future.wait([
           getCurrentLocationMarker(),
+          getCurrentLocationHeadingMarker(),
           getLegStartMarker(),
           getLegEndMarker(),
         ]);
@@ -87,6 +89,36 @@ class MarkerCacheService {
     final result = MarkerBitmapResult(icon, const Offset(0.5, 0.5));
 
     _currentLocationIcon = result;
+    _addToCache(key, result);
+    return result;
+  }
+
+  /// Heading-beam variant of the current-location dot. Same dot geometry,
+  /// plus the compass wedge; the beam is aimed via Marker.rotation so this
+  /// bitmap is generated once and never again.
+  Future<MarkerBitmapResult> getCurrentLocationHeadingMarker({
+    Color backgroundColor = const Color(0xFF00D4FF),
+  }) async {
+    prewarmCacheInBackground();
+
+    if (_currentLocationHeadingIcon != null) {
+      return _currentLocationHeadingIcon!;
+    }
+
+    final key = 'current_location_heading_${backgroundColor.toARGB32()}';
+    if (_cache.containsKey(key)) {
+      return _cache[key]!;
+    }
+
+    final icon = await MarkerUtils.getCurrentLocationHeadingMarker(
+      backgroundColor: backgroundColor,
+    );
+
+    // Dot is centered in the canvas → center anchor is both the dot's
+    // position AND the rotation pivot, so the beam sweeps around the dot.
+    final result = MarkerBitmapResult(icon, const Offset(0.5, 0.5));
+
+    _currentLocationHeadingIcon = result;
     _addToCache(key, result);
     return result;
   }

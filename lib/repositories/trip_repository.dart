@@ -73,6 +73,12 @@ class TripRepository {
         final json = trip.toJson()
           ..['user_id'] = newUserId
           ..['is_active'] = false
+          // Guest trips can never have been published — never upload
+          // sharing state (a stale code here could collide or leak).
+          ..['is_public'] = false
+          ..['share_code'] = null
+          // Server-owned counter — an upsert must never reset it.
+          ..remove('copy_count')
           ..['status'] = trip.status == 'active' ? 'planning' : trip.status;
         await _supabase.from(_tableName).upsert(json);
         synced++;
@@ -375,6 +381,49 @@ class TripRepository {
     }
   }
 
+  /// Publish/unpublish a trip for copy-by-code sharing. Returns the share
+  /// code (minted on first publish; stable across re-publishes). Signed-in
+  /// owners only — the RPC enforces both.
+  Future<String?> setTripPublic(String tripId, bool public) async {
+    final result = await _supabase.rpc('set_trip_public', params: {
+      'p_trip_id': tripId,
+      'p_public': public,
+    });
+    return result as String?;
+  }
+
+  /// Whitelisted snapshot of a public trip by its share code, or null when
+  /// the code is unknown OR the trip is private (indistinguishable by
+  /// design). Throws [TripCodeException] for rate limiting.
+  Future<Map<String, dynamic>?> getPublicTripPreview(String code) async {
+    try {
+      final result = await _supabase.rpc('get_public_trip_preview', params: {
+        'p_code': code,
+      });
+      if (result == null) return null;
+      return Map<String, dynamic>.from(result as Map);
+    } on PostgrestException catch (e) {
+      throw TripCodeException.fromMessage(e.message);
+    }
+  }
+
+  /// Duplicates a public trip into the caller's account (server-side, one
+  /// transaction: new trip + all locations re-anchored to [startDate],
+  /// progress reset, copy born private). Returns the new trip id.
+  Future<String> duplicatePublicTrip(String code, DateTime startDate) async {
+    try {
+      final result = await _supabase.rpc('duplicate_public_trip', params: {
+        'p_code': code,
+        'p_start_date': '${startDate.year.toString().padLeft(4, '0')}-'
+            '${startDate.month.toString().padLeft(2, '0')}-'
+            '${startDate.day.toString().padLeft(2, '0')}',
+      });
+      return result as String;
+    } on PostgrestException catch (e) {
+      throw TripCodeException.fromMessage(e.message);
+    }
+  }
+
   /// Delete a trip
   Future<void> deleteTrip(String tripId) async {
     try {
@@ -389,4 +438,35 @@ class TripRepository {
       rethrow;
     }
   }
+}
+
+/// Typed failures from the trip-code RPCs, mapped from the SQL RAISE
+/// keywords so screens can show honest, specific messages.
+enum TripCodeError { notPublic, copyLimit, rateLimited, ownTrip, unknown }
+
+class TripCodeException implements Exception {
+  TripCodeException(this.error, this.raw);
+
+  final TripCodeError error;
+  final String raw;
+
+  factory TripCodeException.fromMessage(String message) {
+    final m = message.toLowerCase();
+    if (m.contains('not_public')) {
+      return TripCodeException(TripCodeError.notPublic, message);
+    }
+    if (m.contains('copy_limit')) {
+      return TripCodeException(TripCodeError.copyLimit, message);
+    }
+    if (m.contains('rate_limited')) {
+      return TripCodeException(TripCodeError.rateLimited, message);
+    }
+    if (m.contains('own_trip')) {
+      return TripCodeException(TripCodeError.ownTrip, message);
+    }
+    return TripCodeException(TripCodeError.unknown, message);
+  }
+
+  @override
+  String toString() => 'TripCodeException(${error.name}): $raw';
 }

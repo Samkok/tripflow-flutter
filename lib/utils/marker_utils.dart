@@ -54,6 +54,74 @@ class MarkerUtils {
     return BitmapDescriptor.bytes(data.buffer.asUint8List());
   }
 
+  /// The current-location dot with Google-Maps-style heading beam: the same
+  /// dot as [getCurrentLocationMarker] (identical pixel geometry, so swapping
+  /// variants never changes the dot's size) plus a translucent wedge pointing
+  /// "up" in bitmap space. The wedge is aimed by the Marker's `rotation`
+  /// property (platform-side, cheap) — this bitmap itself is static and
+  /// rendered exactly once.
+  static Future<BitmapDescriptor> getCurrentLocationHeadingMarker({
+    double dotSize = 30, // matches getCurrentLocationMarker's size
+    Color backgroundColor = const Color(0xFF4285F4),
+  }) async {
+    final ui.PictureRecorder pictureRecorder = ui.PictureRecorder();
+    final Canvas canvas = Canvas(pictureRecorder);
+
+    const double canvasSize = 76;
+    const double center = canvasSize / 2;
+    const double beamRadius = center - 2;
+    const Offset c = Offset(center, center);
+
+    // Beam: a 52° wedge from the dot center, fading radially outward.
+    const double halfAngleRad = 26 * 3.1415926535 / 180;
+    const double upRad = -3.1415926535 / 2; // pointing up (north in bitmap)
+    final Paint beamPaint = Paint()
+      ..shader = ui.Gradient.radial(
+        c,
+        beamRadius,
+        [
+          backgroundColor.withValues(alpha: 0.42),
+          backgroundColor.withValues(alpha: 0.0),
+        ],
+        [0.18, 1.0],
+      );
+    final Path beamPath = Path()
+      ..moveTo(c.dx, c.dy)
+      ..arcTo(
+        Rect.fromCircle(center: c, radius: beamRadius),
+        upRad - halfAngleRad,
+        2 * halfAngleRad,
+        false,
+      )
+      ..close();
+    canvas.drawPath(beamPath, beamPaint);
+
+    // Dot layers — same paints/radii as getCurrentLocationMarker.
+    final Paint corePaint = Paint()..color = backgroundColor;
+    final Paint glowPaint = Paint()
+      ..color = backgroundColor.withValues(alpha: 0.3);
+    final Paint whiteRingPaint = Paint()
+      ..color = Colors.white
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 4.0;
+    final double glowRadius = dotSize / 2;
+    final double coreRadius = dotSize / 5;
+    final double whiteRingRadius = coreRadius + 2.0;
+    canvas.drawCircle(c, glowRadius, glowPaint);
+    canvas.drawCircle(c, whiteRingRadius, whiteRingPaint);
+    canvas.drawCircle(c, coreRadius, corePaint);
+
+    final ui.Image img = await pictureRecorder
+        .endRecording()
+        .toImage(canvasSize.toInt(), canvasSize.toInt());
+    final ByteData? data = await img.toByteData(format: ui.ImageByteFormat.png);
+
+    if (data == null) {
+      return BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure);
+    }
+    return BitmapDescriptor.bytes(data.buffer.asUint8List());
+  }
+
   /// Creates a custom bitmap for a destination marker (e.g., a flag).
   static Future<BitmapDescriptor> getDestinationMarkerBitmap({
     Color color = Colors.red,
@@ -424,11 +492,9 @@ class MarkerUtils {
     );
 
     double x = hPad;
-    iconPainter.paint(
-        canvas, Offset(x, (chipHeight - iconPainter.height) / 2));
+    iconPainter.paint(canvas, Offset(x, (chipHeight - iconPainter.height) / 2));
     x += iconPainter.width + gap;
-    textPainter.paint(
-        canvas, Offset(x, (chipHeight - textPainter.height) / 2));
+    textPainter.paint(canvas, Offset(x, (chipHeight - textPainter.height) / 2));
     x += textPainter.width + gap;
 
     // Cyan affordance dot — signals "there is more behind this".

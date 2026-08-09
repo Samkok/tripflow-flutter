@@ -25,6 +25,7 @@ import '../core/theme.dart';
 import 'accommodation_prompts.dart';
 import 'app_toast.dart';
 import 'optimized_location_card.dart';
+import 'pulsing_glow.dart';
 import '../services/csv_service.dart';
 import '../services/places_service.dart';
 
@@ -904,7 +905,7 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
               );
 
               if (!canTap) return button;
-              return _PulsingGlow(glowColor: primaryColor, child: button);
+              return _sheetPulsingGlow(glowColor: primaryColor, child: button);
             }),
             const SizedBox(width: 8),
             Container(
@@ -2462,7 +2463,7 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
       );
 
       final primary = canGlow
-          ? _PulsingGlow(glowColor: primaryColor, child: button)
+          ? _sheetPulsingGlow(glowColor: primaryColor, child: button)
           : button;
 
       // Clear is available from the map's FAB column — no duplicate in the
@@ -2831,63 +2832,24 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
   }
 }
 
-// Lightweight pulsing glow — no external dependencies.
-// Wraps its child with an animated box-shadow that pulses in and out.
-class _PulsingGlow extends StatefulWidget {
-  final Widget child;
-  final Color glowColor;
-
-  const _PulsingGlow({
-    required this.child,
-    required this.glowColor,
-  });
-
-  @override
-  State<_PulsingGlow> createState() => _PulsingGlowState();
-}
-
-class _PulsingGlowState extends State<_PulsingGlow>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _controller;
-  late final Animation<double> _glow;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1600),
-    )..repeat(reverse: true);
-    _glow = CurvedAnimation(parent: _controller, curve: Curves.easeInOut);
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: _glow,
-      builder: (context, child) => DecoratedBox(
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(12),
-          boxShadow: [
-            BoxShadow(
-              color:
-                  widget.glowColor.withValues(alpha: 0.25 + _glow.value * 0.45),
-              blurRadius: 6 + _glow.value * 18,
-              spreadRadius: _glow.value * 3,
-            ),
-          ],
-        ),
-        child: child,
-      ),
-      child: widget.child,
-    );
-  }
+/// Sheet-button glow in this sheet's visual language, via the shared
+/// [PulsingGlow] — which self-caps at 8 pulses and then settles. The private
+/// unbounded copy this replaced kept a 60fps ticker alive for the whole
+/// session whenever the Optimize button was glowable (IndexedStack does not
+/// mute offstage tickers), keeping the CPU out of idle even on other tabs.
+Widget _sheetPulsingGlow({required Color glowColor, required Widget child}) {
+  return PulsingGlow(
+    glowColor: glowColor,
+    shape: BoxShape.rectangle,
+    borderRadius: BorderRadius.circular(12),
+    minBlur: 6,
+    maxBlur: 24,
+    maxSpread: 3,
+    minAlpha: 0.25,
+    maxAlpha: 0.70,
+    period: const Duration(milliseconds: 1600),
+    child: child,
+  );
 }
 
 /// Bottom-sheet "Choose starting point" UI. Replaces the previous cramped

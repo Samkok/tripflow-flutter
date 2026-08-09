@@ -14,8 +14,8 @@ import '../models/trip.dart';
 import '../services/google_maps_service.dart';
 import '../services/places_service.dart';
 import '../services/analytics_service.dart';
-import '../services/anonymous_user_service.dart';
-import '../services/onboarding_service.dart';
+// import '../services/anonymous_user_service.dart'; // DISABLED with first-optimize celebration (2026-08-07)
+// import '../services/onboarding_service.dart'; // DISABLED with first-optimize celebration (2026-08-07)
 import '../services/review_prompt_service.dart';
 import '../services/storage_service.dart';
 import '../services/time_saved_ledger_service.dart';
@@ -24,7 +24,7 @@ import '../utils/zone_utils.dart';
 import '../utils/geo_utils.dart';
 import '../utils/isolate_utils.dart';
 import '../models/saved_location.dart';
-import 'auth_provider.dart';
+// import 'auth_provider.dart'; // DISABLED with first-optimize celebration (2026-08-07)
 import 'location_provider.dart';
 import 'trip_listener_provider.dart';
 import '../utils/same_day_place_guard.dart';
@@ -215,6 +215,25 @@ class TripNotifier extends StateNotifier<TripState> {
     return permission == 'write';
   }
 
+  /// Content fingerprint of the last pinnedLocations sync. The locations
+  /// stream re-emits on background syncs that change NOTHING (cold start:
+  /// fetchRemoteLocations re-puts identical rows into Hive) — and clearing
+  /// the optimized route on those no-op emissions was the "first optimize
+  /// after a cold start never appears" bug: the route landed, then the
+  /// sync's re-emission wiped it seconds later.
+  String? _lastPinnedFingerprint;
+
+  static String _locationsFingerprint(List<SavedLocation> locations) {
+    final parts = locations
+        .map((l) => '${l.id}|${l.lat}|${l.lng}|'
+            '${l.scheduledDate?.millisecondsSinceEpoch}|'
+            '${l.scheduledEndDate?.millisecondsSinceEpoch}|'
+            '${l.isSkipped}|${l.isDone}|${l.stayDuration}')
+        .toList()
+      ..sort();
+    return parts.join(';');
+  }
+
   void _initSyncListener() {
     // Instead, watch the full AsyncValue and extract the trip manually
     _ref.listen<AsyncValue<Trip?>>(
@@ -293,6 +312,20 @@ class TripNotifier extends StateNotifier<TripState> {
 
         debugPrint(
             '✅ TripNotifier._initSyncListener: Converted to ${newPinnedLocations.length} LocationModel objects');
+
+        // Only a REAL content change invalidates the computed route. A
+        // background sync re-emitting identical rows must not clear it —
+        // that erased the first post-cold-start optimize.
+        final fingerprint = _locationsFingerprint(filteredLocations);
+        final contentChanged = fingerprint != _lastPinnedFingerprint;
+        _lastPinnedFingerprint = fingerprint;
+
+        if (!contentChanged) {
+          debugPrint(
+              '📍 TripNotifier: no-op sync emission — keeping the route');
+          state = state.copyWith(pinnedLocations: newPinnedLocations);
+          return;
+        }
 
         // Update state with filtered locations from active trip
         state = state.copyWith(
@@ -1312,9 +1345,10 @@ class TripNotifier extends StateNotifier<TripState> {
         location.longitude,
       );
 
-      // OPTIMIZATION: Increase minimum distance threshold to 30m to reduce updates further
-      // This reduces unnecessary state changes and provider rebuilds
-      if (distance < 30) {
+      // 3m: dedupe GPS jitter only. The heavy consumers no longer watch
+      // this field (bitmaps cached; polylines/leg providers narrowed), so
+      // a moving pin costs one cheap marker-set assembly per emission.
+      if (distance < 3) {
         return;
       }
     }
@@ -1681,17 +1715,19 @@ class TripNotifier extends StateNotifier<TripState> {
           await _ref
               .read(checklistProvider.notifier)
               .mark(ChecklistStep.optimizeRoute);
-          // Anonymous users celebrate too (flags keyed to the persistent
-          // device UUID) — the optimize "aha" is the conversion moment.
-          final userId =
-              _ref.read(currentUserIdProvider) ?? await AnonymousUserService.id;
-          if (!await OnboardingService.instance
-              .hasCelebrated(userId, OnboardingMilestone.firstOptimize)) {
-            celebrationPending = true;
-            _ref
-                .read(firstOptimizeCelebrationTrigger.notifier)
-                .update((s) => s + 1);
-          }
+          // FIRST-OPTIMIZE CELEBRATION DISABLED (owner request 2026-08-07).
+          // celebrationPending stays false so the review-prompt cadence
+          // below is unaffected. To revive, uncomment this block and the
+          // firstOptimizeCelebrationTrigger listener in map_screen.dart.
+          // final userId =
+          //     _ref.read(currentUserIdProvider) ?? await AnonymousUserService.id;
+          // if (!await OnboardingService.instance
+          //     .hasCelebrated(userId, OnboardingMilestone.firstOptimize)) {
+          //   celebrationPending = true;
+          //   _ref
+          //       .read(firstOptimizeCelebrationTrigger.notifier)
+          //       .update((s) => s + 1);
+          // }
         }
         await ReviewPromptService.instance.recordSuccessfulOptimize();
         if (!celebrationPending) {
@@ -1941,15 +1977,19 @@ final shareRouteMapTrigger = StateProvider<int>((ref) => 0);
 /// A provider that exposes details of the currently selected route leg.
 /// The UI can watch this to show/hide the "Open in Maps" button.
 final selectedLegDetailsProvider = Provider<Map<String, dynamic>?>((ref) {
-  final tripState = ref.watch(tripProvider);
-  final selectedIndex = tripState.selectedLegIndex;
+  // Narrow watches (moving-pin hygiene): the full tripProvider would
+  // rebuild this on every GPS tick via currentLocation.
+  final selectedIndex =
+      ref.watch(tripProvider.select((s) => s.selectedLegIndex));
+  final legDetails = ref.watch(tripProvider.select((s) => s.legDetails));
+  final legPolylines = ref.watch(tripProvider.select((s) => s.legPolylines));
 
-  if (selectedIndex == null || selectedIndex >= tripState.legDetails.length) {
+  if (selectedIndex == null || selectedIndex >= legDetails.length) {
     return null;
   }
 
-  final legDetail = tripState.legDetails[selectedIndex];
-  final legPolyline = tripState.legPolylines[selectedIndex];
+  final legDetail = legDetails[selectedIndex];
+  final legPolyline = legPolylines[selectedIndex];
 
   // Calculate the midpoint of the polyline to position the button
   final midPoint = legPolyline[legPolyline.length ~/ 2];

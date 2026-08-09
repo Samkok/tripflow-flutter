@@ -142,6 +142,14 @@ final selectedDateProvider = StateProvider<DateTime>((ref) {
 /// whatever the user last used and made the landing look un-focused.
 final mapDayFocusRequestProvider = StateProvider<int>((ref) => 0);
 
+/// Device compass heading in degrees clockwise from north, or null when no
+/// reliable heading exists (no magnetometer, simulator, uncalibrated).
+/// Written ONLY by MapScreen's throttled + ≥3°-gated compass subscription
+/// and watched ONLY by finalMarkersProvider, which aims the current-location
+/// beam via Marker.rotation. Deliberately NOT part of TripState: a heading
+/// tick must never wake trip-state listeners.
+final deviceHeadingProvider = StateProvider<double?>((_) => null);
+
 /// One-shot "collapse the plan sheet and zoom the map to this spot"
 /// request, fired by a location card's map button and consumed by
 /// MapScreen. A fresh object every time (no ==) so repeat taps on the

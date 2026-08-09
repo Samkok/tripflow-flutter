@@ -10,6 +10,17 @@ class Trip {
   final double totalDistance;
   final int totalDurationMinutes;
   final String? countryCode; // ISO 3166-1 alpha-2, e.g. 'JP', 'KH'
+
+  /// Public sharing: anyone with [shareCode] can COPY (not join) this trip
+  /// while [isPublic] is true. The code survives unpublish (re-publishing
+  /// restores the same code); toggling private makes it inert server-side.
+  final bool isPublic;
+  final String? shareCode; // bare 6-char; displayed as TRIP-XXXXXX
+
+  /// Unique people who copied this trip (one credit per person per trip,
+  /// maintained server-side). The owner's endorsement number.
+  final int copyCount;
+
   final DateTime createdAt;
   final DateTime updatedAt;
 
@@ -25,6 +36,9 @@ class Trip {
     this.totalDistance = 0,
     this.totalDurationMinutes = 0,
     this.countryCode,
+    this.isPublic = false,
+    this.shareCode,
+    this.copyCount = 0,
     required this.createdAt,
     required this.updatedAt,
   });
@@ -46,6 +60,9 @@ class Trip {
       totalDistance: (json['total_distance'] as num?)?.toDouble() ?? 0,
       totalDurationMinutes: json['total_duration_minutes'] as int? ?? 0,
       countryCode: (json['country_code'] as String?)?.toUpperCase(),
+      isPublic: json['is_public'] as bool? ?? false,
+      shareCode: json['share_code'] as String?,
+      copyCount: json['copy_count'] as int? ?? 0,
       createdAt: DateTime.parse(json['created_at'] as String),
       updatedAt: DateTime.parse(json['updated_at'] as String),
     );
@@ -64,6 +81,9 @@ class Trip {
       'total_distance': totalDistance,
       'total_duration_minutes': totalDurationMinutes,
       'country_code': countryCode,
+      'is_public': isPublic,
+      'share_code': shareCode,
+      'copy_count': copyCount,
       'created_at': createdAt.toIso8601String(),
       'updated_at': updatedAt.toIso8601String(),
     };
@@ -109,6 +129,9 @@ class Trip {
     double? totalDistance,
     int? totalDurationMinutes,
     String? countryCode,
+    bool? isPublic,
+    String? shareCode,
+    int? copyCount,
     DateTime? createdAt,
     DateTime? updatedAt,
   }) {
@@ -124,6 +147,9 @@ class Trip {
       totalDistance: totalDistance ?? this.totalDistance,
       totalDurationMinutes: totalDurationMinutes ?? this.totalDurationMinutes,
       countryCode: countryCode ?? this.countryCode,
+      isPublic: isPublic ?? this.isPublic,
+      shareCode: shareCode ?? this.shareCode,
+      copyCount: copyCount ?? this.copyCount,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
     );

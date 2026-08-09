@@ -62,9 +62,13 @@ final cachedMarkerBitmapsProvider =
   final markerCache = MarkerCacheService();
 
   // Static, cached after first build — generated unconditionally so this
-  // provider needn't watch the live position at all.
+  // provider needn't watch the live position at all. Two variants: plain
+  // dot, and dot + heading beam (aimed downstream via Marker.rotation, so
+  // neither bitmap ever regenerates as the device moves or turns).
   markerIcons['current_location'] =
       await markerCache.getCurrentLocationMarker();
+  markerIcons['current_location_heading'] =
+      await markerCache.getCurrentLocationHeadingMarker();
 
   // Numbering is order-dependent → compute it synchronously first, THEN
   // rasterize every bitmap in PARALLEL. The serial awaits here were the
@@ -117,6 +121,11 @@ final finalMarkersProvider = Provider<Set<Marker>>((ref) {
   final locationsForDate = ref.watch(locationsForSelectedDateProvider);
   final currentLocation =
       ref.watch(tripProvider.select((s) => s.currentLocation));
+  // Compass heading for the beam. Already noise-gated at the source
+  // (MapScreen writes it only on ≥3° changes), so each emission here is a
+  // real turn of the device — one cheap marker-set reassembly, one
+  // single-marker rotation diff on the platform side.
+  final deviceHeading = ref.watch(deviceHeadingProvider);
 
   debugPrint(
       'finalMarkersProvider: Building ${locationsForDate.length} markers (${locationsForDate.where((l) => !l.isSkipped).length} active)');
@@ -130,15 +139,26 @@ final finalMarkersProvider = Provider<Set<Marker>>((ref) {
       final Set<Marker> markers = {};
       final markerIcons = cachedData.markerIcons;
 
-      // Add current location marker
+      // Add current location marker — beam variant when a compass heading
+      // exists, plain dot otherwise (simulator, missing magnetometer).
       if (currentLocation != null &&
           markerIcons.containsKey('current_location')) {
-        final result = markerIcons['current_location']!;
+        final hasHeading = deviceHeading != null &&
+            markerIcons.containsKey('current_location_heading');
+        final result = hasHeading
+            ? markerIcons['current_location_heading']!
+            : markerIcons['current_location']!;
         markers.add(Marker(
           markerId: const MarkerId('current_location'),
           position: currentLocation,
           icon: result.bitmap,
           anchor: result.anchor,
+          // flat + rotation = the Google-Maps beam: the wedge lies on the
+          // map surface aimed at the real-world compass heading, so it stays
+          // correct when the user rotates the camera. Rotation happens on
+          // the platform side — no bitmap work per tick.
+          flat: hasHeading,
+          rotation: hasHeading ? deviceHeading : 0.0,
           infoWindow: const InfoWindow(title: 'Your Location'),
         ));
       }
@@ -227,29 +247,33 @@ final memoizedAutomaticZonesProvider = Provider<Set<Circle>>((ref) {
 });
 
 final styledPolylinesProvider = Provider<Set<Polyline>>((ref) {
-  final tripState = ref.watch(tripProvider);
+  // Narrow watches (moving-pin hygiene): a full tripProvider watch made
+  // every GPS tick re-style the polylines via currentLocation.
+  final legPolylinesState =
+      ref.watch(tripProvider.select((s) => s.legPolylines));
+  final optimizedForDate = ref
+      .watch(tripProvider.select((s) => s.optimizedLocationsForSelectedDate));
   final tappedPolylineId = ref.watch(tappedPolylineIdProvider);
 
   // DEBUG: Uncomment to track polyline styling
-  // debugPrint('🎨 Styling ${tripState.legPolylines.length} polylines, highlighted: $tappedPolylineId, optimized locations: ${tripState.optimizedLocationsForSelectedDate.length}');
+  // debugPrint('🎨 Styling ${legPolylinesState.length} polylines, highlighted: $tappedPolylineId');
 
   final Set<Polyline> polylines = {};
 
   // The legPolylines are generated based on tripState.optimizedLocationsForSelectedDate.
   // So, we should use that list for checking bounds.
-  final List<LocationModel> currentOptimizedLocations =
-      tripState.optimizedLocationsForSelectedDate;
+  final List<LocationModel> currentOptimizedLocations = optimizedForDate;
 
   // We iterate through the legs of the route. The number of legs should equal
   // the number of segments between locations (n locations = n-1 legs, or n legs if starting from current location).
-  for (int i = 0; i < tripState.legPolylines.length; i++) {
+  for (int i = 0; i < legPolylinesState.length; i++) {
     // Ensure we have a valid leg polyline.
     // The legPolylines array should contain all legs from the route, including the final leg to the destination.
     if (currentOptimizedLocations.isEmpty) {
       continue;
     }
 
-    final legPoints = tripState.legPolylines[i];
+    final legPoints = legPolylinesState[i];
     if (legPoints.isNotEmpty) {
       final polylineId = 'leg_$i';
       final isHighlighted = tappedPolylineId == polylineId;
@@ -367,18 +391,25 @@ final routeInfoMarkersProvider = FutureProvider<Set<Marker>>((ref) async {
     return {};
   }
 
-  final tripState = ref.watch(tripProvider);
+  // Narrow watches — same reasoning as styledPolylinesProvider above.
+  final legDetailsState = ref.watch(tripProvider.select((s) => s.legDetails));
+  final legPolylinesState =
+      ref.watch(tripProvider.select((s) => s.legPolylines));
+  final orderedForDate = ref
+      .watch(tripProvider.select((s) => s.optimizedLocationsForSelectedDate));
+  final startLocationIdState =
+      ref.watch(tripProvider.select((s) => s.startLocationId));
   final legIndex =
       int.tryParse(tappedPolylineId.replaceFirst('leg_', '')) ?? -1;
 
   // Ensure the leg index is valid.
   if (legIndex < 0 ||
-      legIndex >= tripState.legDetails.length ||
-      legIndex >= tripState.legPolylines.length) {
+      legIndex >= legDetailsState.length ||
+      legIndex >= legPolylinesState.length) {
     return {};
   }
 
-  final legPoints = tripState.legPolylines[legIndex];
+  final legPoints = legPolylinesState[legIndex];
   if (legPoints.isEmpty) return {};
 
   // Calculate midpoint for marker placement.
@@ -386,7 +417,7 @@ final routeInfoMarkersProvider = FutureProvider<Set<Marker>>((ref) async {
   final midpoint = legPoints[midIndex];
 
   // Format distance label from legDetails
-  final legData = tripState.legDetails[legIndex];
+  final legData = legDetailsState[legIndex];
   final distanceMeters = (legData['distance'] as num?)?.toDouble() ?? 0.0;
   final String distanceLabel = distanceMeters >= 1000
       ? '${(distanceMeters / 1000).toStringAsFixed(1)} km'
@@ -417,9 +448,8 @@ final routeInfoMarkersProvider = FutureProvider<Set<Marker>>((ref) async {
   //     (no LocationModel, falls back to coords).
   //   - Otherwise, the start stop is at index 0, so leg i goes from
   //     [i] → [i+1].
-  final ordered = tripState.optimizedLocationsForSelectedDate;
-  final isStartCurrentLocation =
-      tripState.startLocationId == 'current_location';
+  final ordered = orderedForDate;
+  final isStartCurrentLocation = startLocationIdState == 'current_location';
   final fromIdx = isStartCurrentLocation ? legIndex - 1 : legIndex;
   final toIdx = isStartCurrentLocation ? legIndex : legIndex + 1;
   final fromLoc = (fromIdx >= 0 && fromIdx < ordered.length)

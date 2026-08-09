@@ -745,6 +745,11 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
       key: _listViewportKey,
       controller: _listScrollController,
       slivers: [
+        // Endorsement: how many people copied this trip — social proof for
+        // the OWNER only, and only once it's non-zero (a "0 travelers"
+        // badge would read as the opposite of an endorsement). Guests'
+        // local trips can never be copied, so the count gate covers them.
+        SliverToBoxAdapter(child: _buildCopyEndorsement()),
         SliverToBoxAdapter(
           child: _buildTripInfoSection(),
         ),
@@ -805,6 +810,57 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
                 ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildCopyEndorsement() {
+    final theme = Theme.of(context);
+    final count = widget.trip.copyCount;
+    final isOwner =
+        ref.watch(isTripOwnerProvider(widget.trip.id)).valueOrNull ?? false;
+    if (!isOwner || count <= 0) return const SizedBox.shrink();
+
+    const gold = Color(0xFFF5A623);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(14),
+          gradient: LinearGradient(
+            colors: [
+              gold.withValues(alpha: 0.16),
+              gold.withValues(alpha: 0.05),
+            ],
+          ),
+          border: Border.all(color: gold.withValues(alpha: 0.45)),
+        ),
+        child: Row(
+          children: [
+            const Icon(Icons.favorite_rounded, color: gold, size: 20),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text.rich(
+                TextSpan(
+                  children: [
+                    TextSpan(
+                      text: '$count traveler${count == 1 ? '' : 's'} ',
+                      style: const TextStyle(
+                          color: gold, fontWeight: FontWeight.w800),
+                    ),
+                    TextSpan(
+                      text: 'loved this trip and made it their own',
+                    ),
+                  ],
+                ),
+                style: theme.textTheme.bodyMedium
+                    ?.copyWith(fontWeight: FontWeight.w500),
+              ),
+            ),
+            const Icon(Icons.auto_awesome_rounded, color: gold, size: 16),
+          ],
+        ),
       ),
     );
   }

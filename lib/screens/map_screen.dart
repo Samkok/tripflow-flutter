@@ -11,7 +11,7 @@ import 'package:intl/intl.dart';
 import 'package:tutorial_coach_mark/tutorial_coach_mark.dart';
 import 'package:voyza/core/theme.dart';
 import 'package:voyza/screens/location_search_screen.dart';
-import 'package:voyza/screens/login_screen.dart';
+// import 'package:voyza/screens/login_screen.dart'; // DISABLED with first-optimize celebration (2026-08-07)
 import 'package:voyza/widgets/add_to_trip_sheet.dart';
 import 'package:voyza/widgets/pulsing_glow.dart';
 import 'package:voyza/widgets/route_leg_sheet.dart';
@@ -29,7 +29,7 @@ import '../utils/geo_utils.dart';
 import '../providers/location_provider.dart';
 import '../providers/optimized_map_overlay_provider.dart';
 import '../providers/trip_provider.dart';
-import '../providers/trip_simulation_provider.dart';
+// import '../providers/trip_simulation_provider.dart'; // DISABLED with first-optimize celebration (2026-08-07)
 import '../providers/theme_provider.dart';
 import '../providers/all_days_route_provider.dart';
 import '../providers/map_ui_state_provider.dart';
@@ -55,7 +55,7 @@ import '../services/analytics_service.dart';
 import '../widgets/celebration_dialogs.dart';
 import '../widgets/free_places_meter.dart';
 import '../widgets/map_tutorial.dart';
-import '../widgets/referral_prompt.dart';
+// import '../widgets/referral_prompt.dart'; // DISABLED with first-optimize celebration (2026-08-07)
 import '../widgets/map_widget.dart';
 import '../widgets/nearby_places_picker_sheet.dart';
 import '../widgets/trip_bottom_sheet.dart';
@@ -91,6 +91,19 @@ class _MapScreenState extends ConsumerState<MapScreen>
 
   StreamSubscription<LatLng>?
       _locationSubscription; // PERFORMANCE: Track subscription for cleanup
+
+  // Compass feed for the current-location heading beam. The stream is
+  // throttled at the source (250ms); _lastAppliedHeading backs the ≥3°
+  // change gate below, so magnetometer noise while the phone lies still
+  // writes nothing into deviceHeadingProvider (zero marker churn).
+  StreamSubscription<double?>? _compassSubscription;
+  double? _lastAppliedHeading;
+
+  /// Battery: set when the tab gate (not lifecycle/dispose) stopped the
+  /// sensor streams, so returning to the Map tab restarts exactly what the
+  /// gate stopped — and never becomes a second entry point into the
+  /// permission-prompting first-init flow.
+  bool _sensorsStoppedByTabGate = false;
 
   // OPTIMIZATION: Cache for lifecycle management
   AppLifecycleState? _lastLifecycleState;
@@ -152,13 +165,15 @@ class _MapScreenState extends ConsumerState<MapScreen>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _lastLifecycleState = state;
     if (state == AppLifecycleState.paused) {
-      // App is backgrounded - stop location tracking to save battery
+      // App is backgrounded - stop location + compass tracking to save battery
       _locationSubscription?.pause();
+      _compassSubscription?.pause();
       // …and stop arrival polling entirely (no background location, ever).
       _stopArrivalPolling();
     } else if (state == AppLifecycleState.resumed) {
-      // App is resumed - resume location tracking
+      // App is resumed - resume location + compass tracking
       _locationSubscription?.resume();
+      _compassSubscription?.resume();
       _startArrivalPolling();
     }
   }
@@ -176,6 +191,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
 
     // PERFORMANCE: Cancel location stream to prevent memory leaks and battery drain
     _locationSubscription?.cancel();
+    _compassSubscription?.cancel();
     _stopArrivalPolling();
 
     // OPTIMIZATION: Dispose map controller if still active
@@ -342,13 +358,22 @@ class _MapScreenState extends ConsumerState<MapScreen>
 
   void _startLocationTracking() {
     if (_isTrackingLocation) return;
+    if (ref.read(selectedTabIndexProvider) != 1) {
+      // Reached while the map tab is hidden (e.g. the user tabbed away
+      // during the first fix). Don't spin sensors for an invisible map —
+      // flag it so the tab listener starts them on the next visit.
+      _sensorsStoppedByTabGate = true;
+      return;
+    }
 
     _isTrackingLocation = true;
 
-    // PERFORMANCE: Location stream is now throttled and filtered
-    // - Only updates every 50+ meters (set in LocationService)
-    // - Further filtered by updateCurrentLocation() to ignore <20m changes
-    // - Result: ~95% fewer location updates
+    // Continuous tracking, Google-Maps style: the stream emits every 5m of
+    // real movement (native distanceFilter — a stationary device emits
+    // nothing), updateCurrentLocation() dedupes <3m GPS jitter, and the
+    // heavy marker/route pipelines don't watch the position, so each tick
+    // costs one single-marker diff.
+    _startCompassTracking();
     _locationSubscription = LocationService.getLocationStream().listen(
       (location) {
         // OPTIMIZATION: Only update if app is in foreground to prevent background processing
@@ -366,6 +391,74 @@ class _MapScreenState extends ConsumerState<MapScreen>
       onError: (error) {
         // Handle location stream errors gracefully
         debugPrint('Location stream error: $error');
+      },
+    );
+  }
+
+  /// Battery: GPS + compass run only while the map is the visible tab.
+  /// pause() on the Dart subscription is NOT enough for that — the native
+  /// location manager keeps the GPS hot until the last listener CANCELS —
+  /// so hiding the tab cancels both streams and re-visiting restarts them.
+  /// (App-level backgrounding needs no equivalent: with no background modes
+  /// declared, the OS suspends the process and releases the sensors itself.)
+  /// Arrival polling is deliberately NOT gated: it must keep noticing
+  /// arrivals from any tab, and its discrete 20s fixes are cheap.
+  void _syncSensorsToTabVisibility(bool mapTabVisible) {
+    if (!mapTabVisible) {
+      if (_isTrackingLocation) {
+        _stopSensorStreams();
+        _sensorsStoppedByTabGate = true;
+      }
+    } else if (_sensorsStoppedByTabGate) {
+      _sensorsStoppedByTabGate = false;
+      _startLocationTracking();
+    }
+  }
+
+  void _stopSensorStreams() {
+    _locationSubscription?.cancel();
+    _locationSubscription = null;
+    _compassSubscription?.cancel();
+    _compassSubscription = null;
+    // Next compass event after a restart must always apply (no ≥3° gate
+    // against a stale reference), so the beam re-aims immediately.
+    _lastAppliedHeading = null;
+    _isTrackingLocation = false;
+  }
+
+  /// Compass feed for the current-location heading beam (the Google-Maps
+  /// "flashlight"). Started with location tracking, paused/resumed with the
+  /// app lifecycle, cancelled in dispose. Writes into [deviceHeadingProvider]
+  /// only when the heading moved ≥3° (circular difference), so sensor noise
+  /// on a still phone triggers zero marker updates.
+  void _startCompassTracking() {
+    if (_compassSubscription != null) return;
+
+    _compassSubscription = LocationService.getCompassStream().listen(
+      (heading) {
+        if (!mounted || _lastLifecycleState == AppLifecycleState.paused) {
+          return;
+        }
+        if (heading == null) {
+          // Lost the compass (uncalibrated / no magnetometer): fall back to
+          // the plain dot instead of freezing the beam at a stale angle.
+          if (_lastAppliedHeading != null) {
+            _lastAppliedHeading = null;
+            ref.read(deviceHeadingProvider.notifier).state = null;
+          }
+          return;
+        }
+        final h = ((heading % 360) + 360) % 360;
+        final last = _lastAppliedHeading;
+        if (last != null) {
+          final delta = ((h - last + 540) % 360) - 180;
+          if (delta.abs() < 3) return;
+        }
+        _lastAppliedHeading = h;
+        ref.read(deviceHeadingProvider.notifier).state = h;
+      },
+      onError: (error) {
+        debugPrint('Compass stream error: $error');
       },
     );
   }
@@ -1321,6 +1414,9 @@ class _MapScreenState extends ConsumerState<MapScreen>
         // "I'm looking at the map now" signal.
         _openLocationGate();
       }
+      // Battery: stop GPS + compass whenever the map tab is hidden and
+      // restart them on return (see _syncSensorsToTabVisibility).
+      _syncSensorsToTabVisibility(next == 1);
     });
     // Location card's map button → collapse the plan sheet and fly to the
     // spot. Listen is safe: the tap happens on this (onstage) screen.
@@ -1367,59 +1463,62 @@ class _MapScreenState extends ConsumerState<MapScreen>
       }
     });
 
-    ref.listen<int>(firstOptimizeCelebrationTrigger, (previous, next) {
-      if (next <= (previous ?? 0)) return;
-      Future.delayed(const Duration(milliseconds: 1200), () async {
-        if (!mounted) return;
-        // Anonymous users celebrate too — flags keyed to the persistent
-        // device UUID. Their dialog carries a signup nudge: local places
-        // merge into the account on login (syncOnLogin), so "keep your
-        // places" is a true promise and this is the conversion moment.
-        final authUserId = ref.read(currentUserIdProvider);
-        final isAnonymous = authUserId == null;
-        final userId = authUserId ?? await AnonymousUserService.id;
-        if (!mounted) return;
-        final service = OnboardingService.instance;
-        if (await service.hasCelebrated(
-            userId, OnboardingMilestone.firstOptimize)) {
-          return;
-        }
-        // Same condition as the TimingWarningsSheet listener in
-        // trip_bottom_sheet — if the warnings sheet is up/imminent, don't
-        // stack the celebration on top of it.
-        final sim = ref.read(tripSimulationProvider);
-        if (sim != null && !sim.fullyFeasible) {
-          final acked = ref.read(acknowledgedTimingWarningsProvider);
-          final hasUnacked = sim.stops.any(
-              (s) => s.warnings.isNotEmpty && !acked.contains(s.locationId));
-          if (hasUnacked) return;
-        }
-        if (!mounted) return;
-        final tripState = ref.read(tripProvider);
-        await service.markCelebrated(userId, OnboardingMilestone.firstOptimize);
-        if (!mounted || !context.mounted) return;
-        await showFirstOptimizeCelebration(
-          context,
-          stops: tripState.optimizedLocationsForSelectedDate.length,
-          totalTime: tripState.totalTravelTime,
-          timeSaved: tripState.timeSaved,
-          onSignUp: isAnonymous
-              ? () => Navigator.of(context).push(
-                    MaterialPageRoute(builder: (_) => const LoginScreen()),
-                  )
-              : null,
-          // Authenticated users get the referral CTA instead — the aha
-          // moment is the single highest-converting referral surface.
-          onInvite: isAnonymous
-              ? null
-              : () => inviteFriends(context, ref, source: 'celebration'),
-          // Everyone can carry the aha out of the app — as the realistic
-          // map image (route + markers), falling back to the silhouette card
-          // if the snapshot isn't available.
-          onShare: _shareRouteMapImage,
-        );
-      });
-    });
+    // FIRST-OPTIMIZE CELEBRATION DISABLED (owner request 2026-08-07).
+    // The trigger side in trip_provider is commented out too; revive
+    // both together.
+    // ref.listen<int>(firstOptimizeCelebrationTrigger, (previous, next) {
+    // if (next <= (previous ?? 0)) return;
+    // Future.delayed(const Duration(milliseconds: 1200), () async {
+    // if (!mounted) return;
+    // // Anonymous users celebrate too — flags keyed to the persistent
+    // // device UUID. Their dialog carries a signup nudge: local places
+    // // merge into the account on login (syncOnLogin), so "keep your
+    // // places" is a true promise and this is the conversion moment.
+    // final authUserId = ref.read(currentUserIdProvider);
+    // final isAnonymous = authUserId == null;
+    // final userId = authUserId ?? await AnonymousUserService.id;
+    // if (!mounted) return;
+    // final service = OnboardingService.instance;
+    // if (await service.hasCelebrated(
+    // userId, OnboardingMilestone.firstOptimize)) {
+    // return;
+    // }
+    // // Same condition as the TimingWarningsSheet listener in
+    // // trip_bottom_sheet — if the warnings sheet is up/imminent, don't
+    // // stack the celebration on top of it.
+    // final sim = ref.read(tripSimulationProvider);
+    // if (sim != null && !sim.fullyFeasible) {
+    // final acked = ref.read(acknowledgedTimingWarningsProvider);
+    // final hasUnacked = sim.stops.any(
+    // (s) => s.warnings.isNotEmpty && !acked.contains(s.locationId));
+    // if (hasUnacked) return;
+    // }
+    // if (!mounted) return;
+    // final tripState = ref.read(tripProvider);
+    // await service.markCelebrated(userId, OnboardingMilestone.firstOptimize);
+    // if (!mounted || !context.mounted) return;
+    // await showFirstOptimizeCelebration(
+    // context,
+    // stops: tripState.optimizedLocationsForSelectedDate.length,
+    // totalTime: tripState.totalTravelTime,
+    // timeSaved: tripState.timeSaved,
+    // onSignUp: isAnonymous
+    // ? () => Navigator.of(context).push(
+    // MaterialPageRoute(builder: (_) => const LoginScreen()),
+    // )
+    // : null,
+    // // Authenticated users get the referral CTA instead — the aha
+    // // moment is the single highest-converting referral surface.
+    // onInvite: isAnonymous
+    // ? null
+    // : () => inviteFriends(context, ref, source: 'celebration'),
+    // // Everyone can carry the aha out of the app — as the realistic
+    // // map image (route + markers), falling back to the silhouette card
+    // // if the snapshot isn't available.
+    // onShare: _shareRouteMapImage,
+    // );
+    // });
+    // });
 
     // Plan Card: the active trip's plan just became fully optimized — the
     // pre-trip "my plan is ready" social-currency moment. Shown once per

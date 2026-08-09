@@ -1,8 +1,16 @@
+import 'dart:ui' show ImageFilter;
+
 import 'package:flutter/material.dart';
 
-/// Self-contained shimmer + skeleton primitives sized to mirror the trip
-/// cards on the home screen. Kept dependency-free (no `shimmer` package) by
-/// driving a sliding gradient via [AnimatedBuilder].
+import 'route_spine.dart';
+
+/// Skeletons for the home screen, built as GHOSTS of the real trip card:
+/// same translucent shell, same hairline border, same corner radius — and a
+/// frosted BackdropFilter so the ambient globe blurs through them instead of
+/// the old flat grey slabs. Placeholder bars use low-alpha ink (never grey),
+/// and the shimmer sweep carries a faint cyan sheen so even loading feels
+/// on-brand. The card's route-spine signature is present at low alpha, so
+/// the page's identity exists before its data does.
 class _Shimmer extends StatefulWidget {
   final Widget child;
   const _Shimmer({required this.child});
@@ -20,7 +28,7 @@ class _ShimmerState extends State<_Shimmer>
     super.initState();
     _controller = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 1400),
+      duration: const Duration(milliseconds: 1600),
     )..repeat();
   }
 
@@ -32,9 +40,9 @@ class _ShimmerState extends State<_Shimmer>
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final base = isDark ? Colors.white12 : Colors.black12;
-    final highlight = isDark ? Colors.white24 : Colors.white;
+    final theme = Theme.of(context);
+    final base = theme.colorScheme.onSurface.withValues(alpha: 0.07);
+    final sheen = theme.colorScheme.primary.withValues(alpha: 0.16);
     return AnimatedBuilder(
       animation: _controller,
       builder: (context, child) {
@@ -45,7 +53,7 @@ class _ShimmerState extends State<_Shimmer>
             return LinearGradient(
               begin: Alignment.centerLeft,
               end: Alignment.centerRight,
-              colors: [base, highlight, base],
+              colors: [base, sheen, base],
               stops: const [0.35, 0.5, 0.65],
               transform: _SlideGradientTransform(dx),
             ).createShader(bounds);
@@ -79,62 +87,50 @@ class _SkeletonBox extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Container(
       width: width,
       height: height,
       decoration: BoxDecoration(
-        color: isDark ? Colors.white12 : Colors.black12,
+        color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.09),
         borderRadius: BorderRadius.circular(radius),
       ),
     );
   }
 }
 
-/// Skeleton for the "Active Trip" hero card shown at the top of the home
-/// screen. Sized to occupy the same vertical space as the loaded card so the
-/// page layout doesn't jump when data resolves.
-class ActiveTripSkeleton extends StatelessWidget {
-  const ActiveTripSkeleton({super.key});
+/// The shared frosted shell: same geometry as the real card, with the globe
+/// blurring through behind a thin translucent fill.
+class _GlassCardShell extends StatelessWidget {
+  final Widget child;
+  final Color? tint;
+  const _GlassCardShell({required this.child, this.tint});
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return _Shimmer(
-      child: Container(
-        padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(
-          color: theme.colorScheme.primary.withValues(alpha: 0.08),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-            color: theme.colorScheme.primary.withValues(alpha: 0.15),
-          ),
-        ),
-        child: const Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                _SkeletonBox(width: 16, height: 16, radius: 4),
-                SizedBox(width: 8),
-                _SkeletonBox(width: 80, height: 12),
-              ],
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(16),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+          decoration: BoxDecoration(
+            color: tint ?? theme.cardColor.withValues(alpha: 0.4),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: theme.dividerColor.withValues(alpha: 0.2),
             ),
-            SizedBox(height: 12),
-            _SkeletonBox(width: 200, height: 22),
-            SizedBox(height: 10),
-            _SkeletonBox(height: 12),
-          ],
+          ),
+          child: child,
         ),
       ),
     );
   }
 }
 
-/// Skeleton matching a single [Trip] card in the home-screen list. Matches
-/// the rounded container, title row, country chip and metadata row used by
-/// `_buildTripCardContent` so swapping the placeholder for real data feels
-/// like content filling in, not a layout shift.
+/// Ghost of one trip card: flag badge, name bar, the route spine at low
+/// alpha, metadata bar, and the action bar — in the real card's positions,
+/// so data resolving reads as content filling in, never a layout jump.
 class TripCardSkeleton extends StatelessWidget {
   const TripCardSkeleton({super.key});
 
@@ -142,33 +138,78 @@ class TripCardSkeleton extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return _Shimmer(
-      child: Container(
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
-        decoration: BoxDecoration(
-          color: theme.cardColor,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-            color: theme.dividerColor.withValues(alpha: 0.2),
-          ),
-        ),
-        child: const Column(
+      child: _GlassCardShell(
+        child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
+            const Row(
               children: [
-                Expanded(child: _SkeletonBox(height: 18)),
-                SizedBox(width: 12),
-                _SkeletonBox(width: 24, height: 24, radius: 12),
+                _SkeletonBox(width: 34, height: 34, radius: 10),
+                SizedBox(width: 10),
+                Expanded(child: _SkeletonBox(height: 20, radius: 7)),
+                SizedBox(width: 16),
+                _SkeletonBox(width: 4, height: 18, radius: 2), // ⋮ ghost
               ],
             ),
-            SizedBox(height: 10),
-            _SkeletonBox(width: 120, height: 12),
-            SizedBox(height: 14),
-            Row(
+            const SizedBox(height: 10),
+            SizedBox(
+              height: 12,
+              width: double.infinity,
+              child: CustomPaint(
+                painter: RouteSpinePainter(
+                  color: theme.colorScheme.onSurfaceVariant
+                      .withValues(alpha: 0.22),
+                  stops: 3,
+                ),
+              ),
+            ),
+            const SizedBox(height: 10),
+            const _SkeletonBox(width: 210, height: 12),
+            const SizedBox(height: 16),
+            const _SkeletonBox(height: 42, radius: 12),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Skeleton for the "Active Trip" hero card — same frosted shell with the
+/// faint cyan tint the real active card carries.
+class ActiveTripSkeleton extends StatelessWidget {
+  const ActiveTripSkeleton({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return _Shimmer(
+      child: _GlassCardShell(
+        tint: theme.colorScheme.primary.withValues(alpha: 0.07),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const _SkeletonBox(width: 76, height: 9, radius: 4), // eyebrow
+            const SizedBox(height: 8),
+            const _SkeletonBox(width: 220, height: 20, radius: 7),
+            const SizedBox(height: 10),
+            SizedBox(
+              height: 12,
+              width: double.infinity,
+              child: CustomPaint(
+                painter: RouteSpinePainter(
+                  color: theme.colorScheme.primary.withValues(alpha: 0.30),
+                  stops: 4,
+                ),
+              ),
+            ),
+            const SizedBox(height: 10),
+            const _SkeletonBox(width: 180, height: 12),
+            const SizedBox(height: 16),
+            const Row(
               children: [
-                _SkeletonBox(width: 90, height: 12),
-                SizedBox(width: 12),
-                _SkeletonBox(width: 60, height: 12),
+                Expanded(child: _SkeletonBox(height: 42, radius: 12)),
+                SizedBox(width: 8),
+                _SkeletonBox(width: 46, height: 42, radius: 12),
               ],
             ),
           ],

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -31,7 +32,10 @@ import 'package:voyza/widgets/pulsing_glow.dart';
 import 'package:voyza/providers/onboarding_checklist_provider.dart';
 import 'package:voyza/widgets/onboarding_checklist.dart';
 import 'package:voyza/widgets/promo_days_card.dart';
+import 'package:voyza/widgets/route_spine.dart';
+import 'package:voyza/widgets/sign_up_required_sheet.dart';
 import 'package:voyza/screens/create_trip_wizard.dart';
+import 'package:voyza/screens/copy_trip_wizard.dart';
 import 'package:voyza/widgets/referral_prompt.dart';
 import 'package:voyza/widgets/rotating_globe_background.dart';
 import 'package:voyza/widgets/trip_collaborators_row.dart';
@@ -229,6 +233,68 @@ class _TripScreenState extends ConsumerState<TripScreen> {
       if (!mounted) return;
       showChecklistCoach(context, targetKey: key, title: title, body: body);
     });
+  }
+
+  /// Full-width copy-a-trip entry under the New Trip button. Transparent,
+  /// labeled in the same text color as trip-card names, with a border that
+  /// renders ONLY at the rounded corners (owner-specified look) — see
+  /// [_CornerBorderPainter].
+  Widget _buildCopyTripButton(BuildContext context) {
+    final theme = Theme.of(context);
+    final labelColor =
+        theme.textTheme.titleMedium?.color ?? theme.colorScheme.onSurface;
+    return SizedBox(
+      width: double.infinity,
+      height: 52,
+      child: CustomPaint(
+        painter: _CornerBorderPainter(
+          color: labelColor.withValues(alpha: 0.55),
+          radius: 18,
+          strokeWidth: 1.6,
+          extension: 10,
+        ),
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(18),
+            onTap: _openCopyTripWizard,
+            child: Center(
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.content_paste_go_rounded,
+                      size: 18, color: labelColor),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Copy a trip with a code',
+                    style: theme.textTheme.titleMedium
+                        ?.copyWith(fontWeight: FontWeight.w600),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _openCopyTripWizard() {
+    if (ref.read(currentUserIdProvider) == null) {
+      showSignUpRequiredSheet(
+        context,
+        icon: Icons.content_paste_go_rounded,
+        title: 'Sign in to copy a trip',
+        message: 'Trip codes attach the copy to an account. Sign in (or '
+            'create one free) and paste the code — the whole trip becomes '
+            'yours in seconds.',
+      );
+      return;
+    }
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const CopyTripWizard()),
+    );
   }
 
   void _openCreateWizard() {
@@ -830,48 +896,55 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                     child: Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 16),
                       // THE creation affordance — glowing, big, unmissable.
-                      child: PulsingGlow(
-                        shape: BoxShape.rectangle,
-                        borderRadius: BorderRadius.circular(18),
-                        glowColor: Theme.of(context).colorScheme.primary,
-                        // Toned down from the defaults — the full glow read as
-                        // overwhelming on the home screen.
-                        minBlur: 6,
-                        maxBlur: 16,
-                        maxSpread: 2,
-                        minAlpha: 0.15,
-                        maxAlpha: 0.4,
-                        child: IntrinsicHeight(
-                          child: Row(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              if ((tripsAsync.valueOrNull?.isNotEmpty ?? false))
-                                ChecklistHeaderChip(
-                                    onStepTap: _onChecklistStep),
-                              Expanded(
-                                child: FilledButton(
-                                  key: _newTripBtnKey,
-                                  onPressed: _openCreateWizard,
-                                  style: FilledButton.styleFrom(
-                                    padding: const EdgeInsets.symmetric(
-                                        vertical: 18),
-                                    shape: RoundedRectangleBorder(
-                                        borderRadius:
-                                            BorderRadius.circular(18)),
-                                    textStyle: Theme.of(context)
-                                        .textTheme
-                                        .titleMedium
-                                        ?.copyWith(
-                                          fontWeight: FontWeight.w800,
-                                          letterSpacing: 0.6,
-                                        ),
+                      child: Column(
+                        children: [
+                          PulsingGlow(
+                            shape: BoxShape.rectangle,
+                            borderRadius: BorderRadius.circular(18),
+                            glowColor: Theme.of(context).colorScheme.primary,
+                            // Toned down from the defaults — the full glow read as
+                            // overwhelming on the home screen.
+                            minBlur: 6,
+                            maxBlur: 16,
+                            maxSpread: 2,
+                            minAlpha: 0.15,
+                            maxAlpha: 0.4,
+                            child: IntrinsicHeight(
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  if ((tripsAsync.valueOrNull?.isNotEmpty ??
+                                      false))
+                                    ChecklistHeaderChip(
+                                        onStepTap: _onChecklistStep),
+                                  Expanded(
+                                    child: FilledButton(
+                                      key: _newTripBtnKey,
+                                      onPressed: _openCreateWizard,
+                                      style: FilledButton.styleFrom(
+                                        padding: const EdgeInsets.symmetric(
+                                            vertical: 18),
+                                        shape: RoundedRectangleBorder(
+                                            borderRadius:
+                                                BorderRadius.circular(18)),
+                                        textStyle: Theme.of(context)
+                                            .textTheme
+                                            .titleMedium
+                                            ?.copyWith(
+                                              fontWeight: FontWeight.w800,
+                                              letterSpacing: 0.6,
+                                            ),
+                                      ),
+                                      child: const Text('New Trip'),
+                                    ),
                                   ),
-                                  child: const Text('New Trip'),
-                                ),
+                                ],
                               ),
-                            ],
+                            ),
                           ),
-                        ),
+                          const SizedBox(height: 10),
+                          _buildCopyTripButton(context),
+                        ],
                       ),
                     ),
                   ),
@@ -1428,18 +1501,15 @@ class _TripScreenState extends ConsumerState<TripScreen> {
 
   Widget _buildSharedTripCard(
       BuildContext context, Trip trip, String permission) {
+    final theme = Theme.of(context);
+    final primary = theme.colorScheme.primary;
     final isWriteAccess = permission == 'write';
-    final permissionColor = isWriteAccess ? Colors.orange : Colors.blue;
-    final permissionText = isWriteAccess ? 'Can Edit' : 'Read Only';
 
-    // Check if this trip is the locally active trip
     final localActiveTripId = ref.watch(localActiveTripIdProvider);
     final isActive = localActiveTripId == trip.id;
 
-    // Derive locationCount + an effective date range the same way the
-    // owner card does so shared trips read with the same metadata.
-    // Prefer the trip's explicit start/end; fall back to the earliest /
-    // latest scheduled date among the trip's locations when null.
+    // Same metadata derivation as the owner card: prefer the trip's explicit
+    // dates, fall back to the span of its locations' scheduled dates.
     final locationsAsync = ref.watch(savedLocationsProvider);
     final tripLocations = locationsAsync.maybeWhen(
       data: (all) => all.where((l) => l.tripId == trip.id).toList(),
@@ -1457,336 +1527,223 @@ class _TripScreenState extends ConsumerState<TripScreen> {
       endDate = dates.last;
     }
 
+    final metaSpans = <InlineSpan>[];
+    if (startDate != null && endDate != null) {
+      final st = DateTime(startDate.year, startDate.month, startDate.day);
+      final en = DateTime(endDate.year, endDate.month, endDate.day);
+      final dayCount = daySpanDays(st, en) + 1;
+      final dateText = st == en
+          ? DateFormat('MMM d, y').format(st)
+          : '${DateFormat('MMM d').format(st)} – ${DateFormat('MMM d, y').format(en)}';
+      metaSpans
+        ..add(TextSpan(text: dateText))
+        ..add(TextSpan(
+          text: '  ·  $dayCount day${dayCount == 1 ? '' : 's'}',
+          style: TextStyle(color: primary, fontWeight: FontWeight.w700),
+        ));
+    } else {
+      metaSpans.add(const TextSpan(text: 'No dates yet'));
+    }
+    metaSpans.add(TextSpan(
+        text: '  ·  $locationCount place${locationCount == 1 ? '' : 's'}'));
+
+    final country =
+        trip.countryCode == null ? null : findCountryByCode(trip.countryCode);
+
+    // The eyebrow carries BOTH facts on one quiet line: activation state
+    // and permission — replacing the old orange/blue permission chip.
+    final eyebrow = isActive
+        ? 'ACTIVE NOW · ${isWriteAccess ? 'CAN EDIT' : 'VIEW ONLY'}'
+        : 'SHARED · ${isWriteAccess ? 'CAN EDIT' : 'VIEW ONLY'}';
+    final eyebrowColor =
+        isActive ? primary : theme.colorScheme.onSurfaceVariant;
+
     return GestureDetector(
-      onTap: () {
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (context) => TripDetailsScreen(trip: trip),
-          ),
-        );
-      },
+      onTap: () => Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => TripDetailsScreen(trip: trip),
+        ),
+      ),
       child: Container(
         decoration: BoxDecoration(
-          // Translucent to match the owned-trip cards — globe shows through.
-          color: Theme.of(context).cardColor.withValues(alpha: 0.55),
+          color: theme.cardColor.withValues(alpha: 0.55),
           borderRadius: BorderRadius.circular(16),
           border: Border.all(
             color: isActive
-                ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.35)
-                : Theme.of(context).colorScheme.primary.withValues(alpha: 0.2),
-            width: isActive ? 2 : 1,
+                ? primary.withValues(alpha: 0.45)
+                : theme.dividerColor.withValues(alpha: 0.2),
+            width: isActive ? 1.4 : 1.0,
           ),
           boxShadow: [
             BoxShadow(
               color: isActive
-                  ? Theme.of(context)
-                      .colorScheme
-                      .primary
-                      .withValues(alpha: 0.08)
+                  ? primary.withValues(alpha: 0.12)
                   : Colors.black.withValues(alpha: 0.05),
-              blurRadius: isActive ? 8 : 4,
+              blurRadius: isActive ? 10 : 4,
               offset: Offset(0, isActive ? 4 : 2),
             ),
           ],
         ),
+        padding: const EdgeInsets.fromLTRB(16, 14, 8, 14),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Header with shared indicator
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              decoration: BoxDecoration(
-                color: Theme.of(context)
-                    .colorScheme
-                    .primary
-                    .withValues(alpha: 0.05),
-                borderRadius: const BorderRadius.vertical(
-                  top: Radius.circular(16),
-                ),
-              ),
-              child: Row(
-                children: [
-                  Icon(
-                    Icons.group_outlined,
-                    size: 16,
-                    color: Theme.of(context).colorScheme.primary,
-                  ),
-                  const SizedBox(width: 6),
-                  Text(
-                    'Shared with you',
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: Theme.of(context).colorScheme.primary,
-                          fontWeight: FontWeight.w500,
-                        ),
-                  ),
-                  const Spacer(),
+            // ── Header: flag badge · eyebrow+name · Options ────────────
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                if (country != null) ...[
                   Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 4,
-                    ),
+                    width: 34,
+                    height: 34,
+                    alignment: Alignment.center,
                     decoration: BoxDecoration(
-                      color: permissionColor.withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(12),
+                      color: primary.withValues(alpha: 0.08),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                          color: theme.dividerColor.withValues(alpha: 0.25)),
                     ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          isWriteAccess ? Icons.edit : Icons.visibility,
-                          size: 12,
-                          color: permissionColor,
-                        ),
-                        const SizedBox(width: 4),
-                        Text(
-                          permissionText,
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: permissionColor,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ],
-                    ),
+                    child: CountryFlagIcon(country.code, height: 16),
                   ),
+                  const SizedBox(width: 10),
                 ],
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        eyebrow,
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: eyebrowColor,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 1.4,
+                          fontSize: 10,
+                        ),
+                      ),
+                      Text(
+                        trip.name,
+                        style: theme.textTheme.titleLarge?.copyWith(
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: -0.2,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
+                ),
+                PopupMenuButton<String>(
+                  tooltip: 'Options',
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16)),
+                  color: theme.cardColor.withValues(alpha: 0.94),
+                  offset: const Offset(0, 34),
+                  child: _optionsChip(theme),
+                  itemBuilder: (context) => const [
+                    PopupMenuItem<String>(
+                      value: 'leave',
+                      child: Row(
+                        children: [
+                          Icon(Icons.exit_to_app_rounded,
+                              size: 18, color: Colors.red),
+                          SizedBox(width: 12),
+                          Text('Leave trip',
+                              style: TextStyle(color: Colors.red)),
+                        ],
+                      ),
+                    ),
+                  ],
+                  onSelected: (value) {
+                    if (value == 'leave') {
+                      _showLeaveConfirmation(context, trip);
+                    }
+                  },
+                ),
+              ],
+            ),
+
+            // ── Signature: the route spine ─────────────────────────────
+            Padding(
+              padding: const EdgeInsets.only(top: 8, right: 12),
+              child: SizedBox(
+                height: 12,
+                width: double.infinity,
+                child: CustomPaint(
+                  painter: RouteSpinePainter(
+                    color: isActive
+                        ? primary
+                        : theme.colorScheme.onSurfaceVariant
+                            .withValues(alpha: 0.35),
+                    stops: locationCount,
+                  ),
+                ),
               ),
             ),
 
-            // Trip content
+            // ── Metadata line ──────────────────────────────────────────
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 8, 12),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+              padding: const EdgeInsets.only(top: 8, right: 8),
+              child: Text.rich(
+                TextSpan(children: metaSpans),
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                  fontWeight: FontWeight.w500,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+
+            // ── Contextual action row ──────────────────────────────────
+            const SizedBox(height: 12),
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: isActive
+                  ? Row(
                       children: [
-                        Text(
-                          trip.name,
-                          style:
-                              Theme.of(context).textTheme.titleMedium?.copyWith(
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        if (trip.description != null &&
-                            trip.description!.isNotEmpty) ...[
-                          const SizedBox(height: 4),
-                          Text(
-                            trip.description!,
-                            style:
-                                Theme.of(context).textTheme.bodySmall?.copyWith(
-                                      color: Theme.of(context)
-                                          .textTheme
-                                          .bodyMedium
-                                          ?.color
-                                          ?.withValues(alpha: 0.6),
-                                    ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
+                        Expanded(
+                          child: SizedBox(
+                            height: 42,
+                            child: FilledButton.icon(
+                              onPressed: () => _goToMapForTrip(trip),
+                              icon: const Icon(Icons.map_rounded, size: 18),
+                              label: const Text('Go to map'),
+                              style: FilledButton.styleFrom(
+                                textStyle: theme.textTheme.labelLarge
+                                    ?.copyWith(fontWeight: FontWeight.w700),
+                                shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12)),
+                              ),
+                            ),
                           ),
-                        ],
-
-                        // Location count + date range — same chrome as
-                        // the owner card so shared trips read with
-                        // identical metadata.
-                        const SizedBox(height: 8),
-                        Row(
-                          children: [
-                            Icon(
-                              Icons.location_on,
-                              size: 14,
-                              color: Theme.of(context).colorScheme.primary,
-                            ),
-                            const SizedBox(width: 6),
-                            Text(
-                              '$locationCount ${locationCount == 1 ? 'location' : 'locations'}',
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .bodySmall
-                                  ?.copyWith(fontWeight: FontWeight.w500),
-                            ),
-                          ],
                         ),
-                        if (startDate != null && endDate != null) ...[
-                          const SizedBox(height: 4),
-                          Row(
-                            children: [
-                              Icon(
-                                Icons.calendar_today,
-                                size: 14,
-                                color: Theme.of(context).colorScheme.primary,
-                              ),
-                              const SizedBox(width: 6),
-                              Expanded(
-                                child: Builder(builder: (context) {
-                                  final s = DateTime(startDate!.year,
-                                      startDate.month, startDate.day);
-                                  final e = DateTime(endDate!.year,
-                                      endDate.month, endDate.day);
-                                  final dayCount = daySpanDays(s, e) + 1;
-                                  final dateText = startDate == endDate
-                                      ? DateFormat('MMM d, y').format(startDate)
-                                      : '${DateFormat('MMM d').format(startDate)} - ${DateFormat('MMM d, y').format(endDate)}';
-                                  return Text.rich(
-                                    TextSpan(
-                                      children: [
-                                        TextSpan(text: dateText),
-                                        TextSpan(
-                                          text:
-                                              '  ·  $dayCount day${dayCount == 1 ? '' : 's'}',
-                                          style: TextStyle(
-                                            fontWeight: FontWeight.w600,
-                                            color: Theme.of(context)
-                                                .colorScheme
-                                                .primary,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .bodySmall
-                                        ?.copyWith(fontWeight: FontWeight.w500),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  );
-                                }),
-                              ),
-                            ],
-                          ),
-                        ],
-
-                        // Co-collaborators on this shared trip (read-only —
-                        // guests can see who else they're planning with).
-                        const SizedBox(height: 10),
-                        TripCollaboratorsRow(
-                          tripId: trip.id,
-                          tripName: trip.name,
-                          canManage: false,
-                        ),
-
-                        const SizedBox(height: 8),
-                        // Activate/Deactivate (+ Go to map when active) for
-                        // shared trips
-                        Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            if (isActive) ...[
-                              SizedBox(
-                                height: 28,
-                                child: ElevatedButton.icon(
-                                  onPressed: () => _goToMapForTrip(trip),
-                                  icon: const Icon(Icons.map_rounded, size: 16),
-                                  label: const Text(
-                                    'Go to map',
-                                    style: TextStyle(fontSize: 12),
-                                  ),
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor:
-                                        Theme.of(context).colorScheme.primary,
-                                    foregroundColor:
-                                        Theme.of(context).colorScheme.onPrimary,
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 10,
-                                    ),
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(6),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                            ],
-                            SizedBox(
-                              height: 28,
-                              child: ElevatedButton.icon(
-                                onPressed: () {
-                                  if (isActive) {
-                                    _deactivateTrip(trip);
-                                  } else {
-                                    _setActiveTrip(trip);
-                                  }
-                                },
-                                icon: Icon(
-                                  isActive
-                                      ? Icons.stop_circle_outlined
-                                      : Icons.play_circle_outline,
-                                  size: 16,
-                                ),
-                                label: Text(
-                                  isActive ? 'Deactivate' : 'Activate',
-                                  style: const TextStyle(fontSize: 12),
-                                ),
-                                style: ElevatedButton.styleFrom(
-                                  // Neutral styling: managing the active trip is
-                                  // housekeeping, not a warning (orange) or a
-                                  // success (green).
-                                  backgroundColor: isActive
-                                      ? Theme.of(context)
-                                          .colorScheme
-                                          .onSurface
-                                          .withValues(alpha: 0.12)
-                                      : Theme.of(context).colorScheme.primary,
-                                  foregroundColor: isActive
-                                      ? Theme.of(context)
-                                          .colorScheme
-                                          .onSurface
-                                          .withValues(alpha: 0.85)
-                                      : Theme.of(context).colorScheme.onPrimary,
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 10,
-                                  ),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(6),
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ],
+                        const SizedBox(width: 8),
+                        _cardIconSquare(
+                          theme,
+                          icon: Icons.stop_circle_outlined,
+                          tooltip: 'Deactivate',
+                          onPressed: () => _deactivateTrip(trip),
                         ),
                       ],
-                    ),
-                  ),
-                  PopupMenuButton<String>(
-                    icon: Icon(
-                      Icons.more_vert_rounded,
-                      color: Theme.of(context)
-                          .textTheme
-                          .bodyMedium
-                          ?.color
-                          ?.withValues(alpha: 0.6),
-                    ),
-                    itemBuilder: (context) => [
-                      const PopupMenuItem<String>(
-                        value: 'leave',
-                        child: Row(
-                          children: [
-                            Icon(
-                              Icons.exit_to_app_rounded,
-                              size: 18,
-                              color: Colors.red,
-                            ),
-                            SizedBox(width: 12),
-                            Text(
-                              'Leave Trip',
-                              style: TextStyle(color: Colors.red),
-                            ),
-                          ],
+                    )
+                  : SizedBox(
+                      width: double.infinity,
+                      height: 42,
+                      child: FilledButton.tonalIcon(
+                        onPressed: () => _setActiveTrip(trip),
+                        icon: const Icon(Icons.play_circle_outline, size: 18),
+                        label: const Text('Activate'),
+                        style: FilledButton.styleFrom(
+                          backgroundColor: primary.withValues(alpha: 0.14),
+                          foregroundColor: primary,
+                          textStyle: theme.textTheme.labelLarge
+                              ?.copyWith(fontWeight: FontWeight.w700),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12)),
                         ),
                       ),
-                    ],
-                    onSelected: (value) {
-                      if (value == 'leave') {
-                        _showLeaveConfirmation(context, trip);
-                      }
-                    },
-                  ),
-                ],
-              ),
+                    ),
             ),
           ],
         ),
@@ -1886,6 +1843,102 @@ class _TripScreenState extends ConsumerState<TripScreen> {
     }
   }
 
+  /// Publish / unpublish a trip straight from its card. Both directions
+  /// confirm first: publishing is privacy-affecting (anyone with the code
+  /// can copy the itinerary), and unpublishing revokes every code holder's
+  /// access. The server mints the code on first publish and keeps it, so
+  /// re-publishing restores the same one.
+  Future<void> _toggleTripPublic(Trip trip) async {
+    final goPublic = !trip.isPublic;
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text(goPublic ? 'Make this trip public?' : 'Make it private?'),
+        content: Text(
+          goPublic
+              ? 'You\'ll get a share code. Anyone with it can copy '
+                  '"${trip.name}" as their own trip — they never see your '
+                  'name, your edits, or your progress, and you can turn '
+                  'this off any time.'
+              : 'People who have your code will no longer be able to copy '
+                  'this trip. Making it public again restores the same code.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(goPublic ? 'Go public' : 'Go private'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true || !mounted) return;
+    try {
+      await ref.read(tripRepositoryProvider).setTripPublic(trip.id, goPublic);
+      ref.invalidate(userTripsProvider);
+      if (!mounted) return;
+      AppToast.success(
+          context,
+          goPublic
+              ? 'Trip is public — the code is on your card'
+              : 'Trip is private again');
+    } catch (e) {
+      debugPrint('setTripPublic failed: $e');
+      if (mounted) {
+        AppToast.error(
+            context, 'Could not update sharing. Check your connection.');
+      }
+    }
+  }
+
+  /// The labeled, transparent menu trigger both card variants use in place
+  /// of the bare three-dot icon.
+  Widget _optionsChip(ThemeData theme) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: theme.dividerColor.withValues(alpha: 0.4)),
+      ),
+      child: Text(
+        'Options',
+        style: theme.textTheme.labelMedium?.copyWith(
+          color: theme.colorScheme.onSurfaceVariant,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+    );
+  }
+
+  /// 46×42 quiet square for the card's secondary actions (share,
+  /// deactivate) — outlined ghost, never competing with the primary.
+  Widget _cardIconSquare(
+    ThemeData theme, {
+    required IconData icon,
+    required String tooltip,
+    required VoidCallback onPressed,
+  }) {
+    return SizedBox(
+      height: 42,
+      width: 46,
+      child: OutlinedButton(
+        onPressed: onPressed,
+        style: OutlinedButton.styleFrom(
+          padding: EdgeInsets.zero,
+          foregroundColor: theme.colorScheme.onSurfaceVariant,
+          side: BorderSide(color: theme.dividerColor.withValues(alpha: 0.4)),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        ),
+        child: Tooltip(message: tooltip, child: Icon(icon, size: 20)),
+      ),
+    );
+  }
+
   Widget _buildTripCardContent(
     BuildContext context,
     Trip trip,
@@ -1896,21 +1949,59 @@ class _TripScreenState extends ConsumerState<TripScreen> {
     bool spotlightActivate = false,
     bool spotlightGoToMap = false,
   }) {
+    final theme = Theme.of(context);
+    final primary = theme.colorScheme.primary;
     final localActiveTripId = ref.watch(localActiveTripIdProvider);
     final isActive = localActiveTripId == trip.id;
+    final signedIn = ref.watch(currentUserIdProvider) != null;
 
-    // Green = active is a status semantic; "Inactive" is a neutral state,
-    // not a warning — grey, never orange.
-    final statusColor = isActive ? Colors.green : Colors.grey;
-    final statusText = isActive ? 'Active' : 'Inactive';
-
-    // Border and shadow change based on active / selected state
+    // Active/selected state lives on the SHELL (border + glow) and the
+    // eyebrow — never repeated as chips or button colors. Cyan is the only
+    // accent; green/orange are gone from this card.
     final borderColor = isSelected
-        ? Theme.of(context).colorScheme.primary
+        ? primary
         : isActive
-            ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.35)
-            : Theme.of(context).dividerColor.withValues(alpha: 0.2);
-    final borderWidth = (isSelected || isActive) ? 2.0 : 1.0;
+            ? primary.withValues(alpha: 0.45)
+            : theme.dividerColor.withValues(alpha: 0.2);
+    final borderWidth = isSelected
+        ? 2.0
+        : isActive
+            ? 1.4
+            : 1.0;
+
+    // Metadata pieces. Default: one line "Oct 5 – Oct 15, 2026 · 11 days ·
+    // 24 places". When a share code exists, the facts split onto a second
+    // line under the dates so the code chip fits beside them (owner call).
+    String dateText = 'No dates yet';
+    final factsSpans = <InlineSpan>[];
+    if (startDate != null && endDate != null) {
+      final st = DateTime(startDate.year, startDate.month, startDate.day);
+      final en = DateTime(endDate.year, endDate.month, endDate.day);
+      final dayCount = daySpanDays(st, en) + 1;
+      dateText = st == en
+          ? DateFormat('MMM d, y').format(st)
+          : '${DateFormat('MMM d').format(st)} – ${DateFormat('MMM d, y').format(en)}';
+      factsSpans.add(TextSpan(
+        text: '$dayCount day${dayCount == 1 ? '' : 's'}',
+        style: TextStyle(color: primary, fontWeight: FontWeight.w700),
+      ));
+    }
+    factsSpans.add(TextSpan(
+        text:
+            '${factsSpans.isEmpty ? '' : '  ·  '}$locationCount place${locationCount == 1 ? '' : 's'}'));
+
+    final metaSpans = <InlineSpan>[
+      TextSpan(text: dateText),
+      const TextSpan(text: '  ·  '),
+      ...factsSpans,
+    ];
+
+    final hasCode = signedIn && trip.isPublic && trip.shareCode != null;
+    // (factsSpans/dateText stay separate above for readability; the card
+    // renders them as one line — the code has its own band below.)
+
+    final country =
+        trip.countryCode == null ? null : findCountryByCode(trip.countryCode);
 
     return GestureDetector(
       // In selection mode the outer GestureDetector in _buildTripCard handles
@@ -1932,379 +2023,320 @@ class _TripScreenState extends ConsumerState<TripScreen> {
               decoration: BoxDecoration(
                 // Translucent so the ambient globe stays visible behind the
                 // list; the border carries the card's shape.
-                color: Theme.of(context).cardColor.withValues(alpha: 0.55),
+                color: theme.cardColor.withValues(alpha: 0.55),
                 borderRadius: BorderRadius.circular(16),
                 border: Border.all(color: borderColor, width: borderWidth),
                 boxShadow: [
                   BoxShadow(
-                    color: isSelected
-                        ? Theme.of(context)
-                            .colorScheme
-                            .primary
-                            .withValues(alpha: 0.12)
-                        : isActive
-                            ? Colors.green.withValues(alpha: 0.1)
-                            : Colors.black.withValues(alpha: 0.05),
-                    blurRadius: (isSelected || isActive) ? 8 : 4,
+                    color: (isSelected || isActive)
+                        ? primary.withValues(alpha: 0.12)
+                        : Colors.black.withValues(alpha: 0.05),
+                    blurRadius: (isSelected || isActive) ? 10 : 4,
                     offset: Offset(0, (isSelected || isActive) ? 4 : 2),
                   ),
                 ],
               ),
+              padding: const EdgeInsets.fromLTRB(16, 14, 8, 14),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Header with name, country chip, and action menu
+                  // ── Header: flag badge · eyebrow+name · menu ──────────
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      if (country != null) ...[
+                        Container(
+                          width: 34,
+                          height: 34,
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            color: primary.withValues(alpha: 0.08),
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(
+                                color:
+                                    theme.dividerColor.withValues(alpha: 0.25)),
+                          ),
+                          child: CountryFlagIcon(country.code, height: 16),
+                        ),
+                        const SizedBox(width: 10),
+                      ],
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            // Eyebrow exists ONLY when the state exists.
+                            if (isActive)
+                              Text(
+                                'ACTIVE NOW',
+                                style: theme.textTheme.labelSmall?.copyWith(
+                                  color: primary,
+                                  fontWeight: FontWeight.w800,
+                                  letterSpacing: 1.4,
+                                  fontSize: 10,
+                                ),
+                              ),
+                            Text(
+                              trip.name,
+                              style: theme.textTheme.titleLarge?.copyWith(
+                                fontWeight: FontWeight.w800,
+                                letterSpacing: -0.2,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ],
+                        ),
+                      ),
+                      if (!_selectionMode)
+                        PopupMenuButton<String>(
+                          tooltip: 'Options',
+                          // Rounded, slightly translucent menu surface —
+                          // shared style with the shared-trip card's menu.
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(16)),
+                          color: theme.cardColor.withValues(alpha: 0.94),
+                          offset: const Offset(0, 34),
+                          child: _optionsChip(theme),
+                          itemBuilder: (context) => [
+                            PopupMenuItem<String>(
+                              value: 'rename',
+                              child: Row(
+                                children: [
+                                  Icon(Icons.edit_rounded,
+                                      size: 18, color: primary),
+                                  const SizedBox(width: 12),
+                                  const Text('Edit'),
+                                ],
+                              ),
+                            ),
+                            PopupMenuItem<String>(
+                              value: 'reschedule',
+                              child: Row(
+                                children: [
+                                  Icon(Icons.event_repeat_rounded,
+                                      size: 18, color: primary),
+                                  const SizedBox(width: 12),
+                                  const Text('Reschedule'),
+                                ],
+                              ),
+                            ),
+                            const PopupMenuDivider(),
+                            const PopupMenuItem<String>(
+                              value: 'delete',
+                              child: Row(
+                                children: [
+                                  Icon(Icons.delete_rounded,
+                                      size: 18, color: Colors.red),
+                                  SizedBox(width: 12),
+                                  Text('Delete',
+                                      style: TextStyle(color: Colors.red)),
+                                ],
+                              ),
+                            ),
+                          ],
+                          onSelected: (value) {
+                            if (value == 'rename') {
+                              _showEditTripDialog(context, trip);
+                            } else if (value == 'reschedule') {
+                              _rescheduleTripFromCard(trip);
+                            } else if (value == 'delete') {
+                              _showDeleteConfirmation(context, trip);
+                            }
+                          },
+                        ),
+                    ],
+                  ),
+
+                  // ── Signature: the route spine ─────────────────────────
                   Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 16, 8, 0),
+                    padding: const EdgeInsets.only(top: 8, right: 12),
+                    child: SizedBox(
+                      height: 12,
+                      width: double.infinity,
+                      child: CustomPaint(
+                        painter: RouteSpinePainter(
+                          color: isActive
+                              ? primary
+                              : theme.colorScheme.onSurfaceVariant
+                                  .withValues(alpha: 0.35),
+                          stops: locationCount,
+                        ),
+                      ),
+                    ),
+                  ),
+
+                  // ── Metadata line ──────────────────────────────────────
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8, right: 8),
+                    child: Text.rich(
+                      TextSpan(children: metaSpans),
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                        fontWeight: FontWeight.w500,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+
+                  // ── Collaborators: their own quiet band again ──────────
+                  if (!_selectionMode) ...[
+                    const SizedBox(height: 10),
+                    TripCollaboratorsRow(
+                      tripId: trip.id,
+                      tripName: trip.name,
+                    ),
+                  ],
+
+                  // ── Actions: primary + publish toggle ──────────────────
+                  const SizedBox(height: 12),
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8),
                     child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                trip.name,
-                                style: Theme.of(context)
-                                    .textTheme
-                                    .titleLarge
-                                    ?.copyWith(
-                                      fontWeight: FontWeight.bold,
+                          child: SizedBox(
+                            height: 42,
+                            child: isActive
+                                ? FilledButton.icon(
+                                    key: spotlightGoToMap
+                                        ? _activeGoToMapKey
+                                        : null,
+                                    onPressed: () => _goToMapForTrip(trip),
+                                    icon:
+                                        const Icon(Icons.map_rounded, size: 18),
+                                    label: const Text('Go to map'),
+                                    style: FilledButton.styleFrom(
+                                      textStyle: theme.textTheme.labelLarge
+                                          ?.copyWith(
+                                              fontWeight: FontWeight.w700),
+                                      shape: RoundedRectangleBorder(
+                                          borderRadius:
+                                              BorderRadius.circular(12)),
                                     ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                              if (trip.countryCode != null) ...[
-                                const SizedBox(height: 6),
-                                Builder(builder: (context) {
-                                  final country =
-                                      findCountryByCode(trip.countryCode);
-                                  if (country == null)
-                                    return const SizedBox.shrink();
-                                  return Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      CountryFlagIcon(country.code, height: 14),
-                                      const SizedBox(width: 5),
-                                      Text(
-                                        country.name,
-                                        style: Theme.of(context)
-                                            .textTheme
-                                            .bodySmall
-                                            ?.copyWith(
-                                              color: Theme.of(context)
-                                                  .colorScheme
-                                                  .primary,
-                                              fontWeight: FontWeight.w500,
-                                            ),
-                                      ),
-                                    ],
-                                  );
-                                }),
-                              ],
-                            ],
+                                  )
+                                : FilledButton.tonalIcon(
+                                    key: spotlightActivate
+                                        ? _cardActivateKey
+                                        : null,
+                                    onPressed: () => _setActiveTrip(trip),
+                                    icon: const Icon(Icons.play_circle_outline,
+                                        size: 18),
+                                    label: const Text('Activate'),
+                                    style: FilledButton.styleFrom(
+                                      backgroundColor:
+                                          primary.withValues(alpha: 0.14),
+                                      foregroundColor: primary,
+                                      textStyle: theme.textTheme.labelLarge
+                                          ?.copyWith(
+                                              fontWeight: FontWeight.w700),
+                                      shape: RoundedRectangleBorder(
+                                          borderRadius:
+                                              BorderRadius.circular(12)),
+                                    ),
+                                  ),
                           ),
                         ),
-                        if (!_selectionMode)
-                          PopupMenuButton<String>(
-                            icon: Icon(
-                              Icons.more_vert_rounded,
-                              color: Theme.of(context)
-                                  .textTheme
-                                  .bodyMedium
-                                  ?.color
-                                  ?.withValues(alpha: 0.6),
+                        // Publish toggle — the LABEL states what the tap
+                        // does, so the trip's current visibility is
+                        // readable without a separate status chip.
+                        if (signedIn) ...[
+                          const SizedBox(width: 8),
+                          SizedBox(
+                            height: 42,
+                            child: OutlinedButton(
+                              onPressed: () => _toggleTripPublic(trip),
+                              style: OutlinedButton.styleFrom(
+                                padding:
+                                    const EdgeInsets.symmetric(horizontal: 14),
+                                foregroundColor: trip.isPublic
+                                    ? theme.colorScheme.onSurfaceVariant
+                                    : primary,
+                                side: BorderSide(
+                                    color: trip.isPublic
+                                        ? theme.dividerColor
+                                            .withValues(alpha: 0.4)
+                                        : primary.withValues(alpha: 0.5)),
+                                shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12)),
+                                textStyle: theme.textTheme.labelLarge
+                                    ?.copyWith(fontWeight: FontWeight.w700),
+                              ),
+                              child: Text(
+                                  trip.isPublic ? 'Go private' : 'Go public'),
                             ),
-                            itemBuilder: (context) => [
-                              PopupMenuItem<String>(
-                                value: 'rename',
-                                child: Row(
-                                  children: [
-                                    Icon(
-                                      Icons.edit_rounded,
-                                      size: 18,
-                                      color:
-                                          Theme.of(context).colorScheme.primary,
-                                    ),
-                                    const SizedBox(width: 12),
-                                    const Text('Edit'),
-                                  ],
-                                ),
-                              ),
-                              PopupMenuItem<String>(
-                                value: 'reschedule',
-                                child: Row(
-                                  children: [
-                                    Icon(
-                                      Icons.event_repeat_rounded,
-                                      size: 18,
-                                      color:
-                                          Theme.of(context).colorScheme.primary,
-                                    ),
-                                    const SizedBox(width: 12),
-                                    const Text('Reschedule'),
-                                  ],
-                                ),
-                              ),
-                              const PopupMenuDivider(),
-                              const PopupMenuItem<String>(
-                                value: 'delete',
-                                child: Row(
-                                  children: [
-                                    Icon(
-                                      Icons.delete_rounded,
-                                      size: 18,
-                                      color: Colors.red,
-                                    ),
-                                    SizedBox(width: 12),
-                                    Text(
-                                      'Delete',
-                                      style: TextStyle(color: Colors.red),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                            onSelected: (value) {
-                              if (value == 'rename') {
-                                _showEditTripDialog(context, trip);
-                              } else if (value == 'reschedule') {
-                                _rescheduleTripFromCard(trip);
-                              } else if (value == 'delete') {
-                                _showDeleteConfirmation(context, trip);
-                              }
-                            },
                           ),
+                        ],
+                        if (isActive) ...[
+                          const SizedBox(width: 8),
+                          _cardIconSquare(
+                            theme,
+                            icon: Icons.stop_circle_outlined,
+                            tooltip: 'Deactivate',
+                            onPressed: () => _deactivateTrip(trip),
+                          ),
+                        ],
                       ],
                     ),
                   ),
 
-                  // Trip info
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        // Location count
-                        Row(
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.all(6),
-                              decoration: BoxDecoration(
-                                color: Theme.of(context)
-                                    .colorScheme
-                                    .primary
-                                    .withValues(alpha: 0.1),
-                                borderRadius: BorderRadius.circular(6),
-                              ),
-                              child: Icon(
-                                Icons.location_on,
-                                size: 16,
-                                color: Theme.of(context).colorScheme.primary,
+                  // ── Share code band: what it's for (left) and the code
+                  // itself (right, tappable to copy). Only when public.
+                  if (hasCode)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 12, right: 8),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          Expanded(
+                            child: Text(
+                              'Send this code to anyone who wants to copy '
+                              'your trip',
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: theme.colorScheme.onSurfaceVariant,
+                                height: 1.3,
                               ),
                             ),
-                            const SizedBox(width: 8),
-                            Text(
-                              '$locationCount ${locationCount == 1 ? 'location' : 'locations'}',
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .bodyMedium
-                                  ?.copyWith(
-                                    fontWeight: FontWeight.w500,
-                                  ),
-                            ),
-                          ],
-                        ),
-
-                        // Date range
-                        if (startDate != null && endDate != null) ...[
-                          const SizedBox(height: 8),
-                          Row(
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.all(6),
-                                decoration: BoxDecoration(
-                                  color: Theme.of(context)
-                                      .colorScheme
-                                      .primary
-                                      .withValues(alpha: 0.1),
-                                  borderRadius: BorderRadius.circular(6),
-                                ),
-                                child: Icon(
-                                  Icons.calendar_today,
-                                  size: 16,
-                                  color: Theme.of(context).colorScheme.primary,
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: Builder(builder: (context) {
-                                  // Inclusive day count — Mar 5 → Mar 7 is 3 days,
-                                  // not 2. Normalize to midnight before diffing so
-                                  // a stored time component doesn't shave a day.
-                                  final s = DateTime(startDate.year,
-                                      startDate.month, startDate.day);
-                                  final e = DateTime(
-                                      endDate.year, endDate.month, endDate.day);
-                                  final dayCount = daySpanDays(s, e) + 1;
-                                  final dateText = startDate == endDate
-                                      ? DateFormat('MMM d, y').format(startDate)
-                                      : '${DateFormat('MMM d').format(startDate)} - ${DateFormat('MMM d, y').format(endDate)}';
-                                  return Text.rich(
-                                    TextSpan(
-                                      children: [
-                                        TextSpan(text: dateText),
-                                        TextSpan(
-                                          text:
-                                              '  ·  $dayCount day${dayCount == 1 ? '' : 's'}',
-                                          style: TextStyle(
-                                            fontWeight: FontWeight.w600,
-                                            color: Theme.of(context)
-                                                .colorScheme
-                                                .primary,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .bodyMedium
-                                        ?.copyWith(fontWeight: FontWeight.w500),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  );
-                                }),
-                              ),
-                            ],
                           ),
-                        ],
-
-                        // Collaborators + add-collaborator button (owned
-                        // trips only — this content builder isn't used for
-                        // shared cards). Hidden during multi-select.
-                        if (!_selectionMode) ...[
-                          const SizedBox(height: 12),
-                          TripCollaboratorsRow(
-                            tripId: trip.id,
-                            tripName: trip.name,
-                          ),
-                        ],
-
-                        const SizedBox(height: 12),
-                        const Divider(height: 1),
-                        const SizedBox(height: 12),
-
-                        // Status and activate button
-                        Row(
-                          children: [
-                            // Status indicator
-                            Container(
+                          const SizedBox(width: 12),
+                          InkWell(
+                            borderRadius: BorderRadius.circular(11),
+                            onTap: () {
+                              Clipboard.setData(ClipboardData(
+                                  text: 'TRIP-${trip.shareCode}'));
+                              AppToast.success(
+                                  context, 'Code copied — send it to anyone!');
+                            },
+                            child: Container(
                               padding: const EdgeInsets.symmetric(
-                                horizontal: 10,
-                                vertical: 6,
-                              ),
+                                  horizontal: 12, vertical: 9),
                               decoration: BoxDecoration(
-                                color: statusColor.withValues(alpha: 0.15),
-                                borderRadius: BorderRadius.circular(20),
+                                borderRadius: BorderRadius.circular(11),
                                 border: Border.all(
-                                  color: statusColor.withValues(alpha: 0.3),
-                                  width: 1,
-                                ),
+                                    color: primary.withValues(alpha: 0.45)),
+                                color: primary.withValues(alpha: 0.08),
                               ),
                               child: Row(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
-                                  Container(
-                                    width: 6,
-                                    height: 6,
-                                    decoration: BoxDecoration(
-                                      color: statusColor,
-                                      shape: BoxShape.circle,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 6),
                                   Text(
-                                    statusText,
-                                    style: TextStyle(
-                                      color: statusColor,
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w600,
+                                    'TRIP-${trip.shareCode}',
+                                    style: theme.textTheme.titleSmall?.copyWith(
+                                      fontFamily: 'monospace',
+                                      fontWeight: FontWeight.w800,
+                                      letterSpacing: 1.4,
                                     ),
                                   ),
+                                  const SizedBox(width: 8),
+                                  Icon(Icons.copy_rounded,
+                                      size: 16, color: primary),
                                 ],
                               ),
                             ),
-
-                            const Spacer(),
-
-                            // Active trip: explicit hop over to the Map tab
-                            // (activation itself no longer auto-switches).
-                            if (isActive) ...[
-                              SizedBox(
-                                height: 32,
-                                child: ElevatedButton.icon(
-                                  key: spotlightGoToMap
-                                      ? _activeGoToMapKey
-                                      : null,
-                                  onPressed: () => _goToMapForTrip(trip),
-                                  icon: const Icon(Icons.map_rounded, size: 18),
-                                  label: const Text('Go to map'),
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor:
-                                        Theme.of(context).colorScheme.primary,
-                                    foregroundColor:
-                                        Theme.of(context).colorScheme.onPrimary,
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 12,
-                                    ),
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(8),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                            ],
-
-                            // Activate/Deactivate button
-                            SizedBox(
-                              height: 32,
-                              child: ElevatedButton.icon(
-                                key:
-                                    spotlightActivate ? _cardActivateKey : null,
-                                onPressed: () {
-                                  if (isActive) {
-                                    _deactivateTrip(trip);
-                                  } else {
-                                    _setActiveTrip(trip);
-                                  }
-                                },
-                                icon: Icon(
-                                  isActive
-                                      ? Icons.stop_circle_outlined
-                                      : Icons.play_circle_outline,
-                                  size: 18,
-                                ),
-                                label:
-                                    Text(isActive ? 'Deactivate' : 'Activate'),
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor:
-                                      isActive ? Colors.orange : Colors.green,
-                                  foregroundColor: Colors.white,
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 12,
-                                  ),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(8),
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
                 ],
               ),
             ),
@@ -2317,26 +2349,20 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                   width: 26,
                   height: 26,
                   decoration: BoxDecoration(
-                    color: isSelected
-                        ? Theme.of(context).colorScheme.primary
-                        : Theme.of(context).cardColor,
                     shape: BoxShape.circle,
+                    color: isSelected
+                        ? primary
+                        : theme.cardColor.withValues(alpha: 0.9),
                     border: Border.all(
                       color: isSelected
-                          ? Theme.of(context).colorScheme.primary
-                          : Theme.of(context)
-                              .colorScheme
-                              .outline
-                              .withValues(alpha: 0.5),
-                      width: 2,
+                          ? primary
+                          : theme.dividerColor.withValues(alpha: 0.6),
+                      width: 1.5,
                     ),
                   ),
                   child: isSelected
-                      ? const Icon(
-                          Icons.check_rounded,
-                          size: 14,
-                          color: Colors.white,
-                        )
+                      ? const Icon(Icons.check_rounded,
+                          size: 17, color: Colors.black)
                       : null,
                 ),
               ),
@@ -3394,4 +3420,66 @@ class _EditTripDialogState extends State<_EditTripDialog> {
       ),
     );
   }
+}
+
+/// Border that exists ONLY at the four rounded corners: each corner draws
+/// its 90° arc plus a short [extension] into the straight edges, leaving the
+/// edges themselves open. Round caps so the strokes end softly.
+class _CornerBorderPainter extends CustomPainter {
+  const _CornerBorderPainter({
+    required this.color,
+    required this.radius,
+    required this.strokeWidth,
+    required this.extension,
+  });
+
+  final Color color;
+  final double radius;
+  final double strokeWidth;
+  final double extension;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = strokeWidth
+      ..strokeCap = StrokeCap.round;
+    final r = radius;
+    final e = extension;
+    final w = size.width;
+    final h = size.height;
+    final rad = Radius.circular(r);
+
+    final path = Path()
+      // top-left
+      ..moveTo(0, r + e)
+      ..lineTo(0, r)
+      ..arcToPoint(Offset(r, 0), radius: rad)
+      ..lineTo(r + e, 0)
+      // top-right
+      ..moveTo(w - r - e, 0)
+      ..lineTo(w - r, 0)
+      ..arcToPoint(Offset(w, r), radius: rad)
+      ..lineTo(w, r + e)
+      // bottom-right
+      ..moveTo(w, h - r - e)
+      ..lineTo(w, h - r)
+      ..arcToPoint(Offset(w - r, h), radius: rad)
+      ..lineTo(w - r - e, h)
+      // bottom-left
+      ..moveTo(r + e, h)
+      ..lineTo(r, h)
+      ..arcToPoint(Offset(0, h - r), radius: rad)
+      ..lineTo(0, h - r - e);
+
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _CornerBorderPainter old) =>
+      color != old.color ||
+      radius != old.radius ||
+      strokeWidth != old.strokeWidth ||
+      extension != old.extension;
 }
