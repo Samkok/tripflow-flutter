@@ -469,6 +469,11 @@ class MarkerUtils {
     String? vehicleType,
     String? badgeText,
     Color? badgeColor,
+    // Endpoint names — when provided, a second smaller line "A → B" renders
+    // under the stats row so the chip says WHERE the leg goes, not just how
+    // far. Long names are trimmed per side so both ends always survive.
+    String? fromName,
+    String? toName,
   }) async {
     final double dpr = (WidgetsBinding
                 .instance.platformDispatcher.implicitView?.devicePixelRatio ??
@@ -541,13 +546,40 @@ class MarkerUtils {
       textDirection: TextDirection.ltr,
     )..layout();
 
+    // "From → To" endpoint line — quieter than the stats row (smaller, and
+    // dimmed) so it reads as context, not competition. Each name is trimmed
+    // on its own so a long "from" can never push the "to" out of the chip.
+    String trimName(String s) => s.length > 18 ? '${s.substring(0, 17)}…' : s;
+    final bool hasRouteLine = (fromName != null && fromName.isNotEmpty) ||
+        (toName != null && toName.isNotEmpty);
+    final TextPainter? routePainter = !hasRouteLine
+        ? null
+        : (TextPainter(
+            text: TextSpan(
+              text: '${trimName(fromName ?? '')} → ${trimName(toName ?? '')}',
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.78),
+                fontSize: 10.5,
+                fontWeight: FontWeight.w500,
+                letterSpacing: 0.1,
+              ),
+            ),
+            maxLines: 1,
+            ellipsis: '…',
+            textDirection: TextDirection.ltr,
+          )..layout(maxWidth: 230));
+    const double routeLineGap = 3.0;
+
     final double contentHeight = [
       iconPainter.height,
       textPainter.height,
       chevronDiameter,
     ].reduce((a, b) => a > b ? a : b);
-    final double chipHeight = contentHeight + vPad * 2;
-    final double chipWidth = hPad +
+    final double chipHeight = vPad +
+        contentHeight +
+        (routePainter == null ? 0 : routeLineGap + routePainter.height) +
+        vPad;
+    final double mainRowWidth = hPad +
         iconPainter.width +
         gap +
         (badgePainter == null ? 0 : badgeWidth + gap) +
@@ -555,6 +587,11 @@ class MarkerUtils {
         gap +
         chevronDiameter +
         hPad;
+    final double chipWidth = routePainter == null
+        ? mainRowWidth
+        : (routePainter.width + hPad * 2 > mainRowWidth
+            ? routePainter.width + hPad * 2
+            : mainRowWidth);
     final double totalHeight = chipHeight + shadowExtra;
 
     final chipRect = RRect.fromRectAndRadius(
@@ -582,28 +619,31 @@ class MarkerUtils {
         ..color = cyan.withValues(alpha: 0.45),
     );
 
-    double x = hPad;
-    iconPainter.paint(canvas, Offset(x, (chipHeight - iconPainter.height) / 2));
+    // Main row is vertically centred in its own band (the top row) so the
+    // endpoint line below never shifts it; horizontally centred in case the
+    // endpoint line came out wider than the stats row.
+    final double rowMid = vPad + contentHeight / 2;
+    double x = hPad + (chipWidth - mainRowWidth) / 2;
+    iconPainter.paint(canvas, Offset(x, rowMid - iconPainter.height / 2));
     x += iconPainter.width + gap;
     if (badgePainter != null) {
       final badgeHeight = badgePainter.height + 4;
       final badgeRect = RRect.fromRectAndRadius(
-        Rect.fromLTWH(
-            x, (chipHeight - badgeHeight) / 2, badgeWidth, badgeHeight),
+        Rect.fromLTWH(x, rowMid - badgeHeight / 2, badgeWidth, badgeHeight),
         const Radius.circular(5),
       );
       canvas.drawRRect(
           badgeRect, Paint()..color = badgeColor ?? const Color(0xFFE53935));
-      badgePainter.paint(canvas,
-          Offset(x + badgeHPad, (chipHeight - badgePainter.height) / 2));
+      badgePainter.paint(
+          canvas, Offset(x + badgeHPad, rowMid - badgePainter.height / 2));
       x += badgeWidth + gap;
     }
-    textPainter.paint(canvas, Offset(x, (chipHeight - textPainter.height) / 2));
+    textPainter.paint(canvas, Offset(x, rowMid - textPainter.height / 2));
     x += textPainter.width + gap;
 
     // Cyan affordance dot — signals "there is more behind this".
     canvas.drawCircle(
-      Offset(x + chevronDiameter / 2, chipHeight / 2),
+      Offset(x + chevronDiameter / 2, rowMid),
       chevronDiameter / 2,
       Paint()..color = cyan,
     );
@@ -611,7 +651,16 @@ class MarkerUtils {
       canvas,
       Offset(
         x + (chevronDiameter - chevronPainter.width) / 2,
-        (chipHeight - chevronPainter.height) / 2,
+        rowMid - chevronPainter.height / 2,
+      ),
+    );
+
+    // Endpoint line, centred under the stats row.
+    routePainter?.paint(
+      canvas,
+      Offset(
+        (chipWidth - routePainter.width) / 2,
+        vPad + contentHeight + routeLineGap,
       ),
     );
 

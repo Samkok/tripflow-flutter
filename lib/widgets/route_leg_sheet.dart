@@ -18,9 +18,10 @@ import 'app_toast.dart';
 /// scheduled times, stop count); and a mode switcher that re-routes JUST
 /// this leg and remembers the choice for future optimizes.
 ///
-/// Deliberately SOLID, unlike the trip plan / search / collaborators sheets:
-/// it's a small pane over a busy map, where a blurred one made the leg names
-/// hard to read. Only the barrier and border come from `AppTheme.sheet*`.
+/// Resizable like the trip-plan sheet (drag up to the same 85% ceiling for
+/// long transit itineraries, down to the floor to dismiss) but deliberately
+/// SOLID, not glass: it sits over a busy map, and a see-through pane made
+/// the leg details hard to read — glass was tried and reverted (Aug 2026).
 ///
 /// NOTE: a ride-provider section belongs here (Grab / Uber / Bolt …), gated
 /// on the leg's country. It is deliberately absent until the country →
@@ -39,16 +40,37 @@ Future<void> showRouteLegSheet(
   return showModalBottomSheet<void>(
     context: context,
     backgroundColor: Colors.transparent,
+    isScrollControlled: true,
     barrierColor: AppTheme.sheetBarrierColor(context),
-    builder: (sheetContext) => _RouteLegSheet(
-      origin: origin,
-      destination: destination,
-      distanceLabel: distanceLabel,
-      durationLabel: durationLabel,
-      legIndex: legIndex,
-      mode: mode,
-      transit: transit,
-    ),
+    builder: (sheetContext) {
+      var popped = false;
+      return NotificationListener<DraggableScrollableNotification>(
+        onNotification: (n) {
+          // Dragged to the floor = dismiss, like every other sheet.
+          if (!popped && n.extent <= n.minExtent + 0.005) {
+            popped = true;
+            Navigator.of(sheetContext).pop();
+          }
+          return false;
+        },
+        child: DraggableScrollableSheet(
+          expand: false,
+          initialChildSize: 0.55,
+          minChildSize: 0.3,
+          maxChildSize: 0.85, // same ceiling as the trip-plan sheet
+          builder: (c, scrollController) => _RouteLegSheet(
+            origin: origin,
+            destination: destination,
+            distanceLabel: distanceLabel,
+            durationLabel: durationLabel,
+            legIndex: legIndex,
+            mode: mode,
+            transit: transit,
+            scrollController: scrollController,
+          ),
+        ),
+      );
+    },
   );
 }
 
@@ -78,6 +100,7 @@ class _RouteLegSheet extends ConsumerStatefulWidget {
     required this.legIndex,
     required this.mode,
     this.transit,
+    required this.scrollController,
   });
 
   final LocationModel origin;
@@ -87,6 +110,10 @@ class _RouteLegSheet extends ConsumerStatefulWidget {
   final int legIndex;
   final String mode;
   final List<Map<String, dynamic>>? transit;
+
+  /// From the enclosing [DraggableScrollableSheet] — wiring it to the body
+  /// scroll view is what lets a drag anywhere resize/dismiss the sheet.
+  final ScrollController scrollController;
 
   @override
   ConsumerState<_RouteLegSheet> createState() => _RouteLegSheetState();
@@ -249,8 +276,10 @@ class _RouteLegSheetState extends ConsumerState<_RouteLegSheet> {
     return ClipRRect(
       borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
       child: Container(
-        // Solid, NOT glass. This sheet is small and sits directly over a
-        // busy map; a see-through pane made the leg names hard to read.
+        // Solid, NOT glass (owner call, twice now): this sheet sits over a
+        // busy map and a see-through pane made the leg details hard to
+        // read. Glass was tried Aug 2026 alongside the resizable shell and
+        // reverted the same day.
         decoration: BoxDecoration(
           color: theme.scaffoldBackgroundColor,
           borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
@@ -261,240 +290,217 @@ class _RouteLegSheetState extends ConsumerState<_RouteLegSheet> {
         ),
         child: SafeArea(
           top: false,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // ── Header = drag zone ─────────────────────────────────────
-              // Handle + title + subtitle live OUTSIDE the scroll view: a
-              // scrollable eats vertical drags, so with the whole sheet
-              // scrollable the ONLY way to drag-dismiss was the 4px pill.
-              // Everything in this block drags the sheet natively.
-              Padding(
-                padding: const EdgeInsets.fromLTRB(24, 12, 24, 0),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Center(
-                      child: Container(
-                        width: 40,
-                        height: 4,
-                        decoration: BoxDecoration(
-                          color: Colors.grey[400],
-                          borderRadius: BorderRadius.circular(2),
+          // ONE scroll view, wired to the DraggableScrollableSheet's
+          // controller: at scroll-top a drag anywhere on the sheet resizes
+          // or dismisses it. (The old header-outside-scroll split existed
+          // only because the sheet wasn't draggable-resizable yet.)
+          child: SingleChildScrollView(
+            controller: widget.scrollController,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(24, 12, 24, 24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Center(
+                    child: Container(
+                      width: 40,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: Colors.grey[400],
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(
+                        MarkerUtils.legModeIcon(mode,
+                            vehicleType: widget.transit?.isNotEmpty == true
+                                ? widget.transit!.first['vehicleType']
+                                    as String?
+                                : null),
+                        size: 26,
+                        color: theme.colorScheme.primary,
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          '${widget.origin.name} → ${widget.destination.name}',
+                          style: theme.textTheme.titleLarge
+                              ?.copyWith(fontWeight: FontWeight.bold),
+                          maxLines: 3,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      IconButton(
+                        icon: const Icon(Icons.close),
+                        tooltip: 'Close',
+                        onPressed: () => Navigator.of(context).pop(),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    subtitle,
+                    style: theme.textTheme.bodyMedium
+                        ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                  ),
+                  // ── Transit itinerary — every segment, walks included ──
+                  if (widget.transit != null && widget.transit!.isNotEmpty) ...[
+                    const SizedBox(height: 14),
+                    ..._buildJourneySegments(),
+                  ],
+
+                  // ── Mode switcher (only for real legs of a route) ─────
+                  if (widget.legIndex >= 0) ...[
+                    const SizedBox(height: 18),
+                    Text(
+                      'TRAVEL THIS LEG',
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        letterSpacing: 1.1,
+                        fontWeight: FontWeight.w800,
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        for (final (m, icon, label) in _switchableModes)
+                          _modeChip(m, icon, label),
+                      ],
+                    ),
+
+                    // ── Route options: the departure board ────────
+                    // Google's ranking IS the structure: the default
+                    // route leads with a RECOMMENDED chip; alternates
+                    // follow. Tapping applies live — the sheet stays
+                    // open so options can be compared on the map.
+                    if (widget.mode != 'direct') ...[
+                      const SizedBox(height: 18),
+                      Text(
+                        'ROUTE OPTIONS',
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          letterSpacing: 1.1,
+                          fontWeight: FontWeight.w800,
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      if (_alternatives == null)
+                        Row(children: [
+                          const SizedBox(
+                            width: 14,
+                            height: 14,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                          const SizedBox(width: 8),
+                          Text('Finding routes…',
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                  color: theme.colorScheme.onSurfaceVariant)),
+                        ])
+                      else if (_alternatives!.length <= 1)
+                        Text(
+                          _alternatives!.isEmpty
+                              ? 'No route options here.'
+                              : 'Only one route here.',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant),
+                        )
+                      else
+                        for (var i = 0; i < _alternatives!.length; i++)
+                          _optionRow(i, _alternatives![i]),
+                    ],
+                  ],
+
+                  const SizedBox(height: 20),
+                  // Frame this leg on the map (real legs only — previews
+                  // have no leg identity to zoom to).
+                  if (widget.legIndex >= 0) ...[
+                    SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton.icon(
+                        onPressed: () {
+                          Navigator.of(context).pop();
+                          ref.read(mapZoomToLegRequestProvider.notifier).state =
+                              MapZoomToLegRequest(widget.legIndex);
+                        },
+                        icon: const Icon(Icons.center_focus_strong_rounded,
+                            size: 20),
+                        label: const Text('Show on map'),
+                        style: OutlinedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(28),
+                          ),
+                          textStyle: const TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                          ),
                         ),
                       ),
                     ),
-                    const SizedBox(height: 18),
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Icon(
-                          MarkerUtils.legModeIcon(mode,
-                              vehicleType: widget.transit?.isNotEmpty == true
-                                  ? widget.transit!.first['vehicleType']
-                                      as String?
-                                  : null),
-                          size: 26,
-                          color: theme.colorScheme.primary,
-                        ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Text(
-                            '${widget.origin.name} → ${widget.destination.name}',
-                            style: theme.textTheme.titleLarge
-                                ?.copyWith(fontWeight: FontWeight.bold),
-                            maxLines: 3,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        IconButton(
-                          icon: const Icon(Icons.close),
-                          tooltip: 'Close',
-                          onPressed: () => Navigator.of(context).pop(),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      subtitle,
-                      style: theme.textTheme.bodyMedium
-                          ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-                    ),
+                    const SizedBox(height: 10),
                   ],
-                ),
-              ),
-              Flexible(
-                child: SingleChildScrollView(
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        // ── Transit itinerary — every segment, walks included ──
-                        if (widget.transit != null &&
-                            widget.transit!.isNotEmpty) ...[
-                          const SizedBox(height: 14),
-                          ..._buildJourneySegments(),
-                        ],
-
-                        // ── Mode switcher (only for real legs of a route) ─────
-                        if (widget.legIndex >= 0) ...[
-                          const SizedBox(height: 18),
-                          Text(
-                            'TRAVEL THIS LEG',
-                            style: theme.textTheme.labelSmall?.copyWith(
-                              letterSpacing: 1.1,
-                              fontWeight: FontWeight.w800,
-                              color: theme.colorScheme.onSurfaceVariant,
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          Wrap(
-                            spacing: 8,
-                            runSpacing: 8,
-                            children: [
-                              for (final (m, icon, label) in _switchableModes)
-                                _modeChip(m, icon, label),
-                            ],
-                          ),
-
-                          // ── Route options: the departure board ────────
-                          // Google's ranking IS the structure: the default
-                          // route leads with a RECOMMENDED chip; alternates
-                          // follow. Tapping applies live — the sheet stays
-                          // open so options can be compared on the map.
-                          if (widget.mode != 'direct') ...[
-                            const SizedBox(height: 18),
-                            Text(
-                              'ROUTE OPTIONS',
-                              style: theme.textTheme.labelSmall?.copyWith(
-                                letterSpacing: 1.1,
-                                fontWeight: FontWeight.w800,
-                                color: theme.colorScheme.onSurfaceVariant,
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            if (_alternatives == null)
-                              Row(children: [
-                                const SizedBox(
-                                  width: 14,
-                                  height: 14,
-                                  child:
-                                      CircularProgressIndicator(strokeWidth: 2),
-                                ),
-                                const SizedBox(width: 8),
-                                Text('Finding routes…',
-                                    style: theme.textTheme.bodySmall?.copyWith(
-                                        color: theme
-                                            .colorScheme.onSurfaceVariant)),
-                              ])
-                            else if (_alternatives!.length <= 1)
-                              Text(
-                                _alternatives!.isEmpty
-                                    ? 'No route options here.'
-                                    : 'Only one route here.',
-                                style: theme.textTheme.bodySmall?.copyWith(
-                                    color: theme.colorScheme.onSurfaceVariant),
-                              )
-                            else
-                              for (var i = 0; i < _alternatives!.length; i++)
-                                _optionRow(i, _alternatives![i]),
-                          ],
-                        ],
-
-                        const SizedBox(height: 20),
-                        // Frame this leg on the map (real legs only — previews
-                        // have no leg identity to zoom to).
-                        if (widget.legIndex >= 0) ...[
-                          SizedBox(
-                            width: double.infinity,
-                            child: OutlinedButton.icon(
-                              onPressed: () {
-                                Navigator.of(context).pop();
-                                ref
-                                    .read(mapZoomToLegRequestProvider.notifier)
-                                    .state = MapZoomToLegRequest(widget.legIndex);
-                              },
-                              icon: const Icon(
-                                  Icons.center_focus_strong_rounded,
-                                  size: 20),
-                              label: const Text('Show on map'),
-                              style: OutlinedButton.styleFrom(
-                                padding:
-                                    const EdgeInsets.symmetric(vertical: 14),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(28),
-                                ),
-                                textStyle: const TextStyle(
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 10),
-                        ],
-                        SizedBox(
-                          width: double.infinity,
-                          child: FilledButton.icon(
-                            onPressed: () {
-                              Navigator.of(context).pop();
-                              openDirectionsInGoogleMaps(
-                                origin: widget.origin,
-                                destination: widget.destination,
-                                mode: mode,
-                              );
-                            },
-                            icon: const Icon(Icons.map_rounded, size: 20),
-                            label: const Text('Open in Google Maps'),
-                            style: FilledButton.styleFrom(
-                              padding: const EdgeInsets.symmetric(vertical: 16),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(28),
-                              ),
-                              textStyle: const TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                          ),
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      onPressed: () {
+                        Navigator.of(context).pop();
+                        openDirectionsInGoogleMaps(
+                          origin: widget.origin,
+                          destination: widget.destination,
+                          mode: mode,
+                        );
+                      },
+                      icon: const Icon(Icons.map_rounded, size: 20),
+                      label: const Text('Open in Google Maps'),
+                      style: FilledButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(28),
                         ),
-
-                        // ── Compliance footnotes ──────────────────────────────
-                        // Beta-mode warning is a Google Maps Platform display
-                        // REQUIREMENT for walk / two-wheeler results; the
-                        // attribution line covers the derived route facts shown
-                        // in this sheet.
-                        if (mode == 'walk' || mode == 'two_wheeler') ...[
-                          const SizedBox(height: 12),
-                          Text(
-                            mode == 'walk'
-                                ? 'Walking routes are in beta and might sometimes be '
-                                    'missing clear sidewalks or pedestrian paths.'
-                                : 'Two-wheeled routes are in beta and might sometimes '
-                                    'be missing suitable paths.',
-                            style: theme.textTheme.bodySmall?.copyWith(
-                                color: theme.colorScheme.onSurfaceVariant
-                                    .withValues(alpha: 0.8)),
-                          ),
-                        ],
-                        const SizedBox(height: 8),
-                        Text(
-                          'Route data: Google Maps',
-                          style: theme.textTheme.bodySmall?.copyWith(
-                              color: theme.colorScheme.onSurfaceVariant
-                                  .withValues(alpha: 0.6)),
+                        textStyle: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
                         ),
-                      ],
+                      ),
                     ),
                   ),
-                ),
+
+                  // ── Compliance footnotes ──────────────────────────────
+                  // Beta-mode warning is a Google Maps Platform display
+                  // REQUIREMENT for walk / two-wheeler results; the
+                  // attribution line covers the derived route facts shown
+                  // in this sheet.
+                  if (mode == 'walk' || mode == 'two_wheeler') ...[
+                    const SizedBox(height: 12),
+                    Text(
+                      mode == 'walk'
+                          ? 'Walking routes are in beta and might sometimes be '
+                              'missing clear sidewalks or pedestrian paths.'
+                          : 'Two-wheeled routes are in beta and might sometimes '
+                              'be missing suitable paths.',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant
+                              .withValues(alpha: 0.8)),
+                    ),
+                  ],
+                  const SizedBox(height: 8),
+                  Text(
+                    'Route data: Google Maps',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant
+                            .withValues(alpha: 0.6)),
+                  ),
+                ],
               ),
-            ],
+            ),
           ),
         ),
       ),
@@ -528,7 +534,9 @@ class _RouteLegSheetState extends ConsumerState<_RouteLegSheet> {
 
     final rideCount = runs?.where((r) => r['mode'] == 'TRANSIT').length ?? -1;
     if (runs == null || runs.isEmpty || rideCount != rides.length) {
-      // Fallback: rides only, still vertically stacked with arrows.
+      // Fallback: rides only, still vertically stacked with arrows. No run
+      // identities here (legacy legs routed before step data existed), so
+      // these rows can't select themselves on the map.
       final out = <Widget>[];
       for (var i = 0; i < rides.length; i++) {
         if (i > 0) out.add(arrow());
@@ -539,35 +547,71 @@ class _RouteLegSheetState extends ConsumerState<_RouteLegSheet> {
 
     final out = <Widget>[];
     var rideIdx = 0;
-    for (final run in runs) {
+    for (var j = 0; j < runs.length; j++) {
+      final run = runs[j];
       final isRide = run['mode'] == 'TRANSIT';
       final secs = ((run['durationSeconds'] as num?) ?? 0).toInt();
       if (!isRide && secs < 20) continue; // curb-length shuffles
       if (out.isNotEmpty) out.add(arrow());
       if (isRide) {
-        out.add(_transitSegment(rides[rideIdx++]));
+        out.add(_tappableRun(j, _transitSegment(rides[rideIdx])));
+        rideIdx++;
       } else {
-        out.add(_walkSegment(secs));
+        // Where this walk is TAKING you: the next ride's board stop, or the
+        // leg's destination after the last ride.
+        final String? toName = rideIdx < rides.length
+            ? rides[rideIdx]['boardStop'] as String?
+            : widget.destination.name;
+        out.add(_tappableRun(j, _walkSegment(secs, to: toName)));
       }
     }
     return out;
   }
 
-  Widget _walkSegment(int seconds) {
+  /// Wraps a journey row so tapping it selects that exact run on the map:
+  /// closes the sheet, highlights the run's polyline, zooms to it, and
+  /// surfaces its own chip (all driven by the tapped-polyline id).
+  Widget _tappableRun(int runIndex, Widget child) {
+    if (widget.legIndex < 0) return child;
+    return InkWell(
+      borderRadius: BorderRadius.circular(14),
+      onTap: () {
+        Navigator.of(context).pop();
+        ref
+            .read(mapUIStateProvider.notifier)
+            .setTappedPolyline('leg_${widget.legIndex}_s$runIndex');
+      },
+      child: child,
+    );
+  }
+
+  Widget _walkSegment(int seconds, {String? to}) {
     final theme = Theme.of(context);
     final mins = (seconds / 60).round().clamp(1, 999);
-    return Row(children: [
-      Icon(Icons.directions_walk_rounded,
-          size: 18, color: theme.colorScheme.onSurfaceVariant),
-      const SizedBox(width: 8),
-      Text(
-        'Walk · $mins min',
-        style: theme.textTheme.bodyMedium?.copyWith(
-          fontWeight: FontWeight.w600,
-          color: theme.colorScheme.onSurfaceVariant,
+    final hasTo = to != null && to.trim().isNotEmpty;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(children: [
+        Icon(Icons.directions_walk_rounded,
+            size: 18, color: theme.colorScheme.onSurfaceVariant),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            hasTo ? 'Walk to $to · $mins min' : 'Walk · $mins min',
+            style: theme.textTheme.bodyMedium?.copyWith(
+              fontWeight: FontWeight.w600,
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
         ),
-      ),
-    ]);
+        if (widget.legIndex >= 0)
+          Icon(Icons.chevron_right_rounded,
+              size: 18,
+              color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.5)),
+      ]),
+    );
   }
 
   /// Minutes the recommended [option] saves over the APPLIED route; 0 when
@@ -853,7 +897,15 @@ class _RouteLegSheetState extends ConsumerState<_RouteLegSheet> {
                 if (lineShort.isNotEmpty) const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    headsign.isEmpty ? 'Ride' : 'to $headsign',
+                    // Some agencies' headsigns are full sentences already
+                    // ("From Kwasa Damansara to Kajang") — prefixing "to"
+                    // there produced "to From … to …".
+                    headsign.isEmpty
+                        ? 'Ride'
+                        : (headsign.toLowerCase().startsWith('from ') ||
+                                headsign.toLowerCase().startsWith('to ')
+                            ? headsign
+                            : 'to $headsign'),
                     style: theme.textTheme.bodyMedium
                         ?.copyWith(fontWeight: FontWeight.w600),
                     maxLines: 1,

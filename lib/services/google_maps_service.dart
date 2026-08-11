@@ -351,9 +351,14 @@ class GoogleMapsService {
       }
       final stepSeconds = _parseDuration(step['staticDuration']).inSeconds;
       final mode = isRide ? 'TRANSIT' : 'WALK';
-      if (runs.isNotEmpty &&
-          runs.last['mode'] == mode &&
-          runs.last['lineColor'] == color) {
+      // Merge consecutive WALK steps only. TRANSIT runs must stay 1:1 with
+      // the ride cards from [_extractTransitSegments]: two back-to-back
+      // rides on same-colored lines (641 → 600, both Rapid KL blue, same
+      // platform so no walk step between) used to merge here, which broke
+      // the run↔ride pairing everywhere it's assumed — the leg sheet fell
+      // back to rides-only (walk rows vanished) and per-run chips would
+      // have shown the wrong stops.
+      if (!isRide && runs.isNotEmpty && runs.last['mode'] == 'WALK') {
         (runs.last['points'] as List<LatLng>).addAll(points);
         runs.last['durationSeconds'] =
             (runs.last['durationSeconds'] as int) + stepSeconds;

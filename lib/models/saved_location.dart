@@ -273,7 +273,17 @@ class SavedLocation extends HiveObject {
       lastSyncedAt: json['last_synced_at'] != null
           ? DateTime.parse(json['last_synced_at'])
           : null,
-      isSynced: json['is_synced'] ?? true, // Assume synced if from remote
+      // A row read from the server IS synced, by definition — this factory
+      // is only ever fed Supabase JSON (fetch, realtime payload, login
+      // merge). The `is_synced` COLUMN is a device-local dirty flag that
+      // toJson unfortunately ships along, so it's almost always `false` on
+      // the server (writes push the pre-sync snapshot). Trusting it made
+      // every fetched row arrive "dirty", which then (a) made
+      // fetchRemoteLocations skip it as a "pending local edit" — so remote
+      // changes never landed — and (b) made syncUnsyncedLocations re-upload
+      // the stale local copy, stomping a collaborator's edits back to their
+      // old values. Ignore the column; it stays only for schema compat.
+      isSynced: true,
       source: json['source'] ?? 'synced',
       fingerprint: json['fingerprint'] ?? '',
       isSkipped: json['is_skipped'] ?? false,

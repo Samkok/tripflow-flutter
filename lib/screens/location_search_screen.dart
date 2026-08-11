@@ -134,7 +134,9 @@ class _LocationSearchScreenState extends ConsumerState<LocationSearchScreen> {
       if (value.isEmpty) {
         ref.read(paginatedSearchProvider.notifier).clear();
       } else {
-        final activeTrip = ref.read(localActiveTripProvider).asData?.value;
+        // valueOrNull: keeps the trip's country bias through provider
+        // reloads (asData is null for a loading-with-previous-value tick).
+        final activeTrip = ref.read(localActiveTripProvider).valueOrNull;
         ref.read(paginatedSearchProvider.notifier).search(
               value,
               countryCodeOverride: activeTrip?.countryCode,

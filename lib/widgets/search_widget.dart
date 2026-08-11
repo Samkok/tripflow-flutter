@@ -67,7 +67,8 @@ class _SearchWidgetState extends ConsumerState<SearchWidget> {
       } else {
         // If a trip is active and tagged with a country, bias the search
         // toward that country instead of the device's current country.
-        final activeTrip = ref.read(localActiveTripProvider).asData?.value;
+        // valueOrNull: survives provider reload ticks (asData is null then).
+        final activeTrip = ref.read(localActiveTripProvider).valueOrNull;
         ref.read(paginatedSearchProvider.notifier).search(
               value,
               countryCodeOverride: activeTrip?.countryCode,

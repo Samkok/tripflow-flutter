@@ -536,10 +536,18 @@ class MultiModalRouter {
                   await fetch('drive') ??
                   walk);
         }
-      } else if (isCity) {
+      } else if (isCity || (profile == 'auto' && d <= maxWalkMeters)) {
         // City ladder — judged on the walk's REAL route distance, not the
         // straight line (which undersells city walks by ~25% and let a
         // "1.2 km · 17 min" walk sneak under a 1.2 km crow-flight gate).
+        //
+        // AUTO also enters here on a NON-city day (one long hop makes
+        // [isCity] false for the whole day) whenever this particular leg is
+        // still inside the user's max-walk tolerance: "auto" means decide
+        // per leg, so a 1.2 km hop must not be driven just because another
+        // leg of the day is 40 km away. The crow-flight pre-check is what
+        // keeps it cheap — routed distance ≥ straight line, so a leg already
+        // beyond the tolerance can never qualify and never costs a probe.
         final walkLeg =
             (chainMode == 'walk' ? base : null) ?? await fetch('walk');
         final walkIsShort = walkLeg != null &&
@@ -563,10 +571,9 @@ class MultiModalRouter {
             leg ??= await fetch('drive');
           }
         } else {
-          // AUTO in a walkable city: short hops walk; past the ~1 km
-          // comfort cap (owner rule) prefer a RIDE — transit first, car
-          // when there's none. The long walk survives only as the very
-          // last resort.
+          // AUTO: a hop within the user's max-walk tolerance walks; past it
+          // prefer a RIDE — transit first, car when there's none. The long
+          // walk survives only as the very last resort.
           if (walkIsShort) {
             leg = walkLeg;
           } else {

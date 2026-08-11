@@ -241,8 +241,17 @@ class TripNotifier extends StateNotifier<TripState> {
     _ref.listen<AsyncValue<Trip?>>(
       realtimeActiveTripProvider,
       (prev, next) {
-        final prevTrip = prev?.asData?.value;
-        final nextTrip = next.asData?.value;
+        // valueOrNull, NOT asData: whenever this provider RELOADS (the manual
+        // refresh invalidating userTripsProvider, an add/remove-day, a
+        // collaborator change) its state is AsyncLoading with the previous
+        // trip retained — and `asData` is null for AsyncLoading. Reading it
+        // that way made every reload look like "trip deactivated", which
+        // wiped pinnedLocations and the computed route: pins vanished, the
+        // map flew to the device location because the day was suddenly
+        // empty, then flew back when the trip resolved. That triple flash is
+        // what the refresh button looked like from the outside.
+        final prevTrip = prev?.valueOrNull;
+        final nextTrip = next.valueOrNull;
 
         final prevId = prevTrip?.id;
         final nextId = nextTrip?.id;
@@ -366,10 +375,12 @@ class TripNotifier extends StateNotifier<TripState> {
     // So we don't update state here - it will be updated by _initSyncListener
 
     try {
-      // Get the REALTIME active trip to associate this location with it
-      // This ensures we use the most up-to-date trip state
+      // Get the REALTIME active trip to associate this location with it.
+      // valueOrNull, not asData: during a provider reload (refresh, day
+      // edit) asData is null while the trip is retained — adding a place in
+      // that window would have silently saved it OUTSIDE the trip.
       final activeTripAsync = _ref.read(realtimeActiveTripProvider);
-      final activeTrip = activeTripAsync.asData?.value;
+      final activeTrip = activeTripAsync.valueOrNull;
 
       final savedLoc = SavedLocation(
         id: locationWithDate.id,
@@ -1588,8 +1599,9 @@ class TripNotifier extends StateNotifier<TripState> {
       }
       final routeResult = await MultiModalRouter.routeItinerary(
         origin: startPoint,
-        originId:
-            effectiveStartLocationId.isEmpty ? 'start' : effectiveStartLocationId,
+        originId: effectiveStartLocationId.isEmpty
+            ? 'start'
+            : effectiveStartLocationId,
         orderedStops: finalOrderedWaypoints,
         profile: travelProfile,
         departureAnchor: _ref.read(effectiveTripStartTimeProvider),

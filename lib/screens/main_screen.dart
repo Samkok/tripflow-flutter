@@ -5,7 +5,6 @@ import 'package:voyza/core/theme.dart';
 import 'package:voyza/providers/auth_provider.dart';
 import 'package:voyza/providers/location_provider.dart';
 import 'package:voyza/providers/onboarding_provider.dart';
-import 'package:voyza/providers/local_active_trip_provider.dart';
 import 'dart:ui';
 import 'package:voyza/screens/trip_screen.dart';
 import 'package:voyza/screens/map_screen.dart';
@@ -23,32 +22,20 @@ class MainScreen extends ConsumerStatefulWidget {
 }
 
 class _MainScreenState extends ConsumerState<MainScreen> {
+  // Everyone lands on HOME (the trips page) — owner call, Aug 2026. The old
+  // map-first branches (guests always; anyone with an active trip) predate
+  // guests being able to create trips, and opening on the map buried the
+  // trip cards that are the app's front door.
   int _selectedIndex = 0;
 
   @override
   void initState() {
     super.initState();
-    // Anonymous users land on the MAP tab: they can't create trips, so the
-    // Trips tab is a dead end for them — the map (search → add places) is
-    // where their journey starts. Authenticated users keep Trips first.
-    if (ref.read(currentUserIdProvider) == null) {
-      _selectedIndex = 1;
-    }
     // Perform initial data fetch once at startup (not in build, to avoid
     // re-running on every auth-token refresh / connectivity change).
     // After sync completes, set initialSyncCompleteProvider so the map screen
     // can hide its loading overlay once marker bitmaps are also ready.
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      // An ACTIVE trip means the user is mid-trip — open straight onto the
-      // map where that trip lives, whatever their auth state. (Post-frame:
-      // the active-trip id loads from SharedPrefsCache, which is guaranteed
-      // ready by now — see the first-frame cache race note in memory.)
-      if (ref.read(localActiveTripIdProvider) != null &&
-          _selectedIndex != 1 &&
-          mounted) {
-        setState(() => _selectedIndex = 1);
-      }
-
       // Publish the initial tab so offstage IndexedStack children (MapScreen)
       // know whether they're actually visible. Post-frame: providers must
       // not be mutated during build/init.
@@ -78,8 +65,8 @@ class _MainScreenState extends ConsumerState<MainScreen> {
         await maybeShowOnboarding(context, ref);
       }
       // Onboarding resolved (shown, skipped, or not needed) — let the map
-      // tutorial re-evaluate. The anonymous flow is already ON the map tab,
-      // so no tab event would otherwise fire.
+      // tutorial re-evaluate in case the user is already on the map tab
+      // (e.g. switched there while onboarding was up).
       if (mounted) {
         ref.read(mapTutorialRecheckProvider.notifier).state++;
       }

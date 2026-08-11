@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:flutter/material.dart';
@@ -209,7 +211,9 @@ final finalMarkersProvider = Provider<Set<Marker>>((ref) {
         }
       }
 
-      // Add location markers
+      // Add location markers — explicitly ABOVE the leg-endpoint collars
+      // (zIndexInt 1): a collar landing near a pin must never cover its
+      // index number.
       for (final location in locationsForDate) {
         if (markerIcons.containsKey(location.id)) {
           final result = markerIcons[location.id]!;
@@ -218,6 +222,7 @@ final finalMarkersProvider = Provider<Set<Marker>>((ref) {
             position: location.coordinates,
             icon: result.bitmap,
             anchor: result.anchor,
+            zIndexInt: 2,
             infoWindow: showPlaceNames
                 ? InfoWindow(title: location.name, snippet: location.address)
                 : InfoWindow.noText,
@@ -373,9 +378,14 @@ final styledPolylinesProvider = Provider<Set<Polyline>>((ref) {
       // ── Transit legs with step geometry: Google's grammar, properly ──
       // A transit leg is walk → ride → walk. Drawing it as ONE solid line
       // in the ride's color made the vaporetto appear to depart from the
-      // user's feet. Each run gets its own polyline: dotted neutral walking
-      // approach, solid line-colored ride. All runs share the parent leg's
-      // tap identity + highlight state.
+      // user's feet. Each run gets its own polyline AND its own tap
+      // identity ('leg_i_sj'): tapping a run highlights JUST that run and
+      // surfaces a chip describing it (walk to the station / the ride
+      // between its two stops) — routeInfoMarkersProvider decodes the id.
+      // Walk CONNECTORS are deliberately quieter than a standalone walking
+      // leg (thinner, tighter dots, translucent): they're an approach to
+      // the ride, not a route of their own, and styling them identically
+      // made a "walk to the station" read as a full A→B walking route.
       final transitSteps = mode == 'transit' && i < legDetailsState.length
           ? (legDetailsState[i]['transitSteps'] as List?)
           : null;
@@ -384,20 +394,24 @@ final styledPolylinesProvider = Provider<Set<Polyline>>((ref) {
           final run = transitSteps[j] as Map;
           final runPoints = (run['points'] as List).cast<LatLng>();
           if (runPoints.isEmpty) continue;
+          final runId = '${polylineId}_s$j';
+          final isRunSelected = tappedPolylineId == runId;
+          // Leg-level selection (chip "Show on map") still lights the whole
+          // journey; a run tap lights only that run.
+          final emphasized = isRunSelected || isHighlighted;
           final isRide = run['mode'] == 'TRANSIT';
           final runColor = isRide
               ? (_parseLineColor(run['lineColor'] as String?) ??
                   transitColor ??
                   AppTheme.primaryColor)
-              : const Color(0xFFB9C1CC);
+              : Colors.white.withValues(alpha: emphasized ? 0.95 : 0.55);
           if (isRide) {
             polylines.add(
               Polyline(
-                polylineId: PolylineId('${polylineId}_s${j}_shadow'),
+                polylineId: PolylineId('${runId}_shadow'),
                 points: runPoints,
-                color:
-                    Colors.black.withValues(alpha: isHighlighted ? 0.2 : 0.12),
-                width: isHighlighted ? 10 : 9,
+                color: Colors.black.withValues(alpha: emphasized ? 0.2 : 0.12),
+                width: emphasized ? 10 : 9,
                 consumeTapEvents: false,
                 startCap: Cap.roundCap,
                 endCap: Cap.roundCap,
@@ -409,28 +423,47 @@ final styledPolylinesProvider = Provider<Set<Polyline>>((ref) {
           }
           polylines.add(
             Polyline(
-              polylineId: PolylineId('${polylineId}_s$j'),
+              polylineId: PolylineId(runId),
               points: runPoints,
               color: runColor,
-              width: isRide ? (isHighlighted ? 8 : 7) : (isHighlighted ? 6 : 5),
+              width: isRide
+                  ? (isRunSelected ? 9 : (isHighlighted ? 8 : 7))
+                  : (emphasized ? 6 : 4),
               // dash, not dot — see the pattern comment above (iOS renders
-              // dots as zero-length spans = invisible).
+              // dots as zero-length spans = invisible). Connector dots are
+              // tighter/shorter than walking-leg dots on purpose.
               patterns: isRide
                   ? const <PatternItem>[]
-                  : <PatternItem>[PatternItem.dash(8), PatternItem.gap(11)],
+                  : <PatternItem>[PatternItem.dash(4), PatternItem.gap(9)],
               consumeTapEvents: true,
               onTap: () {
-                ref
-                    .read(mapUIStateProvider.notifier)
-                    .setTappedPolyline(polylineId);
+                ref.read(mapUIStateProvider.notifier).setTappedPolyline(runId);
               },
               startCap: Cap.roundCap,
               endCap: Cap.roundCap,
               jointType: JointType.round,
               geodesic: true,
-              zIndex: isRide ? (isHighlighted ? 10 : 6) : 5,
+              zIndex: isRunSelected ? 12 : (isRide ? (emphasized ? 10 : 6) : 5),
             ),
           );
+          // Selected ride gets the same white inner border the whole-leg
+          // selection uses — "this exact segment" reads instantly.
+          if (isRunSelected && isRide) {
+            polylines.add(
+              Polyline(
+                polylineId: PolylineId('${runId}_border'),
+                points: runPoints,
+                color: Colors.white.withValues(alpha: 0.4),
+                width: 3,
+                consumeTapEvents: false,
+                startCap: Cap.roundCap,
+                endCap: Cap.roundCap,
+                jointType: JointType.round,
+                geodesic: true,
+                zIndex: 13,
+              ),
+            );
+          }
         }
         continue;
       }
@@ -569,8 +602,14 @@ final routeInfoMarkersProvider = FutureProvider<Set<Marker>>((ref) async {
       .watch(tripProvider.select((s) => s.optimizedLocationsForSelectedDate));
   final startLocationIdState =
       ref.watch(tripProvider.select((s) => s.startLocationId));
-  final legIndex =
-      int.tryParse(tappedPolylineId.replaceFirst('leg_', '')) ?? -1;
+  // 'leg_3' selects the whole leg; 'leg_3_s1' selects one RUN of a transit
+  // leg (a walk connector or a ride) — the chip then describes just that
+  // run instead of the whole journey.
+  final idMatch =
+      RegExp(r'^leg_(\d+)(?:_s(\d+))?$').firstMatch(tappedPolylineId);
+  final legIndex = idMatch == null ? -1 : int.parse(idMatch.group(1)!);
+  final int? runIndex =
+      idMatch?.group(2) == null ? null : int.parse(idMatch!.group(2)!);
 
   // Ensure the leg index is valid.
   if (legIndex < 0 ||
@@ -596,31 +635,13 @@ final routeInfoMarkersProvider = FutureProvider<Set<Marker>>((ref) async {
   final String? durationLabel =
       legDuration == null ? null : formatLegDuration(legDuration);
 
-  final markerCache = MarkerCacheService();
-  // ONE compact chip on the polyline: [mode glyph] 4.4 km · 12 min (>) —
-  // walk/boat/bus/train glyph per leg, plus the transit line's colored
-  // badge (Google's "[2]") when the leg rides one. Bitmap cached per
-  // (mode, badge, labels), so a given chip rasterizes once.
-  final legMode = legData['mode'] as String? ?? 'drive';
-  final transitSegs = legData['transit'] as List?;
-  final firstSeg = (transitSegs != null && transitSegs.isNotEmpty)
-      ? transitSegs.first as Map
-      : null;
-  final chipResult = await markerCache.getRouteLegChipMarker(
-    distanceLabel: distanceLabel,
-    durationLabel: durationLabel,
-    mode: legMode,
-    vehicleType: firstSeg?['vehicleType'] as String?,
-    badgeText: firstSeg?['lineShort'] as String?,
-    badgeColor: _parseLineColor(firstSeg?['lineColor'] as String?),
-  );
-
   final start = legPoints.first;
   final end = legPoints.last;
 
-  // Resolve the leg's start/end LocationModels so the external-app handoff
-  // can use place_id + originalName instead of bare coordinates. Index
-  // mapping mirrors _performRouteOptimization in trip_provider.dart:
+  // Resolve the leg's start/end LocationModels — the chip prints their names
+  // ("A → B") and the external-app handoff uses place_id + originalName
+  // instead of bare coordinates. Index mapping mirrors
+  // _performRouteOptimization in trip_provider.dart:
   //   - When startLocationId == 'current_location', `optimizedLocationsForSelectedDate`
   //     contains only the waypoints (no start), so leg i goes from
   //     [i-1] → [i], and leg 0's "from" is the device's current position
@@ -649,12 +670,109 @@ final routeInfoMarkersProvider = FutureProvider<Set<Marker>>((ref) async {
       ? ordered[toIdx]
       : resolveById(legData['toId'] as String?, _coordOnlyLocation(end));
 
-  // anchor=(0.5, 0.5) → the chip straddles the leg midpoint, so the route
-  // line reads through on both sides of it.
+  final markerCache = MarkerCacheService();
+  // ONE compact chip on the polyline: [mode glyph] 4.4 km · 12 min (>) with
+  // "From → To" beneath — walk/boat/bus/train glyph per leg, plus the
+  // transit line's colored badge (Google's "[2]") when the leg rides one.
+  // Bitmap cached per (mode, badge, labels, endpoints), so a given chip
+  // rasterizes once. A nameless endpoint (leg 0 from the device position)
+  // prints as "Your location".
+  final legMode = legData['mode'] as String? ?? 'drive';
+  final transitSegs = legData['transit'] as List?;
+  final firstSeg = (transitSegs != null && transitSegs.isNotEmpty)
+      ? transitSegs.first as Map
+      : null;
+
+  // Defaults describe the WHOLE leg; a run tap swaps in that run's story.
+  var chipPosition = midpoint;
+  var chipMode = legMode;
+  String? chipVehicleType = firstSeg?['vehicleType'] as String?;
+  String? chipBadgeText = firstSeg?['lineShort'] as String?;
+  Color? chipBadgeColor = _parseLineColor(firstSeg?['lineColor'] as String?);
+  var chipDistanceLabel = distanceLabel;
+  String? chipDurationLabel = durationLabel;
+  var chipFromName = fromLoc.name.isEmpty ? 'Your location' : fromLoc.name;
+  var chipToName = toLoc.name.isEmpty ? 'Your location' : toLoc.name;
+
+  // ── Per-run chip: "walk to the station" / "the ride between two stops".
+  // Stop names come from the ride cards (boardStop/alightStop). A walk
+  // connector borrows its far end from the neighbouring ride, so the text
+  // literally says where the walk is taking you — e.g.
+  // "Pavilion KL → Raja Chulan" for the approach walk, then
+  // "Raja Chulan → Batu Caves" for the ride itself.
+  final transitRuns = legData['transitSteps'] as List?;
+  if (runIndex != null &&
+      transitRuns != null &&
+      runIndex >= 0 &&
+      runIndex < transitRuns.length) {
+    final run = transitRuns[runIndex] as Map;
+    final runPoints = (run['points'] as List).cast<LatLng>();
+    if (runPoints.isNotEmpty) {
+      chipPosition = runPoints[runPoints.length ~/ 2];
+      final isRide = run['mode'] == 'TRANSIT';
+      chipMode = isRide ? 'transit' : 'walk';
+      chipVehicleType = isRide ? run['vehicleType'] as String? : null;
+      chipBadgeText = isRide ? run['lineShort'] as String? : null;
+      chipBadgeColor =
+          isRide ? _parseLineColor(run['lineColor'] as String?) : null;
+      // Per-run distance isn't in the API payload — derive it from the
+      // run's own geometry.
+      final meters = _polylineMeters(runPoints);
+      chipDistanceLabel = meters >= 1000
+          ? '${(meters / 1000).toStringAsFixed(1)} km'
+          : '${meters.round()} m';
+      final secs = (run['durationSeconds'] as num?)?.toInt();
+      chipDurationLabel =
+          secs == null ? null : formatLegDuration(Duration(seconds: secs));
+
+      // Ride ordinal = how many TRANSIT runs precede this one — pairs a run
+      // with its ride card, which carries the stop names.
+      String? boardOf(int k) =>
+          (transitSegs != null && k >= 0 && k < transitSegs.length)
+              ? (transitSegs[k] as Map)['boardStop'] as String?
+              : null;
+      String? alightOf(int k) =>
+          (transitSegs != null && k >= 0 && k < transitSegs.length)
+              ? (transitSegs[k] as Map)['alightStop'] as String?
+              : null;
+      var ridesBefore = 0;
+      for (var r = 0; r < runIndex; r++) {
+        if ((transitRuns[r] as Map)['mode'] == 'TRANSIT') ridesBefore++;
+      }
+      String nonEmpty(String? s, String fallback) =>
+          (s == null || s.isEmpty) ? fallback : s;
+      if (isRide) {
+        chipFromName = nonEmpty(boardOf(ridesBefore), chipFromName);
+        chipToName = nonEmpty(alightOf(ridesBefore), chipToName);
+      } else {
+        // Walk connector: from the previous ride's alight stop (or the leg
+        // origin when it's the first run) to the next ride's board stop (or
+        // the leg destination when it's the last).
+        chipFromName = nonEmpty(alightOf(ridesBefore - 1), chipFromName);
+        chipToName = nonEmpty(boardOf(ridesBefore), chipToName);
+      }
+    }
+  }
+
+  final chipResult = await markerCache.getRouteLegChipMarker(
+    distanceLabel: chipDistanceLabel,
+    durationLabel: chipDurationLabel,
+    mode: chipMode,
+    vehicleType: chipVehicleType,
+    badgeText: chipBadgeText,
+    badgeColor: chipBadgeColor,
+    fromName: chipFromName,
+    toName: chipToName,
+  );
+
+  // anchor=(0.5, 0.5) → the chip straddles the tapped geometry's midpoint
+  // (the leg's, or the tapped run's), so the line reads through on both
+  // sides of it. Tapping the chip always opens the FULL leg sheet — the
+  // run chip is a caption, the sheet is the journey.
   return {
     Marker(
         markerId: MarkerId('route_leg_chip_$legIndex'),
-        position: midpoint,
+        position: chipPosition,
         icon: chipResult.bitmap,
         anchor: chipResult.anchor,
         zIndex: 100,
@@ -707,6 +825,25 @@ LocationModel _coordOnlyLocation(LatLng coord) => LocationModel(
       coordinates: coord,
       addedAt: DateTime.now(),
     );
+
+/// Total ground length of a polyline in meters (haversine per segment) —
+/// per-run distances aren't in the API payload, so the run chip derives
+/// them from geometry.
+double _polylineMeters(List<LatLng> pts) {
+  const r = 6371000.0;
+  var total = 0.0;
+  for (var i = 1; i < pts.length; i++) {
+    final a = pts[i - 1], b = pts[i];
+    final dLat = (b.latitude - a.latitude) * math.pi / 180.0;
+    final dLng = (b.longitude - a.longitude) * math.pi / 180.0;
+    final la1 = a.latitude * math.pi / 180.0;
+    final la2 = b.latitude * math.pi / 180.0;
+    final h = math.sin(dLat / 2) * math.sin(dLat / 2) +
+        math.cos(la1) * math.cos(la2) * math.sin(dLng / 2) * math.sin(dLng / 2);
+    total += 2 * r * math.asin(math.min(1.0, math.sqrt(h)));
+  }
+  return total;
+}
 
 class AssembledMapOverlays {
   final Set<Marker> markers;

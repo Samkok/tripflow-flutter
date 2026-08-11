@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:hive_flutter/hive_flutter.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:voyza/main.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/saved_location.dart' show SavedLocation, OpeningPeriod;
@@ -24,6 +25,7 @@ class LocationRepository {
   static const String _boxName = 'locations';
   static const String _migrationKey = 'location_schema_v2_migrated';
   static const String _needsDataSyncKey = 'location_needs_data_sync';
+  static const String _syncFlagRepairKey = 'location_sync_flag_repair_v1';
   Box<SavedLocation>? _box; // Changed from late to nullable
   final SupabaseClient _supabase = SupabaseService.instance.client;
   RealtimeChannel? _subscription;
@@ -94,6 +96,44 @@ class LocationRepository {
       // Mark migration as done
       await prefs.setBool(_migrationKey, true);
     }
+
+    await _repairLegacySyncFlags(prefs);
+  }
+
+  /// ONE-TIME repair of the `isSynced` flag on already-cached rows.
+  ///
+  /// Until [SavedLocation.fromJson] stopped trusting the server's `is_synced`
+  /// column, EVERY row fetched from Supabase landed in Hive marked dirty (the
+  /// column is a device-local flag that writes push as `false`). Two things
+  /// then went wrong on every launch:
+  ///   • [fetchRemoteLocations] treats a dirty local row as an unsaved edit
+  ///     and skips the remote version — so changes made by a collaborator
+  ///     never reached this device through the fetch path, and
+  ///   • [syncUnsyncedLocations] re-uploaded those stale rows, overwriting
+  ///     the OTHER person's newer edits on the server (the "my move went
+  ///     back to day 1" bug in shared trips).
+  /// The reader fix stops new rows from arriving dirty; this clears the ones
+  /// already sitting in the box, so the first launch after the update doesn't
+  /// fire one last round of stale uploads. Rows that came from a real offline
+  /// edit are indistinguishable here and lose that edit — an acceptable
+  /// trade against re-stomping a shared trip, since the server copy is the
+  /// one every other device already agrees on.
+  Future<void> _repairLegacySyncFlags(SharedPreferences prefs) async {
+    if (prefs.getBool(_syncFlagRepairKey) ?? false) return;
+    final box = _box;
+    if (box == null || !box.isOpen) return;
+
+    final repaired = <String, SavedLocation>{
+      for (final loc in box.values)
+        if (!loc.isSynced && loc.source == 'synced')
+          loc.id: loc.copyWith(isSynced: true),
+    };
+    if (repaired.isNotEmpty) {
+      await box.putAll(repaired);
+      debugPrint(
+          'LocationRepository: repaired ${repaired.length} stale isSynced flags');
+    }
+    await prefs.setBool(_syncFlagRepairKey, true);
   }
 
   /// Adds a location. Handles anonymous vs authenticated logic.
@@ -380,9 +420,12 @@ class LocationRepository {
     final user = _supabase.auth.currentUser;
     if (user == null) return;
 
+    // NOT filtered by userId: in a shared trip a collaborator edits rows the
+    // OWNER created, so scoping the retry to own-rows meant a collaborator's
+    // failed edit (offline, token refresh) was dropped forever. RLS is the
+    // real gate — a push the server won't accept simply fails again.
     final unsynced = _box!.values
-        .where((loc) =>
-            !loc.isSynced && loc.source == 'synced' && loc.userId == user.id)
+        .where((loc) => !loc.isSynced && loc.source == 'synced')
         .toList();
 
     if (unsynced.isEmpty) return;

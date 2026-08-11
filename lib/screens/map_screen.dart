@@ -1383,14 +1383,17 @@ class _MapScreenState extends ConsumerState<MapScreen>
   }
 
   Widget _buildMapScreenContent(BuildContext context) {
-    // Listen to polyline taps to animate the camera to fit the route segment.
+    // Listen to polyline taps to animate the camera to fit the route
+    // segment — 'leg_3' fits the whole leg, 'leg_3_s1' fits just that run
+    // of a transit leg (the walk connector or ride the user tapped).
     ref.listen<String?>(tappedPolylineIdProvider, (previous, next) {
-      if (next != null) {
-        final legIndex = int.tryParse(next.replaceFirst('leg_', '')) ?? -1;
-        if (legIndex != -1) {
-          _zoomToFitLeg(legIndex);
-        }
-      }
+      if (next == null) return;
+      final m = RegExp(r'^leg_(\d+)(?:_s(\d+))?$').firstMatch(next);
+      if (m == null) return;
+      _zoomToFitLeg(
+        int.parse(m.group(1)!),
+        runIndex: m.group(2) == null ? null : int.parse(m.group(2)!),
+      );
     });
 
     // PERFORMANCE: Only listen to optimizedRoute changes, not entire TripState
@@ -1829,6 +1832,12 @@ class _MapScreenState extends ConsumerState<MapScreen>
                 final activeTripAsync = ref.watch(realtimeActiveTripProvider);
 
                 return activeTripAsync.when(
+                  // A reload (manual refresh, day added, collaborator edit)
+                  // re-resolves the SAME trip through an AsyncLoading tick.
+                  // Without this the banner dropped out for those frames and
+                  // the search bar jumped up and back — the refresh button's
+                  // "page reloaded" flash. Keep drawing the previous trip.
+                  skipLoadingOnReload: true,
                   data: (activeTrip) {
                     if (activeTrip == null) return child!;
 
@@ -3063,13 +3072,23 @@ class _MapScreenState extends ConsumerState<MapScreen>
     }
   }
 
-  void _zoomToFitLeg(int legIndex) {
+  void _zoomToFitLeg(int legIndex, {int? runIndex}) {
     if (_mapController == null) return;
 
     final tripState = ref.read(tripProvider);
     if (legIndex < 0 || legIndex >= tripState.legPolylines.length) return;
 
-    final legPoints = tripState.legPolylines[legIndex];
+    // A tapped RUN of a transit leg frames its own geometry; anything
+    // missing falls back to the whole leg.
+    List<LatLng> legPoints = tripState.legPolylines[legIndex];
+    if (runIndex != null && legIndex < tripState.legDetails.length) {
+      final runs = tripState.legDetails[legIndex]['transitSteps'] as List?;
+      if (runs != null && runIndex >= 0 && runIndex < runs.length) {
+        final runPoints =
+            ((runs[runIndex] as Map)['points'] as List).cast<LatLng>();
+        if (runPoints.length >= 2) legPoints = runPoints;
+      }
+    }
     if (legPoints.length < 2) return;
 
     // Calculate the bounds of the polyline

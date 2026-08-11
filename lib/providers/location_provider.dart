@@ -59,8 +59,16 @@ final tripCardStatsProvider = Provider<Map<String, TripCardStats>>((ref) {
 /// map blink.  currentUserIdProvider only changes on login / logout.
 final filteredLocationsForMapProvider =
     StreamProvider<List<SavedLocation>>((ref) async* {
-  // Watch the realtime active trip - will trigger provider rebuild when trip changes
-  final activeTripAsync = ref.watch(realtimeActiveTripProvider);
+  // Watch ONLY the resolved trip id — never the AsyncValue itself. Every
+  // reload of realtimeActiveTripProvider (manual refresh, add/remove-day,
+  // any userTripsProvider invalidation) ticks loading→data with the SAME
+  // trip retained; watching the AsyncValue restarted this whole stream per
+  // tick — fresh initial Hive emission → pinnedLocations churn → marker and
+  // list rebuilds, the "map reloads three times" refresh flash. The id only
+  // changes on a real activate / switch / deactivate, which is exactly when
+  // a restart is wanted.
+  final activeTripId =
+      ref.watch(realtimeActiveTripProvider.select((a) => a.valueOrNull?.id));
 
   // Watch stable user-ID provider instead of authStateProvider.
   // currentUserIdProvider is a Provider<String?> whose value is stable across
@@ -77,21 +85,15 @@ final filteredLocationsForMapProvider =
       'filteredLocationsForMapProvider: Starting to listen for location changes');
 
   await for (final locations in locationsStream) {
-    // valueOrNull, not asData: during a realtimeActiveTripProvider reload
-    // (every add/remove-day invalidation) asData is null even though the
-    // previous trip is retained — which made every trip pin vanish and
-    // pinnedLocations empty for the refetch window.
-    final activeTrip = activeTripAsync.valueOrNull;
-
     // Authenticated when user ID is non-null
     final isAuthenticated = currentUserId != null;
 
-    if (activeTrip != null) {
+    if (activeTripId != null) {
       // Trip is active: filter to only locations in this trip
       final filtered =
-          locations.where((loc) => loc.tripId == activeTrip.id).toList();
+          locations.where((loc) => loc.tripId == activeTripId).toList();
       debugPrint(
-          'filteredLocationsForMapProvider: ✅ Trip ${activeTrip.name} (${activeTrip.id}) active → emitting ${filtered.length}/${locations.length} locations');
+          'filteredLocationsForMapProvider: ✅ Trip $activeTripId active → emitting ${filtered.length}/${locations.length} locations');
       yield filtered;
     } else if (!isAuthenticated) {
       // Anonymous user with no active trip: show all local locations
