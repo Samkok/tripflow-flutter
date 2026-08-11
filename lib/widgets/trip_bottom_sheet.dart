@@ -8,7 +8,6 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:voyza/models/location_model.dart';
 import 'package:voyza/providers/all_days_route_provider.dart';
 import 'package:voyza/providers/map_ui_state_provider.dart';
-import '../models/trip.dart';
 import '../providers/trip_listener_provider.dart';
 import '../providers/trip_provider.dart';
 import '../providers/trip_collaborator_provider.dart';
@@ -16,14 +15,15 @@ import '../providers/trip_simulation_provider.dart';
 import '../utils/date_picker_utils.dart';
 import '../utils/geo_utils.dart';
 import '../utils/same_day_place_guard.dart';
+import '../services/leg_mode_prefs.dart';
 import '../services/review_prompt_service.dart';
-import '../services/trip_day_service.dart';
 import 'timing_warnings_sheet.dart';
 import '../utils/trip_date_validator.dart';
 import '../utils/trip_dates.dart';
 import '../core/theme.dart';
 import 'accommodation_prompts.dart';
 import 'app_toast.dart';
+import 'leg_rail.dart';
 import 'optimized_location_card.dart';
 import 'pulsing_glow.dart';
 import '../services/csv_service.dart';
@@ -107,20 +107,6 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
   });
 
   DraggableScrollableController? get sheetController => widget.sheetController;
-
-  /// Collapses the trip-plan sheet so the map (the thing a day/All chip just
-  /// changed) is actually visible. No-op when the sheet is already at or
-  /// below the collapsed size.
-  void _collapseSheetForMapView() {
-    final ctrl = sheetController;
-    if (ctrl == null || !ctrl.isAttached) return;
-    if (ctrl.size <= 0.13) return;
-    ctrl.animateTo(
-      0.12,
-      duration: const Duration(milliseconds: 300),
-      curve: Curves.easeInOut,
-    );
-  }
 
   Function(LatLng)? get onLocationTap => widget.onLocationTap;
   VoidCallback? get onShowZoneSettings => widget.onShowZoneSettings;
@@ -218,6 +204,11 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
 
   @override
   Widget build(BuildContext context) {
+    // Activates the date-change → clear-stale-route listener. It rode the
+    // (now removed) day-chip strip; the sheet's root build is the one spot
+    // guaranteed alive for every day-switch source (map day picker, Whole
+    // trip date headers, external focus requests).
+    ref.watch(routeClearerProvider);
     // OPTIMIZATION: Watch only specific fields to prevent rebuilds during drag
     // Don't watch entire tripState here since it rebuilds on every state change
     final hasPinnedLocations =
@@ -243,33 +234,12 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
       }
     }
 
-    // Auto-open the warnings sheet whenever an optimization run lands with
-    // simulation warnings. zoomToFitRouteTrigger increments at the end of
-    // _performRouteOptimization (and previewRouteBetween — both are user-
-    // initiated route renders, both should surface timing problems). We
-    // schedule on the next frame so the modal doesn't try to push during
-    // build, and re-read the simulation provider then so we see the result
-    // computed from the just-landed route.
-    ref.listen<int>(zoomToFitRouteTrigger, (prev, next) {
-      if (prev == next) return;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!context.mounted) return;
-        final sim = ref.read(tripSimulationProvider);
-        if (sim == null || sim.fullyFeasible) return;
-        // Filter out warnings the user has already accepted via
-        // "Go anyway" in a previous run of the sheet — otherwise the
-        // re-optimize that the sheet's _confirm fires would land with
-        // the same warnings still present and the sheet would re-open
-        // immediately, recursively. We only re-open when at least one
-        // UNACKNOWLEDGED warning is on the new route.
-        final acked = ref.read(acknowledgedTimingWarningsProvider);
-        final hasUnacked = sim.stops
-            .any((s) => s.warnings.isNotEmpty && !acked.contains(s.locationId));
-        if (hasUnacked) {
-          TimingWarningsSheet.show(context);
-        }
-      });
-    });
+    // NOTE (owner request 2026-08-11): the warnings sheet no longer
+    // auto-pops after optimize — the route was already committed, so the
+    // modal was a verdict without a verb (dismissing changed nothing).
+    // Timing issues now surface as the amber chip in the Route Summary
+    // ("N timing issues — tap to review"), which opens the same sheet ON
+    // DEMAND — now with per-kind practical fixes inside.
 
     return DraggableScrollableSheet(
       controller: sheetController,
@@ -305,6 +275,12 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
         // expands over it, so nothing interactive-looking sits behind the
         // blur (the globe experiment is reverted — it was composed for full
         // screens and cropped badly in a sheet).
+        // NOTE (thermal, 2026-08-10): an extent-based glass→solid swap was
+        // tried here and REVERTED — changing the wrapper's widget type at
+        // the 55–60% mark re-inflated the whole sheet subtree mid-drag, a
+        // visible hitch in both directions. If the blur's map-redraw cost
+        // needs killing again, the structure-stable variant (GlobalKey'd
+        // content reparented across a persistent wrapper) is the way.
         return ClipRRect(
           borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
           child: BackdropFilter(
@@ -613,7 +589,6 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                                         sliver: SliverList(
                                           delegate: SliverChildListDelegate([
                                             _buildDatePicker(context, ref),
-                                            _buildTripDayChips(context, ref),
                                             if (hasPinnedLocations)
                                               _buildPlanSearchField(context),
                                             if (hasPinnedLocations)
@@ -652,7 +627,6 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                                       const EdgeInsets.fromLTRB(20, 8, 20, 20),
                                   children: [
                                     _buildDatePicker(context, ref),
-                                    _buildTripDayChips(context, ref),
                                     if (hasPinnedLocations)
                                       _buildPlanSearchField(context),
                                     if (hasPinnedLocations)
@@ -1132,11 +1106,12 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
     );
   }
 
+  /// The ◀ Today ▶ calendar row — the sheet's day control now that the
+  /// day-chip strip is gone. Restored verbatim (owner request 2026-08-10)
+  /// after being removed in the same cleanup; the only difference is that
+  /// routeClearerProvider is activated in the root build, not here.
   Widget _buildDatePicker(BuildContext context, WidgetRef ref) {
     return Consumer(builder: (context, ref, _) {
-      // Watch the routeClearerProvider to activate the listener.
-      ref.watch(routeClearerProvider);
-
       final selectedDate = ref.watch(selectedDateProvider);
       final isToday = selectedDate.isAtSameMomentAs(DateTime(
           DateTime.now().year, DateTime.now().month, DateTime.now().day));
@@ -1207,301 +1182,6 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
         ],
       );
     });
-  }
-
-  /// Horizontal strip of per-day quick-jump chips covering every day the
-  /// trip spans. Each chip shows "N · MMM d" (N is 1-based day index) and
-  /// sets [selectedDateProvider] when tapped. The day axis is the full,
-  /// gap-free span of the trip — its declared start..end range unioned with
-  /// every scheduled location, with in-between days filled — so a trip with
-  /// no explicit date range still gets one chip per planned day, and an
-  /// empty interstitial day (e.g. Jan 2 between stops on Jan 1 and Jan 3)
-  /// still gets a chip. Returns an empty widget only when the trip touches
-  /// no dates at all.
-  /// Adds one day via the shared [TripDayService], then jumps the map's
-  /// selection to the new day so the add is immediately visible.
-  Future<void> _addTripDay(BuildContext context, WidgetRef ref, Trip trip,
-      List<DateTime> days) async {
-    final range = await TripDayService.addDayAtEnd(
-      context,
-      ref,
-      trip: trip,
-      days: days,
-    );
-    if (range != null) {
-      ref.read(allDaysModeProvider.notifier).state = false;
-      ref.read(selectedDateProvider.notifier).state = range.changedDay;
-    }
-  }
-
-  /// Removes the trip's last day via the shared [TripDayService] flow
-  /// (delete-or-move dialog when the day has places). Keeps the selected
-  /// day valid afterwards.
-  Future<void> _removeTripDay(BuildContext context, WidgetRef ref, Trip trip,
-      List<DateTime> days) async {
-    final range = await TripDayService.removeLastDay(
-      context,
-      ref,
-      trip: trip,
-      days: days,
-    );
-    if (range != null) {
-      final selected = ref.read(selectedDateProvider);
-      final selKey = DateTime(selected.year, selected.month, selected.day);
-      if (selKey.isAtSameMomentAs(range.changedDay)) {
-        ref.read(selectedDateProvider.notifier).state = range.end;
-      }
-    }
-  }
-
-  Widget _buildTripDayChips(BuildContext context, WidgetRef ref) {
-    // valueOrNull (not asData): during a userTripsProvider refresh these
-    // providers pass through a loading state that RETAINS the previous
-    // value — asData would blank the strip for a frame on every add/remove
-    // day, which read as a full page reload.
-    final activeTripAsync = ref.watch(realtimeActiveTripProvider);
-    final trip = activeTripAsync.valueOrNull;
-    final locations = ref.watch(tripProvider.select((s) => s.pinnedLocations));
-
-    final days = contiguousTripDates([
-      trip?.startDate,
-      trip?.endDate,
-      for (final loc in locations) ...[
-        loc.scheduledDate ?? loc.addedAt,
-        loc.scheduledEndDate ?? loc.scheduledDate ?? loc.addedAt,
-      ],
-    ]);
-    if (days.isEmpty) return const SizedBox.shrink();
-
-    final selectedRaw = ref.watch(selectedDateProvider);
-    final selected =
-        DateTime(selectedRaw.year, selectedRaw.month, selectedRaw.day);
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    final theme = Theme.of(context);
-    // Accent reserved for "this chip is today's date" so it stays visually
-    // distinct from the primary-color "selected" treatment. Green reads as
-    // "live/current" and doesn't collide with the brand primary.
-    final todayAccent = Colors.green.shade600;
-
-    final allDaysMode = ref.watch(allDaysModeProvider);
-    final dayColors = ref.watch(tripDayColorsProvider);
-
-    // Trailing "+ Add day" box: extends the trip by one day after the last.
-    // Needs a persisted trip (the new day lives in the trip's date range)
-    // and write access.
-    final canAddDay = trip != null &&
-        (ref.watch(hasActiveTripWriteAccessProvider).valueOrNull ?? false);
-
-    return SizedBox(
-      height: 42,
-      child: ListView.separated(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 12),
-        // Index 0 is the "All" chip; day chips follow, shifted by one; then
-        // the optional add-day box, then (multi-day trips) the remove box.
-        itemCount: days.length +
-            1 +
-            (canAddDay ? 1 : 0) +
-            ((canAddDay && days.length > 1) ? 1 : 0),
-        separatorBuilder: (_, __) => const SizedBox(width: 6),
-        itemBuilder: (context, index) {
-          final primary = theme.colorScheme.primary;
-
-          // ── "−" remove-last-day box — quiet counterpart of Add day. ──
-          if (canAddDay && days.length > 1 && index == days.length + 2) {
-            final fg =
-                theme.textTheme.bodyMedium?.color?.withValues(alpha: 0.6) ??
-                    theme.colorScheme.onSurface;
-            return TextButton(
-              onPressed: () => _removeTripDay(context, ref, trip, days),
-              style: TextButton.styleFrom(
-                minimumSize: Size.zero,
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                foregroundColor: fg,
-                backgroundColor: Colors.transparent,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14),
-                  side: BorderSide(
-                      color: theme.dividerColor.withValues(alpha: 0.7),
-                      width: 1.2),
-                ),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(Icons.remove_rounded, size: 16, color: fg),
-                  const SizedBox(width: 4),
-                  Text('Remove day',
-                      style: theme.textTheme.labelMedium
-                          ?.copyWith(fontWeight: FontWeight.w600, color: fg)),
-                ],
-              ),
-            );
-          }
-
-          // ── "+" add-day square — dashed frame, transparent body. ──
-          if (canAddDay && index == days.length + 1) {
-            final fg =
-                theme.textTheme.bodyMedium?.color?.withValues(alpha: 0.75) ??
-                    theme.colorScheme.onSurface;
-            return Tooltip(
-              message: 'Add day',
-              child: CustomPaint(
-                painter: _DashedRRectPainter(
-                  color: fg.withValues(alpha: 0.6),
-                  radius: 14,
-                ),
-                child: SizedBox(
-                  width: 42,
-                  height: 42,
-                  child: Material(
-                    color: Colors.transparent,
-                    child: InkWell(
-                      borderRadius: BorderRadius.circular(14),
-                      onTap: () => _addTripDay(context, ref, trip, days),
-                      child: Icon(Icons.add_rounded, size: 20, color: fg),
-                    ),
-                  ),
-                ),
-              ),
-            );
-          }
-
-          // ── "All" chip — every day's route at once, each in its color. ──
-          // Deliberately styled apart from the date chips (solid fill +
-          // layers icon vs their outline look) so it reads as a MODE, not
-          // another date.
-          if (index == 0) {
-            final fg = allDaysMode
-                ? theme.colorScheme.onPrimary
-                : (theme.textTheme.bodyMedium?.color?.withValues(alpha: 0.85) ??
-                    theme.colorScheme.onSurface);
-            return TextButton(
-              onPressed: () {
-                ref.read(allDaysModeProvider.notifier).state = true;
-                _collapseSheetForMapView();
-              },
-              style: TextButton.styleFrom(
-                minimumSize: Size.zero,
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                foregroundColor: fg,
-                backgroundColor: allDaysMode ? primary : Colors.transparent,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(21),
-                  side: BorderSide(
-                    color: allDaysMode
-                        ? primary
-                        : theme.dividerColor.withValues(alpha: 0.5),
-                    width: allDaysMode ? 1.6 : 1,
-                  ),
-                ),
-                textStyle: theme.textTheme.labelLarge
-                    ?.copyWith(fontWeight: FontWeight.w800),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(Icons.layers_rounded, size: 14, color: fg),
-                  const SizedBox(width: 5),
-                  const Text('All'),
-                ],
-              ),
-            );
-          }
-
-          final day = days[index - 1];
-          // While All-days mode is on, the mode owns the selection — no
-          // individual day renders as selected.
-          final isSelected = !allDaysMode && day.isAtSameMomentAs(selected);
-          final isToday = day.isAtSameMomentAs(today);
-
-          // Each day's route color, shown as a leading dot — doubles as the
-          // legend for All-days mode and stays consistent because the same
-          // provider colors the map polylines.
-          final routeColor = dayColors[day];
-
-          // The SELECTED chip borrows its own day's route color for the
-          // fill/border, tying the strip to the map's polylines; unselected
-          // chips stay quiet. Today keeps its label + trailing dot instead
-          // of a competing green fill.
-          final accent = routeColor ?? primary;
-          final Color fg;
-          final Color bg;
-          final Color borderColor;
-          if (isSelected) {
-            fg =
-                theme.textTheme.bodyLarge?.color ?? theme.colorScheme.onSurface;
-            bg = accent.withValues(alpha: 0.12);
-            borderColor = accent.withValues(alpha: 0.7);
-          } else {
-            fg = theme.textTheme.bodyMedium?.color?.withValues(alpha: 0.75) ??
-                theme.colorScheme.onSurface;
-            bg = Colors.transparent;
-            borderColor = theme.dividerColor.withValues(alpha: 0.4);
-          }
-
-          final dateLabel = isToday ? 'Today' : DateFormat('d MMM').format(day);
-
-          return TextButton(
-            onPressed: () {
-              // Picking a specific day always leaves All-days mode.
-              ref.read(allDaysModeProvider.notifier).state = false;
-              ref.read(selectedDateProvider.notifier).state = day;
-              _collapseSheetForMapView();
-            },
-            style: TextButton.styleFrom(
-              minimumSize: Size.zero,
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              foregroundColor: fg,
-              backgroundColor: bg,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(21),
-                side:
-                    BorderSide(color: borderColor, width: isSelected ? 1.4 : 1),
-              ),
-              textStyle: theme.textTheme.labelLarge?.copyWith(
-                fontWeight:
-                    (isSelected || isToday) ? FontWeight.w700 : FontWeight.w500,
-              ),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (routeColor != null) ...[
-                  Container(
-                    width: 8,
-                    height: 8,
-                    decoration: BoxDecoration(
-                      color: routeColor,
-                      shape: BoxShape.circle,
-                    ),
-                  ),
-                  const SizedBox(width: 6),
-                ],
-                Text(dateLabel),
-                if (isToday) ...[
-                  const SizedBox(width: 6),
-                  Container(
-                    width: 6,
-                    height: 6,
-                    decoration: BoxDecoration(
-                      color: todayAccent,
-                      shape: BoxShape.circle,
-                    ),
-                  ),
-                ],
-              ],
-            ),
-          );
-        },
-      ),
-    );
   }
 
   Widget _buildHistoryBanner(BuildContext context) {
@@ -1623,6 +1303,73 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
       double totalDistance, int totalStopsForDate,
       {required bool hasRoute, required bool hideEta}) {
     final estimatedArrival = DateTime.now().add(totalTravelTime);
+
+    // Pre-optimize there is exactly ONE fact (stops planned), so the card
+    // is a single quiet row — the old layout kept the full box's height
+    // with empty stat slots. The optimize spinner takes the fact's place
+    // while the first route is being generated.
+    if (!hasRoute) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        margin: const EdgeInsets.only(top: 16),
+        decoration: BoxDecoration(
+          color: Theme.of(context)
+              .cardColor
+              .withValues(alpha: AppTheme.sheetCardAlpha(context)),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.3),
+            width: 1,
+          ),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              Icons.route,
+              color: Theme.of(context).colorScheme.primary,
+              size: 20,
+            ),
+            const SizedBox(width: 8),
+            Text(
+              'Route Summary',
+              style: Theme.of(context)
+                  .textTheme
+                  .titleMedium
+                  ?.copyWith(color: AppTheme.primaryColor),
+            ),
+            const Spacer(),
+            Consumer(builder: (context, ref, _) {
+              final isGenerating = ref.watch(isGeneratingRouteProvider);
+              if (isGenerating) {
+                return Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    SizedBox(
+                      height: 14,
+                      width: 14,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Theme.of(context).colorScheme.primary,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Text('Optimizing…',
+                        style: Theme.of(context).textTheme.bodyMedium),
+                  ],
+                );
+              }
+              return Text(
+                '$totalStopsForDate ${totalStopsForDate == 1 ? 'stop' : 'stops'}',
+                style: Theme.of(context)
+                    .textTheme
+                    .bodyMedium
+                    ?.copyWith(fontWeight: FontWeight.w700),
+              );
+            }),
+          ],
+        ),
+      );
+    }
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -1751,6 +1498,65 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
               }),
             ],
           ),
+          // Timing issues live HERE now (not an auto-popup): an amber chip
+          // that opens the warnings sheet on demand. Respects "Go anyway"
+          // acknowledgements so accepted issues stop counting.
+          Consumer(builder: (context, ref, _) {
+            final sim = ref.watch(tripSimulationProvider);
+            final acked = ref.watch(acknowledgedTimingWarningsProvider);
+            final issueCount = sim == null
+                ? 0
+                : sim.stops
+                    .where((s) =>
+                        s.warnings.isNotEmpty && !acked.contains(s.locationId))
+                    .length;
+            if (issueCount == 0) return const SizedBox.shrink();
+            const amber = Color(0xFFF5A623);
+            return Padding(
+              padding: const EdgeInsets.only(top: 10),
+              child: InkWell(
+                borderRadius: BorderRadius.circular(10),
+                onTap: () => TimingWarningsSheet.show(context),
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: amber.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: amber.withValues(alpha: 0.5)),
+                  ),
+                  child: Row(children: [
+                    const Icon(Icons.warning_amber_rounded,
+                        size: 16, color: amber),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        '$issueCount timing '
+                        '${issueCount == 1 ? 'issue' : 'issues'} — tap to review',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: amber, fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                    const Icon(Icons.chevron_right_rounded,
+                        size: 16, color: amber),
+                  ]),
+                ),
+              ),
+            );
+          }),
+          const SizedBox(height: 10),
+          // Honesty note — schedules drift with traffic and dwell time.
+          Text(
+            'Estimates only — actual times vary with traffic and how long '
+            'you stay at each stop.',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context)
+                      .colorScheme
+                      .onSurfaceVariant
+                      .withValues(alpha: 0.8),
+                  fontStyle: FontStyle.italic,
+                ),
+          ),
           Consumer(builder: (context, ref, _) {
             final isGenerating = ref.watch(isGeneratingRouteProvider);
             if (!isGenerating) return const SizedBox.shrink();
@@ -1845,10 +1651,30 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
 
     final allNormal =
         locations.where((l) => !l.isSkipped && !l.isDone).toList();
+
+    // Route facts consumed by BOTH the numbering and the timeline rails.
+    // Narrow selects: they only change on (re-)optimize, never on GPS ticks.
+    final railLegDetails = ref.watch(tripProvider.select((s) => s.legDetails));
+    final railRouteActive =
+        ref.watch(tripProvider.select((s) => s.optimizedRoute.isNotEmpty));
+    final railStartId =
+        ref.watch(tripProvider.select((s) => s.startLocationId));
+    final railStartIsCurrent = railStartId == 'current_location';
+
+    // When the route starts AT a stop, that stop is the anchor, not stop #1
+    // — the map numbers the remaining stops 1…n-1 and flags the start. The
+    // list must match: start card gets number 0 (rendered as the start
+    // flag), the rest shift down so map "1" == list "1".
+    final startStopLeadsList = railRouteActive &&
+        !railStartIsCurrent &&
+        allNormal.isNotEmpty &&
+        allNormal.first.id == railStartId;
+
     // Number BEFORE filtering: a card surfaced by a search must still show
     // its real stop number, not its position within the results.
     final numberedNormal = <(LocationModel, int)>[
-      for (var i = 0; i < allNormal.length; i++) (allNormal[i], i + 1),
+      for (var i = 0; i < allNormal.length; i++)
+        (allNormal[i], startStopLeadsList ? i : i + 1),
     ];
 
     final normalLocations = numberedNormal
@@ -1865,8 +1691,52 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
 
     final widgets = <Widget>[];
 
-    // Normal (upcoming) locations - directly add to list
-    for (final (location, number) in normalLocations) {
+    // ── Multi-modal timeline rails ─────────────────────────────────────
+    // Between consecutive stop cards, the travel segment that connects
+    // them (walk dashes / transit bar in the line's color / drive). Rails
+    // render only when the leg list actually aligns with the visible cards
+    // — searching or a stale route hides them rather than mislabel.
+    final expectedLegs =
+        railStartIsCurrent ? allNormal.length : allNormal.length - 1;
+    // One extra leg beyond the stop count = the loop-home return to the
+    // accommodation the day started from.
+    final hasReturnLeg = railLegDetails.length == expectedLegs + 1;
+    final railsOn = railRouteActive &&
+        query.isEmpty &&
+        railLegDetails.isNotEmpty &&
+        (railLegDetails.length == expectedLegs || hasReturnLeg);
+
+    LocationModel railOrigin() => LocationModel(
+          id: 'current_location',
+          name: 'Current location',
+          address: '',
+          coordinates: ref.read(tripProvider).currentLocation ??
+              allNormal.first.coordinates,
+          addedAt: DateTime.fromMillisecondsSinceEpoch(0),
+        );
+
+    // Normal (upcoming) locations - directly add to list. Rails key off the
+    // POSITION in the unfiltered list (numbering shifts when the start stop
+    // leads it, so `number` no longer equals position).
+    for (var idx = 0; idx < normalLocations.length; idx++) {
+      final (location, number) = normalLocations[idx];
+      if (railsOn) {
+        final legIndex = railStartIsCurrent ? idx : idx - 1;
+        if (legIndex >= 0 && legIndex < railLegDetails.length) {
+          final from = idx == 0
+              ? (railStartIsCurrent ? railOrigin() : null)
+              : allNormal[idx - 1];
+          if (from != null) {
+            widgets.add(LegRail(
+              key: ValueKey('rail_${from.id}_${location.id}'),
+              legIndex: legIndex,
+              legData: railLegDetails[legIndex],
+              from: from,
+              to: location,
+            ));
+          }
+        }
+      }
       widgets.add(
         OptimizedLocationCard(
           key: ValueKey(location.id),
@@ -1877,6 +1747,52 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
           onLocationTap: onLocationTap,
         ),
       );
+    }
+
+    // The loop-home rail + a quiet terminal row: the day ends where it
+    // began. The accommodation is the day's first card (it's the start),
+    // so it resolves locally by the leg's toId.
+    if (railsOn && hasReturnLeg && allNormal.isNotEmpty) {
+      final returnData = railLegDetails.last;
+      final returnToId = returnData['toId'] as String?;
+      LocationModel? home;
+      for (final l in locations) {
+        if (l.id == returnToId) {
+          home = l;
+          break;
+        }
+      }
+      if (home != null) {
+        widgets.add(LegRail(
+          key: ValueKey('rail_return_${home.id}'),
+          legIndex: railLegDetails.length - 1,
+          legData: returnData,
+          from: allNormal.last,
+          to: home,
+        ));
+        widgets.add(Padding(
+          // Generous bottom clearance — this terminal row sat too close
+          // to the Re-optimize button below the list.
+          padding: const EdgeInsets.fromLTRB(42, 2, 0, 20),
+          child: Row(children: [
+            Icon(Icons.hotel_outlined,
+                size: 15,
+                color: Theme.of(context).colorScheme.onSurfaceVariant),
+            const SizedBox(width: 6),
+            Flexible(
+              child: Text(
+                'Back at ${home.name}',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      fontWeight: FontWeight.w600,
+                    ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ]),
+        ));
+      }
     }
 
     // Done locations section
@@ -2873,6 +2789,131 @@ class _StartPointSheetState extends ConsumerState<_StartPointSheet> {
   String? _selectedStartId;
   bool _initialized = false;
 
+  // ── Travel style (multi-modal anchor) ─────────────────────────────────
+  // 'auto' sniffs the trip's scale (compact ⇒ walking city); 'walk'/'drive'
+  // force the anchor mode. Persisted per trip; the optimizer reads it on
+  // every run. Loaded lazily the first time the sheet has the trip id.
+  String _travelProfile = 'auto';
+  bool _profileLoaded = false;
+
+  /// "Max walk between stops" (routed meters) — a GLOBAL preference (the
+  /// traveller's tolerance, not the trip's), fed into the routing ladder.
+  double _maxWalkMeters = LegModePrefs.defaultMaxWalkMeters.toDouble();
+
+  Future<void> _loadTravelProfile(String tripId) async {
+    if (_profileLoaded) return;
+    _profileLoaded = true;
+    final profile = await LegModePrefs.travelProfile(tripId);
+    final maxWalk = await LegModePrefs.maxWalkMeters();
+    if (mounted) {
+      setState(() {
+        _travelProfile = profile;
+        _maxWalkMeters = maxWalk.toDouble();
+      });
+    }
+  }
+
+  String get _maxWalkLabel => _maxWalkMeters < 1000
+      ? '${_maxWalkMeters.round()} m'
+      : '${(_maxWalkMeters / 1000).toStringAsFixed(1)} km';
+
+  Future<void> _setTravelProfile(String tripId, String profile) async {
+    final changed = profile != _travelProfile;
+    setState(() => _travelProfile = profile);
+    await LegModePrefs.setTravelProfile(tripId, profile);
+    // A style switch is "re-plan the trip THIS way" — manual per-leg
+    // overrides from the previous style would silently win over the new
+    // ladder on every leg they touched, which read as the picker doing
+    // nothing. Fresh style, fresh slate.
+    if (changed) await LegModePrefs.clearAllLegModes(tripId);
+  }
+
+  Widget _buildTravelStyleRow(BuildContext context, String tripId) {
+    final theme = Theme.of(context);
+    const options = [
+      ('auto', Icons.auto_awesome_rounded, 'Auto'),
+      ('walk', Icons.directions_walk_rounded, 'Walking city'),
+      ('transit', Icons.directions_transit_rounded, 'Public transport'),
+      ('drive', Icons.directions_car_rounded, 'Road trip'),
+    ];
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _sectionLabel(context, 'Travel style'),
+        Wrap(
+          spacing: 8,
+          children: [
+            for (final (value, icon, label) in options)
+              ChoiceChip(
+                selected: _travelProfile == value,
+                showCheckmark: false,
+                avatar: Icon(icon,
+                    size: 16,
+                    color: _travelProfile == value
+                        ? theme.colorScheme.onPrimary
+                        : theme.colorScheme.primary),
+                label: Text(label),
+                labelStyle: TextStyle(
+                  fontWeight: FontWeight.w700,
+                  color: _travelProfile == value
+                      ? theme.colorScheme.onPrimary
+                      : theme.textTheme.bodyMedium?.color,
+                ),
+                selectedColor: theme.colorScheme.primary,
+                backgroundColor: theme.cardColor.withValues(alpha: 0.6),
+                side: BorderSide(
+                  color: _travelProfile == value
+                      ? theme.colorScheme.primary
+                      : theme.dividerColor.withValues(alpha: 0.5),
+                ),
+                onSelected: (_) => _setTravelProfile(tripId, value),
+              ),
+          ],
+        ),
+        const SizedBox(height: 14),
+        // ── Travel preferences ────────────────────────────────────────
+        _sectionLabel(context, 'Max walk between stops'),
+        Row(
+          children: [
+            Expanded(
+              child: Slider(
+                value: _maxWalkMeters.clamp(
+                    LegModePrefs.minMaxWalkMeters.toDouble(),
+                    LegModePrefs.maxMaxWalkMeters.toDouble()),
+                min: LegModePrefs.minMaxWalkMeters.toDouble(),
+                max: LegModePrefs.maxMaxWalkMeters.toDouble(),
+                divisions: (LegModePrefs.maxMaxWalkMeters -
+                        LegModePrefs.minMaxWalkMeters) ~/
+                    100,
+                label: _maxWalkLabel,
+                onChanged: (v) => setState(() => _maxWalkMeters = v),
+                onChangeEnd: (v) => LegModePrefs.setMaxWalkMeters(v.round()),
+              ),
+            ),
+            SizedBox(
+              width: 56,
+              child: Text(
+                _maxWalkLabel,
+                textAlign: TextAlign.end,
+                style: theme.textTheme.bodyMedium
+                    ?.copyWith(fontWeight: FontWeight.w700),
+              ),
+            ),
+          ],
+        ),
+        Padding(
+          padding: const EdgeInsets.only(left: 4),
+          child: Text(
+            'Longer hops get a ride instead. Ignored when your travel '
+            'style is Walking city.',
+            style: theme.textTheme.bodySmall
+                ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+          ),
+        ),
+      ],
+    );
+  }
+
   // Country-mismatch gate for the "My current location" anchor.
   //
   // Trip has a tagged country and the device is sitting in a different one
@@ -3053,6 +3094,17 @@ class _StartPointSheetState extends ConsumerState<_StartPointSheet> {
                   children: [
                     _buildStartAtCard(context),
                     const SizedBox(height: 16),
+                    // Travel style: which mode anchors the whole route.
+                    Builder(builder: (context) {
+                      final tripId =
+                          ref.watch(realtimeActiveTripProvider).valueOrNull?.id;
+                      if (tripId == null) return const SizedBox.shrink();
+                      _loadTravelProfile(tripId);
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 16),
+                        child: _buildTravelStyleRow(context, tripId),
+                      );
+                    }),
                     if (dayAccommodations.isNotEmpty) ...[
                       _sectionLabel(context, 'Accommodation'),
                       ...dayAccommodations.map((loc) => _StartPointTile(
@@ -3226,6 +3278,9 @@ class _StartPointSheetState extends ConsumerState<_StartPointSheet> {
   Widget _buildStartAtCard(BuildContext context) {
     final theme = Theme.of(context);
     final start = ref.watch(effectiveTripStartTimeProvider);
+    // Only an explicit user pick needs a way back: with no override the
+    // card already follows the live clock, so Reset would be a no-op.
+    final hasOverride = ref.watch(tripStartTimeOverrideProvider) != null;
     final timeLabel =
         '${start.hour.toString().padLeft(2, '0')}:${start.minute.toString().padLeft(2, '0')}';
 
@@ -3284,6 +3339,24 @@ class _StartPointSheetState extends ConsumerState<_StartPointSheet> {
                 ],
               ),
             ),
+            if (hasOverride) ...[
+              TextButton.icon(
+                onPressed: () {
+                  ref.read(tripStartTimeOverrideProvider.notifier).state = null;
+                  if (mounted) setState(() {});
+                },
+                icon: const Icon(Icons.restore_rounded, size: 16),
+                label: const Text('Reset to now'),
+                style: TextButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  foregroundColor: theme.colorScheme.primary,
+                  textStyle: theme.textTheme.labelMedium
+                      ?.copyWith(fontWeight: FontWeight.w700),
+                ),
+              ),
+              const SizedBox(width: 4),
+            ],
             Icon(Icons.edit_outlined,
                 size: 18,
                 color: theme.colorScheme.primary.withValues(alpha: 0.8)),
@@ -3520,43 +3593,3 @@ class _StatusChip extends StatelessWidget {
 
 /// Dashed rounded-rect outline for the add-day square — Flutter has no
 /// built-in dashed BorderSide.
-class _DashedRRectPainter extends CustomPainter {
-  final Color color;
-  final double radius;
-
-  static const double dashLength = 5;
-  static const double gapLength = 4;
-
-  const _DashedRRectPainter({
-    required this.color,
-    required this.radius,
-  });
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = color
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.2;
-    final path = Path()
-      ..addRRect(RRect.fromRectAndRadius(
-        Offset.zero & size,
-        Radius.circular(radius),
-      ));
-    for (final metric in path.computeMetrics()) {
-      var distance = 0.0;
-      while (distance < metric.length) {
-        final next = distance + dashLength;
-        canvas.drawPath(
-          metric.extractPath(distance, next.clamp(0, metric.length)),
-          paint,
-        );
-        distance = next + gapLength;
-      }
-    }
-  }
-
-  @override
-  bool shouldRepaint(_DashedRRectPainter oldDelegate) =>
-      color != oldDelegate.color || radius != oldDelegate.radius;
-}

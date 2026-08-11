@@ -1,3 +1,5 @@
+import 'dart:io' show Platform;
+
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:voyza/widgets/rotating_globe_background.dart';
@@ -43,7 +45,10 @@ class TermsScreen extends StatelessWidget {
                 _buildSection(
                   context,
                   '3. Third-Party Services',
-                  "The App relies on third-party services to work, including Google Maps Platform (Maps, Places, and Directions) for maps, place information, and routing; Supabase for account authentication and cloud data storage; RevenueCat together with the App Store and Google Play for subscriptions and billing; and Firebase (Google) for analytics, performance monitoring, and push notifications. Your use of these features is also subject to those providers' terms, including Google's Terms of Service and the Google Maps/Google Earth Additional Terms of Service.",
+                  // Store naming is platform-aware: Apple rejects iOS
+                  // binaries that mention Google Play (Guideline 2.3.10).
+                  // The canonical web terms still describe both stores.
+                  "The App relies on third-party services to work, including Google Maps Platform (Maps, Places, and Directions) for maps, place information, and routing; Supabase for account authentication and cloud data storage; RevenueCat together with ${Platform.isIOS ? 'the App Store' : 'the Play Store'} for subscriptions and billing; and Firebase (Google) for analytics, performance monitoring, and push notifications. Your use of these features is also subject to those providers' terms, including Google's Terms of Service and the Google Maps/Google Earth Additional Terms of Service.",
                 ),
                 _buildSection(
                   context,
@@ -58,7 +63,7 @@ class TermsScreen extends StatelessWidget {
                 _buildSection(
                   context,
                   '6. Subscriptions (VoyZa Pro)',
-                  'VoyZa Pro is an optional auto-renewing subscription sold through the App Store and Google Play. Pricing, billing period, and any free-trial terms are shown at the point of purchase and are billed by the applicable store. Subscriptions renew automatically unless cancelled at least 24 hours before the end of the current period; you can manage or cancel them in your App Store or Google Play account settings. To keep our free tier fair, we use a device identifier to enforce one free trial per device.',
+                  'VoyZa Pro is an optional auto-renewing subscription sold through ${Platform.isIOS ? 'the App Store' : 'the Play Store'}. Pricing, billing period, and any free-trial terms are shown at the point of purchase and are billed by the store. Subscriptions renew automatically unless cancelled at least 24 hours before the end of the current period; you can manage or cancel them in your ${Platform.isIOS ? 'App Store' : 'Play Store'} account settings. To keep our free tier fair, we use a device identifier to enforce one free trial per device.',
                 ),
                 _buildSection(
                   context,

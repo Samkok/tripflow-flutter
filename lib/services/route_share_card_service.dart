@@ -109,6 +109,7 @@ class RouteShareCardService {
     required List<LocationModel> optimizedOrder,
     required Duration timeSaved,
     String? tripName,
+    String? dayLabel,
     Duration lifetimeSaved = Duration.zero,
   }) async {
     try {
@@ -130,7 +131,15 @@ class RouteShareCardService {
       final title = (tripName != null && tripName.trim().isNotEmpty)
           ? tripName.trim()
           : 'My $stops-stop day, untangled';
-      _drawText(canvas, title, const Offset(48, 40),
+      // Day note above the trip name — story viewers should know which day
+      // of the trip they're looking at.
+      var titleY = 40.0;
+      if (dayLabel != null && dayLabel.trim().isNotEmpty) {
+        _drawText(canvas, dayLabel.trim().toUpperCase(), const Offset(48, 16),
+            fontSize: 20, weight: FontWeight.w700, color: _subText);
+        titleY = 48.0;
+      }
+      _drawText(canvas, title, Offset(48, titleY),
           fontSize: 40, weight: FontWeight.w800, color: _text, maxWidth: 900);
 
       // Panels.
@@ -214,6 +223,7 @@ class RouteShareCardService {
     required bool anonymous,
     String? tripName,
     String? tripId,
+    String? dayLabel,
   }) async {
     try {
       final lifetimeSaved = await TimeSavedLedgerService.instance.total();
@@ -222,6 +232,7 @@ class RouteShareCardService {
         optimizedOrder: optimizedOrder,
         timeSaved: timeSaved,
         tripName: tripName,
+        dayLabel: dayLabel,
         lifetimeSaved: lifetimeSaved,
       );
       if (file == null) return;
@@ -523,6 +534,9 @@ class RouteShareCardService {
     // All-days mode: the card frames the WHOLE trip, so the stat line reads
     // "N days · M places" instead of the single-day stop count.
     int? daysCount,
+    // Single-day shares: "Day 1 of the trip" — drawn as the small kicker
+    // above the trip name, so a story viewer knows which day they're seeing.
+    String? dayLabel,
     ShareCardFormat format = ShareCardFormat.story,
   }) async {
     try {
@@ -557,7 +571,8 @@ class RouteShareCardService {
       double lineH(double fontSize) => fontSize * 1.1;
       double soft(double fontSize) => fontSize * _textBlurFactor;
       final planMode = archetype != null && archetype.trim().isNotEmpty;
-      final hasKicker = planMode && tripName.trim().isNotEmpty;
+      final dayKicker = dayLabel != null && dayLabel.trim().isNotEmpty;
+      final hasKicker = (planMode && tripName.trim().isNotEmpty) || dayKicker;
       final hasSaved = timeSaved >= const Duration(minutes: 5);
       final hasRoast = roastLine != null && roastLine.trim().isNotEmpty;
       double stack = lineH(38) + 14 + lineH(26) + 22 + lineH(34);
@@ -573,9 +588,13 @@ class RouteShareCardService {
       ];
 
       if (hasKicker) {
-        // Trip name as a small kicker above the identity headline.
+        // Small kicker above the identity headline: the trip name in plan
+        // mode, "DAY 1 OF THE TRIP" on single-day shares.
+        final kicker = planMode
+            ? tripName.trim().toUpperCase()
+            : dayLabel!.trim().toUpperCase();
         y += 20 +
-            _drawText(canvas, tripName.trim().toUpperCase(), Offset(60, y),
+            _drawText(canvas, kicker, Offset(60, y),
                 fontSize: 20,
                 weight: FontWeight.w700,
                 color: _subText,

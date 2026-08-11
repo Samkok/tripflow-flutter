@@ -48,8 +48,8 @@ class EmailHistoryService {
     final value = email.trim().toLowerCase();
     if (value.isEmpty || !value.contains('@')) return;
     try {
-      final prefs =
-          SharedPrefsCache.maybeInstance ?? await SharedPreferences.getInstance();
+      final prefs = SharedPrefsCache.maybeInstance ??
+          await SharedPreferences.getInstance();
       final current = List<String>.from(prefs.getStringList(_key) ?? const []);
       current.removeWhere((e) => e.toLowerCase() == value);
       current.insert(0, value);
@@ -66,8 +66,8 @@ class EmailHistoryService {
   /// Removes a single entry (the ✕ on a suggestion row).
   Future<void> forget(String email) async {
     try {
-      final prefs =
-          SharedPrefsCache.maybeInstance ?? await SharedPreferences.getInstance();
+      final prefs = SharedPrefsCache.maybeInstance ??
+          await SharedPreferences.getInstance();
       final current = List<String>.from(prefs.getStringList(_key) ?? const []);
       current.removeWhere((e) => e.toLowerCase() == email.toLowerCase());
       await prefs.setStringList(_key, current);

@@ -18,6 +18,33 @@ final savedLocationsProvider = StreamProvider<List<SavedLocation>>((ref) {
   return repository.watchLocations();
 });
 
+/// Per-trip stats for the home cards ("N places" + date-span fallback),
+/// computed ONCE per locations emission. Cards `select()` their own trip's
+/// record — records compare structurally, so only the card whose numbers
+/// actually changed rebuilds, instead of every card on every emission.
+typedef TripCardStats = ({int count, DateTime? start, DateTime? end});
+
+final tripCardStatsProvider = Provider<Map<String, TripCardStats>>((ref) {
+  final locations = ref.watch(savedLocationsProvider).valueOrNull ?? const [];
+  final counts = <String, int>{};
+  final starts = <String, DateTime>{};
+  final ends = <String, DateTime>{};
+  for (final location in locations) {
+    final tripId = location.tripId;
+    if (tripId == null) continue;
+    counts[tripId] = (counts[tripId] ?? 0) + 1;
+    final d = location.scheduledDate ?? location.createdAt;
+    final start = starts[tripId];
+    if (start == null || d.isBefore(start)) starts[tripId] = d;
+    final end = ends[tripId];
+    if (end == null || d.isAfter(end)) ends[tripId] = d;
+  }
+  return {
+    for (final id in counts.keys)
+      id: (count: counts[id]!, start: starts[id], end: ends[id]),
+  };
+});
+
 /// Filter locations based on active trip with REAL-TIME updates
 /// - If a trip is active: show only locations that belong to that trip
 /// - If no trip is active BUT user is anonymous: show all local locations (for anonymous mode)

@@ -47,10 +47,10 @@ class _PromoDaysCardState extends ConsumerState<PromoDaysCard> {
 
   @override
   Widget build(BuildContext context) {
-    final customerInfo = ref.watch(
-        subscriptionProvider.select((s) => s.customerInfo));
-    final ent = customerInfo
-        ?.entitlements.active[RevenueCatConfig.entitlementVoyZaPro];
+    final customerInfo =
+        ref.watch(subscriptionProvider.select((s) => s.customerInfo));
+    final ent =
+        customerInfo?.entitlements.active[RevenueCatConfig.entitlementVoyZaPro];
     // Promotional grants only — a real store subscription (including its
     // trial) has its own surfaces (trial countdown banner, management).
     if (ent == null || ent.store != Store.promotional) {

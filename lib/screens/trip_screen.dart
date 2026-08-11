@@ -36,7 +36,9 @@ import 'package:voyza/widgets/route_spine.dart';
 import 'package:voyza/widgets/sign_up_required_sheet.dart';
 import 'package:voyza/screens/create_trip_wizard.dart';
 import 'package:voyza/screens/copy_trip_wizard.dart';
-import 'package:voyza/widgets/referral_prompt.dart';
+// DISABLED with the home referral banner (owner request 2026-08-10) — see
+// the commented ReferralHomeBanner sliver below.
+// import 'package:voyza/widgets/referral_prompt.dart';
 import 'package:voyza/widgets/rotating_globe_background.dart';
 import 'package:voyza/widgets/trip_collaborators_row.dart';
 import 'package:voyza/widgets/trip_skeleton.dart';
@@ -85,7 +87,33 @@ class _TripScreenState extends ConsumerState<TripScreen> {
     // settle delay so it never races onboarding or the map tutorial.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       Future.delayed(const Duration(seconds: 3), _maybeShowTripRecap);
+      // Checklist reconciliation for data that resolved BEFORE this
+      // screen's listeners registered (providers only notify on change —
+      // an already-completed load would otherwise never re-emit).
+      if (mounted) _deriveChecklist();
     });
+  }
+
+  /// Reconciles the checklist against whatever trips + locations are
+  /// already known: create/activate from the trips list, add-3-places from
+  /// the per-trip location counts (same source the cards' "N places" meta
+  /// uses). Idempotent and cheap; called on every emission of either
+  /// provider and once post-frame at startup. All marks are SILENT — the
+  /// seal celebration stays reserved for steps completed live.
+  void _deriveChecklist() {
+    final trips = ref.read(userTripsProvider).valueOrNull;
+    if (trips == null || trips.isEmpty) return;
+    final notifier = ref.read(checklistProvider.notifier);
+    notifier.deriveFromTrips(trips);
+    final stats = ref.read(tripCardStatsProvider);
+    var maxPerTrip = 0;
+    for (final trip in trips) {
+      final n = stats[trip.id]?.count ?? 0;
+      if (n > maxPerTrip) maxPerTrip = n;
+    }
+    if (maxPerTrip > 0) {
+      notifier.reportTripLocationCount(maxPerTrip, silent: true);
+    }
   }
 
   /// Shows the one-time "trip, by the numbers" recap for a trip that ended
@@ -632,14 +660,13 @@ class _TripScreenState extends ConsumerState<TripScreen> {
 
     final tripsAsync = ref.watch(userTripsProvider);
 
-    // Keep the checklist truthful for work done outside the guided path
-    // (or before the feature existed).
-    ref.listen(userTripsProvider, (prev, next) {
-      final trips = next.valueOrNull;
-      if (trips != null && trips.isNotEmpty) {
-        ref.read(checklistProvider.notifier).deriveFromTrips(trips);
-      }
-    });
+    // Keep the checklist truthful for work done outside the guided path,
+    // before the feature existed, or on another device. Both providers
+    // feed the reconciliation: trips (create/activate) and locations
+    // (add-3-places) — locations arrive AFTER trips on sign-in sync, so
+    // each emission re-derives.
+    ref.listen(userTripsProvider, (prev, next) => _deriveChecklist());
+    ref.listen(savedLocationsProvider, (prev, next) => _deriveChecklist());
 
     // Fulfil the guides this screen owns. Safe as ref.listen: these are
     // only requested while the home tab is on stage.
@@ -857,8 +884,15 @@ class _TripScreenState extends ConsumerState<TripScreen> {
 
                 // Persistent referral banner — self-suppresses for signed-out
                 // users and advocates (already shared / have referrals).
-                if (!_selectionMode)
-                  const SliverToBoxAdapter(child: ReferralHomeBanner()),
+                // DISABLED (owner request 2026-08-10): the banner resolves
+                // asynchronously and pushed the whole page down AFTER the
+                // checklist tutorial had measured its spotlight target, so
+                // the ring pointed at the wrong spot. Re-enable only with a
+                // layout-stable slot (reserved height, or placed below the
+                // tutorial's targets). Restore the referral_prompt import
+                // at the top of this file together with this line.
+                // if (!_selectionMode)
+                //   const SliverToBoxAdapter(child: ReferralHomeBanner()),
 
                 // Referral-promo status: dismissible "N free days" card,
                 // promotional entitlements only (store subs have their own
@@ -1201,13 +1235,11 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                       return const SliverToBoxAdapter(child: SizedBox.shrink());
                     }
 
-                    return SliverToBoxAdapter(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const SizedBox(height: 16),
-                          Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 16),
+                    return SliverMainAxisGroup(
+                      slivers: [
+                        SliverToBoxAdapter(
+                          child: Padding(
+                            padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
                             child: Row(
                               children: [
                                 Icon(
@@ -1221,32 +1253,35 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                                   style: Theme.of(context)
                                       .textTheme
                                       .titleLarge
-                                      ?.copyWith(
-                                        fontWeight: FontWeight.w600,
-                                      ),
+                                      ?.copyWith(fontWeight: FontWeight.w600),
                                 ),
                               ],
                             ),
                           ),
-                          const SizedBox(height: 12),
-                          ...sharedTrips.map((data) {
-                            // Null embeds were already dropped by the filter.
-                            final tripData =
-                                data['trips'] as Map<String, dynamic>;
-                            final permission = data['permission'] as String;
-                            final trip = Trip.fromJson(tripData);
-                            return Padding(
-                              padding: const EdgeInsets.only(
-                                left: 16,
-                                right: 16,
-                                bottom: 12,
-                              ),
-                              child: _buildSharedTripCard(
-                                  context, trip, permission),
-                            );
-                          }),
-                        ],
-                      ),
+                        ),
+                        // Lazy like Your Trips — the previous eager Column
+                        // built (and parsed) every shared card up front.
+                        SliverList(
+                          delegate: SliverChildBuilderDelegate(
+                            (context, index) {
+                              final data = sharedTrips[index];
+                              // Null embeds were already dropped by the
+                              // filter.
+                              final tripData =
+                                  data['trips'] as Map<String, dynamic>;
+                              final permission = data['permission'] as String;
+                              final trip = Trip.fromJson(tripData);
+                              return Padding(
+                                padding: const EdgeInsets.only(
+                                    left: 16, right: 16, bottom: 12),
+                                child: _buildSharedTripCard(
+                                    context, trip, permission),
+                              );
+                            },
+                            childCount: sharedTrips.length,
+                          ),
+                        ),
+                      ],
                     );
                   },
                   loading: () =>
@@ -1450,46 +1485,32 @@ class _TripScreenState extends ConsumerState<TripScreen> {
 
   Widget _buildTripCard(BuildContext context, Trip trip,
       {bool spotlightActivate = false, bool spotlightGoToMap = false}) {
-    final locationsAsync = ref.watch(savedLocationsProvider);
+    // Narrow per-trip stats instead of the raw locations list: the raw
+    // watch meant EVERY locations emission rebuilt EVERY card. select() on
+    // this trip's own record (records compare structurally) rebuilds this
+    // card only when its own count/date-span actually changes.
+    final stats = ref.watch(tripCardStatsProvider.select((m) => m[trip.id]));
     final isSelected = _selectedTripIds.contains(trip.id);
 
-    Widget buildContent(
-        int locationCount, DateTime? startDate, DateTime? endDate) {
-      return _buildTripCardContent(
-        context,
-        trip,
-        locationCount,
-        startDate,
-        endDate,
-        isSelected: isSelected,
-        spotlightActivate: spotlightActivate,
-        spotlightGoToMap: spotlightGoToMap,
-      );
+    // Prefer the trip's explicit date range; otherwise fall back to the
+    // span of its locations' scheduled dates so the user still sees a
+    // meaningful range on cards that haven't been tagged with planning
+    // dates.
+    DateTime? startDate = trip.startDate;
+    DateTime? endDate = trip.endDate;
+    if (startDate == null && endDate == null && stats != null) {
+      startDate = stats.start;
+      endDate = stats.end;
     }
-
-    final card = locationsAsync.when(
-      data: (allLocations) {
-        final tripLocations =
-            allLocations.where((loc) => loc.tripId == trip.id).toList();
-
-        // Prefer the trip's explicit date range; otherwise derive from the
-        // earliest/latest scheduled date among the trip's locations so the
-        // user still sees a meaningful range on cards that haven't been
-        // tagged with planning dates.
-        DateTime? startDate = trip.startDate;
-        DateTime? endDate = trip.endDate;
-        if (startDate == null && endDate == null && tripLocations.isNotEmpty) {
-          final dates = tripLocations
-              .map((loc) => loc.scheduledDate ?? loc.createdAt)
-              .toList()
-            ..sort();
-          startDate = dates.first;
-          endDate = dates.last;
-        }
-        return buildContent(tripLocations.length, startDate, endDate);
-      },
-      loading: () => buildContent(0, trip.startDate, trip.endDate),
-      error: (_, __) => buildContent(0, trip.startDate, trip.endDate),
+    final card = _buildTripCardContent(
+      context,
+      trip,
+      stats?.count ?? 0,
+      startDate,
+      endDate,
+      isSelected: isSelected,
+      spotlightActivate: spotlightActivate,
+      spotlightGoToMap: spotlightGoToMap,
     );
 
     return GestureDetector(
@@ -1508,23 +1529,15 @@ class _TripScreenState extends ConsumerState<TripScreen> {
     final localActiveTripId = ref.watch(localActiveTripIdProvider);
     final isActive = localActiveTripId == trip.id;
 
-    // Same metadata derivation as the owner card: prefer the trip's explicit
-    // dates, fall back to the span of its locations' scheduled dates.
-    final locationsAsync = ref.watch(savedLocationsProvider);
-    final tripLocations = locationsAsync.maybeWhen(
-      data: (all) => all.where((l) => l.tripId == trip.id).toList(),
-      orElse: () => const [],
-    );
-    final locationCount = tripLocations.length;
+    // Same metadata derivation as the owner card — via the narrow per-trip
+    // stats record, not the raw locations list (see _buildTripCard).
+    final stats = ref.watch(tripCardStatsProvider.select((m) => m[trip.id]));
+    final locationCount = stats?.count ?? 0;
     DateTime? startDate = trip.startDate;
     DateTime? endDate = trip.endDate;
-    if (startDate == null && endDate == null && tripLocations.isNotEmpty) {
-      final dates = tripLocations
-          .map((loc) => loc.scheduledDate ?? loc.createdAt)
-          .toList()
-        ..sort();
-      startDate = dates.first;
-      endDate = dates.last;
+    if (startDate == null && endDate == null && stats != null) {
+      startDate = stats.start;
+      endDate = stats.end;
     }
 
     final metaSpans = <InlineSpan>[];

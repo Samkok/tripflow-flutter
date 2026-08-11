@@ -5,16 +5,20 @@ import 'package:flutter/material.dart';
 
 import 'package:voyza/widgets/globe_land_mask.dart';
 
-/// A slowly rotating monochrome wireframe globe — blurred, low-contrast —
-/// meant to sit BEHIND screen content as ambient decoration. Draws only
-/// with the theme's neutral tone so it never competes with foreground
-/// components.
+/// A static monochrome wireframe globe — blurred, low-contrast — meant to
+/// sit BEHIND screen content as ambient decoration. Draws only with the
+/// theme's neutral tone so it never competes with foreground components.
+///
+/// FROZEN (owner request 2026-08-10): it used to rotate (one revolution per
+/// 75 s), but even a quantized drift read as jank on device, so the globe
+/// now holds a single pose — a random longitude per mount, so screens don't
+/// all show the identical stamp. Paint cost is now one rasterization per
+/// theme change. The old animation lives in git history.
 class RotatingGlobeBackground extends StatefulWidget {
   const RotatingGlobeBackground({super.key, this.animate = true});
 
-  /// Pause the rotation while the hosting tab is offstage. IndexedStack keeps
-  /// offstage children alive, so without this the ticker would burn frames
-  /// forever while the user is on another tab.
+  /// Inert since the freeze — kept so the call sites (which gate it on tab
+  /// visibility) didn't all need to change.
   final bool animate;
 
   @override
@@ -22,34 +26,10 @@ class RotatingGlobeBackground extends StatefulWidget {
       _RotatingGlobeBackgroundState();
 }
 
-class _RotatingGlobeBackgroundState extends State<RotatingGlobeBackground>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _controller;
-
-  @override
-  void initState() {
-    super.initState();
-    // One full revolution per 75 s — motion you notice, not motion you watch.
-    _controller =
-        AnimationController(vsync: this, duration: const Duration(seconds: 75));
-    if (widget.animate) _controller.repeat();
-  }
-
-  @override
-  void didUpdateWidget(covariant RotatingGlobeBackground oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (widget.animate && !_controller.isAnimating) {
-      _controller.repeat();
-    } else if (!widget.animate && _controller.isAnimating) {
-      _controller.stop();
-    }
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
+class _RotatingGlobeBackgroundState extends State<RotatingGlobeBackground> {
+  /// One random pose per mount, held in State so it stays stable across
+  /// rebuilds (re-randomizing per build would visibly jump the globe).
+  final double _rotation = math.Random().nextDouble() * 2 * math.pi;
 
   @override
   Widget build(BuildContext context) {
@@ -63,15 +43,12 @@ class _RotatingGlobeBackgroundState extends State<RotatingGlobeBackground>
 
     return IgnorePointer(
       child: RepaintBoundary(
-        child: AnimatedBuilder(
-          animation: _controller,
-          builder: (context, _) => CustomPaint(
-            size: Size.infinite,
-            painter: _GlobePainter(
-              rotation: _controller.value * 2 * math.pi,
-              color: lineColor,
-              landColor: landColor,
-            ),
+        child: CustomPaint(
+          size: Size.infinite,
+          painter: _GlobePainter(
+            rotation: _rotation,
+            color: lineColor,
+            landColor: landColor,
           ),
         ),
       ),

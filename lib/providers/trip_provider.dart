@@ -12,7 +12,10 @@ import '../models/location_model.dart';
 import '../models/trip_model.dart';
 import '../models/trip.dart';
 import '../services/google_maps_service.dart';
+import '../services/leg_mode_prefs.dart';
+import '../services/multi_modal_router.dart';
 import '../services/places_service.dart';
+import 'trip_simulation_provider.dart' show effectiveTripStartTimeProvider;
 import '../services/analytics_service.dart';
 // import '../services/anonymous_user_service.dart'; // DISABLED with first-optimize celebration (2026-08-07)
 // import '../services/onboarding_service.dart'; // DISABLED with first-optimize celebration (2026-08-07)
@@ -20,7 +23,6 @@ import '../services/review_prompt_service.dart';
 import '../services/storage_service.dart';
 import '../services/time_saved_ledger_service.dart';
 import '../providers/debounced_settings_provider.dart';
-import '../utils/zone_utils.dart';
 import '../utils/geo_utils.dart';
 import '../utils/isolate_utils.dart';
 import '../models/saved_location.dart';
@@ -1523,28 +1525,38 @@ class TripNotifier extends StateNotifier<TripState> {
         }
 
         if (closestCluster != null) {
-          orderedClusters.add(closestCluster);
           clusters.remove(closestCluster);
-          if (closestCluster.length > 1) {
-            final clusterCenter = ZoneUtils.getClusterCenter(closestCluster);
-            double maxDistFromCenter = -1;
-            LocationModel? farthestPoint;
-            for (final loc in closestCluster) {
+          // WITHIN-cluster order used to be the order the user ADDED the
+          // places — the "visit 2, then walk back to 3" bug. Nearest-
+          // neighbor from the entry point fixes the fallback path (the
+          // primary path is Google's travel-time TSP in the router, which
+          // overrides this order entirely when it succeeds).
+          final remaining = List<LocationModel>.from(closestCluster);
+          final orderedMembers = <LocationModel>[];
+          var walkPoint = currentPoint;
+          while (remaining.isNotEmpty) {
+            LocationModel? nearest;
+            var nearestDist = double.infinity;
+            for (final loc in remaining) {
               final dist = Geolocator.distanceBetween(
-                  clusterCenter.latitude,
-                  clusterCenter.longitude,
+                  walkPoint.latitude,
+                  walkPoint.longitude,
                   loc.coordinates.latitude,
                   loc.coordinates.longitude);
-              if (dist > maxDistFromCenter) {
-                maxDistFromCenter = dist;
-                farthestPoint = loc;
+              if (dist < nearestDist) {
+                nearestDist = dist;
+                nearest = loc;
               }
             }
-            currentPoint =
-                farthestPoint?.coordinates ?? closestCluster.last.coordinates;
-          } else {
-            currentPoint = closestCluster.first.coordinates;
+            orderedMembers.add(nearest!);
+            remaining.remove(nearest);
+            walkPoint = nearest.coordinates;
           }
+          orderedClusters.add(orderedMembers);
+          // Next cluster is chosen from where this one actually ENDS —
+          // the old "farthest from cluster center" reference point had no
+          // relationship to the walking path.
+          currentPoint = orderedMembers.last.coordinates;
         } else {
           break;
         }
@@ -1553,27 +1565,39 @@ class TripNotifier extends StateNotifier<TripState> {
       final finalOrderedWaypoints =
           orderedClusters.expand((cluster) => cluster).toList();
 
-      LocationModel? destination =
-          finalOrderedWaypoints.isNotEmpty ? finalOrderedWaypoints.last : null;
-      List<LocationModel> intermediateWaypoints;
-
-      if (finalOrderedWaypoints.isNotEmpty) {
-        intermediateWaypoints = finalOrderedWaypoints.length > 1
-            ? finalOrderedWaypoints.sublist(0, finalOrderedWaypoints.length - 1)
-            : [];
-      } else {
-        intermediateWaypoints = [];
-        // No waypoints, so no destination. The service call will handle this.
+      // Multi-modal routing along OUR order: one anchor-mode chain call,
+      // then per-leg mode resolution (walk/transit/drive ladder + the user's
+      // per-leg overrides + failure cascades). Longer timeout than the old
+      // single call: transit legs are fetched sequentially so departure
+      // times can chain off cumulative arrival + stay.
+      final routingTripId = locationsForDate.first.tripId ?? 'no_trip';
+      final travelProfile = await LegModePrefs.travelProfile(routingTripId);
+      final legOverrides = await LegModePrefs.overridesForTrip(routingTripId);
+      final prefMaxWalk = await LegModePrefs.maxWalkMeters();
+      // Loop home: when the day STARTS at its accommodation, that stop was
+      // pulled out of the optimize list — without this, the plan just
+      // ended at the last sight. The router appends a routed return leg.
+      // (An accommodation elsewhere in the list is already pinned as the
+      // day's destination — no return leg needed there.)
+      LocationModel? returnAccommodation;
+      final dayAccommodations =
+          locationsForDate.where((l) => l.isAccommodation).toList();
+      if (dayAccommodations.isNotEmpty &&
+          effectiveStartLocationId == dayAccommodations.first.id) {
+        returnAccommodation = dayAccommodations.first;
       }
-
-      // OPTIMIZATION: Add timeout to API call to prevent hanging
-      final routeResult = await GoogleMapsService.getOptimizedRouteDetails(
+      final routeResult = await MultiModalRouter.routeItinerary(
         origin: startPoint,
-        destination: destination,
-        waypoints: intermediateWaypoints,
-        optimizeWaypoints: false,
+        originId:
+            effectiveStartLocationId.isEmpty ? 'start' : effectiveStartLocationId,
+        orderedStops: finalOrderedWaypoints,
+        profile: travelProfile,
+        departureAnchor: _ref.read(effectiveTripStartTimeProvider),
+        legModeOverrides: legOverrides,
+        maxWalkMeters: prefMaxWalk.toDouble(),
+        returnTo: returnAccommodation,
       ).timeout(
-        const Duration(seconds: 20),
+        const Duration(seconds: 45),
         onTimeout: () {
           debugPrint('Route optimization API call timed out');
           return {
@@ -1590,7 +1614,16 @@ class TripNotifier extends StateNotifier<TripState> {
           routeResult['legDetails'] as List<Map<String, dynamic>>;
       final legPolylines = routeResult['legPolylines'] as List<List<LatLng>>;
 
-      List<LocationModel> orderedWaypoints = List.from(finalOrderedWaypoints);
+      // Adopt the router's FINAL visit order: when Google's travel-time TSP
+      // ordered the stops (roads, rivers, one-ways — not straight lines),
+      // the legs follow THAT order, so numbering and travel-time
+      // attribution must too. Falls back to the client heuristic's order
+      // when the router returned nothing better.
+      final routedOrder = routeResult['orderedStops'];
+      final List<LocationModel> orderedWaypoints =
+          (routedOrder is List<LocationModel> && routedOrder.isNotEmpty)
+              ? List.from(routedOrder)
+              : List.from(finalOrderedWaypoints);
 
       List<LocationModel> finalOptimizedLocationsForDate =
           List.from(orderedWaypoints);
@@ -1829,6 +1862,119 @@ class TripNotifier extends StateNotifier<TripState> {
     );
   }
 
+  /// Per-leg mode override (multi-modal Phase 4): re-routes ONE leg of the
+  /// current optimized route in [mode], patches the route state in place,
+  /// and persists the choice per (trip, fromId, toId) so every future
+  /// optimize of this trip keeps it. Returns false — state untouched — when
+  /// no route exists in that mode for this leg.
+  Future<bool> overrideLegMode(int legIndex, String mode) async {
+    final legs = List<Map<String, dynamic>>.from(state.legDetails);
+    final polys = List<List<LatLng>>.from(state.legPolylines);
+    if (legIndex < 0 ||
+        legIndex >= legs.length ||
+        legs.length != polys.length ||
+        polys[legIndex].isEmpty) {
+      return false;
+    }
+    final old = legs[legIndex];
+
+    LatLng coordFor(String? id, LatLng fallback) {
+      if (id == null) return fallback;
+      if (id == 'current_location') return state.currentLocation ?? fallback;
+      final match = state.pinnedLocations.where((l) => l.id == id);
+      return match.isNotEmpty ? match.first.coordinates : fallback;
+    }
+
+    final from = coordFor(old['fromId'] as String?, polys[legIndex].first);
+    final to = coordFor(old['toId'] as String?, polys[legIndex].last);
+
+    // Transit schedules need a departure estimate: trip start + everything
+    // before this leg (travel + dwell). Display-grade, not timetable-grade.
+    var departure = _ref.read(effectiveTripStartTimeProvider);
+    for (var i = 0; i < legIndex; i++) {
+      departure = departure
+          .add((legs[i]['duration'] as Duration?) ?? Duration.zero)
+          .add(const Duration(minutes: 60));
+    }
+
+    final leg = await MultiModalRouter.routeSingleLeg(
+      from: from,
+      to: to,
+      mode: mode,
+      departureTime: departure,
+    );
+    if (leg == null) return false;
+
+    return applyLegRoute(legIndex, leg);
+  }
+
+  /// Applies a specific routed [leg] to position [legIndex] — the shared
+  /// patch behind BOTH the mode switcher and the route-options picker.
+  /// Persists the leg's MODE (re-optimizes keep it); the specific
+  /// alternative route is deliberately not persisted — Google re-ranks
+  /// options with fresh schedules on every optimize, and pinning a stale
+  /// route identity would silently rot.
+  Future<bool> applyLegRoute(int legIndex, LegRoute leg) async {
+    final legs = List<Map<String, dynamic>>.from(state.legDetails);
+    final polys = List<List<LatLng>>.from(state.legPolylines);
+    if (legIndex < 0 ||
+        legIndex >= legs.length ||
+        legs.length != polys.length ||
+        leg.points.isEmpty) {
+      return false;
+    }
+    final old = legs[legIndex];
+
+    legs[legIndex] = {
+      'duration': leg.duration,
+      'distance': leg.distance,
+      'mode': leg.mode,
+      'fromId': old['fromId'],
+      'toId': old['toId'],
+      if (leg.transit != null) 'transit': leg.transit,
+      if (leg.steps != null) 'transitSteps': leg.steps,
+      if (leg.departureTime != null) 'departureTime': leg.departureTime,
+      if (leg.arrivalTime != null) 'arrivalTime': leg.arrivalTime,
+    };
+    polys[legIndex] = leg.points;
+
+    // The destination stop's travel-from-previous facts feed the list cards
+    // and the timing sim — keep them in sync with the new leg.
+    final toId = old['toId'] as String?;
+    List<LocationModel> patch(List<LocationModel> list) => [
+          for (final l in list)
+            l.id == toId
+                ? l.copyWith(
+                    travelTimeFromPrevious: leg.duration,
+                    distanceFromPrevious: leg.distance,
+                  )
+                : l
+        ];
+
+    state = state.copyWith(
+      legDetails: legs,
+      legPolylines: polys,
+      optimizedRoute: polys.expand((p) => p).toList(growable: false),
+      totalTravelTime: legs.fold<Duration>(Duration.zero,
+          (sum, l) => sum + ((l['duration'] as Duration?) ?? Duration.zero)),
+      totalDistance: legs.fold<double>(
+          0, (sum, l) => sum + (((l['distance'] as num?) ?? 0).toDouble())),
+      pinnedLocations: patch(state.pinnedLocations),
+      optimizedLocationsForSelectedDate:
+          patch(state.optimizedLocationsForSelectedDate),
+    );
+
+    // Persist so the ladder honors this leg's mode on every re-optimize.
+    final tripId = state.pinnedLocations.isNotEmpty
+        ? (state.pinnedLocations.first.tripId ?? 'no_trip')
+        : 'no_trip';
+    final fromId = old['fromId'] as String?;
+    if (fromId != null && toId != null) {
+      await LegModePrefs.setLegMode(tripId, fromId, toId, leg.mode);
+    }
+    return true;
+  }
+
   /// Renders a single-leg route between two specific locations on the map by
   /// reusing the existing `optimizedRoute` / `legPolylines` slots that the
   /// map overlay reads from. This is the "From → To" preview triggered from
@@ -1840,30 +1986,43 @@ class TripNotifier extends StateNotifier<TripState> {
     if (from.id == to.id) return;
     _ref.read(isGeneratingRouteProvider.notifier).state = true;
     try {
-      final result = await GoogleMapsService.getOptimizedRouteDetails(
-        origin: from.coordinates,
-        destination: to,
-        waypoints: const [],
-        optimizeWaypoints: false,
-      ).timeout(
-        const Duration(seconds: 20),
-        onTimeout: () => {
-          'routePoints': <LatLng>[],
-          'waypointOrder': <int>[],
-          'legDetails': <Map<String, dynamic>>[],
-          'legPolylines': <List<LatLng>>[],
-        },
-      );
+      // Same brain as the optimizer: honor a stored per-leg override for
+      // this exact pair, then run the AUTO ladder with the user's max-walk
+      // preference — the preview used to hardcode the car.
+      final previewTripId = from.tripId ?? 'no_trip';
+      final previewOverrides =
+          await LegModePrefs.overridesForTrip(previewTripId);
+      final prefMaxWalk = await LegModePrefs.maxWalkMeters();
+      final leg = await MultiModalRouter.routeLegSmart(
+        from: from.coordinates,
+        to: to.coordinates,
+        overrideMode:
+            previewOverrides[LegModePrefs.legOverrideKey(from.id, to.id)],
+        maxWalkMeters: prefMaxWalk.toDouble(),
+        departureTime: DateTime.now().add(const Duration(minutes: 10)),
+      ).timeout(const Duration(seconds: 25), onTimeout: () => null);
 
-      final routePoints = result['routePoints'] as List<LatLng>;
-      final legDetails = result['legDetails'] as List<Map<String, dynamic>>;
-      final legPolylines = result['legPolylines'] as List<List<LatLng>>;
-
-      if (routePoints.isEmpty) {
+      if (leg == null || leg.points.isEmpty) {
         // API failure / timeout — leave existing state alone so we don't
         // wipe a previously-rendered route on a transient error.
         return;
       }
+
+      final routePoints = leg.points;
+      final legDetails = <Map<String, dynamic>>[
+        {
+          'duration': leg.duration,
+          'distance': leg.distance,
+          'mode': leg.mode,
+          'fromId': from.id,
+          'toId': to.id,
+          if (leg.transit != null) 'transit': leg.transit,
+          if (leg.steps != null) 'transitSteps': leg.steps,
+          if (leg.departureTime != null) 'departureTime': leg.departureTime,
+          if (leg.arrivalTime != null) 'arrivalTime': leg.arrivalTime,
+        }
+      ];
+      final legPolylines = <List<LatLng>>[leg.points];
 
       final totalTravelTime = legDetails.fold<Duration>(
         Duration.zero,

@@ -395,9 +395,80 @@ class MarkerUtils {
   ///
   /// Rendered at device pixel ratio and handed to the map with a matching
   /// imagePixelRatio, so the text stays crisp instead of being upscaled.
+  /// Mode → chip glyph. Transit gets a vehicle-specific glyph so a Venice
+  /// vaporetto reads as a boat, not a bus.
+  static IconData legModeIcon(String mode, {String? vehicleType}) {
+    switch (mode) {
+      case 'walk':
+        return Icons.directions_walk_rounded;
+      case 'bicycle':
+        return Icons.directions_bike_rounded;
+      case 'two_wheeler':
+        return Icons.two_wheeler_rounded;
+      case 'direct':
+        return Icons.multiple_stop_rounded;
+      case 'transit':
+        switch (vehicleType) {
+          case 'FERRY':
+            return Icons.directions_boat_rounded;
+          case 'HEAVY_RAIL':
+          case 'COMMUTER_TRAIN':
+          case 'LONG_DISTANCE_TRAIN':
+          case 'HIGH_SPEED_TRAIN':
+            return Icons.train_rounded;
+          case 'SUBWAY':
+          case 'METRO_RAIL':
+            return Icons.subway_rounded;
+          case 'TRAM':
+          case 'LIGHT_RAIL':
+            return Icons.tram_rounded;
+          default:
+            return Icons.directions_bus_rounded;
+        }
+      default:
+        return Icons.directions_car_rounded;
+    }
+  }
+
+  /// Google-style leg endpoint "collar": a small white dot with a soft dark
+  /// ring, placed where legs begin/end and where transit journeys change
+  /// vehicle (board/alight junctions). Static bitmap, rendered once.
+  static Future<MarkerBitmapResult> getLegEndpointDotMarker() async {
+    final double dpr = (WidgetsBinding
+                .instance.platformDispatcher.implicitView?.devicePixelRatio ??
+            3.0)
+        .clamp(1.0, 4.0);
+    final ui.PictureRecorder pictureRecorder = ui.PictureRecorder();
+    final Canvas canvas = Canvas(pictureRecorder);
+    canvas.scale(dpr);
+
+    const double d = 14;
+    const Offset c = Offset(d / 2, d / 2);
+    canvas.drawCircle(
+        c, 6.4, Paint()..color = const Color(0xCC33404F)); // soft ring
+    canvas.drawCircle(c, 4.6, Paint()..color = Colors.white);
+
+    final ui.Image img = await pictureRecorder
+        .endRecording()
+        .toImage((d * dpr).round(), (d * dpr).round());
+    final ByteData? data = await img.toByteData(format: ui.ImageByteFormat.png);
+    if (data == null) {
+      return MarkerBitmapResult(
+          BitmapDescriptor.defaultMarker, const Offset(0.5, 0.5));
+    }
+    return MarkerBitmapResult(
+      BitmapDescriptor.bytes(data.buffer.asUint8List(), imagePixelRatio: dpr),
+      const Offset(0.5, 0.5),
+    );
+  }
+
   static Future<MarkerBitmapResult> getRouteLegChipMarker({
     required String distanceLabel,
     String? durationLabel,
+    String mode = 'drive',
+    String? vehicleType,
+    String? badgeText,
+    Color? badgeColor,
   }) async {
     final double dpr = (WidgetsBinding
                 .instance.platformDispatcher.implicitView?.devicePixelRatio ??
@@ -415,15 +486,34 @@ class MarkerUtils {
     const double shadowExtra = 5.0;
     const Color cyan = Color(0xFF00D4FF);
 
-    const IconData carIcon = Icons.directions_car_rounded;
+    final IconData modeIcon = legModeIcon(mode, vehicleType: vehicleType);
     final iconPainter = TextPainter(
       text: TextSpan(
-        text: String.fromCharCode(carIcon.codePoint),
+        text: String.fromCharCode(modeIcon.codePoint),
         style: TextStyle(
-            fontSize: 15, fontFamily: carIcon.fontFamily, color: Colors.white),
+            fontSize: 15, fontFamily: modeIcon.fontFamily, color: Colors.white),
       ),
       textDirection: TextDirection.ltr,
     )..layout();
+
+    // Transit line badge — the "[2]" in Google's itinerary rows, drawn in
+    // the line's official color right after the vehicle glyph.
+    final bool hasBadge = badgeText != null && badgeText.isNotEmpty;
+    final TextPainter? badgePainter = !hasBadge
+        ? null
+        : (TextPainter(
+            text: TextSpan(
+              text: badgeText,
+              style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800),
+            ),
+            textDirection: TextDirection.ltr,
+          )..layout());
+    const double badgeHPad = 6.0;
+    final double badgeWidth =
+        badgePainter == null ? 0 : badgePainter.width + badgeHPad * 2;
 
     // "4.4 km · 12 min" — the middle dot is dropped when the route service
     // gave us no duration for this leg.
@@ -460,6 +550,7 @@ class MarkerUtils {
     final double chipWidth = hPad +
         iconPainter.width +
         gap +
+        (badgePainter == null ? 0 : badgeWidth + gap) +
         textPainter.width +
         gap +
         chevronDiameter +
@@ -494,6 +585,19 @@ class MarkerUtils {
     double x = hPad;
     iconPainter.paint(canvas, Offset(x, (chipHeight - iconPainter.height) / 2));
     x += iconPainter.width + gap;
+    if (badgePainter != null) {
+      final badgeHeight = badgePainter.height + 4;
+      final badgeRect = RRect.fromRectAndRadius(
+        Rect.fromLTWH(
+            x, (chipHeight - badgeHeight) / 2, badgeWidth, badgeHeight),
+        const Radius.circular(5),
+      );
+      canvas.drawRRect(
+          badgeRect, Paint()..color = badgeColor ?? const Color(0xFFE53935));
+      badgePainter.paint(canvas,
+          Offset(x + badgeHPad, (chipHeight - badgePainter.height) / 2));
+      x += badgeWidth + gap;
+    }
     textPainter.paint(canvas, Offset(x, (chipHeight - textPainter.height) / 2));
     x += textPainter.width + gap;
 

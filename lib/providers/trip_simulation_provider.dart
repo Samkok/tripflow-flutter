@@ -16,10 +16,10 @@ final tripStartTimeOverrideProvider = StateProvider<TimeOfDay?>((ref) => null);
 
 /// Wall-clock start time for the simulation. Combines the selected date
 /// with either the user override or — by default — the device's current
-/// time of day, rounded down to the nearest 15 min. The "Start at" picker
-/// matches what's on the user's clock the moment they open the modal,
-/// regardless of which day is selected. If they want a different anchor
-/// they pick one explicitly (writes [tripStartTimeOverrideProvider]).
+/// time of day, EXACTLY as on the clock (owner call: the default is "now",
+/// not a rounded now). If they want a different anchor they pick one
+/// explicitly (writes [tripStartTimeOverrideProvider]); the Start-at card's
+/// "Reset to now" clears the override back to this default.
 final effectiveTripStartTimeProvider = Provider<DateTime>((ref) {
   final selectedDate = ref.watch(selectedDateProvider);
   final override = ref.watch(tripStartTimeOverrideProvider);
@@ -29,7 +29,7 @@ final effectiveTripStartTimeProvider = Provider<DateTime>((ref) {
     resolved = override;
   } else {
     final now = DateTime.now();
-    resolved = TimeOfDay(hour: now.hour, minute: (now.minute ~/ 15) * 15);
+    resolved = TimeOfDay(hour: now.hour, minute: now.minute);
   }
 
   return DateTime(

@@ -183,12 +183,14 @@ class LocationService {
   }
 
   static Stream<double?> getCompassStream() {
-    // 250ms: fast enough that the map's heading beam tracks a turning
-    // device without visible stepping, and an upper bound of 4 events/sec.
-    // The consumer (MapScreen) additionally gates on a ≥3° change, so a
-    // stationary phone's magnetometer noise produces zero downstream work.
+    // 500ms (was 250): every beam update redraws the map, and with the
+    // glass sheet's blur over it that redraw was the thermal hot path. At
+    // 2 events/sec slow turns still step ≤ the 3° gate (smooth — small
+    // deltas accumulate per tick), and fast turns hide the added latency.
+    // The consumer (MapScreen) gates on a ≥3° change, so a stationary
+    // phone's magnetometer noise produces zero downstream work.
     return FlutterCompass.events!
-        .transform(StreamUtils.throttle(const Duration(milliseconds: 250)))
+        .transform(StreamUtils.throttle(const Duration(milliseconds: 500)))
         .map((event) => event.heading);
   }
 }

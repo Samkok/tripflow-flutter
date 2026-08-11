@@ -220,11 +220,26 @@ class MarkerCacheService {
 
   /// Cached per distance+duration pair — the label is baked into the
   /// bitmap, so each distinct pair is its own image.
+  Future<MarkerBitmapResult> getLegEndpointDot() async {
+    const key = 'leg_endpoint_dot';
+    if (_cache.containsKey(key)) {
+      return _cache[key]!;
+    }
+    final result = await MarkerUtils.getLegEndpointDotMarker();
+    _addToCache(key, result);
+    return result;
+  }
+
   Future<MarkerBitmapResult> getRouteLegChipMarker({
     required String distanceLabel,
     String? durationLabel,
+    String mode = 'drive',
+    String? vehicleType,
+    String? badgeText,
+    Color? badgeColor,
   }) async {
-    final key = 'leg_chip_${distanceLabel}_${durationLabel ?? ''}';
+    final key = 'leg_chip_${mode}_${vehicleType ?? ''}_${badgeText ?? ''}_'
+        '${badgeColor?.toARGB32() ?? ''}_${distanceLabel}_${durationLabel ?? ''}';
     if (_cache.containsKey(key)) {
       return _cache[key]!;
     }
@@ -232,6 +247,10 @@ class MarkerCacheService {
     final result = await MarkerUtils.getRouteLegChipMarker(
       distanceLabel: distanceLabel,
       durationLabel: durationLabel,
+      mode: mode,
+      vehicleType: vehicleType,
+      badgeText: badgeText,
+      badgeColor: badgeColor,
     );
     _addToCache(key, result);
     return result;

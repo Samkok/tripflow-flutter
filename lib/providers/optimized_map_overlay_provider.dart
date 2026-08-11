@@ -69,6 +69,7 @@ final cachedMarkerBitmapsProvider =
       await markerCache.getCurrentLocationMarker();
   markerIcons['current_location_heading'] =
       await markerCache.getCurrentLocationHeadingMarker();
+  markerIcons['leg_endpoint'] = await markerCache.getLegEndpointDot();
 
   // Numbering is order-dependent → compute it synchronously first, THEN
   // rasterize every bitmap in PARALLEL. The serial awaits here were the
@@ -96,7 +97,9 @@ final cachedMarkerBitmapsProvider =
     (spec) => markerCache.getNumberedMarker(
       isStart: spec.isStart,
       number: spec.number,
-      name: spec.loc.name,
+      // The start pin says so in words — the flag alone read as "just
+      // another marker" and its numbering confused the map↔list mapping.
+      name: spec.isStart ? '${spec.loc.name} (Start here)' : spec.loc.name,
       backgroundColor: AppTheme.accentColor,
       textColor: Colors.white,
       isDarkMode: isDarkMode,
@@ -126,9 +129,9 @@ final finalMarkersProvider = Provider<Set<Marker>>((ref) {
   // real turn of the device — one cheap marker-set reassembly, one
   // single-marker rotation diff on the platform side.
   final deviceHeading = ref.watch(deviceHeadingProvider);
-
-  debugPrint(
-      'finalMarkersProvider: Building ${locationsForDate.length} markers (${locationsForDate.where((l) => !l.isSkipped).length} active)');
+  // Leg geometry for the endpoint collars — changes on optimize only.
+  final dotLegPolylines = ref.watch(tripProvider.select((s) => s.legPolylines));
+  final dotLegDetails = ref.watch(tripProvider.select((s) => s.legDetails));
 
   return markerBitmapsAsync.when(
     // During a RELOAD (background sync updates locations), keep showing the
@@ -161,6 +164,49 @@ final finalMarkersProvider = Provider<Set<Marker>>((ref) {
           rotation: hasHeading ? deviceHeading : 0.0,
           infoWindow: const InfoWindow(title: 'Your Location'),
         ));
+      }
+
+      // Google-style white collars at leg boundaries and transit junctions
+      // (board/alight points). Skipped wherever a numbered pin already sits
+      // — they mark stations and hand-off points, not stops.
+      final endpointIcon = markerIcons['leg_endpoint'];
+      if (endpointIcon != null && dotLegPolylines.isNotEmpty) {
+        bool nearAPin(LatLng p) => locationsForDate.any((l) =>
+            (l.coordinates.latitude - p.latitude).abs() < 0.00015 &&
+            (l.coordinates.longitude - p.longitude).abs() < 0.00015);
+        final seen = <String>{};
+        void addDot(LatLng p) {
+          if (nearAPin(p)) return;
+          final key = '${p.latitude.toStringAsFixed(5)},'
+              '${p.longitude.toStringAsFixed(5)}';
+          if (!seen.add(key)) return;
+          markers.add(Marker(
+            markerId: MarkerId('leg_dot_$key'),
+            position: p,
+            icon: endpointIcon.bitmap,
+            anchor: endpointIcon.anchor,
+            zIndexInt: 1,
+          ));
+        }
+
+        for (var i = 0; i < dotLegPolylines.length; i++) {
+          final steps = i < dotLegDetails.length
+              ? (dotLegDetails[i]['transitSteps'] as List?)
+              : null;
+          if (steps != null && steps.isNotEmpty) {
+            for (final run in steps) {
+              final pts = ((run as Map)['points'] as List).cast<LatLng>();
+              if (pts.isEmpty) continue;
+              addDot(pts.first);
+              addDot(pts.last);
+            }
+          } else {
+            final pts = dotLegPolylines[i];
+            if (pts.isEmpty) continue;
+            addDot(pts.first);
+            addDot(pts.last);
+          }
+        }
       }
 
       // Add location markers
@@ -246,11 +292,21 @@ final memoizedAutomaticZonesProvider = Provider<Set<Circle>>((ref) {
   return zones;
 });
 
+/// '#RRGGBB' (Routes API transit line colors) → Color; null on any junk.
+Color? _parseLineColor(String? hex) {
+  if (hex == null || hex.isEmpty) return null;
+  final cleaned = hex.replaceFirst('#', '');
+  if (cleaned.length != 6) return null;
+  final value = int.tryParse(cleaned, radix: 16);
+  return value == null ? null : Color(0xFF000000 | value);
+}
+
 final styledPolylinesProvider = Provider<Set<Polyline>>((ref) {
   // Narrow watches (moving-pin hygiene): a full tripProvider watch made
   // every GPS tick re-style the polylines via currentLocation.
   final legPolylinesState =
       ref.watch(tripProvider.select((s) => s.legPolylines));
+  final legDetailsState = ref.watch(tripProvider.select((s) => s.legDetails));
   final optimizedForDate = ref
       .watch(tripProvider.select((s) => s.optimizedLocationsForSelectedDate));
   final tappedPolylineId = ref.watch(tappedPolylineIdProvider);
@@ -278,24 +334,125 @@ final styledPolylinesProvider = Provider<Set<Polyline>>((ref) {
       final polylineId = 'leg_$i';
       final isHighlighted = tappedPolylineId == polylineId;
 
-      // PROFESSIONAL ROUTE STYLING: Beautiful, crisp polylines with smooth transitions
-      // The Google Maps SDK handles the visual transitions smoothly without reloading the map
+      // ── Multi-modal styling — the industry grammar users already read:
+      // walk = dotted · transit = solid in the LINE's official color ·
+      // bike/moto = long dashes · drive = solid neutral/brand ·
+      // direct (no route found in any mode) = faint dashes.
+      // Patterns render platform-side: zero per-frame cost.
+      final mode = i < legDetailsState.length
+          ? (legDetailsState[i]['mode'] as String? ?? 'drive')
+          : 'drive';
+      Color? transitColor;
+      if (mode == 'transit' && i < legDetailsState.length) {
+        final segs = legDetailsState[i]['transit'] as List?;
+        if (segs != null && segs.isNotEmpty) {
+          transitColor =
+              _parseLineColor((segs.first as Map)['lineColor'] as String?);
+        }
+      }
+      // NO PatternItem.dot anywhere: the iOS plugin maps each pattern item
+      // to a style span of `length ?: 0` — a dot has no length, so dotted
+      // lines rendered as ZERO visible pixels on iPhone (walking legs
+      // simply vanished). Short round-capped dashes read as dots and carry
+      // an explicit length on both platforms.
+      final patterns = switch (mode) {
+        // Walk: tight dot-like dashes. Bike/moto: long-short "dash-dot"
+        // rhythm so it can't be mistaken for walking at a glance.
+        'walk' => <PatternItem>[PatternItem.dash(8), PatternItem.gap(11)],
+        'bicycle' || 'two_wheeler' => <PatternItem>[
+            PatternItem.dash(28),
+            PatternItem.gap(9),
+            PatternItem.dash(7),
+            PatternItem.gap(9),
+          ],
+        'direct' => <PatternItem>[PatternItem.dash(14), PatternItem.gap(12)],
+        _ => const <PatternItem>[],
+      };
+      final hasPattern = patterns.isNotEmpty;
 
-      // Add shadow/outline polyline for depth effect
-      polylines.add(
-        Polyline(
-          polylineId: PolylineId('${polylineId}_shadow'),
-          points: legPoints,
-          color: Colors.black.withValues(alpha: isHighlighted ? 0.2 : 0.12),
-          width: isHighlighted ? 10 : 8,
-          consumeTapEvents: false,
-          startCap: Cap.roundCap,
-          endCap: Cap.roundCap,
-          jointType: JointType.round,
-          geodesic: true,
-          zIndex: 1,
-        ),
-      );
+      // ── Transit legs with step geometry: Google's grammar, properly ──
+      // A transit leg is walk → ride → walk. Drawing it as ONE solid line
+      // in the ride's color made the vaporetto appear to depart from the
+      // user's feet. Each run gets its own polyline: dotted neutral walking
+      // approach, solid line-colored ride. All runs share the parent leg's
+      // tap identity + highlight state.
+      final transitSteps = mode == 'transit' && i < legDetailsState.length
+          ? (legDetailsState[i]['transitSteps'] as List?)
+          : null;
+      if (transitSteps != null && transitSteps.isNotEmpty) {
+        for (var j = 0; j < transitSteps.length; j++) {
+          final run = transitSteps[j] as Map;
+          final runPoints = (run['points'] as List).cast<LatLng>();
+          if (runPoints.isEmpty) continue;
+          final isRide = run['mode'] == 'TRANSIT';
+          final runColor = isRide
+              ? (_parseLineColor(run['lineColor'] as String?) ??
+                  transitColor ??
+                  AppTheme.primaryColor)
+              : const Color(0xFFB9C1CC);
+          if (isRide) {
+            polylines.add(
+              Polyline(
+                polylineId: PolylineId('${polylineId}_s${j}_shadow'),
+                points: runPoints,
+                color:
+                    Colors.black.withValues(alpha: isHighlighted ? 0.2 : 0.12),
+                width: isHighlighted ? 10 : 9,
+                consumeTapEvents: false,
+                startCap: Cap.roundCap,
+                endCap: Cap.roundCap,
+                jointType: JointType.round,
+                geodesic: true,
+                zIndex: 1,
+              ),
+            );
+          }
+          polylines.add(
+            Polyline(
+              polylineId: PolylineId('${polylineId}_s$j'),
+              points: runPoints,
+              color: runColor,
+              width: isRide ? (isHighlighted ? 8 : 7) : (isHighlighted ? 6 : 5),
+              // dash, not dot — see the pattern comment above (iOS renders
+              // dots as zero-length spans = invisible).
+              patterns: isRide
+                  ? const <PatternItem>[]
+                  : <PatternItem>[PatternItem.dash(8), PatternItem.gap(11)],
+              consumeTapEvents: true,
+              onTap: () {
+                ref
+                    .read(mapUIStateProvider.notifier)
+                    .setTappedPolyline(polylineId);
+              },
+              startCap: Cap.roundCap,
+              endCap: Cap.roundCap,
+              jointType: JointType.round,
+              geodesic: true,
+              zIndex: isRide ? (isHighlighted ? 10 : 6) : 5,
+            ),
+          );
+        }
+        continue;
+      }
+
+      // Shadow under solid lines only — a solid shadow beneath a dotted
+      // walk line read as a second (phantom) route.
+      if (!hasPattern) {
+        polylines.add(
+          Polyline(
+            polylineId: PolylineId('${polylineId}_shadow'),
+            points: legPoints,
+            color: Colors.black.withValues(alpha: isHighlighted ? 0.2 : 0.12),
+            width: isHighlighted ? 10 : 8,
+            consumeTapEvents: false,
+            startCap: Cap.roundCap,
+            endCap: Cap.roundCap,
+            jointType: JointType.round,
+            geodesic: true,
+            zIndex: 1,
+          ),
+        );
+      }
 
       // Main polyline with professional styling
       polylines.add(
@@ -304,14 +461,18 @@ final styledPolylinesProvider = Provider<Set<Polyline>>((ref) {
           points: legPoints,
           // Tapped vs untapped must be unmistakable: an untapped leg is
           // neutral grey, the tapped one is the brand color (plus extra
-          // width and the white inner border added below). Same-color
-          // opacity tweaks were indistinguishable on a real map.
-          color:
-              isHighlighted ? AppTheme.primaryColor : const Color(0xFFB9C1CC),
+          // width and the white inner border added below). Transit keeps
+          // its line's official color in BOTH states — the line identity
+          // is the information — and selection shows via width + border.
+          color: transitColor ??
+              (mode == 'direct'
+                  ? const Color(0x66B9C1CC)
+                  : isHighlighted
+                      ? AppTheme.primaryColor
+                      : const Color(0xFFB9C1CC)),
           // Professional width: thicker when highlighted
-          width: isHighlighted ? 8 : 6,
-          // No patterns for cleaner, more professional look
-          patterns: [],
+          width: isHighlighted ? 8 : (mode == 'transit' ? 7 : 6),
+          patterns: patterns,
           // Ensure tap events are captured for interaction
           consumeTapEvents: true,
           onTap: () {
@@ -361,12 +522,21 @@ class RouteLegSheetRequest {
     required this.destination,
     required this.distanceLabel,
     this.durationLabel,
+    this.legIndex = -1,
+    this.mode = 'drive',
+    this.transit,
   });
 
   final LocationModel origin;
   final LocationModel destination;
   final String distanceLabel;
   final String? durationLabel;
+
+  /// Index into tripState.legDetails/legPolylines — the mode switcher needs
+  /// it to re-route exactly this leg. -1 for previews with no leg identity.
+  final int legIndex;
+  final String mode;
+  final List<Map<String, dynamic>>? transit;
 }
 
 /// Set by a chip tap, cleared by MapScreen once the sheet is shown.
@@ -427,13 +597,22 @@ final routeInfoMarkersProvider = FutureProvider<Set<Marker>>((ref) async {
       legDuration == null ? null : formatLegDuration(legDuration);
 
   final markerCache = MarkerCacheService();
-  // ONE compact chip on the polyline: [car] 4.4 km · 12 min (>). Replaces
-  // the old stacked distance-chip + OPEN MAPS + OPEN GRAB bitmaps, which
-  // covered the route the user had just tapped. Actions moved into the leg
-  // sheet that this chip opens.
+  // ONE compact chip on the polyline: [mode glyph] 4.4 km · 12 min (>) —
+  // walk/boat/bus/train glyph per leg, plus the transit line's colored
+  // badge (Google's "[2]") when the leg rides one. Bitmap cached per
+  // (mode, badge, labels), so a given chip rasterizes once.
+  final legMode = legData['mode'] as String? ?? 'drive';
+  final transitSegs = legData['transit'] as List?;
+  final firstSeg = (transitSegs != null && transitSegs.isNotEmpty)
+      ? transitSegs.first as Map
+      : null;
   final chipResult = await markerCache.getRouteLegChipMarker(
     distanceLabel: distanceLabel,
     durationLabel: durationLabel,
+    mode: legMode,
+    vehicleType: firstSeg?['vehicleType'] as String?,
+    badgeText: firstSeg?['lineShort'] as String?,
+    badgeColor: _parseLineColor(firstSeg?['lineColor'] as String?),
   );
 
   final start = legPoints.first;
@@ -452,12 +631,23 @@ final routeInfoMarkersProvider = FutureProvider<Set<Marker>>((ref) async {
   final isStartCurrentLocation = startLocationIdState == 'current_location';
   final fromIdx = isStartCurrentLocation ? legIndex - 1 : legIndex;
   final toIdx = isStartCurrentLocation ? legIndex : legIndex + 1;
+  // Out-of-range indices fall back to the leg's own ids before bare
+  // coordinates — the loop-home return leg points BACK to the day's first
+  // stop (the accommodation), which positional math can't reach.
+  LocationModel resolveById(String? id, LocationModel fallback) {
+    if (id == null) return fallback;
+    for (final l in ordered) {
+      if (l.id == id) return l;
+    }
+    return fallback;
+  }
+
   final fromLoc = (fromIdx >= 0 && fromIdx < ordered.length)
       ? ordered[fromIdx]
-      : _coordOnlyLocation(start);
+      : resolveById(legData['fromId'] as String?, _coordOnlyLocation(start));
   final toLoc = (toIdx >= 0 && toIdx < ordered.length)
       ? ordered[toIdx]
-      : _coordOnlyLocation(end);
+      : resolveById(legData['toId'] as String?, _coordOnlyLocation(end));
 
   // anchor=(0.5, 0.5) → the chip straddles the leg midpoint, so the route
   // line reads through on both sides of it.
@@ -476,6 +666,9 @@ final routeInfoMarkersProvider = FutureProvider<Set<Marker>>((ref) async {
             destination: toLoc,
             distanceLabel: distanceLabel,
             durationLabel: durationLabel,
+            legIndex: legIndex,
+            mode: legMode,
+            transit: transitSegs?.cast<Map<String, dynamic>>(),
           );
         }),
     // ── RIDE PROVIDER BUTTON — DISABLED 2026-08-05 ────────────────────────

@@ -850,7 +850,12 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
                     Text(
                       perMonthLine,
                       style: theme.textTheme.labelSmall?.copyWith(
-                        color: theme.colorScheme.primary,
+                        // Selected card's fill is primaryContainer — primary
+                        // text vanished into it (cyan on cyan). Use the
+                        // Material pair color on the filled state.
+                        color: isSelected
+                            ? theme.colorScheme.onPrimaryContainer
+                            : theme.colorScheme.primary,
                         fontWeight: FontWeight.w600,
                       ),
                     ),
@@ -1070,7 +1075,6 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
     if (!_signedIn || _promoExpiresAt != null || _pendingReferralCode != null) {
       return const SizedBox.shrink();
     }
-    final theme = Theme.of(context);
     if (!_showCodeField) {
       return Center(
         child: TextButton.icon(

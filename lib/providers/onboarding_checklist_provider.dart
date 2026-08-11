@@ -94,6 +94,13 @@ class ChecklistNotifier extends StateNotifier<ChecklistState> {
   final Ref _ref;
   String? _userId;
 
+  // Reconciliation calls that arrive before _load() finishes are stashed
+  // and replayed right after it. Without this, an early trips emission was
+  // silently dropped ("user has trips but 'Create a trip' is unchecked") —
+  // the derive raced the async prefs load and lost.
+  List<Trip>? _pendingDeriveTrips;
+  int _pendingLocCount = 0;
+
   Future<String> _resolveUserId() async =>
       _ref.read(currentUserIdProvider) ?? await AnonymousUserService.id;
 
@@ -145,6 +152,16 @@ class ChecklistNotifier extends StateNotifier<ChecklistState> {
       if (!mounted) return;
       state = state.copyWith(
           done: done, loaded: true, celebrated: celebrated, skipped: skipped);
+
+      // Replay reconciliation that arrived while we were still loading.
+      final pendingTrips = _pendingDeriveTrips;
+      _pendingDeriveTrips = null;
+      if (pendingTrips != null) await deriveFromTrips(pendingTrips);
+      if (_pendingLocCount > 0) {
+        final pendingCount = _pendingLocCount;
+        _pendingLocCount = 0;
+        await reportTripLocationCount(pendingCount, silent: true);
+      }
     } catch (e) {
       debugPrint('ChecklistNotifier: load failed: $e');
       if (mounted) state = state.copyWith(loaded: true);
@@ -153,7 +170,14 @@ class ChecklistNotifier extends StateNotifier<ChecklistState> {
 
   /// Idempotent. Persists, and fires the celebration exactly once when the
   /// set becomes complete.
-  Future<void> mark(ChecklistStep step) async {
+  ///
+  /// [silent] marks are RECONCILIATION — the system noticing work the user
+  /// already did (on this device pre-feature, or on another device), not a
+  /// step just performed. If a silent mark completes the set, the list is
+  /// acknowledged without the seal celebration — same rule as a
+  /// complete-at-load list. Celebrating a background sync would read as a
+  /// random popup, which is exactly the inconsistency it used to cause.
+  Future<void> mark(ChecklistStep step, {bool silent = false}) async {
     if (state.isDone(step)) return;
     final done = {...state.done, step};
     state = state.copyWith(done: done);
@@ -165,11 +189,14 @@ class ChecklistNotifier extends StateNotifier<ChecklistState> {
       if (state.isComplete && !state.celebrated && !state.skipped) {
         state = state.copyWith(celebrated: true);
         await prefs.setBool('checklist_celebrated_$uid', true);
-        // The checklist celebration REPLACES the generic first-optimize one
-        // when they'd land on the same moment — two stacked dialogs is spam.
-        await OnboardingService.instance
-            .markCelebrated(uid, OnboardingMilestone.firstOptimize);
-        _ref.read(checklistCelebrationTrigger.notifier).state++;
+        if (!silent) {
+          // The checklist celebration REPLACES the generic first-optimize
+          // one when they'd land on the same moment — two stacked dialogs
+          // is spam.
+          await OnboardingService.instance
+              .markCelebrated(uid, OnboardingMilestone.firstOptimize);
+          _ref.read(checklistCelebrationTrigger.notifier).state++;
+        }
       }
     } catch (e) {
       debugPrint('ChecklistNotifier: mark($step) failed: $e');
@@ -194,22 +221,33 @@ class ChecklistNotifier extends StateNotifier<ChecklistState> {
 
   /// Derivation from data already on screen — makes the checklist truthful
   /// for users who did steps before the feature existed (or outside the
-  /// guided path). Called by trip_screen whenever the trips list loads.
+  /// guided path). Called by trip_screen whenever trips or locations load.
+  /// Always silent: reconciliation never pops the celebration.
   Future<void> deriveFromTrips(List<Trip> trips) async {
-    if (!state.loaded || trips.isEmpty) return;
-    await mark(ChecklistStep.createTrip);
+    if (trips.isEmpty) return;
+    if (!state.loaded) {
+      _pendingDeriveTrips = trips; // replayed at the end of _load()
+      return;
+    }
+    await mark(ChecklistStep.createTrip, silent: true);
     if (trips.any((t) => t.isActive)) {
-      await mark(ChecklistStep.activateTrip);
+      await mark(ChecklistStep.activateTrip, silent: true);
     }
   }
 
   /// Screens that know a trip's location count report it here (trip details
-  /// list, map add-flow). Reaching 3 completes step 2.
-  Future<void> reportTripLocationCount(int count) async {
+  /// list live, home reconciliation). Reaching 3 completes step 2. Live
+  /// paths keep the default (celebration allowed); reconciliation passes
+  /// [silent].
+  Future<void> reportTripLocationCount(int count, {bool silent = false}) async {
+    if (!state.loaded) {
+      if (count > _pendingLocCount) _pendingLocCount = count;
+      return;
+    }
     if (count > state.locCount) {
       state = state.copyWith(locCount: count);
     }
-    if (count >= 3) await mark(ChecklistStep.addLocations);
+    if (count >= 3) await mark(ChecklistStep.addLocations, silent: silent);
   }
 }
 

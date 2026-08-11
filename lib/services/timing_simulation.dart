@@ -218,6 +218,10 @@ List<TimingWarning> _evaluateStop(
   }
   if (next != null) {
     final wait = next.open.difference(arrival);
+    // Grace threshold (owner-tuned): a wait under 15 minutes is travel,
+    // not a problem — suppressing it here removes the noise from every
+    // surface at once (badges, chip count, warnings sheet).
+    if (wait < const Duration(minutes: 15)) return const [];
     return [
       TimingWarning(
         kind: WarningKind.notOpenYet,
@@ -227,10 +231,20 @@ List<TimingWarning> _evaluateStop(
     ];
   }
 
-  return const [
+  // How far past the LAST close the arrival lands — carried via [overrun]
+  // (documented reuse) so the warnings sheet can compute the earlier start
+  // time that would make this stop reachable.
+  DateTime? lastClose;
+  for (final iv in intervals) {
+    if (lastClose == null || iv.close.isAfter(lastClose)) {
+      lastClose = iv.close;
+    }
+  }
+  return [
     TimingWarning(
       kind: WarningKind.closedOnArrival,
       message: 'Closed on arrival',
+      overrun: lastClose == null ? null : arrival.difference(lastClose),
     ),
   ];
 }

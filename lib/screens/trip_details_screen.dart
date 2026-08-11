@@ -615,8 +615,6 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
 
         // Get data safely
         final allLocations = snapshot.data ?? const [];
-        debugPrint(
-            'Trip details - Total locations in stream: ${allLocations.length}');
 
         // Filter by trip ID
         var tripLocations =

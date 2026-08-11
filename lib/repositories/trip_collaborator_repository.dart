@@ -154,10 +154,7 @@ class TripCollaboratorRepository {
   /// Revoke a pending invite (RLS: only the inviter can).
   Future<bool> revokePendingInvite(String inviteId) async {
     try {
-      await _supabase
-          .from('pending_trip_invites')
-          .delete()
-          .eq('id', inviteId);
+      await _supabase.from('pending_trip_invites').delete().eq('id', inviteId);
       return true;
     } catch (e) {
       debugPrint('Error revoking pending invite: $e');

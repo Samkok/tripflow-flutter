@@ -106,6 +106,13 @@ class LocationDetailSheet extends ConsumerWidget {
                 children: [
                   _buildHeaderBody(context, ref, updatedLocation, isPastDate),
 
+                  // Accommodation section — flag this place as the stay for a day
+                  // or the whole trip (one accommodation per day, DB-enforced).
+                  // Sits above the photos so the flag is reachable without
+                  // scrolling past the strip.
+                  const Divider(height: 32),
+                  _buildAccommodationSection(context, ref, updatedLocation),
+
                   // Photos section — Google Places photos for this stop. The strip is
                   // bounded on both axes (fixed-height SizedBox hosting a horizontal
                   // ListView), so it cannot introduce unbounded-constraint errors in
@@ -126,11 +133,6 @@ class LocationDetailSheet extends ConsumerWidget {
                     _buildHoursSection(
                         context, ref, updatedLocation, isPastDate),
                   ],
-
-                  // Accommodation section — flag this place as the stay for a day
-                  // or the whole trip (one accommodation per day, DB-enforced).
-                  const Divider(height: 32),
-                  _buildAccommodationSection(context, ref, updatedLocation),
 
                   // Multi-day stay section — lets the user mark this location as an
                   // accommodation that spans multiple days, with quick actions for
@@ -466,39 +468,24 @@ class LocationDetailSheet extends ConsumerWidget {
     final hasWriteAccess =
         hasWriteAccessAsync.whenOrNull(data: (value) => value) ?? false;
 
+    final canEdit = !isPastDate && hasWriteAccess;
+    final accent = updatedLocation.isDone
+        ? Colors.green.shade500
+        : updatedLocation.isSkipped
+            ? Colors.grey.shade600
+            : Theme.of(context).colorScheme.primary;
+    final titleStyle = Theme.of(context).textTheme.titleLarge?.copyWith(
+          fontWeight: FontWeight.bold,
+        );
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Action buttons — one row, each labelled. The old "Stop N" /
-        // "Stay: 30m" column is gone: the avatar already carries the stop
-        // number, and the stay duration has its own row further down, so
-        // the freed width goes to the labels.
+        // Action buttons — one row, each labelled. The index now leads the
+        // location name below (mirroring the trip-plan card), so the old
+        // number avatar is gone and the full width goes to the labels.
         Row(
           children: [
-            CircleAvatar(
-              backgroundColor: updatedLocation.isDone
-                  ? Colors.green.shade500
-                  : updatedLocation.isSkipped
-                      ? Colors.grey.shade600
-                      : Theme.of(context).colorScheme.primary,
-              radius: 22,
-              child: updatedLocation.isDone
-                  ? const Icon(Icons.check, color: Colors.white, size: 22)
-                  : updatedLocation.isSkipped
-                      // Skipped stops drop out of the optimized route, so
-                      // the index number is meaningless — a minus glyph
-                      // reads better than a stale number.
-                      ? const Icon(Icons.remove, color: Colors.white, size: 22)
-                      : Text(
-                          '$number',
-                          style: const TextStyle(
-                            color: Colors.black,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 18,
-                          ),
-                        ),
-            ),
-            const SizedBox(width: 12),
             // Equal-width so the three never overflow, whatever the labels
             // become at large text scales.
             Expanded(
@@ -557,14 +544,73 @@ class LocationDetailSheet extends ConsumerWidget {
         ),
         const SizedBox(height: 12),
 
-        // Location name - full width with proper wrapping
-        Text(
-          updatedLocation.name,
-          style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                fontWeight: FontWeight.bold,
+        // Name row: "N. Location name" (index as text, same glyph rules as
+        // the trip-plan card: done → check, skipped → minus, 0 → start flag)
+        // with a plain edit icon pushed to the right edge.
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: Text.rich(
+                TextSpan(
+                  children: [
+                    if (updatedLocation.isDone)
+                      WidgetSpan(
+                        alignment: PlaceholderAlignment.middle,
+                        child: Padding(
+                          padding: const EdgeInsets.only(right: 6),
+                          child: Icon(Icons.check_circle_rounded,
+                              size: 20, color: accent),
+                        ),
+                      )
+                    else if (updatedLocation.isSkipped)
+                      WidgetSpan(
+                        alignment: PlaceholderAlignment.middle,
+                        child: Padding(
+                          padding: const EdgeInsets.only(right: 6),
+                          child: Icon(Icons.remove_circle_outline_rounded,
+                              size: 20, color: accent),
+                        ),
+                      )
+                    else if (number == 0)
+                      WidgetSpan(
+                        alignment: PlaceholderAlignment.middle,
+                        child: Padding(
+                          padding: const EdgeInsets.only(right: 6),
+                          child:
+                              Icon(Icons.flag_rounded, size: 20, color: accent),
+                        ),
+                      )
+                    else
+                      TextSpan(
+                        text: '$number. ',
+                        style: titleStyle?.copyWith(color: accent),
+                      ),
+                    TextSpan(text: updatedLocation.name),
+                  ],
+                ),
+                style: titleStyle,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
               ),
-          maxLines: 3,
-          overflow: TextOverflow.ellipsis,
+            ),
+            const SizedBox(width: 8),
+            IconButton(
+              visualDensity: VisualDensity.compact,
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+              tooltip: 'Edit name',
+              icon: Icon(Icons.edit_outlined,
+                  size: 20,
+                  color: canEdit
+                      ? Theme.of(context).colorScheme.primary
+                      : Colors.grey),
+              onPressed: canEdit
+                  ? () =>
+                      _showEditLocationNameDialog(context, ref, updatedLocation)
+                  : null,
+            ),
+          ],
         ),
       ],
     );
@@ -582,10 +628,15 @@ class LocationDetailSheet extends ConsumerWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Action buttons — 2×2 grid
+        // Breathing room between the name row (up in the drag zone) and the
+        // button row.
+        const SizedBox(height: 12),
+        // Action buttons — one row: Schedule + Google Map. Name editing
+        // moved to the icon beside the name; stay duration is edited from
+        // the trip-plan card's "Stay" text button.
         Row(
           children: [
-            // Date
+            // Schedule (move this stop to another date)
             Expanded(
               child: OutlinedButton.icon(
                 icon: Icon(Icons.calendar_today_outlined,
@@ -593,7 +644,7 @@ class LocationDetailSheet extends ConsumerWidget {
                     color: canEdit
                         ? Theme.of(context).colorScheme.primary
                         : Colors.grey),
-                label: const Text('Date'),
+                label: const Text('Schedule'),
                 onPressed: canEdit
                     ? () async {
                         final datesWithLocations =
@@ -676,66 +727,6 @@ class LocationDetailSheet extends ConsumerWidget {
                           );
                         }
                       }
-                    : null,
-                style: OutlinedButton.styleFrom(
-                  padding:
-                      const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
-                  side: BorderSide(
-                    color: canEdit
-                        ? Theme.of(context)
-                            .colorScheme
-                            .primary
-                            .withValues(alpha: 0.3)
-                        : Colors.grey.withValues(alpha: 0.3),
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(width: 8),
-            // Edit
-            Expanded(
-              child: OutlinedButton.icon(
-                icon: Icon(Icons.edit_outlined,
-                    size: 18,
-                    color: canEdit
-                        ? Theme.of(context).colorScheme.primary
-                        : Colors.grey),
-                label: const Text('Edit'),
-                onPressed: canEdit
-                    ? () => _showEditLocationNameDialog(
-                        context, ref, updatedLocation)
-                    : null,
-                style: OutlinedButton.styleFrom(
-                  padding:
-                      const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
-                  side: BorderSide(
-                    color: canEdit
-                        ? Theme.of(context)
-                            .colorScheme
-                            .primary
-                            .withValues(alpha: 0.3)
-                        : Colors.grey.withValues(alpha: 0.3),
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 8),
-        Row(
-          children: [
-            // Set Stay
-            Expanded(
-              child: OutlinedButton.icon(
-                icon: Icon(Icons.timer_outlined,
-                    size: 18,
-                    color: canEdit
-                        ? Theme.of(context).colorScheme.primary
-                        : Colors.grey),
-                label: const Text('Set Stay'),
-                onPressed: canEdit
-                    ? () => _showEditStayDurationDialog(
-                        context, ref, updatedLocation)
                     : null,
                 style: OutlinedButton.styleFrom(
                   padding:
@@ -1129,47 +1120,38 @@ class LocationDetailSheet extends ConsumerWidget {
               ),
           ],
         ),
-        const SizedBox(height: 8),
-        Text(
-          '$dayLabel · $googleSummary',
-          style: theme.textTheme.bodyMedium,
-        ),
-        if (loc.hoursLastRefreshedAt != null) ...[
-          const SizedBox(height: 4),
-          Text(
-            'Updated ${_formatRelative(loc.hoursLastRefreshedAt!)}',
-            style: theme.textTheme.bodySmall?.copyWith(
-              color: theme.textTheme.bodyMedium?.color?.withValues(alpha: 0.6),
-            ),
-          ),
-        ],
-        const SizedBox(height: 12),
-        Row(
+        const SizedBox(height: 4),
+        // One line: "Tuesday: 10:00 – 18:00" followed by the closing-override
+        // control as a plain text button (opens the same "Close by" dialog).
+        // Once set it reads "Close by 22:00" / "Never closes", with a small
+        // Reset beside it to clear. Wrap keeps split-hours strings and the
+        // buttons from ever overflowing the row.
+        Wrap(
+          spacing: 4,
+          crossAxisAlignment: WrapCrossAlignment.center,
           children: [
-            Text('Close by:', style: theme.textTheme.bodyMedium),
-            const SizedBox(width: 8),
-            OutlinedButton.icon(
-              icon: Icon(Icons.schedule_outlined,
-                  size: 16,
-                  color: canEdit ? theme.colorScheme.primary : Colors.grey),
-              label: Text(
-                overrideMin == null
-                    ? 'Set'
-                    : overrideMin == kNeverCloses
-                        ? 'Never'
-                        : _formatMinutes(overrideMin),
-              ),
+            Text(
+              '$dayLabel: $googleSummary',
+              style: theme.textTheme.bodyMedium,
+            ),
+            TextButton(
               onPressed: canEdit
                   ? () => _editClosingOverride(context, ref, loc, defaultClose)
                   : null,
-              style: OutlinedButton.styleFrom(
-                padding:
-                    const EdgeInsets.symmetric(vertical: 6, horizontal: 12),
-                side: BorderSide(
-                  color: canEdit
-                      ? theme.colorScheme.primary.withValues(alpha: 0.4)
-                      : Colors.grey.withValues(alpha: 0.3),
-                ),
+              style: TextButton.styleFrom(
+                visualDensity: VisualDensity.compact,
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                minimumSize: const Size(0, 32),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                textStyle: theme.textTheme.labelLarge
+                    ?.copyWith(fontWeight: FontWeight.w600),
+              ),
+              child: Text(
+                overrideMin == null
+                    ? 'Set'
+                    : overrideMin == kNeverCloses
+                        ? 'Never closes'
+                        : 'Close by ${_formatMinutes(overrideMin)}',
               ),
             ),
             if (overrideMin != null && canEdit)
@@ -1180,11 +1162,22 @@ class LocationDetailSheet extends ConsumerWidget {
                 style: TextButton.styleFrom(
                   visualDensity: VisualDensity.compact,
                   padding: const EdgeInsets.symmetric(horizontal: 8),
+                  minimumSize: const Size(0, 32),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 ),
                 child: const Text('Reset'),
               ),
           ],
         ),
+        if (loc.hoursLastRefreshedAt != null) ...[
+          const SizedBox(height: 4),
+          Text(
+            'Updated ${_formatRelative(loc.hoursLastRefreshedAt!)}',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.textTheme.bodyMedium?.color?.withValues(alpha: 0.6),
+            ),
+          ),
+        ],
       ],
     );
   }
@@ -1824,314 +1817,6 @@ class LocationDetailSheet extends ConsumerWidget {
           ],
         );
       },
-    );
-  }
-
-  void _showEditStayDurationDialog(
-      BuildContext context, WidgetRef ref, LocationModel location) {
-    final List<Duration> presets = [
-      const Duration(minutes: 15),
-      const Duration(minutes: 30),
-      const Duration(hours: 1),
-      const Duration(hours: 2),
-      const Duration(hours: 3),
-      const Duration(hours: 4),
-    ];
-
-    final customController = TextEditingController();
-    // Staged selection — NOTHING is written until the user confirms with
-    // "Set". Hoisted outside the StatefulBuilder so setLocalState rebuilds
-    // don't reset it.
-    Duration selected = location.stayDuration;
-    // Whether the staged value comes from the custom field (true) or a
-    // quick-select preset (false).
-    var customActive = false;
-    // Custom-field unit: minutes or hours.
-    var customUnitHours = false;
-
-    showDialog(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setLocalState) {
-          // The staged custom duration, or null while the field is invalid.
-          Duration? customDuration() {
-            final raw = int.tryParse(customController.text.trim());
-            if (raw == null || raw <= 0) return null;
-            return customUnitHours
-                ? Duration(hours: raw)
-                : Duration(minutes: raw);
-          }
-
-          final staged = customActive ? customDuration() : selected;
-
-          return AlertDialog(
-            backgroundColor: Theme.of(context).cardColor,
-            shape:
-                RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-            titlePadding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
-            contentPadding: const EdgeInsets.fromLTRB(20, 12, 20, 4),
-            title: Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: Theme.of(context)
-                        .colorScheme
-                        .primary
-                        .withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Icon(Icons.timer_outlined,
-                      color: Theme.of(context).colorScheme.primary, size: 20),
-                ),
-                const SizedBox(width: 12),
-                const Text('Set Stay Duration'),
-              ],
-            ),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const SizedBox(height: 4),
-                Text(
-                  'Quick select',
-                  style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                        color: Colors.grey[500],
-                        letterSpacing: 0.5,
-                      ),
-                ),
-                const SizedBox(height: 10),
-                ...[
-                  [presets[0], presets[1], presets[2]],
-                  [presets[3], presets[4], presets[5]],
-                ].map((rowPresets) => Padding(
-                      padding: const EdgeInsets.only(bottom: 8),
-                      child: Row(
-                        children: rowPresets.expand((duration) {
-                          final isSelected =
-                              !customActive && selected == duration;
-                          return [
-                            Expanded(
-                              child: InkWell(
-                                onTap: () {
-                                  // Stage only — "Set" below commits.
-                                  setLocalState(() {
-                                    selected = duration;
-                                    customActive = false;
-                                    customController.clear();
-                                  });
-                                },
-                                borderRadius: BorderRadius.circular(10),
-                                child: AnimatedContainer(
-                                  duration: const Duration(milliseconds: 150),
-                                  height: 40,
-                                  decoration: BoxDecoration(
-                                    color: isSelected
-                                        ? Theme.of(context).colorScheme.primary
-                                        : Theme.of(context)
-                                            .colorScheme
-                                            .primary
-                                            .withValues(alpha: 0.08),
-                                    borderRadius: BorderRadius.circular(10),
-                                    border: Border.all(
-                                      color: isSelected
-                                          ? Theme.of(context)
-                                              .colorScheme
-                                              .primary
-                                          : Theme.of(context)
-                                              .colorScheme
-                                              .primary
-                                              .withValues(alpha: 0.2),
-                                    ),
-                                  ),
-                                  child: Center(
-                                    child: Text(
-                                      _formatDuration(duration),
-                                      style: TextStyle(
-                                        color: isSelected
-                                            ? Colors.black
-                                            : Theme.of(context)
-                                                .textTheme
-                                                .bodyMedium
-                                                ?.color,
-                                        fontWeight: FontWeight.w600,
-                                        fontSize: 13,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ),
-                            if (duration != rowPresets.last)
-                              const SizedBox(width: 8),
-                          ];
-                        }).toList(),
-                      ),
-                    )),
-                const SizedBox(height: 16),
-                const Divider(height: 1),
-                const SizedBox(height: 14),
-                // Custom duration — framed + labeled with an icon so it
-                // reads as a real, tappable option rather than fine print.
-                Container(
-                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
-                  decoration: BoxDecoration(
-                    color: customActive
-                        ? Theme.of(context)
-                            .colorScheme
-                            .primary
-                            .withValues(alpha: 0.08)
-                        : Theme.of(context).colorScheme.surface,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                      color: customActive
-                          ? Theme.of(context).colorScheme.primary
-                          : Theme.of(context)
-                              .colorScheme
-                              .primary
-                              .withValues(alpha: 0.25),
-                      width: customActive ? 1.5 : 1,
-                    ),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Icon(Icons.edit_rounded,
-                              size: 16,
-                              color: Theme.of(context).colorScheme.primary),
-                          const SizedBox(width: 6),
-                          Text(
-                            'Or type a custom duration',
-                            style: Theme.of(context)
-                                .textTheme
-                                .labelMedium
-                                ?.copyWith(
-                                  color: Theme.of(context).colorScheme.primary,
-                                  fontWeight: FontWeight.w600,
-                                  letterSpacing: 0.3,
-                                ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 10),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: TextField(
-                              controller: customController,
-                              keyboardType: TextInputType.number,
-                              onTap: () =>
-                                  setLocalState(() => customActive = true),
-                              onChanged: (_) =>
-                                  setLocalState(() => customActive = true),
-                              decoration: InputDecoration(
-                                hintText:
-                                    customUnitHours ? 'e.g. 2' : 'e.g. 45',
-                                filled: true,
-                                fillColor:
-                                    Theme.of(context).colorScheme.surface,
-                                border: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(10),
-                                  borderSide: BorderSide.none,
-                                ),
-                                focusedBorder: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(10),
-                                  borderSide: BorderSide(
-                                    color:
-                                        Theme.of(context).colorScheme.primary,
-                                    width: 1.5,
-                                  ),
-                                ),
-                                contentPadding: const EdgeInsets.symmetric(
-                                    horizontal: 14, vertical: 12),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          // Unit toggle: minutes | hours.
-                          SegmentedButton<bool>(
-                            segments: const [
-                              ButtonSegment(value: false, label: Text('min')),
-                              ButtonSegment(value: true, label: Text('hr')),
-                            ],
-                            selected: {customUnitHours},
-                            showSelectedIcon: false,
-                            style: ButtonStyle(
-                              visualDensity: VisualDensity.compact,
-                              textStyle: WidgetStatePropertyAll(
-                                Theme.of(context)
-                                    .textTheme
-                                    .labelMedium
-                                    ?.copyWith(fontWeight: FontWeight.w600),
-                              ),
-                            ),
-                            onSelectionChanged: (sel) => setLocalState(() {
-                              customUnitHours = sel.first;
-                              if (customController.text.trim().isNotEmpty) {
-                                customActive = true;
-                              }
-                            }),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 14),
-                Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton(
-                        onPressed: () => Navigator.of(ctx).pop(),
-                        style: OutlinedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(vertical: 14),
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(10)),
-                        ),
-                        child: const Text('Cancel'),
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: FilledButton(
-                        // The ONLY commit path — quick-selects and custom
-                        // input both just stage until this confirms.
-                        onPressed: staged == null
-                            ? null
-                            : () {
-                                ref
-                                    .read(tripProvider.notifier)
-                                    .updateLocationStayDuration(
-                                        location.id, staged);
-                                Navigator.of(ctx).pop();
-                              },
-                        style: FilledButton.styleFrom(
-                          backgroundColor:
-                              Theme.of(context).colorScheme.primary,
-                          foregroundColor: Colors.black,
-                          padding: const EdgeInsets.symmetric(vertical: 14),
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(10)),
-                        ),
-                        child: Text(
-                          staged == null
-                              ? 'Set'
-                              : 'Set ${_formatDuration(staged)}',
-                          style: const TextStyle(fontWeight: FontWeight.w600),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 4),
-              ],
-            ),
-            actions: const [],
-          );
-        },
-      ),
     );
   }
 

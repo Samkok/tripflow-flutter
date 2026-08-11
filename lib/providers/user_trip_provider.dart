@@ -36,8 +36,7 @@ final userTripsProvider = FutureProvider<List<Trip>>((ref) async {
     data: (state) async {
       // Guests keep the same trips surface, served from the local store —
       // the repository branches on auth internally.
-      final userId =
-          state.session?.user.id ?? await AnonymousUserService.id;
+      final userId = state.session?.user.id ?? await AnonymousUserService.id;
       return tripRepository.getUserTrips(userId);
     },
     loading: () => [],
@@ -52,8 +51,7 @@ final activeTripsProvider = FutureProvider<Trip?>((ref) async {
 
   return authState.when(
     data: (state) async {
-      final userId =
-          state.session?.user.id ?? await AnonymousUserService.id;
+      final userId = state.session?.user.id ?? await AnonymousUserService.id;
       return tripRepository.getActiveTrip(userId);
     },
     loading: () => null,

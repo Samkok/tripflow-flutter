@@ -95,8 +95,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                           await ref
                               .read(authServiceProvider)
                               .resendVerificationEmail(email);
-                          _resendAvailableAt = DateTime.now()
-                              .add(const Duration(seconds: 60));
+                          _resendAvailableAt =
+                              DateTime.now().add(const Duration(seconds: 60));
                           setDialogState(() {});
                           if (ctx.mounted) {
                             AppToast.success(

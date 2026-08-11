@@ -503,8 +503,26 @@ class LocationRepository {
     return result;
   }
 
-  Stream<List<SavedLocation>> watchLocations() {
-    return _createWatchStream();
+  Stream<List<SavedLocation>> watchLocations() async* {
+    // Content dedupe at the source: sync loops and realtime re-puts rewrite
+    // unchanged rows, and every debounced Hive burst then emitted a fresh —
+    // but content-identical — snapshot. Each of those rebuilt every watcher
+    // in the app (home trip cards, trip details, the map pipeline). Swallow
+    // no-op emissions here so every consumer inherits the fix.
+    // Order-sensitive by design: a genuine reorder still emits.
+    String? lastFingerprint;
+    await for (final locations in _createWatchStream()) {
+      final buffer = StringBuffer();
+      for (final location in locations) {
+        buffer
+          ..write(location.toJson().toString())
+          ..write('');
+      }
+      final fingerprint = buffer.toString();
+      if (fingerprint == lastFingerprint) continue;
+      lastFingerprint = fingerprint;
+      yield locations;
+    }
   }
 
   /// Creates a stream that properly initializes the Hive box before watching.

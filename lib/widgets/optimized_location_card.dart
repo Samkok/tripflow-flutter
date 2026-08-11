@@ -7,11 +7,11 @@ import 'package:voyza/providers/map_ui_state_provider.dart';
 import 'package:voyza/providers/trip_listener_provider.dart';
 import 'package:voyza/providers/trip_provider.dart';
 import 'package:voyza/providers/trip_collaborator_provider.dart';
-import 'package:voyza/providers/trip_simulation_provider.dart';
-import 'package:voyza/services/timing_simulation.dart';
 import 'package:voyza/widgets/accommodation_prompts.dart';
 import 'package:voyza/widgets/location_detail_sheet.dart';
 import 'package:voyza/widgets/location_photo_gallery.dart';
+import 'package:voyza/widgets/photo_gallery_viewer.dart';
+import 'package:voyza/widgets/stay_duration_dialog.dart';
 import 'package:voyza/utils/date_picker_utils.dart';
 import 'package:voyza/utils/same_day_place_guard.dart';
 import 'package:voyza/utils/trip_date_validator.dart';
@@ -21,7 +21,7 @@ import 'package:voyza/core/theme.dart';
 /// Location card displayed inside the trip-plan bottom sheet.
 ///
 /// Visual structure (collapsed):
-///   [accent bar] [number badge] [title + address + travel chips] [cover thumb] [chevron + menu]
+///   [cover thumb] [index-led title + hours + "Stay" text button + actions row]
 /// When expanded a horizontal photo strip is revealed below.
 class OptimizedLocationCard extends ConsumerStatefulWidget {
   final LocationModel location;
@@ -199,7 +199,17 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
             photoRef: photoRefs.first,
             size: 108,
             extraCount: photoRefs.length > 1 ? photoRefs.length - 1 : null,
-            onTap: () => _handleTap(context, ref, isSelectionMode, isSelected),
+            // The image IS the photos affordance: tapping it opens the
+            // full-screen carousel. The rest of the card still opens the
+            // location detail modal (selection mode keeps its toggle).
+            onTap: () => isSelectionMode
+                ? _handleTap(context, ref, isSelectionMode, isSelected)
+                : showPhotoGalleryViewer(
+                    context: context,
+                    photoUrls: photoRefs.map(resolveLocationPhotoUrl).toList(),
+                    initialIndex: 0,
+                    title: location.name,
+                  ),
           ),
           const SizedBox(width: 12),
         ],
@@ -209,7 +219,9 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
             children: [
               _buildTitleBlock(context, accent),
               if (!isSelectionMode) ...[
-                const SizedBox(height: 12),
+                const SizedBox(height: 2),
+                _buildStayButton(context),
+                const SizedBox(height: 6),
                 _buildActions(context, hasPhotos),
               ],
             ],
@@ -326,6 +338,18 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
                               size: 18, color: accent),
                         ),
                       )
+                    else if (number == 0)
+                      // Number 0 = this stop is the route's START anchor —
+                      // mirror the map's flag pin instead of a misleading
+                      // "0." (map stop 1 == list stop 1 from here on).
+                      WidgetSpan(
+                        alignment: PlaceholderAlignment.middle,
+                        child: Padding(
+                          padding: const EdgeInsets.only(right: 6),
+                          child:
+                              Icon(Icons.flag_rounded, size: 18, color: accent),
+                        ),
+                      )
                     else
                       TextSpan(
                         text: '$number. ',
@@ -361,13 +385,38 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
             ),
           ],
         ),
-        // if (location.travelTimeFromPrevious != null &&
-        //     location.distanceFromPrevious != null) ...[
-        //   const SizedBox(height: 8),
-        //   _buildTravelChips(context),
-        // ],
-        // _buildWarningBadge(context),
       ],
+    );
+  }
+
+  /// "Stay: 1h 30m" — borderless text button in the primary color, the
+  /// affordance for editing how long the user plans to spend at this stop
+  /// (the detail modal's old "Set Stay" button now lives here, visible at a
+  /// glance in the plan list).
+  Widget _buildStayButton(BuildContext context) {
+    final theme = Theme.of(context);
+    final hasWriteAccess =
+        ref.watch(hasActiveTripWriteAccessProvider).asData?.value ?? false;
+    final selectedDate = ref.watch(selectedDateProvider);
+    final now = DateTime.now();
+    final isPastDate =
+        selectedDate.isBefore(DateTime(now.year, now.month, now.day));
+    final canEdit = hasWriteAccess && !isPastDate;
+
+    return TextButton.icon(
+      onPressed:
+          canEdit ? () => showStayDurationDialog(context, ref, location) : null,
+      icon: const Icon(Icons.timer_outlined, size: 14),
+      label: Text('Stay: ${_formatDuration(location.stayDuration)}'),
+      style: TextButton.styleFrom(
+        foregroundColor: theme.colorScheme.primary,
+        visualDensity: VisualDensity.compact,
+        padding: const EdgeInsets.symmetric(horizontal: 4),
+        minimumSize: const Size(0, 28),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        textStyle:
+            theme.textTheme.labelMedium?.copyWith(fontWeight: FontWeight.w600),
+      ),
     );
   }
 
@@ -398,114 +447,6 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
             '${df.format(start)} – ${df.format(end)}',
             style: theme.textTheme.labelSmall?.copyWith(
               color: theme.colorScheme.primary,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// Reads the latest closing-time-aware simulation result for this stop and
-  /// renders a single most-severe warning chip when present. Hidden when the
-  /// simulation hasn't run, this stop is feasible, or the location is
-  /// skipped/done (warnings would be misleading on a stop the user already
-  /// decided not to visit).
-  Widget _buildWarningBadge(BuildContext context) {
-    if (location.isSkipped || location.isDone) return const SizedBox.shrink();
-    final warnings = ref.watch(stopWarningsProvider
-        .select((m) => m[location.id] ?? const <TimingWarning>[]));
-    if (warnings.isEmpty) return const SizedBox.shrink();
-
-    final w = warnings.reduce((a, b) => a.kind.index >= b.kind.index ? a : b);
-    final theme = Theme.of(context);
-    Color fg;
-    IconData icon;
-    switch (w.kind) {
-      case WarningKind.willOverrunClose:
-        fg = Colors.orange.shade700;
-        icon = Icons.timer_outlined;
-        break;
-      case WarningKind.notOpenYet:
-        fg = Colors.blue.shade700;
-        icon = Icons.schedule_outlined;
-        break;
-      case WarningKind.closedOnArrival:
-      case WarningKind.closedAllDay:
-        fg = theme.colorScheme.error;
-        icon = Icons.do_not_disturb_on_outlined;
-        break;
-    }
-
-    return Padding(
-      padding: const EdgeInsets.only(top: 6),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-        decoration: BoxDecoration(
-          color: fg.withValues(alpha: 0.12),
-          borderRadius: BorderRadius.circular(20),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 12, color: fg),
-            const SizedBox(width: 4),
-            Flexible(
-              child: Text(
-                w.message,
-                style: TextStyle(
-                  color: fg,
-                  fontSize: 11,
-                  fontWeight: FontWeight.w600,
-                ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildTravelChips(BuildContext context) {
-    return Wrap(
-      spacing: 6,
-      runSpacing: 4,
-      children: [
-        _chip(
-          context,
-          icon: Icons.access_time_rounded,
-          label: _formatDuration(location.travelTimeFromPrevious!),
-        ),
-        _chip(
-          context,
-          icon: Icons.straighten_rounded,
-          label: _formatDistance(location.distanceFromPrevious!),
-        ),
-      ],
-    );
-  }
-
-  Widget _chip(BuildContext context,
-      {required IconData icon, required String label}) {
-    final primary = Theme.of(context).colorScheme.primary;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration: BoxDecoration(
-        color: primary.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 12, color: primary),
-          const SizedBox(width: 4),
-          Text(
-            label,
-            style: TextStyle(
-              color: primary,
-              fontSize: 11,
               fontWeight: FontWeight.w600,
             ),
           ),
@@ -926,12 +867,5 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
     final minutes = duration.inMinutes % 60;
     if (hours > 0) return '${hours}h ${minutes}m';
     return '${minutes}m';
-  }
-
-  String _formatDistance(double distanceInMeters) {
-    if (distanceInMeters < 1000) {
-      return '${distanceInMeters.toInt()}m';
-    }
-    return '${(distanceInMeters / 1000).toStringAsFixed(1)}km';
   }
 }

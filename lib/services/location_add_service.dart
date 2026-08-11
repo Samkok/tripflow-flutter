@@ -186,6 +186,7 @@ class LocationAddService {
     BuildContext context,
     LocationModel location, {
     String? locationCountryCode,
+
     /// Batch callers (nearby-places multi-select) run ONE
     /// [SubscriptionLimitService.canAddPlaces] gate up front and pass true
     /// here — otherwise every place past the allowance would pop its own

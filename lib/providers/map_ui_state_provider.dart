@@ -161,3 +161,14 @@ class MapZoomToLocationRequest {
 
 final mapZoomToLocationRequestProvider =
     StateProvider<MapZoomToLocationRequest?>((_) => null);
+
+/// One-shot "frame this route leg on the map" request, fired by the
+/// route-leg sheet's Show-on-map button. MapScreen consumes it: collapses
+/// the plan sheet, fits the camera to the leg's bounds, and highlights it.
+class MapZoomToLegRequest {
+  MapZoomToLegRequest(this.legIndex);
+  final int legIndex;
+}
+
+final mapZoomToLegRequestProvider =
+    StateProvider<MapZoomToLegRequest?>((_) => null);

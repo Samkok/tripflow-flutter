@@ -9,12 +9,13 @@ import '../providers/trip_simulation_provider.dart';
 import '../services/timing_simulation.dart';
 import 'app_toast.dart';
 
-/// Modal sheet shown after the user taps Optimize when the timing simulation
-/// flags one or more stops. The user picks Skip or Move-to-next-day per
-/// flagged stop, those choices are STAGED locally (the live route isn't
-/// touched yet), and a single Cancel / Confirm bar at the bottom applies
-/// everything at once and re-runs the optimizer. Confirm stays disabled
-/// until every flagged stop has a staged choice.
+/// Timing-issues sheet, opened ON DEMAND from the Route Summary's amber
+/// chip (never auto-popped — the route is already committed by then).
+/// Each flagged stop offers only practical verbs, per warning kind:
+/// a computed "Start day at HH:MM" one-tap repair (immediate), Move to
+/// next day, or Go anyway (staged; Apply bar re-optimizes once). Tolerable
+/// mid-day waits render as info-only rows with no buttons and never gate
+/// Apply. Sub-15-minute waits are suppressed at the simulator.
 ///
 /// Captured snapshot model: at open time we freeze the list of problems
 /// from [tripSimulationProvider]. The provider isn't watched, so live
@@ -40,12 +41,13 @@ class TimingWarningsSheet extends ConsumerStatefulWidget {
 }
 
 /// What the user has decided to do about a flagged stop.
-///   • [skip] — drop from the route via `skipMultipleLocations`.
 ///   • [moveNextDay] — push to the next day via
 ///     `updateMultipleLocationsScheduledDate`.
 ///   • [goAnyway] — acknowledge the warning but keep the stop in the
 ///     route as-is; no repository write happens for this choice.
-enum _ActionKind { skip, moveNextDay, goAnyway }
+/// (Skip was deliberately removed: it already lives on the card's own
+/// menu, and the simplified model keeps only practical fixes here.)
+enum _ActionKind { moveNextDay, goAnyway }
 
 class _ProblemEntry {
   final StopTiming stop;
@@ -63,12 +65,19 @@ class _TimingWarningsSheetState extends ConsumerState<TimingWarningsSheet> {
 
   bool _applying = false;
 
+  /// The day's very first stop — the one whose early arrival is fixable
+  /// by simply starting later.
+  String? _firstStopLocationId;
+
   @override
   void initState() {
     super.initState();
     final result = ref.read(tripSimulationProvider);
     final ordered = ref.read(tripProvider).optimizedLocationsForSelectedDate;
     final byId = {for (final l in ordered) l.id: l};
+    _firstStopLocationId = (result != null && result.stops.isNotEmpty)
+        ? result.stops.first.locationId
+        : null;
 
     _problems = result == null
         ? const []
@@ -81,6 +90,75 @@ class _TimingWarningsSheetState extends ConsumerState<TimingWarningsSheet> {
             })
             .whereType<_ProblemEntry>()
             .toList();
+
+    // Info-only rows (mid-day short-ish waits): nothing to decide — the
+    // fact is the deliverable. Auto-acknowledge so they don't gate Apply.
+    for (final p in _problems) {
+      if (_isInfoOnly(p)) _staged[p.location.id] = _ActionKind.goAnyway;
+    }
+  }
+
+  /// Mid-day "not open yet" with a tolerable wait (<45 min, owner-tuned):
+  /// informational, no buttons. First-stop waits get the Start-later fix
+  /// instead, and 45+ min waits earn the Move option.
+  bool _isInfoOnly(_ProblemEntry p) {
+    final w = p.stop.warnings.first;
+    return w.kind == WarningKind.notOpenYet &&
+        p.location.id != _firstStopLocationId &&
+        (w.wait ?? Duration.zero) < const Duration(minutes: 45);
+  }
+
+  /// The one-tap global repair: the start time that makes this stop's
+  /// timing work. Null when no sane start exists (outside 05:00–22:00,
+  /// or the place is closed all day).
+  TimeOfDay? _computeStartAt(_ProblemEntry p) {
+    final w = p.stop.warnings.first;
+    final current = ref.read(effectiveTripStartTimeProvider);
+    DateTime? t;
+    switch (w.kind) {
+      case WarningKind.notOpenYet:
+        // Only the day's first stop: arrive right as the doors open.
+        if (p.location.id == _firstStopLocationId && w.wait != null) {
+          t = current.add(w.wait!);
+        }
+      case WarningKind.willOverrunClose:
+        if (w.overrun != null) t = current.subtract(w.overrun!);
+      case WarningKind.closedOnArrival:
+        // Gap past close (carried in overrun) + a 45-min real visit.
+        if (w.overrun != null) {
+          t = current.subtract(w.overrun! + const Duration(minutes: 45));
+        }
+      case WarningKind.closedAllDay:
+        t = null; // No start time can open a closed day — Move only.
+    }
+    if (t == null) return null;
+    if (t.hour < 5 || t.hour >= 22) return null;
+    return TimeOfDay.fromDateTime(t);
+  }
+
+  /// Immediate global fix: set the new start, close, re-optimize. The
+  /// fresh run re-simulates — fixing the start often clears several
+  /// warnings at once, and whatever remains shows on the summary chip.
+  Future<void> _applyStartAt(TimeOfDay t) async {
+    if (_applying) return;
+    setState(() => _applying = true);
+    final navigator = Navigator.of(context);
+    final notifier = ref.read(tripProvider.notifier);
+    final currentStartId = ref.read(tripProvider).startLocationId;
+    final selectedDate = ref.read(selectedDateProvider);
+    ref.read(tripStartTimeOverrideProvider.notifier).state = t;
+    try {
+      await notifier.generateOptimizedRoute(
+        selectedDate: selectedDate,
+        startLocationId: currentStartId.isEmpty ? null : currentStartId,
+      );
+      if (mounted) navigator.pop();
+    } catch (e) {
+      if (mounted) {
+        setState(() => _applying = false);
+        AppToast.error(context, 'Could not apply the new start time: $e');
+      }
+    }
   }
 
   bool get _allResolved =>
@@ -112,14 +190,11 @@ class _TimingWarningsSheetState extends ConsumerState<TimingWarningsSheet> {
     final currentStartId = ref.read(tripProvider).startLocationId;
 
     // Group actions to minimize repository writes.
-    final toSkip = <String>{};
     final movesByDate = <DateTime, Set<String>>{};
     final goAnyway = <String>{};
     for (final p in _problems) {
       final action = _staged[p.location.id]!;
       switch (action) {
-        case _ActionKind.skip:
-          toSkip.add(p.location.id);
         case _ActionKind.moveNextDay:
           final cur = p.location.scheduledDate ?? DateTime.now();
           final next = DateTime(cur.year, cur.month, cur.day)
@@ -144,9 +219,6 @@ class _TimingWarningsSheetState extends ConsumerState<TimingWarningsSheet> {
     }
 
     try {
-      if (toSkip.isNotEmpty) {
-        await notifier.skipMultipleLocations(toSkip);
-      }
       for (final entry in movesByDate.entries) {
         await notifier.updateMultipleLocationsScheduledDate(
             entry.value, entry.key);
@@ -273,10 +345,21 @@ class _TimingWarningsSheetState extends ConsumerState<TimingWarningsSheet> {
                   separatorBuilder: (_, __) => const SizedBox(height: 4),
                   itemBuilder: (context, i) {
                     final entry = _problems[i];
+                    final startAt =
+                        _isInfoOnly(entry) ? null : _computeStartAt(entry);
                     return _WarningRow(
                       stop: entry.stop,
                       location: entry.location,
                       staged: _staged[entry.location.id],
+                      infoOnly: _isInfoOnly(entry),
+                      startAtLabel: startAt == null
+                          ? null
+                          : 'Start day at '
+                              '${startAt.hour.toString().padLeft(2, '0')}:'
+                              '${startAt.minute.toString().padLeft(2, '0')}',
+                      onStartAt: startAt == null || _applying
+                          ? null
+                          : () => _applyStartAt(startAt),
                       onStage: _applying
                           ? null
                           : (action) => _stage(entry.location.id, action),
@@ -353,6 +436,15 @@ class _WarningRow extends StatelessWidget {
   final LocationModel location;
   final _ActionKind? staged;
 
+  /// Informational row (tolerable mid-day wait): the fact IS the content —
+  /// no buttons render, and it never gates the Apply bar.
+  final bool infoOnly;
+
+  /// "Start day at HH:MM" — the computed one-tap global repair; null when
+  /// no sane start time exists for this warning.
+  final String? startAtLabel;
+  final VoidCallback? onStartAt;
+
   /// Null when the sheet is mid-apply — disables row-level toggling so
   /// the staged set can't change while [TimingWarningsSheet._confirm]
   /// is iterating it.
@@ -363,6 +455,9 @@ class _WarningRow extends StatelessWidget {
     required this.location,
     required this.staged,
     required this.onStage,
+    this.infoOnly = false,
+    this.startAtLabel,
+    this.onStartAt,
   });
 
   @override
@@ -443,37 +538,42 @@ class _WarningRow extends StatelessWidget {
                         color: theme.colorScheme.primary, size: 22),
                 ],
               ),
-              const SizedBox(height: 10),
-              Wrap(
-                spacing: 8,
-                runSpacing: 6,
-                children: [
-                  _ChoiceButton(
-                    icon: Icons.remove_circle_outline,
-                    label: 'Skip',
-                    selected: staged == _ActionKind.skip,
-                    onTap: onStage == null
-                        ? null
-                        : () => onStage!(_ActionKind.skip),
-                  ),
-                  _ChoiceButton(
-                    icon: Icons.calendar_today_outlined,
-                    label: 'Next day',
-                    selected: staged == _ActionKind.moveNextDay,
-                    onTap: onStage == null
-                        ? null
-                        : () => onStage!(_ActionKind.moveNextDay),
-                  ),
-                  _ChoiceButton(
-                    icon: Icons.arrow_forward_rounded,
-                    label: 'Go anyway',
-                    selected: staged == _ActionKind.goAnyway,
-                    onTap: onStage == null
-                        ? null
-                        : () => onStage!(_ActionKind.goAnyway),
-                  ),
-                ],
-              ),
+              // Info-only rows carry no buttons — the fact is the content.
+              // Everything else gets at most three practical verbs: the
+              // computed start-time repair (when one exists), move to the
+              // next day, or accept as-is.
+              if (!infoOnly) ...[
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 6,
+                  children: [
+                    if (startAtLabel != null)
+                      _ChoiceButton(
+                        icon: Icons.schedule_rounded,
+                        label: startAtLabel!,
+                        selected: false,
+                        onTap: onStartAt,
+                      ),
+                    _ChoiceButton(
+                      icon: Icons.calendar_today_outlined,
+                      label: 'Next day',
+                      selected: staged == _ActionKind.moveNextDay,
+                      onTap: onStage == null
+                          ? null
+                          : () => onStage!(_ActionKind.moveNextDay),
+                    ),
+                    _ChoiceButton(
+                      icon: Icons.arrow_forward_rounded,
+                      label: 'Go anyway',
+                      selected: staged == _ActionKind.goAnyway,
+                      onTap: onStage == null
+                          ? null
+                          : () => onStage!(_ActionKind.goAnyway),
+                    ),
+                  ],
+                ),
+              ],
             ],
           ),
         ),

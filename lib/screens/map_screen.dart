@@ -21,9 +21,11 @@ import 'package:voyza/widgets/review_sentiment_dialog.dart';
 import 'package:voyza/widgets/location_detail_sheet.dart';
 import 'package:uuid/uuid.dart';
 import '../models/location_model.dart';
-import '../models/user_profile.dart';
+import '../models/trip.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/route_share_card_service.dart';
+import '../services/trip_day_service.dart';
+import '../utils/trip_dates.dart';
 import '../services/time_saved_ledger_service.dart';
 import '../utils/geo_utils.dart';
 import '../providers/location_provider.dart';
@@ -99,6 +101,29 @@ class _MapScreenState extends ConsumerState<MapScreen>
   StreamSubscription<double?>? _compassSubscription;
   double? _lastAppliedHeading;
 
+  /// Thermal: while the plan sheet is expanded past ~half height it covers
+  /// the map — heading-beam updates are invisible there, but each one still
+  /// forced a map redraw (+ the sheet's blur). The compass stream is
+  /// CANCELLED (not paused — a paused broadcast subscription buffers events
+  /// and replays a stale burst on resume) while the sheet hides the map and
+  /// restarted when it collapses. Hysteresis avoids flapping mid-drag.
+  bool _compassStoppedBySheet = false;
+
+  void _syncCompassToSheetExtent() {
+    final ctrl = _sheetController;
+    if (ctrl == null || !ctrl.isAttached) return;
+    final size = ctrl.size;
+    final shouldStop = _compassStoppedBySheet ? size > 0.50 : size > 0.55;
+    if (shouldStop == _compassStoppedBySheet) return;
+    _compassStoppedBySheet = shouldStop;
+    if (shouldStop) {
+      _compassSubscription?.cancel();
+      _compassSubscription = null;
+    } else if (_isTrackingLocation) {
+      _startCompassTracking();
+    }
+  }
+
   /// Battery: set when the tab gate (not lifecycle/dispose) stopped the
   /// sensor streams, so returning to the Map tab restarts exactly what the
   /// gate stopped — and never becomes a second entry point into the
@@ -143,6 +168,8 @@ class _MapScreenState extends ConsumerState<MapScreen>
     // OPTIMIZATION: Register as lifecycle observer to handle app state changes
     WidgetsBinding.instance.addObserver(this);
     _sheetController = DraggableScrollableController();
+    // Compass stops while the plan sheet covers the map (thermal).
+    _sheetController!.addListener(_syncCompassToSheetExtent);
     // NOT here: MapScreen is built inside MainScreen's IndexedStack, so its
     // initState runs at launch even when the Map tab is offstage — which
     // fired the OS location prompt on the very first frame, before the user
@@ -187,6 +214,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
     _activeTutorial?.finish();
     _activeTutorial = null;
 
+    _sheetController?.removeListener(_syncCompassToSheetExtent);
     _sheetController?.dispose();
 
     // PERFORMANCE: Cancel location stream to prevent memory leaks and battery drain
@@ -433,6 +461,9 @@ class _MapScreenState extends ConsumerState<MapScreen>
   /// on a still phone triggers zero marker updates.
   void _startCompassTracking() {
     if (_compassSubscription != null) return;
+    // The sheet currently hides the map — _syncCompassToSheetExtent
+    // restarts this the moment it collapses.
+    if (_compassStoppedBySheet) return;
 
     _compassSubscription = LocationService.getCompassStream().listen(
       (heading) {
@@ -697,6 +728,17 @@ class _MapScreenState extends ConsumerState<MapScreen>
       final tripName = trip?.name ?? 'My route';
       final stopCount = tripState.optimizedLocationsForSelectedDate.length;
       final shareTimeSaved = allDaysMode ? Duration.zero : tripState.timeSaved;
+      // Single-day shares carry which day of the trip this is — the story
+      // kicker "DAY 1 OF THE TRIP" above the trip name. All-days shares
+      // frame the whole trip, so no day number there.
+      String? shareDayLabel;
+      if (!allDaysMode) {
+        final axis = ref.read(activeTripDayAxisProvider);
+        final sel = ref.read(selectedDateProvider);
+        final idx = axis.indexWhere((d) =>
+            d.year == sel.year && d.month == sel.month && d.day == sel.day);
+        if (idx >= 0) shareDayLabel = 'Day ${idx + 1} of the trip';
+      }
 
       // Render ONCE — QA, preview, share and save all consume these bytes,
       // so the QA screenshot is provably the production card.
@@ -711,6 +753,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
           archetype: archetype,
           roastLine: roastLine,
           daysCount: shareDaysCount,
+          dayLabel: shareDayLabel,
           format: format,
         );
       }
@@ -737,6 +780,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
           optimizedOrder: tripState.optimizedLocationsForSelectedDate,
           timeSaved: shareTimeSaved,
           tripName: tripName,
+          dayLabel: shareDayLabel,
         );
         if (saveToPhotos) {
           final ok = silhouette != null &&
@@ -760,6 +804,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
           anonymous: anonymous,
           tripName: tripName,
           tripId: anonymous ? null : trip?.id,
+          dayLabel: shareDayLabel,
         );
         return;
       }
@@ -1436,6 +1481,42 @@ class _MapScreenState extends ConsumerState<MapScreen>
       );
     });
 
+    // Leg sheet's "Show on map": collapse the plan sheet, fit the camera
+    // to the leg's bounds, and highlight it so the chip appears.
+    ref.listen<MapZoomToLegRequest?>(mapZoomToLegRequestProvider, (prev, next) {
+      if (next == null) return;
+      ref.read(mapZoomToLegRequestProvider.notifier).state = null; // consume
+      final polys = ref.read(tripProvider).legPolylines;
+      if (next.legIndex < 0 || next.legIndex >= polys.length) return;
+      final points = polys[next.legIndex];
+      if (points.isEmpty) return;
+      var minLat = points.first.latitude, maxLat = points.first.latitude;
+      var minLng = points.first.longitude, maxLng = points.first.longitude;
+      for (final p in points) {
+        if (p.latitude < minLat) minLat = p.latitude;
+        if (p.latitude > maxLat) maxLat = p.latitude;
+        if (p.longitude < minLng) minLng = p.longitude;
+        if (p.longitude > maxLng) maxLng = p.longitude;
+      }
+      _sheetController?.animateTo(
+        0.15,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeInOut,
+      );
+      ref
+          .read(mapUIStateProvider.notifier)
+          .setTappedPolyline('leg_${next.legIndex}');
+      _mapController?.animateCamera(
+        CameraUpdate.newLatLngBounds(
+          LatLngBounds(
+            southwest: LatLng(minLat, minLng),
+            northeast: LatLng(maxLat, maxLng),
+          ),
+          70,
+        ),
+      );
+    });
+
     // A route-leg chip was tapped → open its sheet. The markers live in a
     // FutureProvider with no BuildContext, so the tap arrives as a request
     // that we consume here.
@@ -1449,6 +1530,9 @@ class _MapScreenState extends ConsumerState<MapScreen>
         destination: next.destination,
         distanceLabel: next.distanceLabel,
         durationLabel: next.durationLabel,
+        legIndex: next.legIndex,
+        mode: next.mode,
+        transit: next.transit,
       );
     });
 
@@ -1743,18 +1827,10 @@ class _MapScreenState extends ConsumerState<MapScreen>
             child: Consumer(
               builder: (context, ref, child) {
                 final activeTripAsync = ref.watch(realtimeActiveTripProvider);
-                final currentUserId = ref.watch(currentUserIdProvider);
 
                 return activeTripAsync.when(
                   data: (activeTrip) {
                     if (activeTrip == null) return child!;
-
-                    // True when the signed-in user is NOT the trip owner —
-                    // i.e. this is a collaborator viewing someone else's
-                    // trip. Drives both the "owner" pill on the right of
-                    // the badge and which profile we look up.
-                    final isSharedTrip = currentUserId != null &&
-                        activeTrip.userId != currentUserId;
 
                     return Column(
                       children: [
@@ -1888,10 +1964,12 @@ class _MapScreenState extends ConsumerState<MapScreen>
                                       ],
                                     ),
                                   ),
-                                  if (isSharedTrip) ...[
-                                    const SizedBox(width: 10),
-                                    _OwnerPill(ownerUserId: activeTrip.userId),
-                                  ],
+                                  const SizedBox(width: 10),
+                                  // Day selector — replaces the old owner
+                                  // pill and shows for EVERY trip (owned or
+                                  // shared): selected date + "Day N", tap
+                                  // for the day-picker sheet.
+                                  const _DayPill(),
                                 ],
                               ),
                             ),
@@ -2523,7 +2601,20 @@ class _MapScreenState extends ConsumerState<MapScreen>
       return;
     }
 
-    final locations = ref.read(locationsForSelectedDateProvider);
+    // The day fit frames what's left to DO: skipped and done stops keep
+    // their pins but don't drive the camera. (Entire-trip mode differs by
+    // design — [_zoomToFitAllDays] keeps done stops in the story via
+    // [allDayStopsProvider], which only drops skipped ones.) When every stop
+    // on the day is done/skipped there's nothing "left", so fall back to
+    // framing all of them rather than doing nothing.
+    final allOnDate = ref.read(locationsForSelectedDateProvider);
+    final active = allOnDate.where((l) => !l.isSkipped && !l.isDone).toList();
+    final locations = active.isEmpty ? allOnDate : active;
+    final excludedIds = <String>{
+      if (active.isNotEmpty)
+        for (final l in allOnDate)
+          if (l.isSkipped || l.isDone) l.id,
+    };
     final includeCurrent = ref.read(includeCurrentInFitProvider);
     final currentLocation = ref.read(tripProvider).currentLocation;
 
@@ -2605,14 +2696,22 @@ class _MapScreenState extends ConsumerState<MapScreen>
 
     // Same leading-vector framing as the share capture, constrained to the
     // BROWSING window (below the search bar, above the collapsed sheet).
-    // Route geometry rides in the extents so the drawn road never clips.
+    // Route geometry rides in the extents so the drawn road never clips —
+    // except legs touching an excluded (done/skipped) stop, which would drag
+    // the frame right back to the pin the filter just dropped.
     final tripState = ref.read(tripProvider);
+    final legDetails = tripState.legDetails;
+    final legPoints = <LatLng>[
+      for (var i = 0; i < tripState.legPolylines.length; i++)
+        if (excludedIds.isEmpty ||
+            i >= legDetails.length ||
+            (!excludedIds.contains(legDetails[i]['fromId']) &&
+                !excludedIds.contains(legDetails[i]['toId'])))
+          ...tripState.legPolylines[i],
+    ];
     _fitPointsLeadingVector(
       orientStops: locations.map((l) => l.coordinates).toList(),
-      extents: [
-        ...points,
-        for (final leg in tripState.legPolylines) ...leg,
-      ],
+      extents: [...points, ...legPoints],
       window: _browsingFitWindow(),
       instant: false,
     );
@@ -3035,105 +3134,566 @@ class _MapScreenState extends ConsumerState<MapScreen>
   }
 }
 
-/// Compact pill rendered on the right edge of the active-trip badge when
-/// the signed-in user is viewing a trip OWNED by someone else. Shows the
-/// owner's avatar (initials fallback) and short name so a collaborator can
-/// tell at a glance whose trip they're planning in.
+/// Frosted day-selector pill on the right edge of the active-trip badge.
 ///
-/// Profile is loaded via [userProfileByIdProvider], which caches per-userId
-/// — switching back to the same shared trip won't re-fetch.
-class _OwnerPill extends ConsumerWidget {
-  final String ownerUserId;
-
-  const _OwnerPill({required this.ownerUserId});
-
-  String _shortLabel(UserProfile? profile) {
-    if (profile == null) return 'Owner';
-    final first = (profile.firstName ?? '').trim();
-    if (first.isNotEmpty) return first;
-    final last = (profile.lastName ?? '').trim();
-    if (last.isNotEmpty) return last;
-    // Fall back to the part of the email before the @ so we always show
-    // *something* useful while the user's profile is still bare.
-    final email = profile.email;
-    final at = email.indexOf('@');
-    return at > 0 ? email.substring(0, at) : email;
-  }
-
-  String _initials(UserProfile? profile) {
-    if (profile == null) return '?';
-    final f = (profile.firstName ?? '').trim();
-    final l = (profile.lastName ?? '').trim();
-    if (f.isNotEmpty && l.isNotEmpty) {
-      return '${f[0]}${l[0]}'.toUpperCase();
-    }
-    if (f.isNotEmpty) return f[0].toUpperCase();
-    if (l.isNotEmpty) return l[0].toUpperCase();
-    final email = profile.email;
-    return email.isNotEmpty ? email[0].toUpperCase() : '?';
-  }
+/// Shows the selected day's date with its 1-based index in the trip
+/// ("Day 3" under "Sep 9") — or "Entire trip" while All-days mode is on —
+/// plus a chevron so it reads as tappable. Tapping opens [_DayPickerSheet].
+/// Replaces the old owner pill and shows for EVERY active trip, owned or
+/// shared. The leading dot is the selected day's route color, so the pill,
+/// the day chips and the map polylines all speak the same legend.
+class _DayPill extends ConsumerWidget {
+  const _DayPill();
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final ownerAsync = ref.watch(userProfileByIdProvider(ownerUserId));
-    final profile = ownerAsync.asData?.value;
+    final trip = ref.watch(realtimeActiveTripProvider).valueOrNull;
+    final locations = ref.watch(tripProvider.select((s) => s.pinnedLocations));
+    final days = contiguousTripDates([
+      trip?.startDate,
+      trip?.endDate,
+      for (final loc in locations) ...[
+        loc.scheduledDate ?? loc.addedAt,
+        loc.scheduledEndDate ?? loc.scheduledDate ?? loc.addedAt,
+      ],
+    ]);
 
-    final initials = _initials(profile);
-    final name = profile == null ? '…' : _shortLabel(profile);
-    // While the lookup is in flight OR if it returned null (RPC missing,
-    // RLS denied), show a person glyph instead of bogus initials so the
-    // pill never looks like a broken state.
-    final hasProfile = profile != null;
+    final allDays = ref.watch(allDaysModeProvider);
+    final selected = dayKey(ref.watch(selectedDateProvider));
+    final dayIndex = days.indexWhere((d) => d.isAtSameMomentAs(selected));
+    final routeColor = ref.watch(tripDayColorsProvider)[selected];
 
-    return ConstrainedBox(
-      // Cap the pill width so a long owner name can't push the trip title
-      // into ellipsis territory on narrow phones.
-      constraints: const BoxConstraints(maxWidth: 96),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          Container(
-            width: 30,
-            height: 30,
-            decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.22),
-              shape: BoxShape.circle,
-              border: Border.all(
-                color: Colors.white.withValues(alpha: 0.6),
-                width: 1.2,
-              ),
+    final String topLine;
+    final String? bottomLine;
+    if (allDays) {
+      topLine = 'Entire trip';
+      bottomLine = days.isEmpty
+          ? null
+          : '${days.length} day${days.length == 1 ? '' : 's'}';
+    } else {
+      topLine = DateFormat('MMM d').format(selected);
+      // Off-plan dates (picked outside the trip's day span) have no index —
+      // show the year instead of a wrong "Day N".
+      bottomLine = dayIndex >= 0
+          ? 'Day ${dayIndex + 1}'
+          : DateFormat('y').format(selected);
+    }
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () => _DayPickerSheet.show(context),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.18),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: Colors.white.withValues(alpha: 0.45),
+              width: 1.2,
             ),
-            alignment: Alignment.center,
-            child: hasProfile
-                ? Text(
-                    initials,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 11,
-                      fontWeight: FontWeight.bold,
-                      letterSpacing: 0.2,
-                    ),
-                  )
-                : const Icon(
-                    Icons.person_rounded,
-                    size: 16,
-                    color: Colors.white,
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (allDays) ...[
+                        const Icon(Icons.layers_rounded,
+                            size: 12, color: Colors.white),
+                        const SizedBox(width: 4),
+                      ] else if (routeColor != null) ...[
+                        Container(
+                          width: 8,
+                          height: 8,
+                          decoration: BoxDecoration(
+                            color: routeColor,
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                                color: Colors.white.withValues(alpha: 0.7),
+                                width: 1),
+                          ),
+                        ),
+                        const SizedBox(width: 5),
+                      ],
+                      Text(
+                        topLine,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 0.2,
+                        ),
+                      ),
+                    ],
                   ),
+                  if (bottomLine != null) ...[
+                    const SizedBox(height: 1),
+                    Text(
+                      bottomLine,
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.88),
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: 0.3,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+              const SizedBox(width: 3),
+              Icon(
+                Icons.keyboard_arrow_down_rounded,
+                size: 18,
+                color: Colors.white.withValues(alpha: 0.95),
+              ),
+            ],
           ),
-          const SizedBox(height: 3),
-          Text(
-            name,
-            style: TextStyle(
-              color: Colors.white.withValues(alpha: 0.95),
-              fontSize: 10,
-              fontWeight: FontWeight.w600,
-              letterSpacing: 0.2,
+        ),
+      ),
+    );
+  }
+}
+
+/// Frosted-glass day picker opened from [_DayPill]: one row per trip day
+/// (stacked vertically), an "Entire trip" row on top mirroring the sheet's
+/// All-days chip, and — with write access — the same add/remove-day actions
+/// as the trip sheet's day strip, via the shared [TripDayService] so the
+/// two surfaces can't drift. Stays open after add/remove so several days
+/// can be added in one visit; every row rebuilds live off the providers.
+class _DayPickerSheet extends ConsumerStatefulWidget {
+  const _DayPickerSheet();
+
+  static Future<void> show(BuildContext context) {
+    return showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.black.withValues(alpha: 0.35),
+      builder: (_) => const _DayPickerSheet(),
+    );
+  }
+
+  @override
+  ConsumerState<_DayPickerSheet> createState() => _DayPickerSheetState();
+}
+
+class _DayPickerSheetState extends ConsumerState<_DayPickerSheet> {
+  ScrollController? _scroll;
+
+  // Row heights used to seed the scroll offset so the SELECTED day is
+  // already in view when a long trip opens the sheet.
+  static const double _rowExtent = 64;
+
+  ScrollController _controllerFor(int selIndex) {
+    if (_scroll != null) return _scroll!;
+    final target = selIndex <= 2 ? 0.0 : (selIndex - 2) * _rowExtent;
+    _scroll = ScrollController(initialScrollOffset: target);
+    return _scroll!;
+  }
+
+  @override
+  void dispose() {
+    _scroll?.dispose();
+    super.dispose();
+  }
+
+  Future<void> _addDay(Trip trip, List<DateTime> days) async {
+    final range = await TripDayService.addDayAtEnd(
+      context,
+      ref,
+      trip: trip,
+      days: days,
+    );
+    if (range != null && mounted) {
+      ref.read(allDaysModeProvider.notifier).state = false;
+      ref.read(selectedDateProvider.notifier).state = range.changedDay;
+    }
+  }
+
+  Future<void> _removeDay(Trip trip, List<DateTime> days) async {
+    final range = await TripDayService.removeLastDay(
+      context,
+      ref,
+      trip: trip,
+      days: days,
+    );
+    if (range != null && mounted) {
+      final selected = dayKey(ref.read(selectedDateProvider));
+      if (selected.isAtSameMomentAs(range.changedDay)) {
+        ref.read(selectedDateProvider.notifier).state = range.end;
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final trip = ref.watch(realtimeActiveTripProvider).valueOrNull;
+    final locations = ref.watch(tripProvider.select((s) => s.pinnedLocations));
+    final days = contiguousTripDates([
+      trip?.startDate,
+      trip?.endDate,
+      for (final loc in locations) ...[
+        loc.scheduledDate ?? loc.addedAt,
+        loc.scheduledEndDate ?? loc.scheduledDate ?? loc.addedAt,
+      ],
+    ]);
+
+    final allDays = ref.watch(allDaysModeProvider);
+    final selected = dayKey(ref.watch(selectedDateProvider));
+    final dayColors = ref.watch(tripDayColorsProvider);
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+
+    final canEdit = trip != null &&
+        (ref.watch(hasActiveTripWriteAccessProvider).valueOrNull ?? false);
+
+    // Stops scheduled per day — the same isActiveOnDate the planner uses.
+    final stopCount = <DateTime, int>{
+      for (final d in days)
+        d: locations.where((l) => l.isActiveOnDate(d)).length,
+    };
+
+    final selIndex = days.indexWhere((d) => d.isAtSameMomentAs(selected));
+
+    final maxHeight = MediaQuery.of(context).size.height * 0.62;
+
+    return ClipRRect(
+      borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+        child: Container(
+          constraints: BoxConstraints(maxHeight: maxHeight),
+          decoration: BoxDecoration(
+            color: theme.colorScheme.surface.withValues(alpha: 0.86),
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+            border: Border.all(
+              color: theme.colorScheme.onSurface.withValues(alpha: 0.08),
             ),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
           ),
-        ],
+          // SafeArea sits INSIDE the frosted container so the glass runs to
+          // the physical bottom edge (no see-through gap under the buttons)
+          // while the buttons keep the same clearance above the home bar.
+          child: SafeArea(
+            top: false,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const SizedBox(height: 10),
+                Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.onSurface.withValues(alpha: 0.2),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(24, 14, 24, 6),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Jump to a day',
+                              style: theme.textTheme.titleMedium?.copyWith(
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                            if (trip != null)
+                              Text(
+                                trip.name,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: theme.colorScheme.onSurface
+                                      .withValues(alpha: 0.6),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Flexible(
+                  child: days.isEmpty
+                      ? Padding(
+                          padding: const EdgeInsets.fromLTRB(24, 16, 24, 24),
+                          child: Text(
+                            'Add places or trip dates to build your '
+                            'day-by-day list.',
+                            style: theme.textTheme.bodyMedium?.copyWith(
+                              color: theme.colorScheme.onSurface
+                                  .withValues(alpha: 0.6),
+                            ),
+                          ),
+                        )
+                      : ListView(
+                          controller: _controllerFor(selIndex),
+                          shrinkWrap: true,
+                          padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+                          children: [
+                            _entireTripRow(theme, days.length, allDays),
+                            const SizedBox(height: 4),
+                            for (var i = 0; i < days.length; i++) ...[
+                              _dayRow(
+                                theme,
+                                index: i,
+                                day: days[i],
+                                isSelected: !allDays &&
+                                    days[i].isAtSameMomentAs(selected),
+                                isToday: days[i].isAtSameMomentAs(today),
+                                routeColor: dayColors[days[i]],
+                                stops: stopCount[days[i]] ?? 0,
+                              ),
+                              if (i != days.length - 1)
+                                const SizedBox(height: 4),
+                            ],
+                          ],
+                        ),
+                ),
+                if (canEdit && days.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 14),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: () => _addDay(trip, days),
+                            icon: const Icon(Icons.add_rounded, size: 18),
+                            label: const Text('Add day'),
+                            style: OutlinedButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(vertical: 12),
+                              foregroundColor: theme.colorScheme.primary,
+                              side: BorderSide(
+                                color: theme.colorScheme.primary
+                                    .withValues(alpha: 0.6),
+                                width: 1.3,
+                              ),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(14),
+                              ),
+                              textStyle: theme.textTheme.labelLarge?.copyWith(
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                        ),
+                        if (days.length > 1) ...[
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: () => _removeDay(trip, days),
+                              icon: const Icon(Icons.remove_rounded, size: 18),
+                              label: const Text('Remove day'),
+                              style: OutlinedButton.styleFrom(
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 12),
+                                foregroundColor: theme
+                                    .textTheme.bodyMedium?.color
+                                    ?.withValues(alpha: 0.7),
+                                side: BorderSide(
+                                  color:
+                                      theme.dividerColor.withValues(alpha: 0.7),
+                                  width: 1.2,
+                                ),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(14),
+                                ),
+                                textStyle: theme.textTheme.labelLarge?.copyWith(
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                const SizedBox(height: 4),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// "Entire trip" — the sheet twin of the day strip's All chip: every
+  /// day's route on the map at once.
+  Widget _entireTripRow(ThemeData theme, int dayCount, bool active) {
+    final primary = theme.colorScheme.primary;
+    return _pickerRow(
+      theme,
+      selected: active,
+      accent: primary,
+      leading: Icon(
+        Icons.layers_rounded,
+        size: 18,
+        color: active
+            ? primary
+            : theme.colorScheme.onSurface.withValues(alpha: 0.65),
+      ),
+      title: 'Entire trip',
+      subtitle: 'All $dayCount day${dayCount == 1 ? '' : 's'} on the map',
+      onTap: () {
+        ref.read(allDaysModeProvider.notifier).state = true;
+        Navigator.of(context).pop();
+      },
+    );
+  }
+
+  Widget _dayRow(
+    ThemeData theme, {
+    required int index,
+    required DateTime day,
+    required bool isSelected,
+    required bool isToday,
+    required Color? routeColor,
+    required int stops,
+  }) {
+    final accent = routeColor ?? theme.colorScheme.primary;
+    return _pickerRow(
+      theme,
+      selected: isSelected,
+      accent: accent,
+      leading: Container(
+        width: 12,
+        height: 12,
+        decoration: BoxDecoration(
+          color:
+              routeColor ?? theme.colorScheme.onSurface.withValues(alpha: 0.25),
+          shape: BoxShape.circle,
+        ),
+      ),
+      title: 'Day ${index + 1}',
+      titleBadge: isToday,
+      subtitle: DateFormat('EEE, MMM d, y').format(day),
+      trailing: stops > 0
+          ? Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: theme.colorScheme.onSurface.withValues(alpha: 0.06),
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: Text(
+                '$stops stop${stops == 1 ? '' : 's'}',
+                style: theme.textTheme.labelSmall?.copyWith(
+                  fontWeight: FontWeight.w600,
+                  color: theme.colorScheme.onSurface.withValues(alpha: 0.65),
+                ),
+              ),
+            )
+          : null,
+      onTap: () {
+        ref.read(allDaysModeProvider.notifier).state = false;
+        ref.read(selectedDateProvider.notifier).state = day;
+        Navigator.of(context).pop();
+      },
+    );
+  }
+
+  /// Shared row chrome: route-color accent fill + border when selected,
+  /// quiet otherwise — the same treatment as the day strip's chips.
+  Widget _pickerRow(
+    ThemeData theme, {
+    required bool selected,
+    required Color accent,
+    required Widget leading,
+    required String title,
+    String? subtitle,
+    Widget? trailing,
+    bool titleBadge = false,
+    required VoidCallback onTap,
+  }) {
+    return Material(
+      color: selected ? accent.withValues(alpha: 0.12) : Colors.transparent,
+      borderRadius: BorderRadius.circular(16),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color:
+                  selected ? accent.withValues(alpha: 0.7) : Colors.transparent,
+              width: 1.4,
+            ),
+          ),
+          child: Row(
+            children: [
+              SizedBox(width: 24, child: Center(child: leading)),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          title,
+                          style: theme.textTheme.bodyLarge?.copyWith(
+                            fontWeight: FontWeight.w800,
+                            fontSize: 15,
+                          ),
+                        ),
+                        if (titleBadge) ...[
+                          const SizedBox(width: 6),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color:
+                                  Colors.green.shade600.withValues(alpha: 0.14),
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                            child: Text(
+                              'Today',
+                              style: theme.textTheme.labelSmall?.copyWith(
+                                color: Colors.green.shade700,
+                                fontWeight: FontWeight.w700,
+                                fontSize: 10,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                    if (subtitle != null)
+                      Text(
+                        subtitle,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onSurface
+                              .withValues(alpha: 0.6),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              if (trailing != null) ...[
+                const SizedBox(width: 8),
+                trailing,
+              ],
+              if (selected) ...[
+                const SizedBox(width: 8),
+                Icon(Icons.check_rounded, size: 20, color: accent),
+              ],
+            ],
+          ),
+        ),
       ),
     );
   }

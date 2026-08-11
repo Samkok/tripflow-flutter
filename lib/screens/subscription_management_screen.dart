@@ -1,3 +1,5 @@
+import 'dart:io' show Platform;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -243,7 +245,9 @@ class _SubscriptionManagementScreenState
               ? OutlinedButton.icon(
                   onPressed: () => _openManagementUrl(url),
                   icon: const Icon(Icons.settings),
-                  label: const Text('Manage in App Store'),
+                  label: Text(Platform.isIOS
+                      ? 'Manage in App Store'
+                      : 'Manage in Play Store'),
                   style: OutlinedButton.styleFrom(
                     padding: const EdgeInsets.symmetric(vertical: 16),
                   ),
@@ -305,8 +309,17 @@ class _SubscriptionManagementScreenState
           _buildFaqItem(
             context,
             'How do I cancel my subscription?',
-            'Tap "Open Customer Center" above to manage your subscription, including cancellation. '
-                'You can also manage through App Store/Google Play settings. Your subscription will remain active until the end of the billing period.',
+            // Platform-aware store naming: App Review rejected the binary
+            // for mentioning Google Play on iOS (Guideline 2.3.10) — each
+            // platform's users see only their own store. Also fixed the
+            // stale reference to a "Customer Center" button that no longer
+            // exists on this screen.
+            'Tap "Manage in ${Platform.isIOS ? 'App Store' : 'Play Store'}" '
+                'above to manage your subscription, including cancellation. '
+                'You can also manage it in your '
+                '${Platform.isIOS ? 'App Store' : 'Play Store'} settings. '
+                'Your subscription will remain active until the end of the '
+                'billing period.',
           ),
           const Divider(height: 24),
           _buildFaqItem(
@@ -320,7 +333,8 @@ class _SubscriptionManagementScreenState
             context,
             'How do I restore my purchase?',
             'Tap "Restore Purchases" above if you\'ve previously subscribed. '
-                'Make sure you\'re using the same App Store/Google Play account.',
+                'Make sure you\'re using the same '
+                '${Platform.isIOS ? 'App Store' : 'Play Store'} account.',
           ),
         ],
       ),

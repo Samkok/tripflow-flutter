@@ -46,12 +46,22 @@ Future<void> openDirectionsInGoogleMaps({
   required LocationModel origin,
   required LocationModel destination,
   List<LocationModel> waypoints = const [],
+  String mode = 'drive',
 }) async {
+  // VoyZa leg mode → Google Maps deeplink travelmode. bicycling covers both
+  // cycle modes (no motorcycle travelmode exists); 'direct' hands off as
+  // walking — the closest thing to "find your own way".
+  final travelmode = switch (mode) {
+    'walk' || 'direct' => 'walking',
+    'transit' => 'transit',
+    'bicycle' || 'two_wheeler' => 'bicycling',
+    _ => 'driving',
+  };
   final params = <String, String>{
     'api': '1',
     'origin': _coordsParam(origin),
     'destination': _coordsParam(destination),
-    'travelmode': 'driving',
+    'travelmode': travelmode,
     if (origin.placeId != null && origin.placeId!.isNotEmpty)
       'origin_place_id': origin.placeId!,
     if (destination.placeId != null && destination.placeId!.isNotEmpty)

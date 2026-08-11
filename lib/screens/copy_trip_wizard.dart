@@ -88,8 +88,9 @@ class _CopyTripWizardState extends ConsumerState<CopyTripWizard> {
       }
       setState(() {
         _preview = preview;
-        _normalizedCode = raw.toUpperCase().replaceFirst(
-            RegExp(r'^TRIP-', caseSensitive: false), '');
+        _normalizedCode = raw
+            .toUpperCase()
+            .replaceFirst(RegExp(r'^TRIP-', caseSensitive: false), '');
       });
       _goTo(1);
     } on TripCodeException catch (e) {
@@ -160,8 +161,7 @@ class _CopyTripWizardState extends ConsumerState<CopyTripWizard> {
           AppToast.error(context,
               "That's your own trip — the code is for sharing with others.");
         case TripCodeError.unknown:
-          AppToast.error(
-              context, 'Could not copy the trip. Please try again.');
+          AppToast.error(context, 'Could not copy the trip. Please try again.');
       }
     } catch (e) {
       debugPrint('CopyTripWizard confirm: $e');
@@ -319,8 +319,8 @@ class _CopyTripWizardState extends ConsumerState<CopyTripWizard> {
   Widget _buildPreviewStep(ThemeData theme) {
     final p = _preview;
     if (p == null) return const SizedBox.shrink();
-    final locations = (p['locations'] as List? ?? const [])
-        .cast<Map<String, dynamic>>();
+    final locations =
+        (p['locations'] as List? ?? const []).cast<Map<String, dynamic>>();
 
     // Group by calendar day; dateless at the end.
     final byDay = <DateTime?, List<Map<String, dynamic>>>{};
@@ -457,8 +457,7 @@ class _CopyTripWizardState extends ConsumerState<CopyTripWizard> {
                     errorBuilder: (_, __, ___) => Container(
                       width: 44,
                       height: 44,
-                      color:
-                          theme.colorScheme.primary.withValues(alpha: 0.12),
+                      color: theme.colorScheme.primary.withValues(alpha: 0.12),
                       child: Icon(Icons.place_rounded,
                           size: 22, color: theme.colorScheme.primary),
                     ),
@@ -554,8 +553,9 @@ class _CopyTripWizardState extends ConsumerState<CopyTripWizard> {
                           : '${DateFormat('EEE, MMM d, yyyy').format(chosen)}'
                               '${chosenEnd == null ? '' : '  →  ${DateFormat('MMM d').format(chosenEnd)}'}',
                       style: theme.textTheme.titleMedium?.copyWith(
-                          fontWeight:
-                              chosen == null ? FontWeight.w500 : FontWeight.w700),
+                          fontWeight: chosen == null
+                              ? FontWeight.w500
+                              : FontWeight.w700),
                     ),
                   ),
                 ],
