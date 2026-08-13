@@ -31,6 +31,7 @@ import 'package:voyza/widgets/country_picker_sheet.dart';
 import 'package:voyza/widgets/pulsing_glow.dart';
 import 'package:voyza/providers/onboarding_checklist_provider.dart';
 import 'package:voyza/widgets/onboarding_checklist.dart';
+import 'package:voyza/widgets/app_update_badge.dart';
 import 'package:voyza/widgets/promo_days_card.dart';
 import 'package:voyza/widgets/route_spine.dart';
 import 'package:voyza/widgets/sign_up_required_sheet.dart';
@@ -247,18 +248,48 @@ class _TripScreenState extends ConsumerState<TripScreen> {
     }
   }
 
-  /// Scroll home to the top (where every spotlight target lives), wait for
-  /// the scroll + layout to settle, then run the coach mark.
+  /// Bring the TARGET itself into view, wait for the scroll + layout to
+  /// settle, then run the coach mark. This used to blanket-scroll to the
+  /// top ("where every spotlight target lives") — no longer true: the page
+  /// grew (active-trip section, copy-trip button, search row), and on small
+  /// screens the first card's Activate button sat below the fold at
+  /// scroll-top, so the ring drew clipped or skipped entirely.
   void _coachAfterScroll(GlobalKey key, String title, String body,
       {int settleMs = 400}) {
-    if (_tripsScrollController.hasClients &&
+    void reveal(BuildContext ctx, {int durationMs = 280}) {
+      Scrollable.ensureVisible(
+        ctx,
+        // Slightly above center — leaves room for the coach copy below.
+        alignment: 0.35,
+        duration: Duration(milliseconds: durationMs),
+        curve: Curves.easeOutCubic,
+      );
+    }
+
+    final ctx = key.currentContext;
+    if (ctx != null) {
+      reveal(ctx);
+    } else if (_tripsScrollController.hasClients &&
         _tripsScrollController.offset > 0) {
+      // Target not even BUILT (lazy sliver, user scrolled deep) — head for
+      // the top region where all targets live so it materializes; the
+      // post-settle pass below fine-tunes onto it.
       _tripsScrollController.animateTo(0,
           duration: const Duration(milliseconds: 300),
           curve: Curves.easeOutCubic);
     }
     Future.delayed(Duration(milliseconds: settleMs), () {
       if (!mounted) return;
+      final late = key.currentContext;
+      if (late != null && late.mounted && ctx == null) {
+        // Materialized during the scroll — one fine-tune, then measure.
+        reveal(late, durationMs: 220);
+        Future.delayed(const Duration(milliseconds: 240), () {
+          if (!mounted) return;
+          showChecklistCoach(context, targetKey: key, title: title, body: body);
+        });
+        return;
+      }
       showChecklistCoach(context, targetKey: key, title: title, body: body);
     });
   }
@@ -894,11 +925,6 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                 // if (!_selectionMode)
                 //   const SliverToBoxAdapter(child: ReferralHomeBanner()),
 
-                // Referral-promo status: dismissible "N free days" card,
-                // promotional entitlements only (store subs have their own
-                // trial banner).
-                const SliverToBoxAdapter(child: PromoDaysCard()),
-
                 // Active Trip Section
                 SliverToBoxAdapter(
                   child: activeTripAsync.when(
@@ -982,6 +1008,14 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                       ),
                     ),
                   ),
+
+                // Referral-promo status: dismissible "N free days" card,
+                // promotional entitlements only (store subs have their own
+                // trial banner). BELOW the New Trip cluster on purpose: it
+                // resolves asynchronously (RevenueCat + prefs), and async
+                // content must never sit above the checklist spotlight
+                // targets — see the ReferralHomeBanner note above.
+                const SliverToBoxAdapter(child: PromoDaysCard()),
 
                 // Breathing room so the big New Trip button and the
                 // search field can't be mis-tapped for each other.
@@ -1304,6 +1338,21 @@ class _TripScreenState extends ConsumerState<TripScreen> {
               ],
             ),
           ),
+
+          // "Update available" pill — an overlay as the Stack's LAST child
+          // (paints above the scroll content; never shifts the page or the
+          // checklist spotlight targets), horizontally centred below the
+          // status bar / Dynamic Island inset. The widget hides itself
+          // during the onboarding checklist and after a per-version
+          // dismissal. The Center wrapper is hit-test transparent — taps
+          // beside the pill fall through to the page.
+          if (!_selectionMode)
+            Positioned(
+              top: MediaQuery.of(context).padding.top + 8,
+              left: 0,
+              right: 0,
+              child: const Center(child: AppUpdateBadge()),
+            ),
         ],
       ),
     );
