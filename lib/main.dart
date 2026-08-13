@@ -29,8 +29,6 @@ import 'services/referral_service.dart';
 import 'services/review_prompt_service.dart';
 import 'services/analytics_consent_service.dart';
 import 'repositories/location_repository.dart';
-import 'repositories/user_profile_repository.dart';
-import 'widgets/app_toast.dart';
 
 import 'package:firebase_core/firebase_core.dart';
 import 'package:hive_flutter/hive_flutter.dart';
@@ -356,53 +354,6 @@ class _MyAppState extends ConsumerState<MyApp> with WidgetsBindingObserver {
   }
 
   /// Initialize collaborator listener after Supabase is ready
-  /// Post-link unlocks for an instant account whose email just CONFIRMED:
-  /// the user_profiles row (deferred at instant signup — the table requires
-  /// an email), RevenueCat attributes, the pending referral code, and any
-  /// collaboration invites addressed to the new email. Gated on the
-  /// pending-link flag LinkEmailScreen sets, so ordinary userUpdated events
-  /// (password changes etc.) cost one prefs read and nothing else.
-  Future<void> _completeEmailLinkIfPending(User user) async {
-    try {
-      if (!await AuthService.hasPendingEmailLink()) return;
-      final email = user.email ?? '';
-      if (email.isEmpty) return;
-
-      try {
-        await UserProfileRepository().createUserProfile(
-          userId: user.id,
-          email: email,
-        );
-      } catch (e) {
-        // Already-exists (23505) or transient — the profile also self-heals
-        // on the next app start via this same path until the flag clears.
-        debugPrint('Main: link-email profile create: $e');
-      }
-
-      try {
-        await RevenueCatService().setUserAttributes(email: email);
-      } catch (e) {
-        debugPrint('Main: link-email RC attributes: $e');
-      }
-
-      unawaited(ReferralService.instance.redeemPendingCodeIfAny());
-      unawaited(ReferralService.instance.claimInvites().then((joined) {
-        if (joined > 0 && mounted) {
-          ref.read(checklistProvider.notifier).skip();
-        }
-      }));
-
-      await AuthService.clearPendingEmailLink();
-      final ctx = navigatorKey.currentContext;
-      if (ctx != null && ctx.mounted) {
-        AppToast.success(
-            ctx, 'Account secured — invites and referrals unlocked');
-      }
-    } catch (e) {
-      debugPrint('Main: _completeEmailLinkIfPending failed: $e');
-    }
-  }
-
   Future<void> _initializeCollaboratorListener() async {
     try {
       debugPrint('Main: Starting _initializeCollaboratorListener');
@@ -445,11 +396,6 @@ class _MyAppState extends ConsumerState<MyApp> with WidgetsBindingObserver {
               (_) => false,
             );
           } else if (data.event == AuthChangeEvent.signedIn) {
-            // Instant (anonymous) accounts have no email: referral
-            // redemption is server-rejected for them and claim-invites has
-            // nothing to match — both wait until the email links (see the
-            // userUpdated arm below).
-            if (data.session?.user.isAnonymous == true) return;
             // Referral: a code entered at signup is saved locally (no session
             // exists until the email is verified) — redeem it on the first
             // verified sign-in. Idempotent + no-op without a pending code.
@@ -464,36 +410,19 @@ class _MyAppState extends ConsumerState<MyApp> with WidgetsBindingObserver {
                 ref.read(checklistProvider.notifier).skip();
               }
             }));
-          } else if (data.event == AuthChangeEvent.userUpdated) {
-            // Fires when an instant account's linked email gets CONFIRMED
-            // (the user object flips to non-anonymous with a real email) —
-            // run the unlocks that were deferred at instant-signup time.
-            final user = data.session?.user;
-            if (user != null &&
-                user.isAnonymous != true &&
-                (user.email ?? '').isNotEmpty) {
-              unawaited(_completeEmailLinkIfPending(user));
-            }
           }
         },
       );
 
       // Covers the "verified earlier, app relaunched with a live session"
-      // path where no signedIn event fires this run. Anonymous sessions
-      // skip for the same reason as the signedIn arm; a session whose
-      // email-link confirmation landed while the app was closed is picked
-      // up by the pending-link check.
-      final session = SupabaseService.instance.client.auth.currentSession;
-      if (session != null && session.user.isAnonymous != true) {
+      // path where no signedIn event fires this run.
+      if (SupabaseService.instance.client.auth.currentSession != null) {
         unawaited(ReferralService.instance.redeemPendingCodeIfAny());
         unawaited(ReferralService.instance.claimInvites().then((joined) {
           if (joined > 0 && mounted) {
             ref.read(checklistProvider.notifier).skip();
           }
         }));
-        if ((session.user.email ?? '').isNotEmpty) {
-          unawaited(_completeEmailLinkIfPending(session.user));
-        }
       }
 
       // PERFORMANCE: Defer collaborator realtime to let UI render first

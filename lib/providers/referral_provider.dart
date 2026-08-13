@@ -7,18 +7,17 @@ import '../services/supabase_service.dart';
 import 'auth_provider.dart';
 
 /// The signed-in user's stable referral code (lazily created server-side).
-/// Null when signed out — and for instant (anonymous) accounts: referral
-/// identity requires a linked email, and minting codes for throwaway
-/// sessions would litter the codes table.
+/// Null when signed out.
 final myReferralCodeProvider = FutureProvider<String?>((ref) async {
-  if (!ref.watch(hasLinkedEmailProvider)) return null;
+  final userId = ref.watch(currentUserIdProvider);
+  if (userId == null) return null;
   return ReferralService.instance.getOrCreateMyCode();
 });
 
 /// The user's referrals (as referrer), newest first. RLS scopes the select.
 final myReferralsProvider = FutureProvider<List<ReferralEntry>>((ref) async {
   final userId = ref.watch(currentUserIdProvider);
-  if (userId == null || !ref.watch(hasLinkedEmailProvider)) return const [];
+  if (userId == null) return const [];
   final rows = await SupabaseService.instance.client
       .from('referrals')
       .select('id, status, created_at, qualified_at, banked_at, rewarded_at')

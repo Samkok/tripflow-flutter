@@ -29,7 +29,6 @@ import '../widgets/delete_account_dialog.dart';
 import '../widgets/pro_feature_gate.dart';
 import '../services/time_saved_ledger_service.dart';
 import 'login_screen.dart';
-import 'link_email_screen.dart';
 import 'profile_screen.dart';
 import 'referral_screen.dart';
 import 'security_screen.dart';
@@ -78,10 +77,9 @@ class SettingsScreen extends ConsumerWidget {
               _buildProfileCard(context, ref),
               const SizedBox(height: 24),
 
-              // Invite friends — referral program (linked-email accounts
-              // only; instant accounts unlock it by adding their email).
+              // Invite friends — referral program (signed-in users only).
               // Top of the page (owner call): the growth surface leads.
-              if (ref.watch(hasLinkedEmailProvider)) ...[
+              if (ref.watch(currentUserProvider) != null) ...[
                 _buildSectionHeader(context, 'Invite friends'),
                 _buildInviteFriendsTile(context, ref),
                 const SizedBox(height: 24),
@@ -100,10 +98,8 @@ class SettingsScreen extends ConsumerWidget {
               _buildSubscriptionTile(context, ref),
               const SizedBox(height: 24),
 
-              // Security Section — password change needs an email identity,
-              // so instant (anonymous) accounts don't see it (their path to
-              // a password IS the add-email flow on the profile card).
-              if (ref.watch(hasLinkedEmailProvider)) ...[
+              // Security Section (only for signed-in users)
+              if (ref.watch(currentUserProvider) != null) ...[
                 _buildSectionHeader(context, 'Security'),
                 _buildSecurityTile(context),
                 const SizedBox(height: 24),
@@ -224,19 +220,10 @@ class SettingsScreen extends ConsumerWidget {
       );
     }
 
-    // Instant (anonymous) account: no email on the user yet. The card's
-    // job flips from "show identity" to "get one": add-email CTA, and the
-    // sign-out button carries a hard warning — without an email there is
-    // no way back into this account.
-    final isInstant = currentUser.isAnonymous;
-    final email = currentUser.email ?? '';
-
     return GestureDetector(
-      onTap: isInstant
-          ? null // profile screen is identity-centric; nothing to show yet
-          : () => Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const ProfileScreen()),
-              ),
+      onTap: () => Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => const ProfileScreen()),
+      ),
       child: Container(
         decoration: BoxDecoration(
           color: Theme.of(context).cardColor.withValues(alpha: 0.55),
@@ -260,19 +247,14 @@ class SettingsScreen extends ConsumerWidget {
                 CircleAvatar(
                   radius: 30,
                   backgroundColor: AppTheme.primaryColor,
-                  child: isInstant
-                      ? const Icon(Icons.person_outline_rounded,
-                          size: 30, color: Colors.black)
-                      : Text(
-                          email.isNotEmpty
-                              ? email.substring(0, 1).toUpperCase()
-                              : 'U',
-                          style: const TextStyle(
-                            fontSize: 24,
-                            color: Colors.black,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
+                  child: Text(
+                    currentUser.email?.substring(0, 1).toUpperCase() ?? 'U',
+                    style: const TextStyle(
+                      fontSize: 24,
+                      color: Colors.black,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
                 ),
                 const SizedBox(width: 16),
                 Expanded(
@@ -280,9 +262,7 @@ class SettingsScreen extends ConsumerWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        isInstant
-                            ? 'Instant account'
-                            : (email.isNotEmpty ? email : 'User'),
+                        currentUser.email ?? 'User',
                         style:
                             Theme.of(context).textTheme.titleMedium?.copyWith(
                                   fontWeight: FontWeight.bold,
@@ -292,13 +272,9 @@ class SettingsScreen extends ConsumerWidget {
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        isInstant
-                            ? 'Add an email to secure your trips'
-                            : 'Account Sync Active',
+                        'Account Sync Active',
                         style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                              color: isInstant
-                                  ? Theme.of(context).colorScheme.primary
-                                  : Colors.green,
+                              color: Colors.green,
                             ),
                       ),
                     ],
@@ -307,58 +283,14 @@ class SettingsScreen extends ConsumerWidget {
               ],
             ),
             const SizedBox(height: 16),
-            if (isInstant) ...[
-              SizedBox(
-                width: double.infinity,
-                child: FilledButton.icon(
-                  onPressed: () => Navigator.of(context).push(
-                    MaterialPageRoute(builder: (_) => const LinkEmailScreen()),
-                  ),
-                  icon: const Icon(Icons.mark_email_unread_outlined, size: 18),
-                  label: const Text('Add my email'),
-                ),
-              ),
-              const SizedBox(height: 8),
-            ],
             SizedBox(
               width: double.infinity,
               child: OutlinedButton.icon(
                 onPressed: () async {
-                  // An instant account without an email is unreachable after
-                  // sign-out — make that unmissable before proceeding.
-                  final bool? shouldLogout;
-                  if (isInstant) {
-                    shouldLogout = await showDialog<bool>(
-                      context: context,
-                      builder: (ctx) => AlertDialog(
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(20)),
-                        title: const Text('Sign out without an email?'),
-                        content: const Text(
-                          'This account has no email, so there is NO way to '
-                          'sign back into it. Your trips and places will be '
-                          'lost.\n\nAdd an email first to keep them.',
-                        ),
-                        actions: [
-                          TextButton(
-                            onPressed: () => Navigator.of(ctx).pop(false),
-                            child: const Text('Cancel'),
-                          ),
-                          TextButton(
-                            onPressed: () => Navigator.of(ctx).pop(true),
-                            child: Text('Sign out anyway',
-                                style: TextStyle(
-                                    color: Theme.of(ctx).colorScheme.error)),
-                          ),
-                        ],
-                      ),
-                    );
-                  } else {
-                    shouldLogout = await showDialog<bool>(
-                      context: context,
-                      builder: (context) => const LogoutConfirmationDialog(),
-                    );
-                  }
+                  final shouldLogout = await showDialog<bool>(
+                    context: context,
+                    builder: (context) => const LogoutConfirmationDialog(),
+                  );
 
                   if (shouldLogout == true) {
                     // Clear cached data BEFORE signing out so the brief

@@ -45,11 +45,7 @@ class UserProfile {
       userId: json['user_id'] as String,
       firstName: json['first_name'] as String?,
       lastName: json['last_name'] as String?,
-      // Tolerate a null/absent email instead of throwing: profile rows are
-      // only created once an email exists, but defensive callers (public
-      // profile projections, future schema relaxations) must never crash
-      // the parse over it.
-      email: json['email'] as String? ?? '',
+      email: json['email'] as String,
       phoneNumber: json['phone_number'] as String?,
       profilePictureUrl: json['profile_picture_url'] as String?,
       bio: json['bio'] as String?,

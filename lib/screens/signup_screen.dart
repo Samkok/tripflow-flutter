@@ -8,11 +8,8 @@ import 'package:voyza/screens/terms_screen.dart';
 import 'package:voyza/widgets/rotating_globe_background.dart';
 import '../providers/auth_provider.dart';
 import '../providers/onboarding_provider.dart';
-import '../providers/trip_collaborator_provider.dart';
-import '../providers/user_trip_provider.dart';
 import '../services/auth_service.dart';
 import '../services/email_history_service.dart';
-import '../services/referral_service.dart';
 import '../widgets/sync_confirmation_dialog.dart';
 import 'login_screen.dart';
 import '../widgets/app_toast.dart';
@@ -100,65 +97,6 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
     _passwordController.text = pwd;
     _confirmPasswordController.text = pwd;
     AppToast.success(context, 'Strong password generated and filled');
-  }
-
-  /// INSTANT ACCOUNT — one tap, no email, no verification wall. Creates a
-  /// Supabase anonymous session (a real account: server-synced trips,
-  /// subscriptions, everything solo), keeps whatever the guest already made,
-  /// and drops the user straight into the app. Email can be linked later
-  /// from Settings; email-gated features prompt for it when needed.
-  /// Terms are agreed BY the tap (the caption above the button says so) —
-  /// the checkbox below only governs the email form.
-  Future<void> _startInstant() async {
-    setState(() {
-      _isLoading = true;
-      _authStage = 'Starting…';
-      _authProgress = 0.05;
-    });
-    try {
-      // A referral code typed into the form still counts: park it as the
-      // pending code — it redeems automatically once an email is linked
-      // (redemption requires a non-anonymous account).
-      final code = _referralCodeController.text.trim();
-      if (code.isNotEmpty) {
-        await ReferralService.instance.savePendingCode(code);
-      }
-
-      await ref.read(authServiceProvider).startInstantAccount(
-        onStage: (label, progress) {
-          if (mounted) {
-            setState(() {
-              _authStage = label;
-              _authProgress = progress;
-            });
-          }
-        },
-      );
-      if (!mounted) return;
-
-      // Home shows the freshly-synced server copies immediately.
-      ref.invalidate(userTripsProvider);
-      ref.invalidate(sharedTripsProvider);
-
-      AppToast.success(
-        context,
-        "You're in! Add an email anytime in Settings to secure your account.",
-      );
-      if (Navigator.canPop(context)) {
-        Navigator.of(context).pop();
-      } else {
-        Navigator.of(context).pushReplacementNamed('/home');
-      }
-    } on AuthException catch (e) {
-      if (mounted) AppToast.error(context, e.message);
-    } catch (_) {
-      if (mounted) {
-        AppToast.error(
-            context, 'Could not create your account. Please try again.');
-      }
-    } finally {
-      if (mounted) setState(() => _isLoading = false);
-    }
   }
 
   Future<void> _signUp() async {
@@ -394,71 +332,7 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
                           style: theme.textTheme.titleMedium?.copyWith(
                               color: theme.colorScheme.onSurfaceVariant),
                         ),
-                        const SizedBox(height: 28),
-                        // ── THE one-tap path (owner call: friction first).
-                        // No email, no verification wall; email links later.
-                        FilledButton.icon(
-                          onPressed: _isLoading ? null : _startInstant,
-                          icon: const Icon(Icons.bolt_rounded, size: 22),
-                          label: const Text('Start instantly'),
-                          style: FilledButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(vertical: 16),
-                            textStyle: theme.textTheme.titleMedium?.copyWith(
-                              fontWeight: FontWeight.w800,
-                              letterSpacing: 0.3,
-                            ),
-                            shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(16)),
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        // Terms-by-action for the one-tap path; the checkbox
-                        // below only governs the email form.
-                        Wrap(
-                          alignment: WrapAlignment.center,
-                          crossAxisAlignment: WrapCrossAlignment.center,
-                          children: [
-                            Text(
-                              'One tap — no email needed. By continuing you agree to the ',
-                              style: theme.textTheme.bodySmall?.copyWith(
-                                  color: theme.colorScheme.onSurfaceVariant),
-                            ),
-                            GestureDetector(
-                              onTap: () => Navigator.of(context).push(
-                                  MaterialPageRoute(
-                                      builder: (_) => const TermsScreen())),
-                              child: Text(
-                                'Terms & Conditions',
-                                style: theme.textTheme.bodySmall?.copyWith(
-                                  color: theme.colorScheme.primary,
-                                  decoration: TextDecoration.underline,
-                                ),
-                              ),
-                            ),
-                            Text(
-                              '.',
-                              style: theme.textTheme.bodySmall?.copyWith(
-                                  color: theme.colorScheme.onSurfaceVariant),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 20),
-                        Row(
-                          children: [
-                            const Expanded(child: Divider()),
-                            Padding(
-                              padding:
-                                  const EdgeInsets.symmetric(horizontal: 12),
-                              child: Text(
-                                'or sign up with email',
-                                style: theme.textTheme.bodySmall?.copyWith(
-                                    color: theme.colorScheme.onSurfaceVariant),
-                              ),
-                            ),
-                            const Expanded(child: Divider()),
-                          ],
-                        ),
-                        const SizedBox(height: 20),
+                        const SizedBox(height: 40),
                         TextFormField(
                           controller: _emailController,
                           focusNode: _emailFocusNode,

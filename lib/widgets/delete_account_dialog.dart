@@ -152,23 +152,8 @@ class _DeleteAccountDialogState extends ConsumerState<DeleteAccountDialog> {
     );
   }
 
-  /// Instant (anonymous) accounts have no email to retype — the friction
-  /// gate becomes typing DELETE instead. Same mechanism, same weight.
-  bool get _isInstantAccount =>
-      ref.read(currentUserProvider)?.isAnonymous == true;
-
-  /// What step 2 expects the user to type: their email, or DELETE for
-  /// email-less instant accounts.
-  bool _confirmTextMatches(String entered) {
-    if (_isInstantAccount) return entered.trim().toUpperCase() == 'DELETE';
-    final userEmail = ref.read(currentUserProvider)?.email ?? '';
-    return entered.trim().isNotEmpty &&
-        entered.trim().toLowerCase() == userEmail.toLowerCase();
-  }
-
   Widget _buildStep2(ThemeData theme) {
     final user = ref.watch(currentUserProvider);
-    final isInstant = user?.isAnonymous == true;
     final userEmail = user?.email ?? '';
 
     return Column(
@@ -176,9 +161,7 @@ class _DeleteAccountDialogState extends ConsumerState<DeleteAccountDialog> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          isInstant
-              ? 'To confirm deletion, type DELETE:'
-              : 'To confirm deletion, please type your email address:',
+          'To confirm deletion, please type your email address:',
           style: theme.textTheme.bodyMedium,
         ),
         const SizedBox(height: 8),
@@ -189,7 +172,7 @@ class _DeleteAccountDialogState extends ConsumerState<DeleteAccountDialog> {
             borderRadius: BorderRadius.circular(8),
           ),
           child: Text(
-            isInstant ? 'DELETE' : userEmail,
+            userEmail,
             style: theme.textTheme.bodyMedium?.copyWith(
               fontWeight: FontWeight.bold,
               fontFamily: 'monospace',
@@ -200,14 +183,13 @@ class _DeleteAccountDialogState extends ConsumerState<DeleteAccountDialog> {
         TextField(
           controller: _emailController,
           decoration: InputDecoration(
-            labelText: isInstant ? 'Type DELETE' : 'Enter your email',
-            hintText: isInstant ? 'DELETE' : 'Type your email to confirm',
+            labelText: 'Enter your email',
+            hintText: 'Type your email to confirm',
             errorText: _emailError,
             border: const OutlineInputBorder(),
-            prefixIcon: Icon(isInstant ? Icons.delete_forever : Icons.email),
+            prefixIcon: const Icon(Icons.email),
           ),
-          keyboardType:
-              isInstant ? TextInputType.text : TextInputType.emailAddress,
+          keyboardType: TextInputType.emailAddress,
           autocorrect: false,
           onChanged: (_) {
             setState(() {
@@ -267,8 +249,12 @@ class _DeleteAccountDialogState extends ConsumerState<DeleteAccountDialog> {
         ),
       ];
     } else {
-      // Check the confirmation text (email, or DELETE for instant accounts)
-      final emailMatches = _confirmTextMatches(_emailController.text);
+      // Check if email matches
+      final user = ref.read(currentUserProvider);
+      final userEmail = user?.email ?? '';
+      final enteredEmail = _emailController.text.trim();
+      final emailMatches = enteredEmail.isNotEmpty &&
+          enteredEmail.toLowerCase() == userEmail.toLowerCase();
 
       return [
         TextButton(
@@ -294,22 +280,20 @@ class _DeleteAccountDialogState extends ConsumerState<DeleteAccountDialog> {
   }
 
   void _verifyAndDelete() {
+    final user = ref.read(currentUserProvider);
+    final userEmail = user?.email ?? '';
     final enteredEmail = _emailController.text.trim();
 
     if (enteredEmail.isEmpty) {
       setState(() {
-        _emailError = _isInstantAccount
-            ? 'Type DELETE to confirm'
-            : 'Please enter your email';
+        _emailError = 'Please enter your email';
       });
       return;
     }
 
-    if (!_confirmTextMatches(enteredEmail)) {
+    if (enteredEmail.toLowerCase() != userEmail.toLowerCase()) {
       setState(() {
-        _emailError = _isInstantAccount
-            ? 'Type DELETE exactly to confirm'
-            : 'Email does not match';
+        _emailError = 'Email does not match';
       });
       return;
     }

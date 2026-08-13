@@ -45,30 +45,6 @@ final currentUserIdProvider = Provider<String?>((ref) {
   return authState.asData?.value.session?.user.id;
 });
 
-/// True while the session belongs to an INSTANT account (Supabase anonymous
-/// sign-in): a real auth.uid with server-synced data, but no email yet.
-/// Guests (no session at all) are `false` here — check
-/// [currentUserIdProvider] == null for that state.
-final isAnonymousUserProvider = Provider<bool>((ref) {
-  final authState = ref.watch(authStateProvider);
-  return authState.asData?.value.session?.user.isAnonymous ?? false;
-});
-
-/// THE gate for features that genuinely need an email identity:
-/// collaborators (inviting and being invited), referral redeem/earn,
-/// publishing a trip, copying by code. True only for a signed-in,
-/// non-anonymous user with an email on the account.
-///
-/// Guests and instant accounts both read `false` — surfaces route them to
-/// sign-up or the link-email screen respectively (see
-/// showSignUpRequiredSheet, which branches on [isAnonymousUserProvider]).
-final hasLinkedEmailProvider = Provider<bool>((ref) {
-  final authState = ref.watch(authStateProvider);
-  final user = authState.asData?.value.session?.user;
-  if (user == null || user.isAnonymous) return false;
-  return (user.email ?? '').isNotEmpty;
-});
-
 /// Profile lookup keyed by user_id. Used by surfaces that need to render
 /// somebody OTHER than the signed-in user — chiefly the shared-trip badge
 /// on the map screen, which shows the trip's owner. Riverpod caches the

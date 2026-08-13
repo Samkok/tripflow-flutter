@@ -60,15 +60,7 @@ class _SecurityScreenState extends ConsumerState<SecurityScreen> {
 
     final user = ref.read(currentUserProvider);
     final email = user?.email;
-    if (email == null || email.isEmpty) {
-      // Instant (anonymous) accounts have no email/password identity —
-      // Settings hides this screen for them, so this is defense-in-depth,
-      // not a reachable path. Fail loudly rather than spinning silently.
-      setState(() => _step1Loading = false);
-      AppToast.error(
-          context, 'Add an email to your account first (Settings → profile).');
-      return;
-    }
+    if (email == null) return;
 
     try {
       // Re-authenticate to verify the current password

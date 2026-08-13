@@ -426,10 +426,7 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
                               icon: const Icon(Icons.group_outlined),
                               tooltip: 'Travel buddies',
                               onPressed: () {
-                                // Collaboration is email-keyed end to end
-                                // (invites, identity, claim) — instant
-                                // accounts get the add-email variant.
-                                if (!ref.read(hasLinkedEmailProvider)) {
+                                if (ref.read(currentUserIdProvider) == null) {
                                   showSignUpRequiredSheet(
                                     context,
                                     icon: Icons.group_add_rounded,
