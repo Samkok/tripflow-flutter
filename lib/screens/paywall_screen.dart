@@ -66,8 +66,14 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
   DateTime? _promoExpiresAt;
   final _codeController = TextEditingController();
 
-  bool get _signedIn =>
-      SupabaseService.instance.client.auth.currentSession != null;
+  // Referral redemption needs a LINKED EMAIL, not just a session — instant
+  // (anonymous) accounts are free identities, and the server rejects them.
+  // The name is kept: every use of this getter is a referral gate.
+  bool get _signedIn {
+    final user = SupabaseService.instance.client.auth.currentUser;
+    if (user == null || user.isAnonymous) return false;
+    return (user.email ?? '').isNotEmpty;
+  }
 
   @override
   void initState() {

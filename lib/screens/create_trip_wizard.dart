@@ -43,10 +43,10 @@ class _CreateTripWizardState extends ConsumerState<CreateTripWizard> {
   final _pageController = PageController();
   int _step = 0;
 
-  /// Guests skip the buddies step — inviting collaborators needs an
-  /// account (trip_shares rows, invite emails). Their trips live on-device
-  /// until the sign-in sync.
-  bool get _isGuest => ref.read(currentUserIdProvider) == null;
+  /// Guests AND instant (anonymous) accounts skip the buddies step —
+  /// inviting collaborators is email-keyed end to end (collaborator rows,
+  /// invite emails), so it needs a linked email, not just a session.
+  bool get _isGuest => !ref.read(hasLinkedEmailProvider);
 
   int get _stepCount => _isGuest ? 3 : 4;
 

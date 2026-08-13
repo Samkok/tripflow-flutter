@@ -98,7 +98,9 @@ class ReferralHomeBanner extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    if (ref.watch(currentUserIdProvider) == null) {
+    // Referral is an email-account feature — hidden for guests AND for
+    // instant (anonymous) accounts.
+    if (!ref.watch(hasLinkedEmailProvider)) {
       return const SizedBox.shrink();
     }
     if (ref.watch(referralBannerDismissedProvider)) {

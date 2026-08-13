@@ -339,7 +339,10 @@ class _TripScreenState extends ConsumerState<TripScreen> {
   }
 
   void _openCopyTripWizard() {
-    if (ref.read(currentUserIdProvider) == null) {
+    // Linked email required: copy-by-code has a per-account free limit, and
+    // free instant accounts would launder it. The sheet itself shows the
+    // "add your email" variant to instant accounts.
+    if (!ref.read(hasLinkedEmailProvider)) {
       showSignUpRequiredSheet(
         context,
         icon: Icons.content_paste_go_rounded,
@@ -2015,7 +2018,10 @@ class _TripScreenState extends ConsumerState<TripScreen> {
     final primary = theme.colorScheme.primary;
     final localActiveTripId = ref.watch(localActiveTripIdProvider);
     final isActive = localActiveTripId == trip.id;
-    final signedIn = ref.watch(currentUserIdProvider) != null;
+    // Publishing a trip (and its code chip) requires a LINKED EMAIL, not
+    // just a session: instant accounts can't take accountability actions
+    // and the RPC rejects them anyway.
+    final signedIn = ref.watch(hasLinkedEmailProvider);
 
     // Active/selected state lives on the SHELL (border + glow) and the
     // eyebrow — never repeated as chips or button colors. Cyan is the only

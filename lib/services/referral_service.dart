@@ -78,6 +78,19 @@ class ReferralService {
     }
   }
 
+  /// The locally saved not-yet-redeemed code, if any — surfaces let the
+  /// user know a code is already parked (e.g. LinkEmailScreen hides its
+  /// referral field when one is waiting).
+  Future<String?> pendingCode() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final code = prefs.getString(_kPendingCode);
+      return (code == null || code.isEmpty) ? null : code;
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<void> clearPendingCode() async {
     try {
       final prefs = await SharedPreferences.getInstance();
