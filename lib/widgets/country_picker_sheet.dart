@@ -41,12 +41,10 @@ class _CountryPickerSheetState extends State<_CountryPickerSheet> {
 
   List<Country> get _filtered {
     if (_query.isEmpty) return kCountries;
-    final q = _query.toLowerCase();
-    return kCountries
-        .where((c) =>
-            c.name.toLowerCase().contains(q) ||
-            c.code.toLowerCase().startsWith(q))
-        .toList();
+    // Folded matching: diacritic-insensitive + aliases, so "turkey" finds
+    // "Türkiye" and "ivory coast" finds "Côte d'Ivoire".
+    final q = foldForSearch(_query);
+    return kCountries.where((c) => c.matchesQuery(q)).toList();
   }
 
   @override

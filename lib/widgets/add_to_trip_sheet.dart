@@ -29,7 +29,11 @@ class _AddToTripSheetState extends ConsumerState<AddToTripSheet> {
   @override
   void initState() {
     super.initState();
-    selectedLocationIds = {};
+    // Single-location flow (pin detail sheet's "Add to trip"): the choice
+    // is already made — preselect it so the sheet is one tap from done.
+    selectedLocationIds = widget.availableLocations.length == 1
+        ? {widget.availableLocations.first.id}
+        : {};
   }
 
   @override

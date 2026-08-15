@@ -8,11 +8,19 @@ class AddCollaboratorResult {
   final String? error;
   final TripCollaborator? collaborator;
 
-  /// True when the invited email has no VoyZa account yet — instead of an
-  /// error, the UI should offer to send a referral invite (they'll both get
-  /// a free month, and the invitee auto-joins this trip on signup).
+  /// True when the invited email can't be added directly — instead of an
+  /// error, the UI should offer to send a referral invite (they auto-join
+  /// this trip once they sign up / verify).
   final bool needsInvite;
   final String? inviteEmail;
+
+  /// Narrows [needsInvite]: the address DOES have a VoyZa account, it just
+  /// hasn't verified its email yet. Collaboration is gated on verification
+  /// (server-side: get_user_id_by_email matches verified users only), so
+  /// the UI must say that plainly instead of the "they're not on VoyZa
+  /// yet, you'll both get a free month" pitch — which would be wrong on
+  /// both counts.
+  final bool existsUnverified;
 
   AddCollaboratorResult({
     required this.success,
@@ -20,6 +28,7 @@ class AddCollaboratorResult {
     this.collaborator,
     this.needsInvite = false,
     this.inviteEmail,
+    this.existsUnverified = false,
   });
 }
 
@@ -28,7 +37,10 @@ class TripCollaboratorRepository {
 
   static const String _tableName = 'trip_collaborators';
 
-  /// Check if a user exists by email
+  /// The user id behind [email] — VERIFIED accounts only (the RPC filters
+  /// on email_verified_at by design, so an unverified squatter can never
+  /// be attached to a trip). Pair with [emailExists] to tell "no account
+  /// at all" apart from "account exists but unverified".
   Future<String?> getUserIdByEmail(String email) async {
     try {
       final response = await _supabase
@@ -39,6 +51,20 @@ class TripCollaboratorRepository {
     } catch (e) {
       debugPrint('Error getting user by email: $e');
       return null;
+    }
+  }
+
+  /// True when ANY live auth account uses [email], verified or not.
+  /// Fails CLOSED (false) so a hiccup just falls back to the normal
+  /// "not on VoyZa yet" invite path rather than blocking the invite.
+  Future<bool> emailExists(String email) async {
+    try {
+      final res =
+          await _supabase.rpc('email_exists', params: {'user_email': email});
+      return res == true;
+    } catch (e) {
+      debugPrint('Error probing email existence: $e');
+      return false;
     }
   }
 
@@ -53,12 +79,18 @@ class TripCollaboratorRepository {
       final userId = await getUserIdByEmail(email);
 
       if (userId == null) {
-        // Not a user yet — surface the referral invite path instead of a
-        // dead-end. The sheet turns this into "invite them, both get a month."
+        // Can't attach them directly — surface the invite path instead of a
+        // dead-end. Two very different reasons land here, so probe which:
+        // no account at all ("invite them, both get a month"), or an
+        // account that exists but hasn't verified its email (the invite
+        // still goes out and auto-joins them once they verify — the UI
+        // just has to say so).
+        final exists = await emailExists(email);
         return AddCollaboratorResult(
           success: false,
           needsInvite: true,
           inviteEmail: email,
+          existsUnverified: exists,
         );
       }
 
@@ -112,11 +144,16 @@ class TripCollaboratorRepository {
     }
   }
 
-  /// Store a pending referral invite for a non-user email + return the
-  /// inviter's referral code (to share). The invitee auto-joins [tripId]
-  /// when they sign up (via the claim-invites edge function). Returns null
-  /// on failure (e.g. no write access).
-  Future<String?> createPendingInvite({
+  /// Store a pending referral invite for an email that can't be attached
+  /// directly + return the inviter's referral code (to share). The invitee
+  /// auto-joins [tripId] once they sign up / verify (via the claim-invites
+  /// edge function).
+  ///
+  /// `code == null` means it failed. [inviterUnverified] separates the one
+  /// failure the user can actually fix — the RPC refuses invites from
+  /// accounts that haven't verified their OWN email — from generic errors
+  /// (no write access, offline), so the UI can say which it was.
+  Future<({String? code, bool inviterUnverified})> createPendingInvite({
     required String tripId,
     required String email,
     required String permission,
@@ -127,10 +164,18 @@ class TripCollaboratorRepository {
         'p_email': email,
         'p_permission': permission,
       });
-      return code is String && code.isNotEmpty ? code : null;
+      return (
+        code: code is String && code.isNotEmpty ? code : null,
+        inviterUnverified: false,
+      );
     } catch (e) {
       debugPrint('Error creating pending invite: $e');
-      return null;
+      return (
+        code: null,
+        // The RPC raises 'email_unverified'; PostgrestException carries it
+        // through in the message.
+        inviterUnverified: e.toString().contains('email_unverified'),
+      );
     }
   }
 

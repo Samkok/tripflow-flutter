@@ -247,7 +247,10 @@ class ChecklistNotifier extends StateNotifier<ChecklistState> {
     if (count > state.locCount) {
       state = state.copyWith(locCount: count);
     }
-    if (count >= 3) await mark(ChecklistStep.addLocations, silent: silent);
+    // Mirrors TripBottomSheet.ahaThreshold (2): the step completes exactly
+    // when Optimize unlocks, so the checklist never asks for more places
+    // than the aha needs.
+    if (count >= 2) await mark(ChecklistStep.addLocations, silent: silent);
   }
 }
 

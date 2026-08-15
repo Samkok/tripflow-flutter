@@ -12,7 +12,6 @@ import 'package:tutorial_coach_mark/tutorial_coach_mark.dart';
 import 'package:voyza/core/theme.dart';
 import 'package:voyza/screens/location_search_screen.dart';
 // import 'package:voyza/screens/login_screen.dart'; // DISABLED with first-optimize celebration (2026-08-07)
-import 'package:voyza/widgets/add_to_trip_sheet.dart';
 import 'package:voyza/widgets/pulsing_glow.dart';
 import 'package:voyza/widgets/route_leg_sheet.dart';
 import 'package:voyza/providers/onboarding_checklist_provider.dart';
@@ -2206,14 +2205,6 @@ class _MapScreenState extends ConsumerState<MapScreen>
                         final hasRoute = hasSelectedDayRoute || allDaysActive;
                         final isGenerating =
                             ref.watch(isGeneratingRouteProvider);
-                        final currentUserId = ref.watch(currentUserIdProvider);
-                        final allSaved =
-                            ref.watch(savedLocationsProvider).asData?.value ??
-                                const [];
-                        final unassigned = allSaved
-                            .where((l) =>
-                                l.tripId == null && l.userId == currentUserId)
-                            .toList();
                         final showPlaceNames =
                             ref.watch(showPlaceNamesProvider);
 
@@ -2276,24 +2267,10 @@ class _MapScreenState extends ConsumerState<MapScreen>
                               tooltip: 'Clear Route',
                               child: const Icon(Icons.clear_outlined),
                             ),
-                          if (unassigned.isNotEmpty)
-                            FloatingActionButton(
-                              heroTag: 'addToTripFab',
-                              mini: true,
-                              onPressed: () {
-                                showModalBottomSheet(
-                                  context: context,
-                                  isScrollControlled: true,
-                                  backgroundColor: Colors.transparent,
-                                  builder: (context) => AddToTripSheet(
-                                    availableLocations: unassigned,
-                                    onSuccess: () {},
-                                  ),
-                                );
-                              },
-                              tooltip: 'Add Locations to Trip',
-                              child: const Icon(Icons.playlist_add),
-                            ),
+                          // (The bulk "Add Locations to Trip" FAB lived here.
+                          // Removed: adding now happens per-location from the
+                          // pin's detail sheet, which shows "Add to trip" for
+                          // any location not attached to a trip.)
                           FloatingActionButton(
                             heroTag: 'togglePlaceNamesFab',
                             mini: true,

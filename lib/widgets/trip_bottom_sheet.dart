@@ -49,10 +49,14 @@ class TripBottomSheet extends ConsumerStatefulWidget {
   });
 
   /// Places needed before route optimization is worth offering (the "aha").
-  /// Single source of truth for the goal-gradient nudges below. Distinct from
-  /// [SubscriptionLimitService.freePlaceAllowance] (the paywall cap of 5) — 3
-  /// unlocks Optimize, 5 hits the wall.
-  static const int ahaThreshold = 3;
+  /// Single source of truth for the goal-gradient nudges below — the
+  /// onboarding checklist's "add places" step mirrors this number by hand
+  /// (onboarding_checklist_provider / onboarding_checklist), keep them in
+  /// step. Distinct from [SubscriptionLimitService.freePlaceAllowance] (the
+  /// paywall cap of 5) — 2 unlocks Optimize, 5 hits the wall.
+  /// Lowered from 3 → 2 (owner call, 2026-08-15): even a two-stop day has a
+  /// real best order + travel times worth showing.
+  static const int ahaThreshold = 2;
 
   /// Collapsed-state height as a fraction of the screen. PUBLIC because the
   /// map's zoom-to-fit window must know exactly where the sheet's top edge
@@ -784,10 +788,9 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
               final isPastDate = nudgeDate.isBefore(
                   DateTime(nudgeNow.year, nudgeNow.month, nudgeNow.day));
 
-              // Goal-gradient nudge: route optimization only pays off at 3+
-              // stops, so below that we coach toward the "aha" instead of
-              // offering a trivial optimize. Re-optimize stays available once
-              // a route already exists.
+              // Goal-gradient nudge: below [ahaThreshold] stops we coach
+              // toward the "aha" instead of offering a trivial optimize.
+              // Re-optimize stays available once a route already exists.
               const ahaThreshold = TripBottomSheet.ahaThreshold;
               if (!isPastDate &&
                   count > 0 &&
@@ -1057,7 +1060,7 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                     child: ListTile(
                       leading: Icon(Icons.calendar_today_outlined,
                           color: canEdit ? null : Colors.grey),
-                      title: Text('Move to...',
+                      title: Text('Move to another day',
                           style:
                               TextStyle(color: canEdit ? null : Colors.grey)),
                     ),
@@ -1094,7 +1097,8 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                   const PopupMenuItem(
                     value: 'copy',
                     child: ListTile(
-                        leading: Icon(Icons.copy), title: Text('Copy to...')),
+                        leading: Icon(Icons.copy),
+                        title: Text('Copy to another day')),
                   ),
                 ],
               ),
@@ -2264,10 +2268,9 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
       final isViewingHistory = isPastDate && hasRoute;
       final hasLocations = locationsForDate.isNotEmpty;
 
-      // Same goal-gradient rule as the header button: optimization only
-      // pays off at 3+ stops, so below that we coach toward the "aha"
-      // instead of offering a trivial optimize. Re-optimize stays
-      // available once a route already exists.
+      // Same goal-gradient rule as the header button: below [ahaThreshold]
+      // stops we coach toward the "aha" instead of offering a trivial
+      // optimize. Re-optimize stays available once a route already exists.
       const ahaThreshold = TripBottomSheet.ahaThreshold;
       final stopCount = locationsForDate.length;
       if (stopCount > 0 &&
@@ -3095,10 +3098,17 @@ class _StartPointSheetState extends ConsumerState<_StartPointSheet> {
                     _buildStartAtCard(context),
                     const SizedBox(height: 16),
                     // Travel style: which mode anchors the whole route.
+                    // Loose locations (no active trip) optimize with the SAME
+                    // machinery under the 'no_trip' sentinel — the exact key
+                    // the optimizer reads (`tripId ?? 'no_trip'` in
+                    // trip_provider) — so the picker shows either way instead
+                    // of silently locking tripless users to the defaults.
                     Builder(builder: (context) {
-                      final tripId =
-                          ref.watch(realtimeActiveTripProvider).valueOrNull?.id;
-                      if (tripId == null) return const SizedBox.shrink();
+                      final tripId = ref
+                              .watch(realtimeActiveTripProvider)
+                              .valueOrNull
+                              ?.id ??
+                          'no_trip';
                       _loadTravelProfile(tripId);
                       return Padding(
                         padding: const EdgeInsets.only(bottom: 16),

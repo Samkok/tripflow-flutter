@@ -73,6 +73,22 @@ serve(async (req) => {
     const email = (user.email ?? "").toLowerCase();
     if (!email) return reply(200, { ok: true, joined: 0 });
 
+    // VERIFIED INBOX REQUIRED. "Confirm email" is off (signups are
+    // auto-confirmed with a live session), so gotrue's flag proves nothing —
+    // without this gate anyone could sign up AS someone else's address and
+    // claim every trip that address was invited to. Verification lives in
+    // our own OTP layer (user_profiles.email_verified_at, set by
+    // verify-email-otp). Pending invites are left untouched: the claim
+    // simply runs again after the user verifies.
+    const { data: prof } = await supabase
+      .from("user_profiles")
+      .select("email_verified_at")
+      .eq("user_id", user.id)
+      .maybeSingle();
+    if (!prof?.email_verified_at) {
+      return reply(200, { ok: true, joined: 0, reason: "email_unverified" });
+    }
+
     const body = await req.json().catch(() => ({}));
     const deviceId = typeof body.device_id === "string" ? body.device_id : null;
 

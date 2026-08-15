@@ -29,7 +29,7 @@ const _kStepMeta = {
   ),
   ChecklistStep.addLocations: (
     icon: Icons.place_outlined,
-    title: 'Add 3 places to it',
+    title: 'Add 2 places to it',
     subtitle: 'Search anything — cafés, sights, hotels',
   ),
   ChecklistStep.activateTrip: (
@@ -402,7 +402,8 @@ class AddLocationsProgressBadge extends ConsumerWidget {
     if (!active) return const SizedBox.shrink();
 
     const amber = Color(0xFFF5A623);
-    final n = count.clamp(0, 3);
+    // 2 = TripBottomSheet.ahaThreshold — the badge's definition of done.
+    final n = count.clamp(0, 2);
     // Material(transparency) matters: this badge floats OUTSIDE the
     // Scaffold, and a Text with no Material ancestor renders with the
     // framework's yellow double-underline fallback style.
@@ -422,7 +423,7 @@ class AddLocationsProgressBadge extends ConsumerWidget {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              for (var i = 0; i < 3; i++) ...[
+              for (var i = 0; i < 2; i++) ...[
                 Container(
                   width: 9,
                   height: 9,
@@ -435,9 +436,9 @@ class AddLocationsProgressBadge extends ConsumerWidget {
               ],
               const SizedBox(width: 3),
               Text(
-                n >= 3
+                n >= 2
                     ? 'Done!'
-                    : 'Add ${3 - n} more place${3 - n == 1 ? '' : 's'} · $n/3',
+                    : 'Add ${2 - n} more place${2 - n == 1 ? '' : 's'} · $n/2',
                 style: const TextStyle(
                     color: Colors.white,
                     fontSize: 12.5,

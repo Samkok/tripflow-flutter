@@ -21,6 +21,7 @@ import 'package:voyza/utils/trip_dates.dart';
 
 import '../core/theme.dart';
 import 'accommodation_prompts.dart';
+import 'add_to_trip_sheet.dart';
 import 'app_toast.dart';
 import 'location_photo_gallery.dart';
 
@@ -631,6 +632,46 @@ class LocationDetailSheet extends ConsumerWidget {
         // Breathing room between the name row (up in the drag zone) and the
         // button row.
         const SizedBox(height: 12),
+        // Loose saved location (not attached to any trip): adding it to a
+        // trip is THE next step, so it leads the actions. Replaces the old
+        // map-corner "Add Locations to Trip" FAB — same AddToTripSheet
+        // (write-access + country guard live inside), scoped to this one
+        // location and preselected.
+        if (updatedLocation.tripId == null) ...[
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton.icon(
+              icon: const Icon(Icons.add_location_alt_rounded, size: 18),
+              label: const Text('Add to trip'),
+              onPressed: () {
+                final saved = (ref.read(savedLocationsProvider).valueOrNull ??
+                        const <SavedLocation>[])
+                    .where((l) => l.id == updatedLocation.id)
+                    .toList();
+                if (saved.isEmpty) {
+                  AppToast.warning(
+                      context, 'Location not found — try refreshing.');
+                  return;
+                }
+                showModalBottomSheet(
+                  context: context,
+                  isScrollControlled: true,
+                  backgroundColor: Colors.transparent,
+                  builder: (_) => AddToTripSheet(
+                    availableLocations: saved,
+                    // The location just joined a trip — this sheet's
+                    // "loose location" actions are stale; close it.
+                    onSuccess: () => Navigator.of(context).maybePop(),
+                  ),
+                );
+              },
+              style: FilledButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 12),
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+        ],
         // Action buttons — one row: Schedule + Google Map. Name editing
         // moved to the icon beside the name; stay duration is edited from
         // the trip-plan card's "Stay" text button.

@@ -8,6 +8,9 @@ import 'package:voyza/screens/terms_screen.dart';
 import 'package:voyza/widgets/rotating_globe_background.dart';
 import '../providers/auth_provider.dart';
 import '../providers/onboarding_provider.dart';
+import '../providers/subscription_provider.dart';
+import '../providers/trip_collaborator_provider.dart';
+import '../providers/user_trip_provider.dart';
 import '../services/auth_service.dart';
 import '../services/email_history_service.dart';
 import '../widgets/sync_confirmation_dialog.dart';
@@ -102,10 +105,11 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
   Future<void> _signUp() async {
     if (!_formKey.currentState!.validate()) return;
 
-    // Sync question comes BEFORE authenticating. The decision is only
-    // recorded here; upload/deletion run after a session exists (most
-    // sign-ups go through email verification first — the recorded "yes"
-    // makes the first sign-in sync automatically without re-asking).
+    // Sync question comes BEFORE authenticating. The decision is recorded
+    // up front; its consequences (upload or deletion) run right after the
+    // session exists — signup returns a live session now that email
+    // confirmation is no longer a wall.
+    bool? syncKeep;
     final counts = await ref.read(authServiceProvider).getLocalDataCounts();
     if (counts.trips > 0 || counts.places > 0) {
       if (!mounted) return;
@@ -119,6 +123,7 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
           ) ??
           false;
       await AuthService.presetSyncChoice(keep);
+      syncKeep = keep;
     }
     if (!mounted) return;
 
@@ -150,43 +155,49 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
         // gets the prompt here and a subsequent sign-in with the
         // same address won't re-ask.
         //
-        // Must happen BEFORE we pop — the helper calls
+        // Must happen BEFORE we navigate — the helper calls
         // finishAutofillContext which needs the screen's text fields
         // still mounted to commit their values into the autofill
         // context.
         await promptSavePasswordIfNeeded(context, _emailController.text.trim());
         // Offer this address back next time the user lands on an auth screen.
         await EmailHistoryService.instance.remember(_emailController.text);
+        // Prefill the login form if they ever sign out.
+        await AuthService.saveRememberMe(true, _emailController.text.trim());
         if (!mounted) return;
 
-        // A blocking dialog, not a toast: "verify before you can sign in"
-        // is the one thing they must absorb before leaving this screen.
-        await showDialog<void>(
-          context: context,
-          builder: (ctx) => AlertDialog(
-            shape:
-                RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-            title: const Text('Verify your email'),
-            content: Text(
-              'We sent a verification link to '
-              '${_emailController.text.trim()}.\n\n'
-              'You need to open it before you can sign in. If it '
-              "doesn't arrive within a minute or two, check your spam "
-              'folder.',
-            ),
-            actions: [
-              FilledButton(
-                onPressed: () => Navigator.of(ctx).pop(),
-                child: const Text('Got it'),
-              ),
-            ],
-          ),
-        );
-        if (!mounted) return;
-        // Pop back to the login screen after successful sign-up
-        if (Navigator.canPop(context)) {
-          Navigator.of(context).pop();
+        // Signup returns a live session now (confirmations off), so the
+        // post-auth pipeline mirrors the sign-in screen: carry out the
+        // sync decision taken up front, then land the user on Home. The
+        // verification email (6-digit code) is already on its way — the
+        // Settings banner owns the "Verify now" surface.
+        if (syncKeep == true) {
+          setState(() {
+            _authStage = 'Syncing your trips and places…';
+            _authProgress = 0.97;
+          });
+          await ref.read(authServiceProvider).syncLocalLocations();
+          // Surface the freshly synced trips immediately — without this
+          // the home list stays on its pre-sync fetch until a refresh.
+          ref.invalidate(userTripsProvider);
+          ref.invalidate(sharedTripsProvider);
+        } else if (syncKeep == false) {
+          await ref.read(authServiceProvider).declineSync();
+          ref.invalidate(userTripsProvider);
+          ref.invalidate(sharedTripsProvider);
         }
+        ref.read(subscriptionProvider.notifier).reinitialize();
+
+        if (!mounted) return;
+        AppToast.success(
+          context,
+          "You're in! We emailed you a 6-digit code — verify anytime "
+          'in Settings.',
+        );
+        // Straight to Home with a clean stack (a pop could land on the
+        // login screen that pushed us — wrong place for a signed-in user).
+        Navigator.of(context)
+            .pushNamedAndRemoveUntil('/home', (route) => false);
       }
     } on EmailAlreadyRegisteredException catch (e) {
       if (mounted) {

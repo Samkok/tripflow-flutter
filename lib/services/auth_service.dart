@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:voyza/repositories/location_repository.dart';
 import 'package:voyza/repositories/trip_repository.dart';
 import 'package:voyza/repositories/user_profile_repository.dart';
+import 'package:voyza/services/email_otp_service.dart';
 import 'package:voyza/services/supabase_service.dart';
 import 'package:voyza/services/revenuecat_service.dart';
 import 'package:voyza/services/analytics_service.dart';
@@ -143,12 +144,6 @@ class AuthService {
     } catch (e) {
       rethrow;
     }
-  }
-
-  /// Re-sends the signup verification email. Supabase rate-limits this
-  /// server-side; the UI adds its own cooldown so users can't hammer it.
-  Future<void> resendVerificationEmail(String email) async {
-    await _supabase.auth.resend(type: OtpType.signup, email: email.trim());
   }
 
   /// Performs the sync of local locations to the cloud
@@ -381,11 +376,31 @@ class AuthService {
         // a genuinely new account past the 23505 duplicate backstop above.
         AnalyticsService.instance.signup('email');
 
-        // Referral: no session exists yet (email verification pending), so
-        // the code can't be redeemed here. Persist it locally; main.dart's
-        // auth listener redeems it on the first verified sign-in.
+        // Referral: the session exists (confirmations are off) but the
+        // server refuses redemption until the email is verified — persist
+        // the code; the OTP sheet / auth listener redeem it once verified.
         if (referralCode != null && referralCode.trim().isNotEmpty) {
           await ReferralService.instance.savePendingCode(referralCode);
+        }
+
+        // Verification code: fire-and-forget — the user lands in the app
+        // immediately while the 6-digit email arrives in parallel. The
+        // Settings banner / Security screen own the retry surface, so a
+        // failure here costs nothing.
+        onStage?.call('Sending your verification code…', 0.82);
+        unawaited(EmailOtpService.sendCode().catchError((Object e) {
+          debugPrint('AuthService: verify-code send failed (non-fatal): $e');
+          return OtpSendStatus.failed;
+        }));
+
+        // Push token — same rule as signIn: the first session on this
+        // device may show the OS notification prompt (the service
+        // persists an already-asked flag, so it never double-prompts).
+        onStage?.call('Setting up notifications…', 0.92);
+        try {
+          await NotificationService().registerToken(allowPrompt: true);
+        } catch (e) {
+          debugPrint('AuthService: Failed to register push token: $e');
         }
       }
     } catch (e) {
@@ -398,7 +413,29 @@ class AuthService {
     return _supabase.auth.onAuthStateChange;
   }
 
-  /// Sends a password reset email with the app's custom scheme redirect.
+  /// True when a VoyZa account uses [email] — backs the forgot-password
+  /// screen's honest "no account with this email" message instead of the
+  /// silent send-to-nowhere. Product call: for a travel planner, clear
+  /// recovery UX beats anti-enumeration. Backed by the `email_exists`
+  /// SECURITY DEFINER function (reads auth.users, boolean only).
+  ///
+  /// Fails OPEN (true): a network/RPC error must never block a real user
+  /// from requesting their reset email.
+  Future<bool> emailExists(String email) async {
+    try {
+      final res = await _supabase
+          .rpc('email_exists', params: {'user_email': email.trim()});
+      return res != false;
+    } catch (e) {
+      debugPrint('AuthService.emailExists (fail-open): $e');
+      return true;
+    }
+  }
+
+  /// Sends the password reset email. The template carries a 6-digit
+  /// {{ .Token }} code (entered in-app → auth.verifyOTP type recovery)
+  /// PLUS the legacy {{ .ConfirmationURL }} link — the link keeps
+  /// pre-code app versions' deeplink flow working off the same email.
   Future<void> sendPasswordResetEmail(String email) async {
     await _supabase.auth.resetPasswordForEmail(
       email,

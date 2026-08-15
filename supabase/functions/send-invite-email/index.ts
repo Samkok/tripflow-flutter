@@ -60,6 +60,18 @@ Deno.serve(async (req) => {
     }
     const inviter = userData.user;
 
+    // VERIFIED SENDERS ONLY — with dashboard confirmations off, accounts
+    // are free identities; an email relay must not be. (The invite RPC
+    // enforces the same rule, so this is belt-and-braces.)
+    const { data: inviterProf } = await supabase
+      .from("user_profiles")
+      .select("email_verified_at")
+      .eq("user_id", inviter.id)
+      .maybeSingle();
+    if (!inviterProf?.email_verified_at) {
+      return reply(200, { ok: false, reason: "email_unverified" });
+    }
+
     const body = await req.json().catch(() => ({}));
     const tripId = typeof body.trip_id === "string" ? body.trip_id : "";
     const email = typeof body.email === "string"

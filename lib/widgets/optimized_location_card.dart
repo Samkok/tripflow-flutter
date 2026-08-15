@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:intl/intl.dart';
 import 'package:voyza/models/location_model.dart';
+import 'package:voyza/providers/all_days_route_provider.dart';
 import 'package:voyza/providers/map_ui_state_provider.dart';
 import 'package:voyza/providers/trip_listener_provider.dart';
 import 'package:voyza/providers/trip_provider.dart';
@@ -283,6 +284,18 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
           width: 44,
           child: FilledButton(
             onPressed: () {
+              // The camera must land on a day where this stop's pin exists.
+              // If the selected day doesn't include it (and we're not in
+              // All-days view, which shows everything), jump the day strip
+              // to the stop's scheduled day first.
+              final sched = widget.location.scheduledDate;
+              if (sched != null &&
+                  !ref.read(allDaysModeProvider) &&
+                  !widget.location
+                      .isActiveOnDate(ref.read(selectedDateProvider))) {
+                ref.read(selectedDateProvider.notifier).state =
+                    DateTime(sched.year, sched.month, sched.day);
+              }
               ref.read(mapZoomToLocationRequestProvider.notifier).state =
                   MapZoomToLocationRequest(widget.location.coordinates);
             },
@@ -541,6 +554,9 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
 
     return PopupMenuButton<String>(
       padding: EdgeInsets.zero,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+      // Rounded corners must clip the ListTile ink of the first/last items.
+      clipBehavior: Clip.antiAlias,
       // With [child] the button renders as the labeled "Options" control;
       // without it, the classic three-dot icon (other call sites).
       icon: child == null ? const Icon(Icons.more_vert, size: 22) : null,
@@ -604,13 +620,13 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
             child: ListTile(
                 leading: Icon(Icons.calendar_today_outlined,
                     color: canEdit ? null : Colors.grey),
-                title: Text('Move to...',
+                title: Text('Move to another day',
                     style: TextStyle(color: canEdit ? null : Colors.grey))),
           ),
           const PopupMenuItem<String>(
             value: 'copy',
-            child:
-                ListTile(leading: Icon(Icons.copy), title: Text('Copy to...')),
+            child: ListTile(
+                leading: Icon(Icons.copy), title: Text('Copy to another day')),
           ),
           if (canRemoveFromTrip)
             PopupMenuItem<String>(

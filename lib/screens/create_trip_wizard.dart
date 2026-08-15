@@ -160,11 +160,11 @@ class _CreateTripWizardState extends ConsumerState<CreateTripWizard> {
       _checkingBuddy = true;
       _buddyError = null;
     });
-    final hasAccount = await TripBuddyService.emailHasAccount(ref, email);
+    final probe = await TripBuddyService.probeEmail(ref, email);
     if (!mounted) return;
     setState(() => _checkingBuddy = false);
 
-    if (hasAccount) {
+    if (probe.addable) {
       setState(() {
         _buddies.add((email: email, invite: false));
         _buddyController.clear();
@@ -172,12 +172,15 @@ class _CreateTripWizardState extends ConsumerState<CreateTripWizard> {
       return;
     }
 
-    // No account — the same consent dialog the Collaborators screen shows.
+    // Not addable — the same consent dialog the Collaborators screen shows,
+    // in the right flavour: no account at all, or an account that still
+    // has to verify its email before it can collaborate.
     final typedName = _nameController.text.trim();
     final confirmed = await showInviteBuddyDialog(
       context,
       email: email,
       tripName: typedName.isEmpty ? 'this trip' : typedName,
+      unverifiedAccount: probe.unverifiedAccount,
     );
     if (confirmed == true && mounted) {
       setState(() {

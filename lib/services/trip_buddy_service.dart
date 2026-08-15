@@ -113,7 +113,12 @@ class TripBuddyService {
           BuddyAddStatus.error, result.error ?? 'Could not add them.');
     }
 
-    // Not a user yet — referral invite path.
+    // Can't attach directly — invite path. Either they have no account, or
+    // they have one that hasn't verified its email (collaboration is gated
+    // on verification server-side); the dialog and the closing message say
+    // which, because "we'll email them a referral" is the wrong story for
+    // someone who already signed up.
+    final unverifiedAccount = result.existsUnverified;
     if (!inviteWithoutAsking) {
       if (!context.mounted) {
         return const BuddyAddResult(BuddyAddStatus.cancelled);
@@ -122,20 +127,28 @@ class TripBuddyService {
         context,
         email: normalized,
         tripName: tripName,
+        unverifiedAccount: unverifiedAccount,
       );
       if (confirmed != true) {
         return const BuddyAddResult(BuddyAddStatus.cancelled);
       }
     }
 
-    final code = await repository.createPendingInvite(
+    final invite = await repository.createPendingInvite(
       tripId: tripId,
       email: normalized,
       permission: permission,
     );
+    final code = invite.code;
     if (code == null) {
-      return const BuddyAddResult(BuddyAddStatus.error,
-          'Couldn\'t create the invite. Please try again.');
+      return BuddyAddResult(
+        BuddyAddStatus.error,
+        invite.inviterUnverified
+            ? 'Verify your own email first — open Settings and tap "Verify '
+                'now". We need to know your address is real before you can '
+                'invite people to a trip.'
+            : 'Couldn\'t create the invite. Please try again.',
+      );
     }
     AnalyticsService.instance.referralPromptShown('collab_invite');
 
@@ -161,6 +174,14 @@ class TripBuddyService {
         subject: 'Plan "$tripName" with me on VoyZa',
       ));
     }
+    if (unverifiedAccount) {
+      // Kept short: this lands in a toast, and the dialog above already
+      // gave the full "why verification is required" explanation.
+      return BuddyAddResult(
+          BuddyAddStatus.invited,
+          '$normalized hasn\'t verified their email yet — they\'ll join '
+              'this trip automatically once they do.');
+    }
     return BuddyAddResult(
         BuddyAddStatus.invited,
         emailed
@@ -169,22 +190,39 @@ class TripBuddyService {
             : null);
   }
 
-  /// Fast existence probe for pre-creation surfaces (the wizard checks at
-  /// typing time, before any trip exists).
-  static Future<bool> emailHasAccount(WidgetRef ref, String email) async {
+  /// Fast probe for pre-creation surfaces (the wizard checks at typing
+  /// time, before any trip exists). [addable] means a VERIFIED account we
+  /// can attach straight away; [unverifiedAccount] means the address is
+  /// taken by an account that still has to verify its email before it can
+  /// collaborate — an invite, with the right wording.
+  static Future<({bool addable, bool unverifiedAccount})> probeEmail(
+      WidgetRef ref, String email) async {
     final repository = ref.read(tripCollaboratorRepositoryProvider);
-    final userId =
-        await repository.getUserIdByEmail(email.trim().toLowerCase());
-    return userId != null;
+    final normalized = email.trim().toLowerCase();
+    final userId = await repository.getUserIdByEmail(normalized);
+    if (userId != null) {
+      return (addable: true, unverifiedAccount: false);
+    }
+    return (
+      addable: false,
+      unverifiedAccount: await repository.emailExists(normalized),
+    );
   }
 }
 
-/// The one "they're not on VoyZa yet" consent dialog, shared verbatim by
-/// the Collaborators sheet and the wizard's buddy step.
+/// The one invite-consent dialog, shared by the Collaborators sheet and the
+/// wizard's buddy step. Two stories, because the reason the person can't be
+/// added directly changes what's true:
+///   • default — no VoyZa account: the referral pitch (free month, rewards).
+///   • [unverifiedAccount] — they HAVE an account but haven't verified their
+///     email, which collaboration requires. No free-month promise (they're
+///     not a new signup), just the honest "they must verify first, then
+///     they're added automatically".
 Future<bool?> showInviteBuddyDialog(
   BuildContext context, {
   required String email,
   required String tripName,
+  bool unverifiedAccount = false,
 }) {
   return showDialog<bool>(
     context: context,
@@ -192,12 +230,20 @@ Future<bool?> showInviteBuddyDialog(
       final theme = Theme.of(ctx);
       return AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Text('They\'re not on VoyZa yet'),
+        title: Text(unverifiedAccount
+            ? 'Their email isn\'t verified yet'
+            : 'They\'re not on VoyZa yet'),
         content: Text(
-          '$email doesn\'t have an account. We\'ll email them an invite '
-          'to plan "$tripName" with you — they start with a free month of '
-          'Pro and join this trip automatically when they sign up (and '
-          'you\'ll earn rewards too).',
+          unverifiedAccount
+              ? '$email has a VoyZa account, but hasn\'t verified their email '
+                  'address yet — VoyZa requires that before someone can join '
+                  'a trip.\n\nWe\'ll send them an invite to "$tripName". The '
+                  'moment they verify, they\'re added to this trip '
+                  'automatically.'
+              : '$email doesn\'t have an account. We\'ll email them an invite '
+                  'to plan "$tripName" with you — they start with a free month '
+                  'of Pro and join this trip automatically when they sign up '
+                  '(and you\'ll earn rewards too).',
           style: theme.textTheme.bodyMedium,
         ),
         actions: [
@@ -207,7 +253,11 @@ Future<bool?> showInviteBuddyDialog(
           ),
           FilledButton.icon(
             onPressed: () => Navigator.pop(ctx, true),
-            icon: const Icon(Icons.card_giftcard_rounded, size: 18),
+            icon: Icon(
+                unverifiedAccount
+                    ? Icons.mark_email_unread_outlined
+                    : Icons.card_giftcard_rounded,
+                size: 18),
             label: const Text('Send invite'),
           ),
         ],

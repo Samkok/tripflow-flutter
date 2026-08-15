@@ -80,6 +80,21 @@ serve(async (req) => {
       return reply(401, { ok: false, reason: "not_authenticated" });
     }
 
+    // ── VERIFIED INBOX REQUIRED ───────────────────────────────────────
+    // With dashboard confirmations off, accounts are free instant
+    // identities — rewarding unverified ones turns every fake signup into
+    // a month of Pro. Checked BEFORE the attempt log so an unverified
+    // user's retries don't eat their rate budget; the client keeps the
+    // pending code and retries after verification.
+    const { data: refereeProf } = await supabase
+      .from("user_profiles")
+      .select("email_verified_at")
+      .eq("user_id", referee.id)
+      .maybeSingle();
+    if (!refereeProf?.email_verified_at) {
+      return reply(200, { ok: false, reason: "email_unverified" });
+    }
+
     const body = await req.json().catch(() => ({}));
     const rawCode = typeof body.code === "string" ? body.code : "";
     const deviceId = typeof body.device_id === "string" ? body.device_id : null;

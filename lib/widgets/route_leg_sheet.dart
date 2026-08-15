@@ -4,6 +4,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/theme.dart';
 import '../models/location_model.dart';
 import '../providers/map_ui_state_provider.dart';
+import '../providers/optimized_map_overlay_provider.dart'
+    show formatLegDuration;
 import '../providers/trip_provider.dart';
 import '../services/multi_modal_router.dart';
 import '../utils/external_app_links.dart';
@@ -237,8 +239,8 @@ class _RouteLegSheetState extends ConsumerState<_RouteLegSheet> {
     setState(() => _available = {for (final e in entries) e.key: e.value});
   }
 
-  Future<void> _switchMode(String mode) async {
-    if (_switching != null || mode == widget.mode) return;
+  Future<void> _switchMode(String mode, String currentMode) async {
+    if (_switching != null || mode == currentMode) return;
     setState(() => _switching = mode);
     final ok = await ref
         .read(tripProvider.notifier)
@@ -267,11 +269,35 @@ class _RouteLegSheetState extends ConsumerState<_RouteLegSheet> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final mode = widget.mode;
-    final subtitle = (widget.durationLabel == null ||
-            widget.durationLabel!.isEmpty)
-        ? '${widget.distanceLabel} · ${_modeLabel(mode)}'
-        : '${widget.distanceLabel} · ${widget.durationLabel} ${_modeLabel(mode)}';
+    // LIVE leg facts. Route options and mode switches re-route this leg
+    // while the sheet stays open (comparison flow), so the header, the
+    // itinerary and every gate below read the provider's CURRENT leg —
+    // the open-time snapshot went stale the moment "apply" succeeded.
+    // The snapshot remains the fallback for preview opens (legIndex < 0)
+    // and the brief window before legDetails exist. Watching legDetails
+    // re-runs this build only when the route actually changes — one
+    // cheap rebuild, no reload, no polling.
+    final legsLive = ref.watch(tripProvider.select((s) => s.legDetails));
+    final live = (widget.legIndex >= 0 && widget.legIndex < legsLive.length)
+        ? legsLive[widget.legIndex]
+        : null;
+    final mode = (live?['mode'] as String?) ?? widget.mode;
+    final transit =
+        (live?['transit'] as List?)?.cast<Map<String, dynamic>>() ??
+            widget.transit;
+    final liveMeters = (live?['distance'] as num?)?.toDouble();
+    final distanceLabel = liveMeters == null
+        ? widget.distanceLabel
+        : liveMeters >= 1000
+            ? '${(liveMeters / 1000).toStringAsFixed(1)} km'
+            : '${liveMeters.round()} m';
+    final liveDuration = live?['duration'] as Duration?;
+    final durationLabel = live == null
+        ? widget.durationLabel
+        : (liveDuration == null ? null : formatLegDuration(liveDuration));
+    final subtitle = (durationLabel == null || durationLabel.isEmpty)
+        ? '$distanceLabel · ${_modeLabel(mode)}'
+        : '$distanceLabel · $durationLabel ${_modeLabel(mode)}';
 
     return ClipRRect(
       borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
@@ -318,9 +344,8 @@ class _RouteLegSheetState extends ConsumerState<_RouteLegSheet> {
                     children: [
                       Icon(
                         MarkerUtils.legModeIcon(mode,
-                            vehicleType: widget.transit?.isNotEmpty == true
-                                ? widget.transit!.first['vehicleType']
-                                    as String?
+                            vehicleType: transit?.isNotEmpty == true
+                                ? transit!.first['vehicleType'] as String?
                                 : null),
                         size: 26,
                         color: theme.colorScheme.primary,
@@ -350,9 +375,9 @@ class _RouteLegSheetState extends ConsumerState<_RouteLegSheet> {
                         ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
                   ),
                   // ── Transit itinerary — every segment, walks included ──
-                  if (widget.transit != null && widget.transit!.isNotEmpty) ...[
+                  if (transit != null && transit.isNotEmpty) ...[
                     const SizedBox(height: 14),
-                    ..._buildJourneySegments(),
+                    ..._buildJourneySegments(transit),
                   ],
 
                   // ── Mode switcher (only for real legs of a route) ─────
@@ -372,7 +397,7 @@ class _RouteLegSheetState extends ConsumerState<_RouteLegSheet> {
                       runSpacing: 8,
                       children: [
                         for (final (m, icon, label) in _switchableModes)
-                          _modeChip(m, icon, label),
+                          _modeChip(m, icon, label, mode),
                       ],
                     ),
 
@@ -381,7 +406,7 @@ class _RouteLegSheetState extends ConsumerState<_RouteLegSheet> {
                     // route leads with a RECOMMENDED chip; alternates
                     // follow. Tapping applies live — the sheet stays
                     // open so options can be compared on the map.
-                    if (widget.mode != 'direct') ...[
+                    if (mode != 'direct') ...[
                       const SizedBox(height: 18),
                       Text(
                         'ROUTE OPTIONS',
@@ -512,8 +537,7 @@ class _RouteLegSheetState extends ConsumerState<_RouteLegSheet> {
   /// transfer walks between stations, walk from the last stop. Built from
   /// the leg's step runs when available (route state), falling back to the
   /// ride cards alone for legs routed before step data existed.
-  List<Widget> _buildJourneySegments() {
-    final rides = widget.transit ?? const [];
+  List<Widget> _buildJourneySegments(List<Map<String, dynamic>> rides) {
     List<Map>? runs;
     if (widget.legIndex >= 0) {
       final legs = ref.read(tripProvider).legDetails;
@@ -803,9 +827,9 @@ class _RouteLegSheetState extends ConsumerState<_RouteLegSheet> {
     );
   }
 
-  Widget _modeChip(String m, IconData icon, String label) {
+  Widget _modeChip(String m, IconData icon, String label, String currentMode) {
     final theme = Theme.of(context);
-    final selected = m == widget.mode;
+    final selected = m == currentMode;
     final loading = _switching == m;
     // Probed-and-unavailable modes are DISABLED, not fail-on-tap. While the
     // probe runs, chips stay optimistically enabled (results are cached, so
@@ -846,8 +870,9 @@ class _RouteLegSheetState extends ConsumerState<_RouteLegSheet> {
                 ? theme.colorScheme.primary
                 : theme.dividerColor.withValues(alpha: 0.5),
       ),
-      onSelected:
-          (_switching != null || unavailable) ? null : (_) => _switchMode(m),
+      onSelected: (_switching != null || unavailable)
+          ? null
+          : (_) => _switchMode(m, currentMode),
     );
   }
 

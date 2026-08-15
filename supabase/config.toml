@@ -1,0 +1,43 @@
+# Remote config managed as code — pushed with:
+#   supabase config push --project-ref dkbibfjszsohtixjxlle
+#
+# ⚠️ `config push` is NOT a partial update for [auth]: any auth key you
+# declare makes the CLI manage the WHOLE auth config, and every
+# undeclared value falls back to CLI defaults (localhost site_url, MFA
+# off, …). So this file pins EVERY remote value that differs from the
+# CLI defaults — verified against the live diff on 2026-08-15. Always
+# run a push WITHOUT --yes first and read the diff before confirming.
+#
+# The other templates in supabase/email-templates/ are still pasted into
+# the dashboard by hand (see that folder's README) — declare them here
+# too if they ever need to change.
+project_id = "voyza"
+
+[auth]
+enabled = true
+# Production deep-link scheme — CLI default is http://127.0.0.1:3000.
+site_url = "voyza://"
+additional_redirect_urls = ["voyza://reset-password"]
+
+[auth.rate_limit]
+# Remote values (CLI defaults are 30/30).
+sign_in_sign_ups = 100
+token_verifications = 100
+
+[auth.mfa.totp]
+# Enabled on remote (CLI default is false).
+enroll_enabled = true
+verify_enabled = true
+
+[auth.email]
+# Remote resend cooldown (CLI default is 1s).
+max_frequency = "1m0s"
+# INTENTIONAL CHANGE (2026-08-15): 8 → 6. The reset-by-code flow types
+# {{ .Token }} into a 6-box sheet; 6 digits also matches VoyZa's own
+# verify/change-email codes. Old app builds never type tokens (they tap
+# the link), so shortening only affects the new flow.
+otp_length = 6
+
+[auth.email.template.recovery]
+subject = "Reset your VoyZa password"
+content_path = "./supabase/email-templates/reset_password.html"

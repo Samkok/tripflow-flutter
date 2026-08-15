@@ -194,9 +194,9 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
           showChecklistCoach(
             context,
             targetKey: _addLocationFabKey,
-            title: 'Add 3 places',
+            title: 'Add 2 places',
             body: 'Search for spots you want to visit — cafés, sights, your '
-                'hotel. Add 3 and step 2 is done; the badge up top keeps '
+                'hotel. Add 2 and step 2 is done; the badge up top keeps '
                 'count.',
             align: ContentAlign.top,
           );
@@ -509,7 +509,7 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
                 ),
         ),
         // Floating step-2 progress badge (checklist): visible only while
-        // "add 3 places" is the active goal — the checklist lives on home,
+        // "add places" is the active goal — the checklist lives on home,
         // so this is the on-screen definition of done.
         Positioned(
           top: MediaQuery.of(context).padding.top + kToolbarHeight + 6,

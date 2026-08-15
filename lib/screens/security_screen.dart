@@ -2,8 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:voyza/providers/auth_provider.dart';
+import 'package:voyza/providers/email_verified_provider.dart';
 import 'package:voyza/services/supabase_service.dart';
 import 'package:voyza/widgets/app_toast.dart';
+import 'package:voyza/widgets/otp_entry_sheet.dart';
 import 'package:voyza/widgets/rotating_globe_background.dart';
 
 class SecurityScreen extends ConsumerStatefulWidget {
@@ -226,6 +228,11 @@ class _SecurityScreenState extends ConsumerState<SecurityScreen> {
           body: ListView(
             padding: const EdgeInsets.all(20),
             children: [
+              // Unverified email = unrecoverable account if the password
+              // is forgotten. Not dismissible here — this screen is
+              // exactly where that risk lives.
+              const _UnverifiedResetWarning(),
+
               // Section header
               const _SectionHeader(
                 icon: Icons.lock_outline_rounded,
@@ -539,6 +546,86 @@ class _SecurityScreenState extends ConsumerState<SecurityScreen> {
 }
 
 // ─── Supporting widgets ─────────────────────────────────────────────────────
+
+/// Red warning shown while the account's email is unverified: the reset
+/// code goes to an inbox the user hasn't proven they can open, so a
+/// forgotten password could mean losing the account for good.
+class _UnverifiedResetWarning extends ConsumerWidget {
+  const _UnverifiedResetWarning();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final verified = ref.watch(emailVerifiedProvider).valueOrNull;
+    if (verified != false) return const SizedBox.shrink();
+
+    final theme = Theme.of(context);
+    final red = theme.colorScheme.error;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 24),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: red.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: red.withValues(alpha: 0.4)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.gpp_maybe_rounded, color: red, size: 22),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Your email is not verified',
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    color: red,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Password reset codes go to this email. Until you verify you '
+            'can receive them, a forgotten password means this account '
+            "can't be recovered — and you could lose it for good.",
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurface.withValues(alpha: 0.75),
+              height: 1.35,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Align(
+            alignment: Alignment.centerRight,
+            child: FilledButton.tonal(
+              onPressed: () async {
+                final ok = await showOtpEntrySheet(
+                  context,
+                  mode: OtpSheetMode.verifyEmail,
+                  sendOnOpen: true,
+                );
+                if (ok == true && context.mounted) {
+                  AppToast.success(context, 'Email verified!');
+                }
+              },
+              style: FilledButton.styleFrom(
+                backgroundColor: red.withValues(alpha: 0.12),
+                foregroundColor: red,
+                visualDensity: VisualDensity.compact,
+              ),
+              child: const Text(
+                'Verify now',
+                style: TextStyle(fontWeight: FontWeight.w800),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
 
 class _SectionHeader extends StatelessWidget {
   final IconData icon;

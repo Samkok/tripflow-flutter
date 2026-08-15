@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:voyza/core/theme.dart';
 import 'package:voyza/models/user_profile.dart';
 import 'package:voyza/providers/auth_provider.dart';
+import 'package:voyza/providers/email_verified_provider.dart';
 import 'package:voyza/widgets/app_toast.dart';
 import 'package:voyza/widgets/rotating_globe_background.dart';
 
@@ -167,12 +168,14 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                   ),
                   const SizedBox(height: 24),
 
-                  // Email (read-only)
+                  // Email (read-only here — changed via Settings → Security)
                   _InfoTile(
                     icon: Icons.email_outlined,
                     label: 'Email',
                     value: user?.email ?? '—',
-                    note: 'Email cannot be changed',
+                    verified:
+                        ref.watch(emailVerifiedProvider).valueOrNull == true,
+                    note: 'Change it in Settings → Security',
                   ),
                   const SizedBox(height: 24),
 
@@ -274,11 +277,15 @@ class _InfoTile extends StatelessWidget {
   final String value;
   final String? note;
 
+  /// Shows a verified badge next to [value] (email tile only).
+  final bool verified;
+
   const _InfoTile({
     required this.icon,
     required this.label,
     required this.value,
     this.note,
+    this.verified = false,
   });
 
   @override
@@ -318,11 +325,27 @@ class _InfoTile extends StatelessWidget {
                       ),
                 ),
                 const SizedBox(height: 2),
-                Text(
-                  value,
-                  style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                        fontWeight: FontWeight.w500,
+                Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        value,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                              fontWeight: FontWeight.w500,
+                            ),
                       ),
+                    ),
+                    if (verified) ...[
+                      const SizedBox(width: 5),
+                      Icon(
+                        Icons.verified_rounded,
+                        size: 17,
+                        color: Theme.of(context).colorScheme.primary,
+                      ),
+                    ],
+                  ],
                 ),
                 if (note != null) ...[
                   const SizedBox(height: 4),

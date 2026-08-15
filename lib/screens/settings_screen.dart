@@ -14,6 +14,7 @@ import 'package:voyza/widgets/app_toast.dart';
 import 'package:voyza/widgets/rotating_globe_background.dart';
 
 import '../providers/auth_provider.dart';
+import '../providers/email_verified_provider.dart';
 import '../providers/nearby_radius_provider.dart';
 import '../providers/zoom_fit_settings_provider.dart';
 import '../services/notification_service.dart';
@@ -24,10 +25,11 @@ import '../providers/user_trip_provider.dart';
 import '../providers/trip_provider.dart';
 import '../providers/subscription_provider.dart';
 import '../screens/paywall_screen.dart';
+import '../widgets/email_verify_banner.dart';
 import '../widgets/logout_confirmation_dialog.dart';
 import '../widgets/delete_account_dialog.dart';
 import '../widgets/pro_feature_gate.dart';
-import '../services/time_saved_ledger_service.dart';
+import 'change_email_screen.dart';
 import 'login_screen.dart';
 import 'profile_screen.dart';
 import 'referral_screen.dart';
@@ -75,6 +77,9 @@ class SettingsScreen extends ConsumerWidget {
               // Profile Section
               _buildSectionHeader(context, 'Profile'),
               _buildProfileCard(context, ref),
+              // Unverified-email nudge — renders nothing when verified,
+              // signed out, or dismissed.
+              const EmailVerifyBanner(),
               const SizedBox(height: 24),
 
               // Invite friends — referral program (signed-in users only).
@@ -102,14 +107,12 @@ class SettingsScreen extends ConsumerWidget {
               if (ref.watch(currentUserProvider) != null) ...[
                 _buildSectionHeader(context, 'Security'),
                 _buildSecurityTile(context),
+                const SizedBox(height: 12),
+                _buildEmailTile(context, ref),
                 const SizedBox(height: 24),
               ],
 
               // Preferences Section
-              // Social currency: the compounding lifetime stat. Renders nothing
-              // until the user has actually saved time (no "0m" flex).
-              const _TimeSavedStatTile(),
-
               _buildSectionHeader(context, 'Preferences'),
               _buildThemeTile(context, ref, themeMode),
               const SizedBox(height: 12),
@@ -220,6 +223,17 @@ class SettingsScreen extends ConsumerWidget {
       );
     }
 
+    // Name from the profile row (may still be loading — email leads until
+    // it arrives); verified badge from VoyZa's own OTP layer.
+    final profile = ref.watch(userProfileProvider).valueOrNull;
+    final fullName = [profile?.firstName, profile?.lastName]
+        .whereType<String>()
+        .map((s) => s.trim())
+        .where((s) => s.isNotEmpty)
+        .join(' ');
+    final emailVerified = ref.watch(emailVerifiedProvider).valueOrNull == true;
+    final email = currentUser.email ?? 'User';
+
     return GestureDetector(
       onTap: () => Navigator.of(context).push(
         MaterialPageRoute(builder: (_) => const ProfileScreen()),
@@ -248,7 +262,9 @@ class SettingsScreen extends ConsumerWidget {
                   radius: 30,
                   backgroundColor: AppTheme.primaryColor,
                   child: Text(
-                    currentUser.email?.substring(0, 1).toUpperCase() ?? 'U',
+                    (fullName.isNotEmpty ? fullName : email)
+                        .substring(0, 1)
+                        .toUpperCase(),
                     style: const TextStyle(
                       fontSize: 24,
                       color: Colors.black,
@@ -261,14 +277,51 @@ class SettingsScreen extends ConsumerWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        currentUser.email ?? 'User',
-                        style:
-                            Theme.of(context).textTheme.titleMedium?.copyWith(
-                                  fontWeight: FontWeight.bold,
-                                ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
+                      if (fullName.isNotEmpty) ...[
+                        Text(
+                          fullName,
+                          style:
+                              Theme.of(context).textTheme.titleMedium?.copyWith(
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        const SizedBox(height: 2),
+                      ],
+                      Row(
+                        children: [
+                          Flexible(
+                            child: Text(
+                              email,
+                              style: fullName.isNotEmpty
+                                  ? Theme.of(context)
+                                      .textTheme
+                                      .bodyMedium
+                                      ?.copyWith(
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .onSurfaceVariant,
+                                      )
+                                  : Theme.of(context)
+                                      .textTheme
+                                      .titleMedium
+                                      ?.copyWith(
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          if (emailVerified) ...[
+                            const SizedBox(width: 4),
+                            Icon(
+                              Icons.verified_rounded,
+                              size: 16,
+                              color: Theme.of(context).colorScheme.primary,
+                            ),
+                          ],
+                        ],
                       ),
                       const SizedBox(height: 4),
                       Text(
@@ -453,6 +506,53 @@ class SettingsScreen extends ConsumerWidget {
         ),
         title: const Text('Change Password'),
         subtitle: const Text('Update your account password'),
+        trailing: const Icon(Icons.arrow_forward_ios, size: 16),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+        ),
+      ),
+    );
+  }
+
+  /// Change-email entry, surfaced next to Change Password so all account
+  /// credentials live under one Security section.
+  Widget _buildEmailTile(BuildContext context, WidgetRef ref) {
+    final email = ref.watch(currentUserProvider)?.email ?? '';
+    return Container(
+      decoration: BoxDecoration(
+        color: Theme.of(context).cardColor.withValues(alpha: 0.55),
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: ListTile(
+        onTap: () {
+          Navigator.of(context).push(
+            MaterialPageRoute(builder: (_) => const ChangeEmailScreen()),
+          );
+        },
+        leading: Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Icon(
+            Icons.alternate_email_rounded,
+            color: Theme.of(context).colorScheme.primary,
+          ),
+        ),
+        title: const Text('Change Email'),
+        subtitle: Text(
+          email.isEmpty ? 'Move this account to a new email' : email,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
         trailing: const Icon(Icons.arrow_forward_ios, size: 16),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(20),
@@ -1443,63 +1543,3 @@ class _TrialStatusTileState extends ConsumerState<_TrialStatusTile> {
   }
 }
 
-/// Lifetime "time saved with VoyZa" stat — the user's compounding win.
-/// Hidden entirely until at least 5 minutes have accrued, so a fresh install
-/// never shows an empty brag.
-class _TimeSavedStatTile extends StatelessWidget {
-  const _TimeSavedStatTile();
-
-  String _format(Duration d) {
-    final h = d.inHours;
-    final m = d.inMinutes % 60;
-    if (h > 0) return '${h}h ${m}m';
-    return '${m}m';
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return FutureBuilder<Duration>(
-      future: TimeSavedLedgerService.instance.total(),
-      builder: (context, snap) {
-        final total = snap.data ?? Duration.zero;
-        if (total < const Duration(minutes: 5)) {
-          return const SizedBox.shrink();
-        }
-        final primary = Theme.of(context).colorScheme.primary;
-        return Padding(
-          padding: const EdgeInsets.only(bottom: 24),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-            decoration: BoxDecoration(
-              color: primary.withValues(alpha: 0.08),
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: primary.withValues(alpha: 0.3)),
-            ),
-            child: Row(
-              children: [
-                Icon(Icons.timer_outlined, color: primary),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    'Time saved with VoyZa',
-                    style: Theme.of(context)
-                        .textTheme
-                        .bodyLarge
-                        ?.copyWith(fontWeight: FontWeight.w600),
-                  ),
-                ),
-                Text(
-                  '~${_format(total)}',
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        color: primary,
-                        fontWeight: FontWeight.w800,
-                      ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
-}
