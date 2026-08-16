@@ -486,6 +486,27 @@ class LocationRepository {
               'fetchRemoteLocations: skipped $skipped local rows with pending changes');
         }
       }
+
+      // GHOST SWEEP. The response above is the COMPLETE set this account may
+      // see (no filters — RLS scopes it), so any local row that claims to be
+      // synced yet is absent remotely was deleted remotely (or its trip
+      // access was revoked) — and without this pass it lingered forever:
+      // the merge only ever added and updated, which is exactly how a
+      // collaborator's device ends up with a different location count than
+      // the owner's (Hong Kong trip incident, Aug 2026). Pending local rows
+      // (isSynced == false) are unpushed creates/edits, not ghosts — kept.
+      final remoteIds = <String>{
+        for (final item in data) item['id'] as String,
+      };
+      final ghosts = <dynamic>[
+        for (final loc in _box!.values)
+          if (loc.isSynced && !remoteIds.contains(loc.id)) loc.id,
+      ];
+      if (ghosts.isNotEmpty) {
+        await _box!.deleteAll(ghosts);
+        debugPrint(
+            'fetchRemoteLocations: removed ${ghosts.length} remotely-deleted rows');
+      }
     } catch (e) {
       debugPrint('Error fetching remote locations: $e');
     }
