@@ -89,6 +89,13 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
   // change needed to show photos out of the box.)
   final Set<String> _photoCollapsedIds = {};
 
+  /// Per-day sort state for the header's sort toggle, keyed by the day's
+  /// normalized midnight. Absent = the list's natural (drag) order;
+  /// `true` = oldest added first; `false` = newest added first.
+  /// Session-only view state, deliberately not persisted — like the photo
+  /// collapse set — and it never writes to the locations themselves.
+  final Map<DateTime, bool> _sortByAddedDays = {};
+
   void _enterSelectionMode(String id) {
     setState(() {
       _selectionMode = true;
@@ -212,7 +219,16 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
       // Refresh location cache from Supabase so collaborators see each other's locations.
       // The local Hive box is only populated at login, so it may be stale if the user
       // was invited after they last logged in.
-      ref.read(locationRepositoryProvider).fetchRemoteLocations();
+      //
+      // DEFERRED past the push transition (~300 ms): the refresh can write
+      // Hive rows, and each write re-emits the locations stream to every
+      // watcher — doing that mid-animation was a visible stutter on the
+      // home → details transition. Half a second of extra staleness is
+      // imperceptible; a janked push animation is not.
+      Future.delayed(const Duration(milliseconds: 600), () {
+        if (!mounted) return;
+        ref.read(locationRepositoryProvider).fetchRemoteLocations();
+      });
 
       // One-time "first trip" congrats. Double-gated: the caller only sets
       // the flag on a genuine first creation, and the per-user prefs flag
@@ -667,16 +683,6 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
   /// the same calendar day compare equal.
   DateTime _dayKey(DateTime d) => DateTime(d.year, d.month, d.day);
 
-  /// Stay duration (stored in seconds) → "45m" under an hour, "2h" / "1h 30m"
-  /// above it.
-  String _formatStayLabel(int seconds) {
-    final minutes = (seconds / 60).round();
-    if (minutes < 60) return '${minutes}m';
-    final h = minutes ~/ 60;
-    final m = minutes % 60;
-    return m == 0 ? '${h}h' : '${h}h ${m}m';
-  }
-
   /// True when [day] is a calendar day strictly before today. Used to lock
   /// out the per-date "add a place" affordances for dates that have already
   /// passed (mirrors the search screen's guard and the detail sheet's
@@ -1116,6 +1122,18 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
     // read-only for adding (existing cards can still be dragged around).
     final canAddHere = hasWriteAccess && !_isPastDay(day);
 
+    // Header sort toggle. null = natural order; true = oldest added first;
+    // false = newest added first. Sorts on createdAt — the exact value the
+    // card prints as "Added …", so the order is verifiable on screen.
+    // View-only: nothing is written, and the natural order comes back.
+    final bool? sortAscending = _sortByAddedDays[day];
+    final displayLocations = sortAscending == null
+        ? locations
+        : (List<SavedLocation>.from(locations)
+          ..sort((a, b) => sortAscending
+              ? a.createdAt.compareTo(b.createdAt)
+              : b.createdAt.compareTo(a.createdAt)));
+
     return Padding(
       padding: const EdgeInsets.only(top: 16, left: 16, right: 16),
       // DragTarget around the whole day so users can drop on either the
@@ -1163,6 +1181,13 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Row(
+                  // spaceBetween + a grouped icon Row instead of a Spacer.
+                  // A Spacer is Expanded(flex:1), so it COMPETED with the
+                  // Flexible chip for free space and capped the chip at
+                  // roughly half the header — truncating "October 05, 2026"
+                  // to "October 05, …" with the right half sitting empty.
+                  // Now the chip may use everything the icons don't.
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     // Flexible + ellipsis so a long date label at large
                     // accessibility text scales truncates instead of
@@ -1205,22 +1230,68 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
                         ),
                       ),
                     ),
-                    const Spacer(),
-                    // Per-day quick-add: adds a place already scheduled to
-                    // THIS day, so empty gap days can be filled directly.
-                    // Hidden on past days — you can't schedule into the past.
-                    if (canAddHere)
-                      IconButton(
-                        onPressed: () => _showAddLocationForDate(day),
-                        icon: Icon(Icons.add_circle_outline,
-                            color: theme.colorScheme.primary),
-                        iconSize: 22,
-                        visualDensity: VisualDensity.compact,
-                        padding: EdgeInsets.zero,
-                        constraints:
-                            const BoxConstraints(minWidth: 40, minHeight: 32),
-                        tooltip: 'Add a place on this day',
-                      ),
+                    // Grouped so the free space lands BETWEEN the chip and
+                    // the buttons, never between the buttons themselves.
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        // Sort this day's cards by when they were ADDED.
+                        // Three states, cycled by tapping: off (the natural
+                        // order, which is also the drag order) → oldest
+                        // first (arrow up) → newest first (arrow down).
+                        // The arrow always points the way the dates run.
+                        if (locations.length > 1)
+                          IconButton(
+                            onPressed: () => setState(() {
+                              final current = _sortByAddedDays[day];
+                              if (current == null) {
+                                _sortByAddedDays[day] = true; // oldest first
+                              } else if (current) {
+                                _sortByAddedDays[day] = false; // newest first
+                              } else {
+                                _sortByAddedDays.remove(day); // natural
+                              }
+                            }),
+                            icon: Icon(
+                              sortAscending == null
+                                  ? Icons.swap_vert_rounded
+                                  : sortAscending
+                                      ? Icons.arrow_upward_rounded
+                                      : Icons.arrow_downward_rounded,
+                              color: sortAscending == null
+                                  ? theme.textTheme.bodyMedium?.color
+                                      ?.withValues(alpha: 0.45)
+                                  : theme.colorScheme.primary,
+                            ),
+                            iconSize: 22,
+                            visualDensity: VisualDensity.compact,
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints(
+                                minWidth: 40, minHeight: 32),
+                            tooltip: sortAscending == null
+                                ? 'Sort by date added'
+                                : sortAscending
+                                    ? 'Oldest added first — tap for newest'
+                                    : 'Newest added first — tap to reset',
+                          ),
+                        // Per-day quick-add: adds a place already scheduled
+                        // to THIS day, so empty gap days can be filled
+                        // directly. Hidden on past days — you can't
+                        // schedule into the past.
+                        if (canAddHere)
+                          IconButton(
+                            onPressed: () => _showAddLocationForDate(day),
+                            icon: Icon(Icons.add_circle_outline,
+                                color: theme.colorScheme.primary),
+                            iconSize: 22,
+                            visualDensity: VisualDensity.compact,
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints(
+                                minWidth: 40, minHeight: 32),
+                            tooltip: 'Add a place on this day',
+                          ),
+                      ],
+                    ),
                   ],
                 ),
                 const SizedBox(height: 12),
@@ -1237,13 +1308,15 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
                   ListView.separated(
                     shrinkWrap: true,
                     physics: const NeverScrollableScrollPhysics(),
-                    itemCount: locations.length,
+                    itemCount: displayLocations.length,
                     separatorBuilder: (context, index) =>
                         const SizedBox(height: 8),
+                    // displayLocations everywhere (card, index, group) so the
+                    // detail sheet's swipe-through order matches the screen.
                     itemBuilder: (context, index) => _buildLocationCard(
-                      locations[index],
+                      displayLocations[index],
                       index,
-                      locations,
+                      displayLocations,
                       hasWriteAccess: hasWriteAccess,
                     ),
                   ),
@@ -1503,7 +1576,6 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
     List<SavedLocation> dateGroup, {
     required bool hasWriteAccess,
   }) {
-    final timeString = DateFormat('HH:mm').format(location.createdAt);
     final isSelected = _selectedIds.contains(location.id);
     final photoRefs = location.effectivePhotoReferences;
     final hasPhotos = photoRefs.isNotEmpty;
@@ -1623,8 +1695,13 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
                               overflow: TextOverflow.ellipsis,
                             ),
                           ),
+                        // Raw lat/lng told the user nothing; the timestamp
+                        // does. NOTE: `locations` has no updated_at column
+                        // (last_synced_at is populated on ~6% of rows), so
+                        // this is the ADD time — labelled honestly rather
+                        // than passed off as a modification date.
                         Text(
-                          '${location.lat.toStringAsFixed(4)}, ${location.lng.toStringAsFixed(4)}',
+                          'Added ${DateFormat('d MMM yyyy, h:mm a').format(location.createdAt.toLocal())}',
                           style:
                               Theme.of(context).textTheme.labelSmall?.copyWith(
                                     color: Theme.of(context)
@@ -1639,35 +1716,9 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
                       ],
                     ),
                   ),
-                  const SizedBox(width: 4),
-                  // Time + stay
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      Text(
-                        timeString,
-                        style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                              color: Theme.of(context)
-                                  .textTheme
-                                  .bodyMedium
-                                  ?.color
-                                  ?.withValues(alpha: 0.5),
-                            ),
-                      ),
-                      if (location.stayDuration > 0)
-                        Text(
-                          '${_formatStayLabel(location.stayDuration)} stay',
-                          style:
-                              Theme.of(context).textTheme.labelSmall?.copyWith(
-                                    color: Theme.of(context)
-                                        .textTheme
-                                        .bodyMedium
-                                        ?.color
-                                        ?.withValues(alpha: 0.5),
-                                  ),
-                        ),
-                    ],
-                  ),
+                  // (The added-time + "Xm stay" column lived here — removed:
+                  // the "Added …" line under the name already carries the
+                  // timestamp, and stay is edited from the plan sheet.)
                   if (hasPhotos && !_selectionMode) ...[
                     const SizedBox(width: 4),
                     IconButton(

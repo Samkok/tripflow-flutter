@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -469,6 +470,7 @@ class LocationRepository {
       if (data.isNotEmpty) {
         final Map<String, SavedLocation> batch = {};
         int skipped = 0;
+        int unchanged = 0;
         for (final item in data) {
           final remoteLoc = SavedLocation.fromJson(item);
           final existing = _box!.get(remoteLoc.id);
@@ -476,14 +478,26 @@ class LocationRepository {
             skipped++;
             continue;
           }
+          // IDENTICAL rows are not rewritten. Every put fires a Hive watch
+          // event and re-emits the full list to every watcher (map markers,
+          // trip-detail list, home derivations) — so blindly rewriting all
+          // N rows on each refresh caused a rebuild storm right in the
+          // middle of the home → trip-details push transition, growing
+          // with the account's location count. Steady-state refreshes now
+          // write nothing and stay silent.
+          if (existing != null &&
+              jsonEncode(existing.toJson()) == jsonEncode(remoteLoc.toJson())) {
+            unchanged++;
+            continue;
+          }
           batch[remoteLoc.id] = remoteLoc;
         }
         if (batch.isNotEmpty) {
           await _box!.putAll(batch);
         }
-        if (skipped > 0) {
-          debugPrint(
-              'fetchRemoteLocations: skipped $skipped local rows with pending changes');
+        if (skipped > 0 || batch.isNotEmpty) {
+          debugPrint('fetchRemoteLocations: wrote ${batch.length}, '
+              '$unchanged unchanged, $skipped pending-local skipped');
         }
       }
 
