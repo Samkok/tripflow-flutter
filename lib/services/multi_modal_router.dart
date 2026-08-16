@@ -314,7 +314,14 @@ class MultiModalRouter {
         walk.duration <= maxComfortableWalk) {
       return walk;
     }
-    return await f('transit') ?? await f('drive') ?? walk;
+    // Same rule as the itinerary ladder: a transit itinerary only wins
+    // when its station access/egress walking also fits the tolerance —
+    // otherwise drive, keeping the over-walk ride as a fallback.
+    final transit = await f('transit');
+    if (transit != null && _transitWalkOk(transit, maxWalkMeters)) {
+      return transit;
+    }
+    return await f('drive') ?? transit ?? walk;
   }
 
   static LegRoute _directFallback(LatLng from, LatLng to) => LegRoute(
@@ -323,6 +330,35 @@ class MultiModalRouter {
         distance: _meters(from, to),
         mode: 'direct',
       );
+
+  /// The longest single WALKING run inside a transit leg, in meters —
+  /// measured from the run's own geometry (steps carry points, not
+  /// distance; a polyline sum tracks the routed length closely enough for
+  /// a tolerance check).
+  static double _longestTransitWalkMeters(LegRoute leg) {
+    var longest = 0.0;
+    for (final run in leg.steps ?? const <Map<String, dynamic>>[]) {
+      if (run['mode'] != 'WALK') continue;
+      final pts = (run['points'] as List?)?.cast<LatLng>() ?? const <LatLng>[];
+      var m = 0.0;
+      for (var i = 1; i < pts.length; i++) {
+        m += _meters(pts[i - 1], pts[i]);
+      }
+      if (m > longest) longest = m;
+    }
+    return longest;
+  }
+
+  /// Whether a transit itinerary's internal walking (station access,
+  /// egress, transfers) respects the user's max-walk tolerance. A "ride"
+  /// that opens with a 1.5 km march to the stop is a walk in costume —
+  /// the ladder must judge that walk by the same rule it applies to whole
+  /// walking legs, and prefer the car instead when it fails.
+  ///
+  /// Legs without step data pass: old cache entries carry no runs, and a
+  /// missing field must not read as "too far".
+  static bool _transitWalkOk(LegRoute leg, double maxWalkMeters) =>
+      _longestTransitWalkMeters(leg) <= maxWalkMeters;
 
   // ── The itinerary pipeline ──────────────────────────────────────────────
   /// Routes the (already ordered — ordering is VoyZa's own optimizer) stops:
@@ -516,15 +552,22 @@ class MultiModalRouter {
         leg ??= base ?? await fetch('drive');
       } else if (profile == 'transit') {
         // Public-transport style: walk the short hops (handled above),
-        // RIDE whenever any ride exists — even when walking would be
+        // RIDE whenever a real ride exists — even when walking would be
         // quicker, riding is the point of this style — and fall back to
         // a reasonable walk, then car, only when no ride pans out.
+        //
+        // "Real ride" includes the walk TO it: an itinerary whose station
+        // access/egress walk exceeds the user's max-walk tolerance is a
+        // walk in costume (500 m tolerance, 1.5 km march to the stop) —
+        // treat it like no ride and let the car cover the leg instead.
         final transitLeg = transitEnabled ? await fetch('transit') : null;
-        if (transitLeg != null) {
+        if (transitLeg != null && _transitWalkOk(transitLeg, maxWalkMeters)) {
           leg = transitLeg;
         } else {
-          // No ride exists. This is a non-walking style, so a walk only
-          // stands in when it's short (≤1 km) — otherwise the car covers it.
+          // No acceptable ride. This is a non-walking style, so a walk
+          // only stands in when it's short — otherwise the car covers it.
+          // An over-walk ride survives as the very last resort: it still
+          // beats a straight line.
           final walk =
               (chainMode == 'walk' ? base : null) ?? await fetch('walk');
           final walkAcceptable = walk != null &&
@@ -534,6 +577,7 @@ class MultiModalRouter {
               ? walk
               : ((chainMode == 'drive' ? base : null) ??
                   await fetch('drive') ??
+                  transitLeg ??
                   walk);
         }
       } else if (isCity || (profile == 'auto' && d <= maxWalkMeters)) {
@@ -572,15 +616,22 @@ class MultiModalRouter {
           }
         } else {
           // AUTO: a hop within the user's max-walk tolerance walks; past it
-          // prefer a RIDE — transit first, car when there's none. The long
-          // walk survives only as the very last resort.
+          // prefer a RIDE — transit first, car when there's none. A transit
+          // itinerary only counts when its OWN walking (to/from stations)
+          // also respects the tolerance; otherwise the car takes the leg
+          // and the over-walk ride drops to a fallback. The long walk
+          // survives only as the very last resort.
           if (walkIsShort) {
             leg = walkLeg;
           } else {
             final transitLeg = transitEnabled ? await fetch('transit') : null;
-            leg = transitLeg ??
-                ((chainMode == 'drive' ? base : null) ??
+            final transitOk = transitLeg != null &&
+                _transitWalkOk(transitLeg, maxWalkMeters);
+            leg = transitOk
+                ? transitLeg
+                : ((chainMode == 'drive' ? base : null) ??
                     await fetch('drive') ??
+                    transitLeg ??
                     walkLeg);
           }
         }
