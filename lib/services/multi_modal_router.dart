@@ -297,6 +297,15 @@ class MultiModalRouter {
         });
 
     if (overrideMode != null) {
+      // Same rule as the itinerary ladder: a REMEMBERED transit override
+      // only replays while its station walks fit the CURRENT max-walk
+      // tolerance; past that the car takes the leg (choice kept, not
+      // deleted — raising the slider re-honors it).
+      if (overrideMode == 'transit') {
+        final t = await f('transit');
+        if (t != null && _transitWalkOk(t, maxWalkMeters)) return t;
+        return await f('drive') ?? t ?? await f('walk');
+      }
       return await f(overrideMode) ?? await f('drive') ?? await f('walk');
     }
 
@@ -541,7 +550,26 @@ class MultiModalRouter {
           });
 
       LegRoute? leg;
-      if (overrideMode != null) {
+      if (overrideMode == 'transit') {
+        // A REMEMBERED transit choice replays on every re-optimize — but it
+        // predates the user's CURRENT max-walk setting, and honoring it
+        // blindly resurrects itineraries whose station walks the slider now
+        // forbids (tap Transit once while testing, and 572 m marches ignore
+        // a 200 m limit forever). Replay it only while its walking still
+        // fits; otherwise the car takes the leg this run. The stored choice
+        // is NOT deleted — raise the slider and it resumes. A fresh tap in
+        // the leg sheet still applies immediately (overrideLegMode), so an
+        // explicit in-the-moment pick keeps working.
+        final t = transitEnabled ? await fetch('transit') : null;
+        if (t != null && _transitWalkOk(t, maxWalkMeters)) {
+          leg = t;
+        } else {
+          leg = (chainMode == 'drive' ? base : null) ??
+              await fetch('drive') ??
+              t ??
+              base;
+        }
+      } else if (overrideMode != null) {
         // The user chose this leg's mode — honor it, cascade only on failure.
         leg = overrideMode == chainMode
             ? (base ?? await fetch(overrideMode))
