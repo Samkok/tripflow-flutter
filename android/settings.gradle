@@ -25,7 +25,9 @@ plugins {
     // supports it (the "android.newDsl" fix box in the CI log).
     // Needs Gradle >= 8.13 — the wrapper is on 8.14.3.
     id "com.android.application" version "8.13.2" apply false
-    id "org.jetbrains.kotlin.android" version "2.1.0" apply false
+    // Flutter stable requires KGP >= 2.2.20; 2.2.21 is its newest patch.
+    // Keep in lockstep with android/build.gradle (same trap as AGP).
+    id "org.jetbrains.kotlin.android" version "2.2.21" apply false
 }
 
 include ":app"

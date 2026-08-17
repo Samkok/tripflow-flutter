@@ -27,7 +27,12 @@ workflows:
         - revenuecat
         - android_key
         - google_play        # NEW: holds GOOGLE_PLAY_SERVICE_ACCOUNT_CREDENTIALS
-      flutter: stable
+      # PINNED, deliberately (was `stable`): Codemagic re-resolves `stable` on
+      # every build, so each new Flutter release silently raises the minimum
+      # Gradle/AGP/Kotlin floors and breaks the build with no repo change
+      # (Aug 2026: three consecutive tag builds failed exactly this way).
+      # Keep this equal to the local SDK; upgrade both together on purpose.
+      flutter: 3.38.9
       android_signing:
         - voyza_key
     scripts:
@@ -115,7 +120,12 @@ workflows:
         - app_store_credentials
       vars:
         APP_STORE_APPLE_ID: 6758559163
-      flutter: stable
+      # PINNED, deliberately (was `stable`): Codemagic re-resolves `stable` on
+      # every build, so each new Flutter release silently raises the minimum
+      # Gradle/AGP/Kotlin floors and breaks the build with no repo change
+      # (Aug 2026: three consecutive tag builds failed exactly this way).
+      # Keep this equal to the local SDK; upgrade both together on purpose.
+      flutter: 3.38.9
       xcode: latest
       cocoapods: default
     scripts:
