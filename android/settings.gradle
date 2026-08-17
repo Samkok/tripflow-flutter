@@ -18,7 +18,13 @@ pluginManagement {
 
 plugins {
     id "dev.flutter.flutter-plugin-loader" version "1.0.0"
-    id "com.android.application" version "8.9.1" apply false
+    // 8.13.2 = latest stable AGP 8.x. Flutter stable (what CI resolves)
+    // requires >= 8.11.1; the extra headroom avoids another forced bump the
+    // next time that floor rises. Deliberately NOT AGP 9.x: it reads only
+    // the new DSL, which breaks the Flutter Gradle plugin until Flutter
+    // supports it (the "android.newDsl" fix box in the CI log).
+    // Needs Gradle >= 8.13 — the wrapper is on 8.14.3.
+    id "com.android.application" version "8.13.2" apply false
     id "org.jetbrains.kotlin.android" version "2.1.0" apply false
 }
 
