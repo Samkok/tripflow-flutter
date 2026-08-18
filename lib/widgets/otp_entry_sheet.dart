@@ -159,7 +159,6 @@ class _OtpEntrySheetState extends ConsumerState<OtpEntrySheet> {
       try {
         await SupabaseService.instance.client.auth.resetPasswordForEmail(
           _targetEmail,
-          redirectTo: 'voyza://reset-password', // legacy-link fallback
         );
         if (mounted) {
           setState(() => _info = 'Code sent to $_targetEmail.');

@@ -669,45 +669,58 @@ class _RouteLegSheetState extends ConsumerState<_RouteLegSheet> {
     if (option.transit != null && option.transit!.isNotEmpty) {
       final dep = _localTime(option.departureTime);
       final arr = _localTime(option.arrivalTime);
-      identity = Row(children: [
-        for (var s = 0; s < option.transit!.length; s++) ...[
-          if (s > 0)
+      // Wrap, not Row: itineraries with 4-5 rides overflowed the card and
+      // the trailing chips were clipped at its edge. Chips flow onto
+      // further lines instead, and a single very long route name (some
+      // Taiwanese bus routes carry whole sentences) is capped + ellipsized
+      // so it can never exceed the card on its own.
+      identity = Wrap(
+        crossAxisAlignment: WrapCrossAlignment.center,
+        runSpacing: 4,
+        children: [
+          for (var s = 0; s < option.transit!.length; s++) ...[
+            if (s > 0)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+                child: Text('›',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant
+                            .withValues(alpha: 0.5))),
+              ),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
+              decoration: BoxDecoration(
+                color: _lineColor(option.transit![s]['lineColor'] as String?) ??
+                    theme.colorScheme.primary,
+                borderRadius: BorderRadius.circular(5),
+              ),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 168),
+                child: Text(
+                  (option.transit![s]['lineShort'] as String?) ?? 'Ride',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w800),
+                ),
+              ),
+            ),
+          ],
+          if (dep != null && arr != null)
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 4),
-              child: Text('›',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant
-                          .withValues(alpha: 0.5))),
+              padding: const EdgeInsets.only(left: 8),
+              child: Text(
+                '$dep – $arr',
+                style: theme.textTheme.bodySmall
+                    ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
             ),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
-            decoration: BoxDecoration(
-              color: _lineColor(option.transit![s]['lineColor'] as String?) ??
-                  theme.colorScheme.primary,
-              borderRadius: BorderRadius.circular(5),
-            ),
-            child: Text(
-              (option.transit![s]['lineShort'] as String?) ?? 'Ride',
-              style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 11,
-                  fontWeight: FontWeight.w800),
-            ),
-          ),
         ],
-        if (dep != null && arr != null) ...[
-          const SizedBox(width: 8),
-          Flexible(
-            child: Text(
-              '$dep – $arr',
-              style: theme.textTheme.bodySmall
-                  ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-        ],
-      ]);
+      );
     } else {
       final via = option.description;
       identity = Text(

@@ -166,6 +166,13 @@ class _MapScreenState extends ConsumerState<MapScreen>
     super.initState();
     // OPTIMIZATION: Register as lifecycle observer to handle app state changes
     WidgetsBinding.instance.addObserver(this);
+    // Seed from the binding: didChangeAppLifecycleState only fires on LATER
+    // transitions, and on Android the launch "resumed" is delivered before
+    // this observer exists — leaving the field null for the whole session
+    // unless the app is backgrounded once. The position listener gates on
+    // resumed, so unseeded it silently dropped every GPS update (frozen
+    // current-location dot on a cold start).
+    _lastLifecycleState = WidgetsBinding.instance.lifecycleState;
     _sheetController = DraggableScrollableController();
     // Compass stops while the plan sheet covers the map (thermal).
     _sheetController!.addListener(_syncCompassToSheetExtent);
@@ -404,7 +411,11 @@ class _MapScreenState extends ConsumerState<MapScreen>
     _locationSubscription = LocationService.getLocationStream().listen(
       (location) {
         // OPTIMIZATION: Only update if app is in foreground to prevent background processing
-        if (mounted && _lastLifecycleState == AppLifecycleState.resumed) {
+        // null = no lifecycle event seen yet → we're foreground (same
+        // null-tolerance as the arrival-poll gates below).
+        if (mounted &&
+            (_lastLifecycleState == null ||
+                _lastLifecycleState == AppLifecycleState.resumed)) {
           ref.read(tripProvider.notifier).updateCurrentLocation(location);
           // FOREGROUND-ONLY by construction: this stream only runs while the
           // app is active (no background modes are declared on either
@@ -503,11 +514,11 @@ class _MapScreenState extends ConsumerState<MapScreen>
   Timer? _arrivalPollTimer;
   bool _arrivalCheckInFlight = false;
 
-  /// Dedicated arrival poll. The movement stream can't drive this: it has a
-  /// 50m distanceFilter (plus a 30m state filter), so walking the last few
-  /// metres to a stop emits NO event inside the 10m arrival ring — the
-  /// detection could essentially never fire. A slow timer taking its own
-  /// fix is the only reliable trigger.
+  /// Dedicated arrival poll. The movement stream can't drive this: it emits
+  /// only on movement (5m native + 3m state filter), so a user already
+  /// standing at the stop when the app opens produces NO event inside the
+  /// 10m arrival ring. A slow timer taking its own fix is the only trigger
+  /// that also notices arrivals that happened while the app was closed.
   ///
   /// FOREGROUND-ONLY, by three independent guards: the timer is started on
   /// resume and cancelled on pause/dispose, each tick re-checks

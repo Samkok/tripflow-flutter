@@ -432,15 +432,11 @@ class AuthService {
     }
   }
 
-  /// Sends the password reset email. The template carries a 6-digit
-  /// {{ .Token }} code (entered in-app → auth.verifyOTP type recovery)
-  /// PLUS the legacy {{ .ConfirmationURL }} link — the link keeps
-  /// pre-code app versions' deeplink flow working off the same email.
+  /// Sends the password reset email. The template carries ONLY a 6-digit
+  /// {{ .Token }} code (entered in-app → auth.verifyOTP type recovery);
+  /// no link, so no redirectTo.
   Future<void> sendPasswordResetEmail(String email) async {
-    await _supabase.auth.resetPasswordForEmail(
-      email,
-      redirectTo: 'voyza://reset-password',
-    );
+    await _supabase.auth.resetPasswordForEmail(email);
   }
 
   /// Updates the authenticated user's password during a recovery session.

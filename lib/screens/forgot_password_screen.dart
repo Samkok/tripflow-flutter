@@ -9,8 +9,7 @@ import 'signup_screen.dart';
 /// Password reset by 6-digit code: the recovery email carries a
 /// {{ .Token }} code the user types here (auth.verifyOTP type recovery
 /// signs the device in and fires passwordRecovery — main.dart pushes
-/// ResetPasswordScreen). The email also keeps the legacy deeplink for
-/// app versions that predate the code flow.
+/// ResetPasswordScreen). The email is code-only — no reset link.
 class ForgotPasswordScreen extends ConsumerStatefulWidget {
   const ForgotPasswordScreen({super.key});
 

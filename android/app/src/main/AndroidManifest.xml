@@ -34,6 +34,21 @@
         android:supportsRtl="false"
         android:enableOnBackInvokedCallback="true">
         
+        <!-- Renderer: Skia, NOT Impeller (Flutter's Android default since 3.38).
+             Measured on a OnePlus 7 Pro (Adreno 640, Android 12, 1440x3120 @90Hz):
+             Impeller's Vulkan backend held ~333 MB of graphics memory and then
+             died allocating a multisample render target —
+               "Unable to allocate Vulkan Image: ErrorOutOfDeviceMemory
+                Type: Texture2DMultisample" → FATAL back_texture check → SIGABRT.
+             The app's glass/blur surfaces (BackdropFilter) each force a
+             full-screen MSAA offscreen, which at QHD+ is ~70 MB apiece.
+             Skia renders the same UI without the multisample allocations.
+             iOS is unaffected (Impeller there is mature and stays on).
+             Re-evaluate when Flutter's Android Impeller memory story improves;
+             flip the value to "true" and re-run the device test to check. -->
+        <meta-data android:name="io.flutter.embedding.android.EnableImpeller"
+                   android:value="false" />
+
         <!-- Google Maps API Key -->
         <meta-data android:name="com.google.android.geo.API_KEY"
                    android:value="${googleMapsApiKey}"/>

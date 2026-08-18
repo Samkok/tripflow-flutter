@@ -118,12 +118,19 @@ class LegRail extends ConsumerWidget {
                 color: color,
                 borderRadius: BorderRadius.circular(5),
               ),
-              child: Text(
-                label,
-                style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w800),
+              child: ConstrainedBox(
+                // Some route names are whole sentences (e.g. 7327J經高鐵、
+                // 長庚、遊客中心) — cap so chip + "Ride · N min" always fit.
+                constraints: const BoxConstraints(maxWidth: 120),
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w800),
+                ),
               ),
             )
           else

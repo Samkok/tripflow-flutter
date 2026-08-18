@@ -457,7 +457,15 @@ class MultiModalRouter {
     // that's where the night is spent. Moving the chosen stop to the END of
     // the list makes every path honor it — the TSP call pins it as the
     // destination, and the fallback/2-stop chains simply route to it last.
-    if (stops.length >= 2) {
+    //
+    // Skipped entirely on loop-home days (returnTo != null): the return
+    // point IS the destination there, and pinning the far stop instead
+    // froze the order into an open path with a stapled backtrack home
+    // (Taiwan loop: …Kaohsiung → Taitung → Kenting → home instead of
+    // …Kenting → Taitung → home up the other coast). The TSP below closes
+    // the loop properly, with every stop free to move.
+    final loopHome = returnTo != null;
+    if (!loopHome && stops.length >= 2) {
       var destIdx = 0;
       var destScore = double.negativeInfinity;
       for (var i = 0; i < stops.length; i++) {
@@ -472,9 +480,12 @@ class MultiModalRouter {
       stops.add(chosen);
     }
 
-    if (stops.length > 2) {
-      final dest = stops.last;
-      final inter = stops.sublist(0, stops.length - 1);
+    if (stops.length > 2 || (loopHome && stops.length == 2)) {
+      // Loop-home: destination = the accommodation and EVERY stop is a free
+      // intermediate, so Google solves the closed tour. Open day: the last
+      // stop (accommodation or far point) is the pinned destination.
+      final dest = loopHome ? returnTo : stops.last;
+      final inter = loopHome ? stops : stops.sublist(0, stops.length - 1);
       final res = await GoogleMapsService.getOptimizedRouteDetails(
         origin: origin,
         destination: dest,
@@ -486,10 +497,15 @@ class MultiModalRouter {
         final det = res['legDetails'] as List<Map<String, dynamic>>;
         final pol = res['legPolylines'] as List<List<LatLng>>;
         final order = (res['waypointOrder'] as List).cast<int>();
-        if (det.length == stops.length && order.length == inter.length) {
-          stops = [for (final k in order) inter[k], dest];
+        if (det.length == inter.length + 1 && order.length == inter.length) {
+          stops = [for (final k in order) inter[k], if (!loopHome) dest];
+          // Loop-home: the response's LAST leg (final stop → accommodation)
+          // is deliberately not kept — the dedicated return-leg block below
+          // re-routes it with the full ladder/override/clock treatment,
+          // exactly as it did before. Only the ORDER (and the stop-to-stop
+          // leg geometry) comes from this closed-tour call.
           chain = [
-            for (var i = 0; i < det.length; i++)
+            for (var i = 0; i < stops.length; i++)
               legFrom(det[i], pol[i], anchorMode)
           ];
           chainReady = true;
