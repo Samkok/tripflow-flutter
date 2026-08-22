@@ -148,6 +148,9 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
     );
   }
 
+  /// Hours-line text for a weekday Google lists no opening period on.
+  static const String kMightBeClosedLabel = 'Might be closed on this date';
+
   /// Opening–closing hours for the day this stop is planned on. Falls back
   /// to an explicit "not found" line rather than an empty subtitle, so the
   /// card always reads the same shape.
@@ -163,7 +166,9 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
     final googleDay = day.weekday % 7;
 
     final periods = hours.where((p) => p.openDay == googleDay).toList();
-    if (periods.isEmpty) return 'Closed on this day';
+    // A "might": Google's hours are often stale or incomplete, so this is
+    // a prompt to double-check, never a verdict. Rendered in amber.
+    if (periods.isEmpty) return kMightBeClosedLabel;
     return periods.map((p) {
       final open = _formatClockMinutes(p.openMinutes);
       final close = p.closeMinutes;
@@ -386,16 +391,36 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
         Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Icon(Icons.access_time_rounded, size: 13, color: mutedColor),
-            const SizedBox(width: 4),
-            Expanded(
-              child: Text(
-                _hoursSubtitle(),
-                style: theme.textTheme.bodySmall?.copyWith(color: mutedColor),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
+            Builder(builder: (context) {
+              final hoursText = _hoursSubtitle();
+              final caution = hoursText == kMightBeClosedLabel;
+              const amber = Color(0xFFFFB300);
+              return Expanded(
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(
+                        caution
+                            ? Icons.warning_amber_rounded
+                            : Icons.access_time_rounded,
+                        size: 13,
+                        color: caution ? amber : mutedColor),
+                    const SizedBox(width: 4),
+                    Expanded(
+                      child: Text(
+                        hoursText,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: caution ? amber : mutedColor,
+                          fontWeight: caution ? FontWeight.w600 : null,
+                        ),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }),
           ],
         ),
       ],
@@ -810,12 +835,20 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
     final selectedDate = ref.read(selectedDateProvider);
     final day =
         DateTime(selectedDate.year, selectedDate.month, selectedDate.day);
-    final startRaw = location.scheduledDate ?? location.addedAt;
-    final start = DateTime(startRaw.year, startRaw.month, startRaw.day);
+    // Unscheduled rows have no span; a plain delete is the only option.
+    final startRaw = location.scheduledDate;
+    final start = startRaw == null
+        ? null
+        : DateTime(startRaw.year, startRaw.month, startRaw.day);
     final endRaw = location.scheduledEndDate ?? startRaw;
-    final end = DateTime(endRaw.year, endRaw.month, endRaw.day);
-    final spansHere =
-        end.isAfter(start) && !day.isBefore(start) && !day.isAfter(end);
+    final end = endRaw == null
+        ? null
+        : DateTime(endRaw.year, endRaw.month, endRaw.day);
+    final spansHere = start != null &&
+        end != null &&
+        end.isAfter(start) &&
+        !day.isBefore(start) &&
+        !day.isAfter(end);
 
     showDialog(
       context: context,

@@ -170,10 +170,23 @@ class LocationService {
     // existed because every tick used to regenerate every marker bitmap;
     // that pipeline is fixed (bitmaps cached, position applied downstream),
     // so the coarse filter's reason is gone.
-    const locationSettings = LocationSettings(
-      accuracy: LocationAccuracy.high,
-      distanceFilter: 5,
-    );
+    // Android: the fused provider's default interval is "as fast as
+    // possible" — a 3 s interval cuts the GPS duty cycle with no visible
+    // cost (walking pace = one step every 3 s; driving at 50 km/h ≈ 40 m
+    // hops, fine for a planning map). iOS keeps the plain settings: its
+    // auto-pause options can leave the stream silent after a long rest,
+    // the frozen-dot bug class we just fixed.
+    final LocationSettings locationSettings =
+        defaultTargetPlatform == TargetPlatform.android
+            ? AndroidSettings(
+                accuracy: LocationAccuracy.high,
+                distanceFilter: 5,
+                intervalDuration: const Duration(seconds: 3),
+              )
+            : const LocationSettings(
+                accuracy: LocationAccuracy.high,
+                distanceFilter: 5,
+              );
 
     await for (final position in Geolocator.getPositionStream(
       locationSettings: locationSettings,
@@ -183,14 +196,14 @@ class LocationService {
   }
 
   static Stream<double?> getCompassStream() {
-    // 500ms (was 250): every beam update redraws the map, and with the
-    // glass sheet's blur over it that redraw was the thermal hot path. At
-    // 2 events/sec slow turns still step ≤ the 3° gate (smooth — small
-    // deltas accumulate per tick), and fast turns hide the added latency.
+    // 750ms (was 500, was 250): every beam update redraws the map, and
+    // with the glass sheet's blur over it that redraw was the thermal hot
+    // path. At ~1.3 events/sec slow turns still step ≤ the 5° gate (smooth
+    // — small deltas accumulate per tick), and fast turns hide the latency.
     // The consumer (MapScreen) gates on a ≥3° change, so a stationary
     // phone's magnetometer noise produces zero downstream work.
     return FlutterCompass.events!
-        .transform(StreamUtils.throttle(const Duration(milliseconds: 500)))
+        .transform(StreamUtils.throttle(const Duration(milliseconds: 750)))
         .map((event) => event.heading);
   }
 }

@@ -132,12 +132,13 @@ class MarkerCacheService {
     bool isStart = false,
     bool isSkipped = false,
     bool isDone = false,
+    String? warningLine,
   }) async {
     // Trigger background prewarming on first marker access
     prewarmCacheInBackground();
 
     final key =
-        'numbered_${number}_${name}_${backgroundColor.value}_${textColor.value}_${isDarkMode}_${isSkipped}_${isDone}_$isStart';
+        'numbered_${number}_${name}_${backgroundColor.value}_${textColor.value}_${isDarkMode}_${isSkipped}_${isDone}_${isStart}_${warningLine ?? ''}';
 
     if (_cache.containsKey(key)) {
       _moveToEnd(key);
@@ -153,6 +154,7 @@ class MarkerCacheService {
       isDarkMode: isDarkMode,
       isSkipped: isSkipped,
       isDone: isDone,
+      warningLine: warningLine,
     );
 
     _addToCache(key, result);

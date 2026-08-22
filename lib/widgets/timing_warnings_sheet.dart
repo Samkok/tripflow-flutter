@@ -145,12 +145,14 @@ class _TimingWarningsSheetState extends ConsumerState<TimingWarningsSheet> {
     final navigator = Navigator.of(context);
     final notifier = ref.read(tripProvider.notifier);
     final currentStartId = ref.read(tripProvider).startLocationId;
+    final currentFinalId = ref.read(tripProvider).finalLocationId;
     final selectedDate = ref.read(selectedDateProvider);
     ref.read(tripStartTimeOverrideProvider.notifier).state = t;
     try {
       await notifier.generateOptimizedRoute(
         selectedDate: selectedDate,
         startLocationId: currentStartId.isEmpty ? null : currentStartId,
+        finalLocationId: currentFinalId.isEmpty ? null : currentFinalId,
       );
       if (mounted) navigator.pop();
     } catch (e) {
@@ -188,6 +190,7 @@ class _TimingWarningsSheetState extends ConsumerState<TimingWarningsSheet> {
     // falls back to the device GPS and the route silently re-anchors away
     // from whatever the user picked in the Optimize sheet.
     final currentStartId = ref.read(tripProvider).startLocationId;
+    final currentFinalId = ref.read(tripProvider).finalLocationId;
 
     // Group actions to minimize repository writes.
     final movesByDate = <DateTime, Set<String>>{};
@@ -229,6 +232,7 @@ class _TimingWarningsSheetState extends ConsumerState<TimingWarningsSheet> {
       await notifier.generateOptimizedRoute(
         selectedDate: selectedDate,
         startLocationId: currentStartId.isEmpty ? null : currentStartId,
+        finalLocationId: currentFinalId.isEmpty ? null : currentFinalId,
       );
 
       if (mounted) navigator.pop();

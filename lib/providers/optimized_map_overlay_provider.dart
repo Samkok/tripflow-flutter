@@ -11,6 +11,7 @@ import '../providers/debounced_settings_provider.dart';
 import '../services/marker_cache_service.dart';
 import '../utils/zone_utils.dart';
 import '../utils/marker_utils.dart'; // Needed for MarkerBitmapResult type
+import '../utils/polyline_simplify.dart';
 import '../utils/external_app_links.dart';
 import '../core/theme.dart';
 
@@ -95,20 +96,30 @@ final cachedMarkerBitmapsProvider =
     specs.add((loc: location, number: markerNumber, isStart: isStartLocation));
   }
 
-  final results = await Future.wait(specs.map(
-    (spec) => markerCache.getNumberedMarker(
+  final results = await Future.wait(specs.map((spec) {
+    // "Might be closed": Google lists no opening period for this weekday.
+    // Amber pin + caution line — phrased as a maybe, because Places hours
+    // are often stale. Done/skipped pins keep their own treatment.
+    final mightBeClosed = !spec.loc.isDone &&
+        !spec.loc.isSkipped &&
+        spec.loc.mightBeClosedOn(selectedDate);
+    return markerCache.getNumberedMarker(
       isStart: spec.isStart,
       number: spec.number,
       // The start pin says so in words — the flag alone read as "just
       // another marker" and its numbering confused the map↔list mapping.
       name: spec.isStart ? '${spec.loc.name} (Start here)' : spec.loc.name,
-      backgroundColor: AppTheme.accentColor,
+      backgroundColor:
+          mightBeClosed ? MarkerUtils.warningAmber : AppTheme.accentColor,
       textColor: Colors.white,
       isDarkMode: isDarkMode,
       isSkipped: spec.loc.isSkipped,
       isDone: spec.loc.isDone,
-    ),
-  ));
+      warningLine: mightBeClosed
+          ? 'Might be closed on this date — please check'
+          : null,
+    );
+  }));
   for (var i = 0; i < specs.length; i++) {
     markerIcons[specs[i].loc.id] = results[i];
   }
@@ -334,7 +345,9 @@ final styledPolylinesProvider = Provider<Set<Polyline>>((ref) {
       continue;
     }
 
-    final legPoints = legPolylinesState[i];
+    // Display-only thinning: Google's full-density geometry costs the SDK
+    // per vertex per zoom frame (and per dash, for patterned lines).
+    final legPoints = simplifyForDisplay(legPolylinesState[i]);
     if (legPoints.isNotEmpty) {
       final polylineId = 'leg_$i';
       final isHighlighted = tappedPolylineId == polylineId;
@@ -360,10 +373,18 @@ final styledPolylinesProvider = Provider<Set<Polyline>>((ref) {
       // lines rendered as ZERO visible pixels on iPhone (walking legs
       // simply vanished). Short round-capped dashes read as dots and carry
       // an explicit length on both platforms.
+      // NO dash pattern on walking legs. Both Maps SDKs re-cut every dash
+      // of a patterned polyline on EVERY zoom frame (iOS: one span object
+      // per dash; Android: per-segment pattern recompute) — a day of
+      // walking routes became thousands of segments rebuilt per frame and
+      // the map stuttered on every pinch, on both platforms. Thinner
+      // dashes, fewer vertices and a zoom cut-off didn't fix it; only
+      // solid strokes do. Walking is now drawn as a solid "footpath" —
+      // a dark casing with a thin translucent white core (see below) —
+      // still unmistakable next to drive (solid grey) and transit (thick,
+      // line-colored). Dashes survive only where they're short and rare:
+      // bike/moto legs and the straight-line 'direct' fallback.
       final patterns = switch (mode) {
-        // Walk: tight dot-like dashes. Bike/moto: long-short "dash-dot"
-        // rhythm so it can't be mistaken for walking at a glance.
-        'walk' => <PatternItem>[PatternItem.dash(8), PatternItem.gap(11)],
         'bicycle' || 'two_wheeler' => <PatternItem>[
             PatternItem.dash(28),
             PatternItem.gap(9),
@@ -374,6 +395,7 @@ final styledPolylinesProvider = Provider<Set<Polyline>>((ref) {
         _ => const <PatternItem>[],
       };
       final hasPattern = patterns.isNotEmpty;
+      final isWalk = mode == 'walk';
 
       // ── Transit legs with step geometry: Google's grammar, properly ──
       // A transit leg is walk → ride → walk. Drawing it as ONE solid line
@@ -392,7 +414,8 @@ final styledPolylinesProvider = Provider<Set<Polyline>>((ref) {
       if (transitSteps != null && transitSteps.isNotEmpty) {
         for (var j = 0; j < transitSteps.length; j++) {
           final run = transitSteps[j] as Map;
-          final runPoints = (run['points'] as List).cast<LatLng>();
+          final runPoints =
+              simplifyForDisplay((run['points'] as List).cast<LatLng>());
           if (runPoints.isEmpty) continue;
           final runId = '${polylineId}_s$j';
           final isRunSelected = tappedPolylineId == runId;
@@ -416,7 +439,7 @@ final styledPolylinesProvider = Provider<Set<Polyline>>((ref) {
                 startCap: Cap.roundCap,
                 endCap: Cap.roundCap,
                 jointType: JointType.round,
-                geodesic: true,
+                geodesic: false, // road paths, not great circles — no per-segment interpolation
                 zIndex: 1,
               ),
             );
@@ -432,9 +455,10 @@ final styledPolylinesProvider = Provider<Set<Polyline>>((ref) {
               // dash, not dot — see the pattern comment above (iOS renders
               // dots as zero-length spans = invisible). Connector dots are
               // tighter/shorter than walking-leg dots on purpose.
-              patterns: isRide
-                  ? const <PatternItem>[]
-                  : <PatternItem>[PatternItem.dash(4), PatternItem.gap(9)],
+              // Solid: connectors are short, but patterned lines are the
+              // per-zoom-frame cost class (see the walking-leg note). Their
+              // "approach, not a route" read comes from thinness + alpha.
+              patterns: const <PatternItem>[],
               consumeTapEvents: true,
               onTap: () {
                 ref.read(mapUIStateProvider.notifier).setTappedPolyline(runId);
@@ -442,7 +466,7 @@ final styledPolylinesProvider = Provider<Set<Polyline>>((ref) {
               startCap: Cap.roundCap,
               endCap: Cap.roundCap,
               jointType: JointType.round,
-              geodesic: true,
+              geodesic: false, // road paths, not great circles — no per-segment interpolation
               zIndex: isRunSelected ? 12 : (isRide ? (emphasized ? 10 : 6) : 5),
             ),
           );
@@ -459,7 +483,7 @@ final styledPolylinesProvider = Provider<Set<Polyline>>((ref) {
                 startCap: Cap.roundCap,
                 endCap: Cap.roundCap,
                 jointType: JointType.round,
-                geodesic: true,
+                geodesic: false, // road paths, not great circles — no per-segment interpolation
                 zIndex: 13,
               ),
             );
@@ -468,20 +492,22 @@ final styledPolylinesProvider = Provider<Set<Polyline>>((ref) {
         continue;
       }
 
-      // Shadow under solid lines only — a solid shadow beneath a dotted
-      // walk line read as a second (phantom) route.
+      // Shadow under solid lines only (a shadow beneath a dashed fallback
+      // line read as a second, phantom route). For walking it doubles as
+      // the footpath's dark casing.
       if (!hasPattern) {
         polylines.add(
           Polyline(
             polylineId: PolylineId('${polylineId}_shadow'),
             points: legPoints,
-            color: Colors.black.withValues(alpha: isHighlighted ? 0.2 : 0.12),
-            width: isHighlighted ? 10 : 8,
+            color: Colors.black
+                .withValues(alpha: isHighlighted ? 0.2 : (isWalk ? 0.22 : 0.12)),
+            width: isHighlighted ? 10 : (isWalk ? 7 : 8),
             consumeTapEvents: false,
             startCap: Cap.roundCap,
             endCap: Cap.roundCap,
             jointType: JointType.round,
-            geodesic: true,
+            geodesic: false, // road paths, not great circles — no per-segment interpolation
             zIndex: 1,
           ),
         );
@@ -502,9 +528,13 @@ final styledPolylinesProvider = Provider<Set<Polyline>>((ref) {
                   ? const Color(0x66B9C1CC)
                   : isHighlighted
                       ? AppTheme.primaryColor
-                      : const Color(0xFFB9C1CC)),
+                      : isWalk
+                          // Footpath core: thin, light, translucent — the
+                          // pedestrian line next to the car's solid grey.
+                          ? Colors.white.withValues(alpha: 0.72)
+                          : const Color(0xFFB9C1CC)),
           // Professional width: thicker when highlighted
-          width: isHighlighted ? 8 : (mode == 'transit' ? 7 : 6),
+          width: isHighlighted ? 8 : (mode == 'transit' ? 7 : (isWalk ? 4 : 6)),
           patterns: patterns,
           // Ensure tap events are captured for interaction
           consumeTapEvents: true,
@@ -517,7 +547,7 @@ final styledPolylinesProvider = Provider<Set<Polyline>>((ref) {
           // Round joints for smooth corners
           jointType: JointType.round,
           // Geodesic for accurate path representation
-          geodesic: true,
+          geodesic: false, // road paths, not great circles — no per-segment interpolation
           // Higher z-index for main polyline
           zIndex: isHighlighted ? 10 : 5,
         ),
@@ -535,7 +565,7 @@ final styledPolylinesProvider = Provider<Set<Polyline>>((ref) {
             startCap: Cap.roundCap,
             endCap: Cap.roundCap,
             jointType: JointType.round,
-            geodesic: true,
+            geodesic: false, // road paths, not great circles — no per-segment interpolation
             zIndex: 11,
           ),
         );

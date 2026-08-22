@@ -71,6 +71,14 @@ class MultiModalRouter {
   /// the live value arrives via routeItinerary's [maxWalkMeters].
   static const double longWalkMeters = 1000;
 
+  /// Hard ceiling on how many stops one day can route as a single chain.
+  /// Google Routes caps `intermediates` at 25 per request, and loop-home
+  /// days send EVERY stop as an intermediate — beyond this the TSP call is
+  /// a guaranteed 400 that used to cascade into N per-leg calls and a 45s
+  /// timeout ending in an empty route with no error. Callers refuse and
+  /// redirect the user to spread the day instead.
+  static const int maxRoutableStopsPerDay = 25;
+
   // ── Leg cache ───────────────────────────────────────────────────────────
   // Session-scoped: keyed by endpoints+mode (+30-min departure band for
   // transit, whose results are schedule-dependent). Re-optimizes and mode
@@ -394,6 +402,16 @@ class MultiModalRouter {
     // back to it. (An accommodation that IS a stop already gets pinned as
     // the destination by the scoring above — no return leg needed.)
     LocationModel? returnTo,
+    // The user's explicit "end the day at" stop (must be in [orderedStops]):
+    // visited LAST among the stops. With an accommodation ending still in
+    // play (in-list accommodation or [returnTo]), the route continues from
+    // it to the accommodation — "final, then home".
+    String? finalStopId,
+    // Whether an IN-LIST accommodation is pinned as the day's end. OFF =
+    // the user chose not to return: it becomes an ordinary stop and the day
+    // ends wherever the route does. (Callers also withhold [returnTo] when
+    // OFF, so start-at-hotel days get no return leg either.)
+    bool endAtAccommodation = true,
     void Function(int done, int total)? onLegProgress,
   }) async {
     // The walk-always shortcut LOWERS with a small max-walk preference but
@@ -437,8 +455,44 @@ class MultiModalRouter {
     //    the far point). The client heuristic's order remains the input —
     //    and the fallback when this call fails.
     var stops = List<LocationModel>.from(orderedStops);
+
+    // ── The day's END sequence ("tail"), visited after the free stops ────
+    //   [finalStop?] → [endAcc?] → (returnTo, appended by the loop-home block)
+    // finalStop = the user's explicit last stop. endAcc = an in-list
+    // accommodation when the day ends there (endAtAccommodation). Whichever
+    // comes first in that sequence is the TSP destination; the rest are
+    // appended as extra legs and resolved by the same per-leg ladder.
+    LocationModel? finalStop;
+    if (finalStopId != null) {
+      final i = stops.indexWhere((s) => s.id == finalStopId);
+      if (i != -1) finalStop = stops.removeAt(i);
+    }
+    LocationModel? endAcc;
+    if (endAtAccommodation) {
+      // Hotel-change day with two accommodations: the one farther from the
+      // start is where the night is spent.
+      var bestIdx = -1;
+      var bestD = double.negativeInfinity;
+      for (var i = 0; i < stops.length; i++) {
+        if (!stops[i].isAccommodation) continue;
+        final d = _meters(origin, stops[i].coordinates);
+        if (d > bestD) {
+          bestD = d;
+          bestIdx = i;
+        }
+      }
+      if (bestIdx != -1) endAcc = stops.removeAt(bestIdx);
+    }
+    // The TSP destination: the first element of the tail, if any.
+    final pinnedDest = finalStop ?? endAcc;
+    // Tail legs beyond the destination (only "final → accommodation").
+    final tailRest = <LocationModel>[
+      if (finalStop != null && endAcc != null) endAcc,
+    ];
+    if (pinnedDest != null) stops.add(pinnedDest);
+
     var legCount = stops.length;
-    List<LegRoute?> chain = List.filled(legCount, null);
+    List<LegRoute?> chain = List.filled(legCount, null, growable: true);
     var chainMode = anchorMode;
     var chainReady = false;
 
@@ -464,13 +518,21 @@ class MultiModalRouter {
     // (Taiwan loop: …Kaohsiung → Taitung → Kenting → home instead of
     // …Kenting → Taitung → home up the other coast). The TSP below closes
     // the loop properly, with every stop free to move.
+    //
+    // An explicit end (the user's final stop, or the in-list accommodation
+    // extracted above) already sits at stops.last — the far-point rule only
+    // applies when nothing else decides the ending. Accommodations left in
+    // the list (endAtAccommodation OFF) are ordinary stops here.
     final loopHome = returnTo != null;
-    if (!loopHome && stops.length >= 2) {
+    // Closed tour (every stop free, destination = home) only when nothing
+    // pins an explicit end; with a final stop the day is an open path to it
+    // and the loop-home block appends the ride home afterwards.
+    final closedTour = loopHome && pinnedDest == null;
+    if (!loopHome && pinnedDest == null && stops.length >= 2) {
       var destIdx = 0;
       var destScore = double.negativeInfinity;
       for (var i = 0; i < stops.length; i++) {
-        final score = (stops[i].isAccommodation ? 1e9 : 0) +
-            _meters(origin, stops[i].coordinates);
+        final score = _meters(origin, stops[i].coordinates);
         if (score > destScore) {
           destScore = score;
           destIdx = i;
@@ -480,12 +542,12 @@ class MultiModalRouter {
       stops.add(chosen);
     }
 
-    if (stops.length > 2 || (loopHome && stops.length == 2)) {
-      // Loop-home: destination = the accommodation and EVERY stop is a free
-      // intermediate, so Google solves the closed tour. Open day: the last
-      // stop (accommodation or far point) is the pinned destination.
-      final dest = loopHome ? returnTo : stops.last;
-      final inter = loopHome ? stops : stops.sublist(0, stops.length - 1);
+    if (stops.length > 2 || (closedTour && stops.length == 2)) {
+      // Closed tour: destination = home and EVERY stop is a free
+      // intermediate, so Google solves the loop. Open day: the last stop
+      // (final / accommodation / far point) is the pinned destination.
+      final dest = closedTour ? returnTo : stops.last;
+      final inter = closedTour ? stops : stops.sublist(0, stops.length - 1);
       final res = await GoogleMapsService.getOptimizedRouteDetails(
         origin: origin,
         destination: dest,
@@ -498,8 +560,8 @@ class MultiModalRouter {
         final pol = res['legPolylines'] as List<List<LatLng>>;
         final order = (res['waypointOrder'] as List).cast<int>();
         if (det.length == inter.length + 1 && order.length == inter.length) {
-          stops = [for (final k in order) inter[k], if (!loopHome) dest];
-          // Loop-home: the response's LAST leg (final stop → accommodation)
+          stops = [for (final k in order) inter[k], if (!closedTour) dest];
+          // Closed tour: the response's LAST leg (final stop → accommodation)
           // is deliberately not kept — the dedicated return-leg block below
           // re-routes it with the full ladder/override/clock treatment,
           // exactly as it did before. Only the ORDER (and the stop-to-stop
@@ -541,6 +603,14 @@ class MultiModalRouter {
           chainMode = anchorMode;
         }
       }
+    }
+
+    // Tail legs beyond the TSP destination ("final → accommodation"): no
+    // chain geometry yet — the per-leg ladder below routes them like any
+    // other leg (overrides honored, clock-chained).
+    if (tailRest.isNotEmpty) {
+      stops = [...stops, ...tailRest];
+      chain = [...chain, for (final _ in tailRest) null];
     }
 
     // Leg endpoints reflect the FINAL order: origin → s0 → s1 → …

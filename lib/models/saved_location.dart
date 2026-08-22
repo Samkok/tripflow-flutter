@@ -215,7 +215,9 @@ class SavedLocation extends HiveObject {
     bool? isSkipped,
     bool? isDone,
     int? stayDuration,
-    DateTime? scheduledDate,
+    // Sentinel-nullable: `copyWith(scheduledDate: null)` really CLEARS the
+    // date (→ the Unscheduled bucket); omitting the param keeps it.
+    Object? scheduledDate = _unset,
     Object? tripId = _unset,
     String? photoReference,
     List<String>? photoReferences,
@@ -242,7 +244,9 @@ class SavedLocation extends HiveObject {
       isSkipped: isSkipped ?? this.isSkipped,
       isDone: isDone ?? this.isDone,
       stayDuration: stayDuration ?? this.stayDuration,
-      scheduledDate: scheduledDate ?? this.scheduledDate,
+      scheduledDate: identical(scheduledDate, _unset)
+          ? this.scheduledDate
+          : scheduledDate as DateTime?,
       tripId: identical(tripId, _unset) ? this.tripId : tripId as String?,
       photoReference: photoReference ?? this.photoReference,
       photoReferences: photoReferences ?? this.photoReferences,
@@ -355,12 +359,53 @@ class SavedLocation extends HiveObject {
     };
   }
 
+  /// Identity of what the USER sees. Excludes device-local sync metadata
+  /// (`isSynced`, `lastSyncedAt`) and normalizes timestamps to UTC instants
+  /// and calendar dates to y-m-d, so a server echo of this device's own
+  /// write (UTC `created_at`, older `last_synced_at`) compares EQUAL to the
+  /// local row. `toJson()` equality could never do that — every echo looked
+  /// like a change, and each needless Hive rewrite re-emitted the full list
+  /// to every watcher in the app (home cards, map pipeline, trip details).
+  /// Used by the realtime handler, the remote fetch, and the watch stream.
+  String contentSignature() {
+    String day(DateTime? d) => d == null ? '' : '${d.year}-${d.month}-${d.day}';
+    return [
+      id,
+      userId,
+      tripId ?? '',
+      name,
+      lat,
+      lng,
+      createdAt.toUtc().millisecondsSinceEpoch,
+      source,
+      fingerprint,
+      isSkipped,
+      isDone,
+      stayDuration,
+      day(scheduledDate),
+      day(scheduledEndDate),
+      photoReference ?? '',
+      photoReferences?.join('|') ?? '',
+      photoAttributions?.join('|') ?? '',
+      placeId ?? '',
+      originalName ?? '',
+      googleOpeningHours?.map((p) => p.toJson().toString()).join('|') ?? '',
+      userClosingMinuteOverride ?? '',
+      hoursLastRefreshedAt?.toUtc().millisecondsSinceEpoch ?? '',
+      isAccommodation,
+    ].join('');
+  }
+
   /// True when [day] falls within this location's active range, inclusive
   /// on both ends. For single-day rows (no [scheduledEndDate]) returns true
-  /// only on the matching day; for legacy rows with no [scheduledDate] at
-  /// all, falls back to [createdAt] so they still appear somewhere.
+  /// only on the matching day. A row with no [scheduledDate] is UNSCHEDULED
+  /// — it lives in the trip's Unscheduled bucket and is active on NO day.
+  /// (The old createdAt fallback made undated rows phantom-occupy their
+  /// creation day; a one-time client migration stamped those rows so this
+  /// flip changes nothing visible for existing data.)
   bool isActiveOnDate(DateTime day) {
-    final startRaw = scheduledDate ?? createdAt;
+    final startRaw = scheduledDate;
+    if (startRaw == null) return false;
     final start = DateTime(startRaw.year, startRaw.month, startRaw.day);
     final endRaw = scheduledEndDate ?? startRaw;
     final end = DateTime(endRaw.year, endRaw.month, endRaw.day);

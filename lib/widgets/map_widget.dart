@@ -141,6 +141,10 @@ class MapWidget extends ConsumerWidget {
             zoomGesturesEnabled: true,
             compassEnabled: false,
             liteModeEnabled: false,
+            // Thermal: 3D building extrusion and indoor floor plans are
+            // GPU/data work at street zoom that a planning map never needs.
+            buildingsEnabled: false,
+            indoorViewEnabled: false,
             // OPTIMIZATION: Limit FPS to reduce rendering pressure
             minMaxZoomPreference: const MinMaxZoomPreference(0, 22),
           ),
@@ -173,6 +177,8 @@ class MapWidget extends ConsumerWidget {
           zoomGesturesEnabled: true,
           compassEnabled: false,
           liteModeEnabled: false,
+          buildingsEnabled: false,
+          indoorViewEnabled: false,
         );
       },
     );

@@ -169,7 +169,9 @@ class LocationModel {
     Duration? stayDuration,
     bool? isSkipped,
     bool? isDone,
-    DateTime? scheduledDate,
+    // Sentinel-nullable: `copyWith(scheduledDate: null)` really CLEARS the
+    // date (→ the Unscheduled bucket); omitting the param keeps it.
+    Object? scheduledDate = _unset,
     String? photoReference,
     List<String>? photoReferences,
     List<String>? photoAttributions,
@@ -194,7 +196,9 @@ class LocationModel {
       stayDuration: stayDuration ?? this.stayDuration,
       isSkipped: isSkipped ?? this.isSkipped,
       isDone: isDone ?? this.isDone,
-      scheduledDate: scheduledDate ?? this.scheduledDate,
+      scheduledDate: identical(scheduledDate, _unset)
+          ? this.scheduledDate
+          : scheduledDate as DateTime?,
       photoReference: photoReference ?? this.photoReference,
       photoReferences: photoReferences ?? this.photoReferences,
       photoAttributions: photoAttributions ?? this.photoAttributions,
@@ -212,11 +216,25 @@ class LocationModel {
     );
   }
 
+  /// Google's hours list no opening period on [day]'s weekday. Named
+  /// "might" on purpose: Places hours are often stale or incomplete, so
+  /// every surface must say "might be closed — please check", never a flat
+  /// "closed". False when hours are unknown or the place is 24/7.
+  bool mightBeClosedOn(DateTime day) {
+    final hours = googleOpeningHours;
+    if (hours == null || hours.isEmpty) return false;
+    if (hours.any((p) => p.isAlwaysOpen)) return false;
+    // Google weekday numbering: Sunday = 0 … Saturday = 6.
+    final googleDay = day.weekday % 7;
+    return !hours.any((p) => p.openDay == googleDay);
+  }
+
   /// True iff this location is "active" on [day] — i.e. [day] is within
-  /// `[scheduledDate..scheduledEndDate]` inclusive. Falls back to [addedAt]
-  /// when [scheduledDate] is missing so legacy rows still appear somewhere.
+  /// `[scheduledDate..scheduledEndDate]` inclusive. A row with no
+  /// [scheduledDate] is UNSCHEDULED (the trip's bucket): active on NO day.
   bool isActiveOnDate(DateTime day) {
-    final startRaw = scheduledDate ?? addedAt;
+    final startRaw = scheduledDate;
+    if (startRaw == null) return false;
     final start = DateTime(startRaw.year, startRaw.month, startRaw.day);
     final endRaw = scheduledEndDate ?? startRaw;
     final end = DateTime(endRaw.year, endRaw.month, endRaw.day);

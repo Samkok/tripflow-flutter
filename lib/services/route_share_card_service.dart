@@ -164,25 +164,14 @@ class RouteShareCardService {
       _drawText(canvas, '→', Offset(_w / 2 - 18, panelTop + panelH / 2 - 30),
           fontSize: 48, weight: FontWeight.w700, color: _subText);
 
-      // Headline stat.
-      final stat = timeSaved >= const Duration(minutes: 5)
-          ? '~${_formatDuration(timeSaved)} of travel time saved'
-          : '$stops ${stops == 1 ? 'stop' : 'stops'}';
-      _drawText(canvas, stat, const Offset(48, 520),
-          fontSize: 40, weight: FontWeight.w800, color: _afterLine);
-
-      // Compounding social-currency footer — only when the lifetime stat is
-      // established and clearly more than this single route's saving.
-      if (lifetimeSaved >= const Duration(minutes: 30) &&
-          lifetimeSaved > timeSaved * 2) {
-        _drawText(
-            canvas,
-            '${_formatDuration(lifetimeSaved)} saved all-time with VoyZa',
-            const Offset(48, 578),
-            fontSize: 22,
-            weight: FontWeight.w600,
-            color: _subText);
-      }
+      // Per-DAY card: no time-saved boast (owner request — the blue "~1h
+      // saved" headline read as clutter on a day share). A quiet stop
+      // count is all the footer says; the whole-trip Plan Card keeps its
+      // time-saved stat. [timeSaved]/[lifetimeSaved] stay in the signature
+      // for the share MESSAGE text, which still mentions the saving.
+      _drawText(canvas, '$stops ${stops == 1 ? 'stop' : 'stops'}',
+          const Offset(48, 528),
+          fontSize: 28, weight: FontWeight.w700, color: _subText);
 
       // Wordmark + link.
       _drawText(canvas, 'VOYZA', const Offset(_w - 260, 516),

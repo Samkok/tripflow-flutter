@@ -282,10 +282,13 @@ class LocationAddService {
     // Own places only — collaborators' shared-trip rows don't count.
     final usedAfter = SubscriptionLimitService.ownPlaceCount(_ref) + 1;
 
-    // Captured before the write — see beforeAddingLocation.
-    final addStart = location.scheduledDate ?? DateTime.now();
-    final newDays =
-        _daysWithoutLocations(addStart, location.scheduledEndDate ?? addStart);
+    // Captured before the write — see beforeAddingLocation. An unscheduled
+    // add materializes no day, so no accommodation prompt can apply.
+    final addStart = location.scheduledDate;
+    final newDays = addStart == null
+        ? const <DateTime>[]
+        : _daysWithoutLocations(
+            addStart, location.scheduledEndDate ?? addStart);
 
     // Same ordering rule as [addLocation]: persist the location first so
     // the subsequent userTripsProvider invalidation can't strand it
@@ -352,7 +355,9 @@ class LocationAddService {
     // prompt below.
     final newDaySet = <DateTime>{};
     for (final pick in picks) {
-      final start = pick.scheduledDate ?? pick.createdAt;
+      // Unscheduled picks land in the bucket — they materialize no day.
+      final start = pick.scheduledDate;
+      if (start == null) continue;
       newDaySet
           .addAll(_daysWithoutLocations(start, pick.scheduledEndDate ?? start));
     }

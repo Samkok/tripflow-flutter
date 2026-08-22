@@ -16,8 +16,12 @@ import '../utils/date_picker_utils.dart';
 import '../utils/geo_utils.dart';
 import '../utils/same_day_place_guard.dart';
 import '../services/leg_mode_prefs.dart';
+import '../services/multi_modal_router.dart';
 import '../services/review_prompt_service.dart';
+import '../screens/trip_details_screen.dart';
+import 'auto_plan_sheet.dart';
 import 'timing_warnings_sheet.dart';
+import '../services/analytics_service.dart';
 import '../utils/trip_date_validator.dart';
 import '../utils/trip_dates.dart';
 import '../core/theme.dart';
@@ -213,6 +217,14 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
     // guaranteed alive for every day-switch source (map day picker, Whole
     // trip date headers, external focus requests).
     ref.watch(routeClearerProvider);
+    // Over-cap refusals from optimize paths that bypass _onOptimizePressed's
+    // own pre-check (start-point confirm, timing-warning reruns). Safe as a
+    // listen: optimize only runs while the map tab (and this sheet) is live.
+    ref.listen<int?>(routeOverCapProvider, (prev, count) {
+      if (count == null) return;
+      ref.read(routeOverCapProvider.notifier).state = null;
+      _showOverCapDialog(context, ref, count);
+    });
     // OPTIMIZATION: Watch only specific fields to prevent rebuilds during drag
     // Don't watch entire tripState here since it rebuilds on every state change
     final hasPinnedLocations =
@@ -748,6 +760,54 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                 style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                     color: Theme.of(context).colorScheme.onSurfaceVariant),
               ),
+              // Bucket pill: places in the trip but on NO day. The map is
+              // day-scoped so they can't appear on it — this is their one
+              // map-surface trace, leading to trip details to schedule.
+              Consumer(builder: (context, ref, _) {
+                final n = ref.watch(unscheduledCountProvider);
+                if (n == 0) return const SizedBox.shrink();
+                const amber = Color(0xFFFFB300);
+                return Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(8),
+                    onTap: () {
+                      final trip =
+                          ref.read(realtimeActiveTripProvider).valueOrNull;
+                      if (trip == null) return;
+                      Navigator.of(context).push(MaterialPageRoute(
+                          builder: (_) => TripDetailsScreen(trip: trip)));
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: amber.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.inventory_2_outlined,
+                              size: 13, color: amber),
+                          const SizedBox(width: 5),
+                          Text(
+                            'Unscheduled ($n)',
+                            style: Theme.of(context)
+                                .textTheme
+                                .labelSmall
+                                ?.copyWith(
+                                    color: amber,
+                                    fontWeight: FontWeight.w700),
+                          ),
+                          const Icon(Icons.chevron_right_rounded,
+                              size: 14, color: amber),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+              }),
             ],
           ),
         ),
@@ -858,16 +918,32 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Icon(
-                            isGenerating
-                                ? Icons.hourglass_empty
-                                : Icons.route_rounded,
-                            color: Colors.white,
-                            size: 20,
-                          ),
+                          // In flight: an actual spinner + "Optimizing…" —
+                          // a swapped icon with the same label read as
+                          // "nothing is happening".
+                          if (isGenerating)
+                            const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2.2,
+                                valueColor:
+                                    AlwaysStoppedAnimation<Color>(Colors.white),
+                              ),
+                            )
+                          else
+                            const Icon(
+                              Icons.route_rounded,
+                              color: Colors.white,
+                              size: 20,
+                            ),
                           const SizedBox(width: 8),
                           Text(
-                            hasOptimizedRoute ? 'Re-optimize' : 'Optimize',
+                            isGenerating
+                                ? 'Optimizing…'
+                                : hasOptimizedRoute
+                                    ? 'Re-optimize'
+                                    : 'Optimize',
                             style: const TextStyle(
                               color: Colors.white,
                               fontWeight: FontWeight.bold,
@@ -2406,7 +2482,14 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
               : () async {
                   try {
                     final csvService = CsvService();
-                    await csvService.generateAndShareTripCsv(locations);
+                    await csvService.generateAndShareTripCsv(
+                      locations,
+                      tripName: ref
+                          .read(realtimeActiveTripProvider)
+                          .valueOrNull
+                          ?.name,
+                      date: ref.read(selectedDateProvider),
+                    );
                   } on MissingPluginException {
                     if (context.mounted) {
                       AppToast.warning(
@@ -2448,7 +2531,28 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
     // but any future caller lands here too. Optimization is per-day — the
     // user picks a day first.
     if (ref.read(allDaysModeProvider)) {
-      AppToast.info(context, 'Pick a day first — optimization works per day.');
+      // All-days view = the whole-trip mindset: per-day optimize can't run
+      // here, but Auto-plan (order the cities, spread across days) is
+      // exactly the whole-trip action — offer it instead of a dead end.
+      final placeCount = ref.read(tripProvider).pinnedLocations.length;
+      if (placeCount >= 2) {
+        showAutoPlanSheet(context);
+      } else {
+        AppToast.info(
+            context, 'Pick a day first — optimization works per day.');
+      }
+      return;
+    }
+    // Google Routes caps one day's chain at 25 intermediates — refuse with
+    // guidance instead of the old silent 400→fallback→45s-timeout dead end.
+    final capDay = ref.read(selectedDateProvider);
+    final dayStops = ref
+        .read(tripProvider)
+        .pinnedLocations
+        .where((l) => !l.isSkipped && !l.isDone && l.isActiveOnDate(capDay))
+        .length;
+    if (dayStops > MultiModalRouter.maxRoutableStopsPerDay) {
+      _showOverCapDialog(context, ref, dayStops);
       return;
     }
     if (!isReoptimizing) {
@@ -2464,6 +2568,79 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
     }
     if (!context.mounted) return;
     _showChooseStartPointDialog(context, ref, isReoptimizing: isReoptimizing);
+  }
+
+  /// The day exceeds [MultiModalRouter.maxRoutableStopsPerDay]: explain and
+  /// redirect. Primary action opens trip details, where days can be
+  /// reorganized (and, once Auto-plan ships, planned automatically).
+  void _showOverCapDialog(BuildContext context, WidgetRef ref, int stopCount) {
+    showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          backgroundColor: Theme.of(context).cardColor,
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: Text('$stopCount stops is a lot for one day'),
+          content: const Text(
+              'Routes work best with under '
+              '${MultiModalRouter.maxRoutableStopsPerDay} stops in a day. '
+              'Auto-plan can spread them across your trip, or move some '
+              'yourself.'),
+          // One full-width Row (not two bare action children): the
+          // default OverflowBar stacks actions vertically the moment their
+          // combined width exceeds the dialog — these two always share a
+          // row, each taking half.
+          actions: [
+            SizedBox(
+              width: double.infinity,
+              child: Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () {
+                        Navigator.of(dialogContext).pop();
+                        final trip =
+                            ref.read(realtimeActiveTripProvider).valueOrNull;
+                        if (trip == null) return;
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                              builder: (_) => TripDetailsScreen(trip: trip)),
+                        );
+                      },
+                      style: OutlinedButton.styleFrom(
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12)),
+                      ),
+                      child: const Text('Do it myself'),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: ElevatedButton(
+                      onPressed: () {
+                        AnalyticsService.instance
+                            .autoPlanOvercapRedirect(stopCount);
+                        Navigator.of(dialogContext).pop();
+                        showAutoPlanSheet(context);
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Theme.of(context).colorScheme.primary,
+                        foregroundColor:
+                            Theme.of(context).colorScheme.onPrimary,
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12)),
+                      ),
+                      child: const Text('Auto-plan'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   void _showChooseStartPointDialog(BuildContext context, WidgetRef ref,
@@ -2792,6 +2969,14 @@ class _StartPointSheetState extends ConsumerState<_StartPointSheet> {
   String? _selectedStartId;
   bool _initialized = false;
 
+  /// Optional "end the day at" stop (null = let the optimizer decide).
+  String? _selectedFinalId;
+
+  /// "Return to accommodation" — per-trip pref, default ON. Decides whether
+  /// the day's route ends at the hotel (and whether a start-at-hotel day
+  /// gets a ride home).
+  bool _returnToAcc = true;
+
   // ── Travel style (multi-modal anchor) ─────────────────────────────────
   // 'auto' sniffs the trip's scale (compact ⇒ walking city); 'walk'/'drive'
   // force the anchor mode. Persisted per trip; the optimizer reads it on
@@ -2808,10 +2993,12 @@ class _StartPointSheetState extends ConsumerState<_StartPointSheet> {
     _profileLoaded = true;
     final profile = await LegModePrefs.travelProfile(tripId);
     final maxWalk = await LegModePrefs.maxWalkMeters();
+    final returnToAcc = await LegModePrefs.returnToAccommodation(tripId);
     if (mounted) {
       setState(() {
         _travelProfile = profile;
         _maxWalkMeters = maxWalk.toDouble();
+        _returnToAcc = returnToAcc;
       });
     }
   }
@@ -3127,6 +3314,74 @@ class _StartPointSheetState extends ConsumerState<_StartPointSheet> {
                             onChanged: (v) =>
                                 setState(() => _selectedStartId = v),
                           )),
+                      // Round trip: does the day END back at the hotel?
+                      // Fed into the optimizer as its fixed destination /
+                      // loop-home leg. Persisted per trip.
+                      Builder(builder: (context) {
+                        final tripId = ref
+                                .read(realtimeActiveTripProvider)
+                                .valueOrNull
+                                ?.id ??
+                            'no_trip';
+                        return Container(
+                          margin: const EdgeInsets.only(top: 6),
+                          decoration: BoxDecoration(
+                            color: theme.cardColor.withValues(alpha: 0.5),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                                color:
+                                    theme.dividerColor.withValues(alpha: 0.4)),
+                          ),
+                          child: Column(
+                            children: [
+                              SwitchListTile.adaptive(
+                                value: _returnToAcc,
+                                onChanged: (v) {
+                                  setState(() {
+                                    _returnToAcc = v;
+                                    // With the round trip on, the hotel is
+                                    // the end by definition — a final pick
+                                    // of the hotel itself is redundant.
+                                    if (v &&
+                                        dayAccommodations.any(
+                                            (a) => a.id == _selectedFinalId)) {
+                                      _selectedFinalId = null;
+                                    }
+                                  });
+                                  LegModePrefs.setReturnToAccommodation(
+                                      tripId, v);
+                                },
+                                dense: true,
+                                contentPadding: const EdgeInsets.symmetric(
+                                    horizontal: 12),
+                                title: Text('Return to accommodation',
+                                    style: theme.textTheme.bodyMedium
+                                        ?.copyWith(
+                                            fontWeight: FontWeight.w600)),
+                                activeTrackColor: theme.colorScheme.primary,
+                              ),
+                              Padding(
+                                padding:
+                                    const EdgeInsets.fromLTRB(12, 0, 12, 10),
+                                child: Text(
+                                  _returnToAcc
+                                      ? 'The route ends back at your stay — '
+                                          'the optimizer plans the day as a '
+                                          'loop. Pick an end point below and '
+                                          'it becomes the last stop before '
+                                          'heading home.'
+                                      : 'Open-ended day: the route finishes '
+                                          'at its last stop, with no ride '
+                                          'back to your stay.',
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                    color: theme.colorScheme.onSurfaceVariant,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      }),
                       const SizedBox(height: 16),
                     ],
                     if (hasCurrentLocation) ...[
@@ -3216,6 +3471,81 @@ class _StartPointSheetState extends ConsumerState<_StartPointSheet> {
                             mutedTitle: true,
                           )),
                     ],
+                    // ── End point (optional) ───────────────────────────
+                    // Candidates: today's active stops minus the chosen
+                    // start, minus the accommodation while the round trip
+                    // is on (it's already the end then).
+                    Builder(builder: (context) {
+                      final hasAcc = dayAccommodations.isNotEmpty;
+                      final roundTrip = hasAcc && _returnToAcc;
+                      final candidates = activeStops
+                          .where((l) =>
+                              l.id != _selectedStartId &&
+                              !(roundTrip && l.isAccommodation))
+                          .toList();
+                      if (_selectedFinalId != null &&
+                          !candidates.any((l) => l.id == _selectedFinalId)) {
+                        _selectedFinalId = null; // start took it / hidden
+                      }
+                      if (candidates.isEmpty) return const SizedBox.shrink();
+                      final chosen = _selectedFinalId == null
+                          ? null
+                          : candidates
+                              .firstWhere((l) => l.id == _selectedFinalId);
+                      final accName = hasAcc ? dayAccommodations.first.name : '';
+                      final String note;
+                      if (chosen == null) {
+                        note = roundTrip
+                            ? 'Optional. By default the day ends back at '
+                                '$accName.'
+                            : 'Optional. By default the day ends at the '
+                                'stop farthest from your start.';
+                      } else if (roundTrip) {
+                        note = '${chosen.name} will be the last stop, then '
+                            'the route returns to $accName.';
+                      } else {
+                        note = '${chosen.name} will be the last stop of the '
+                            'day.';
+                      }
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const SizedBox(height: 16),
+                          _sectionLabel(context, 'End the day at'),
+                          Padding(
+                            padding: const EdgeInsets.only(
+                                bottom: 8, left: 4, right: 4),
+                            child: Text(
+                              note,
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: theme.colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                          ),
+                          _StartPointTile(
+                            leading: Icon(Icons.auto_awesome_rounded,
+                                color: theme.colorScheme.primary),
+                            title: 'Let VoyZa decide',
+                            value: '',
+                            groupValue: _selectedFinalId ?? '',
+                            onChanged: (_) =>
+                                setState(() => _selectedFinalId = null),
+                          ),
+                          ...candidates.map((loc) => _StartPointTile(
+                                leading: Icon(Icons.flag_outlined,
+                                    color: theme.colorScheme.primary),
+                                title: loc.name,
+                                subtitle: loc.address.isNotEmpty
+                                    ? loc.address
+                                    : null,
+                                value: loc.id,
+                                groupValue: _selectedFinalId ?? '',
+                                onChanged: (v) =>
+                                    setState(() => _selectedFinalId = v),
+                              )),
+                        ],
+                      );
+                    }),
                   ],
                 ),
               ),
@@ -3257,6 +3587,7 @@ class _StartPointSheetState extends ConsumerState<_StartPointSheet> {
                                       .read(tripProvider.notifier)
                                       .generateOptimizedRoute(
                                           startLocationId: id,
+                                          finalLocationId: _selectedFinalId,
                                           selectedDate: selectedDate);
                                 },
                           style: FilledButton.styleFrom(

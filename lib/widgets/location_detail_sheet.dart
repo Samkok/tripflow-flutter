@@ -174,12 +174,12 @@ class LocationDetailSheet extends ConsumerWidget {
           const <SavedLocation>[];
       for (final l in all) {
         if (l.tripId != trip.id) continue;
-        marks.add(l.scheduledDate ?? l.createdAt);
+        marks.add(l.scheduledDate); // null (unscheduled) doesn't stretch axis
         marks.add(l.scheduledEndDate);
       }
     } else {
       for (final l in ref.read(tripProvider).pinnedLocations) {
-        marks.add(l.scheduledDate ?? l.addedAt);
+        marks.add(l.scheduledDate); // null (unscheduled) doesn't stretch axis
         marks.add(l.scheduledEndDate);
       }
     }
@@ -805,6 +805,51 @@ class LocationDetailSheet extends ConsumerWidget {
             ),
           ],
         ),
+        // Unscheduled escape hatch: clears the date — the place stays in
+        // the trip, parked in the Unscheduled bucket (trip details).
+        // Hidden for rows that must keep a day: accommodations (DB CHECK),
+        // completed places, and multi-day stays.
+        if (canEdit &&
+            updatedLocation.scheduledDate != null &&
+            updatedLocation.tripId != null &&
+            !updatedLocation.isAccommodation &&
+            !updatedLocation.isDone &&
+            !updatedLocation.isMultiDay)
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              icon: const Icon(Icons.event_busy_rounded, size: 16),
+              label: const Text('No date — move to Unscheduled'),
+              style: TextButton.styleFrom(
+                foregroundColor: Theme.of(context).colorScheme.onSurfaceVariant,
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                visualDensity: VisualDensity.compact,
+              ),
+              onPressed: () async {
+                final inActivePinned = ref
+                    .read(tripProvider)
+                    .pinnedLocations
+                    .any((l) => l.id == updatedLocation.id);
+                if (inActivePinned) {
+                  await ref
+                      .read(tripProvider.notifier)
+                      .clearLocationSchedule(updatedLocation.id);
+                } else {
+                  // Non-active trip (opened from trip details): repository-
+                  // direct, same bypass pattern trip_details uses. RLS
+                  // backstops auth.
+                  await ref
+                      .read(locationRepositoryProvider)
+                      .updateLocation(updatedLocation.id, {
+                    'scheduled_date': null,
+                  });
+                }
+                if (!context.mounted) return;
+                AppToast.info(context,
+                    '"${updatedLocation.name}" moved to Unscheduled.');
+              },
+            ),
+          ),
         // Route preview row — pick another stop to use as the start ("From")
         // or end ("To") of a single-leg route drawn on the map. Disabled
         // when there's no other location on the selected date to pair with.

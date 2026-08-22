@@ -71,6 +71,55 @@ class LegModePrefs {
         meters.clamp(minMaxWalkMeters, maxMaxWalkMeters));
   }
 
+  /// The Auto-plan choices for "places per day". null = Auto (capacity
+  /// only); the rest are hard caps.
+  static const List<int?> autoPlanMaxStopsChoices = [
+    null, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15
+  ];
+
+  /// Auto-plan's per-day cap (see [autoPlanMaxStopsChoices]); a trait of
+  /// the traveller, so global like max walk. null = Auto.
+  static Future<int?> autoPlanMaxStops() async {
+    final prefs = await SharedPreferences.getInstance();
+    final v = prefs.getInt('pref_auto_plan_max_stops');
+    return v == null || v <= 0 ? null : v;
+  }
+
+  /// Whether a day's route should END at (return to) the day's
+  /// accommodation. Per trip, default ON — you sleep where you end. OFF
+  /// leaves the day open-ended: the accommodation becomes an ordinary stop
+  /// (if it's in the list) or no return leg is added (if it's the start).
+  static Future<bool> returnToAccommodation(String tripId) async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool('pref_return_to_accommodation_$tripId') ?? true;
+  }
+
+  static Future<void> setReturnToAccommodation(String tripId, bool on) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('pref_return_to_accommodation_$tripId', on);
+  }
+
+  /// Auto-plan fill style: 'balanced' (even days) or 'pack' (fill each day
+  /// to the limit, leave the rest free). Global like the cap.
+  static Future<String> autoPlanFillStyle() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('pref_auto_plan_fill_style') ?? 'balanced';
+  }
+
+  static Future<void> setAutoPlanFillStyle(String style) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('pref_auto_plan_fill_style', style);
+  }
+
+  static Future<void> setAutoPlanMaxStops(int? cap) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (cap == null || cap <= 0) {
+      await prefs.remove('pref_auto_plan_max_stops');
+    } else {
+      await prefs.setInt('pref_auto_plan_max_stops', cap);
+    }
+  }
+
   /// Wipes every per-leg override for a trip. Called when the user changes
   /// the trip's TRAVEL STYLE: a style switch means "re-plan this trip that
   /// way", and stale manual leg choices silently overriding the new style

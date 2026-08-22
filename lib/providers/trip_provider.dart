@@ -31,6 +31,8 @@ import 'location_provider.dart';
 import 'trip_listener_provider.dart';
 import '../utils/same_day_place_guard.dart';
 import '../utils/trip_dates.dart';
+import '../services/day_distribution/distribution_models.dart';
+import '../services/day_distribution/model_bridge.dart';
 import 'trip_collaborator_provider.dart';
 import 'onboarding_checklist_provider.dart';
 
@@ -66,6 +68,11 @@ class TripState {
   /// it only when ≥ ~5 minutes so the claim always stays defensible.
   final Duration timeSaved;
   String startLocationId;
+
+  /// The user's optional "end the day at" stop for the last optimize
+  /// ('' = let the optimizer decide). Re-runs (timing-warning fixes) read
+  /// it back so the choice survives.
+  String finalLocationId;
   final int? selectedLegIndex;
 
   TripState({
@@ -82,6 +89,7 @@ class TripState {
     this.totalDistance = 0.0,
     this.timeSaved = Duration.zero,
     this.startLocationId = '',
+    this.finalLocationId = '',
     this.selectedLegIndex,
   });
 
@@ -99,6 +107,7 @@ class TripState {
     double? totalDistance,
     Duration? timeSaved,
     String? startLocationId,
+    String? finalLocationId,
     int? selectedLegIndex,
   }) {
     return TripState(
@@ -117,6 +126,7 @@ class TripState {
       totalDistance: totalDistance ?? this.totalDistance,
       timeSaved: timeSaved ?? this.timeSaved,
       startLocationId: startLocationId ?? this.startLocationId,
+      finalLocationId: finalLocationId ?? this.finalLocationId,
       selectedLegIndex: selectedLegIndex, // Allow setting to null
     );
   }
@@ -302,8 +312,10 @@ class TripNotifier extends StateNotifier<TripState> {
             address: '', // Address not available from SavedLocation
             coordinates: LatLng(saved.lat, saved.lng),
             addedAt: saved.createdAt,
-            scheduledDate:
-                saved.scheduledDate ?? _ref.read(selectedDateProvider),
+            // null passes through: an unscheduled row must NOT be dressed
+            // up with the currently-selected day (it used to phantom-follow
+            // the user's day selection on every map surface).
+            scheduledDate: saved.scheduledDate,
             isSkipped: saved.isSkipped,
             isDone: saved.isDone,
             isAccommodation: saved.isAccommodation,
@@ -827,6 +839,220 @@ class TripNotifier extends StateNotifier<TripState> {
     }
   }
 
+  // ── Auto-plan apply / undo ────────────────────────────────────────────
+
+  /// One-shot undo snapshot of the last applied distribution:
+  /// id → (scheduledDate, scheduledEndDate) BEFORE the apply. Validated by
+  /// fingerprint at revert time, so any intervening edit (own or a
+  /// collaborator's) refuses the undo instead of clobbering it.
+  Map<String, (DateTime?, DateTime?)>? _distributionSnapshot;
+  String? _snapshotFingerprint;
+
+  /// Applies an Auto-plan [plan]: every proposed change becomes ONE batch
+  /// write of `scheduled_date` values (UPDATE-only — zero collaborator
+  /// push notifications). Stale plans (rows changed since compute) are
+  /// refused so the sheet can recompute; rows that lost a same-day
+  /// duplicate race land in the Unscheduled bucket instead of being
+  /// silently dropped.
+  Future<ApplyDistributionResult> applyDistribution(
+      DistributionPlan plan) async {
+    final hasAccess = await _hasWriteAccess();
+    if (!hasAccess) {
+      return const ApplyDistributionResult(ApplyDistributionStatus.denied);
+    }
+    final current = state.pinnedLocations;
+    if (distributionFingerprint(current) != plan.inputFingerprint) {
+      return const ApplyDistributionResult(ApplyDistributionStatus.stale);
+    }
+
+    final byId = {for (final l in current) l.id: l};
+    final targetDayById = <String, DateTime?>{};
+    final byTargetDay = <DateTime, Set<String>>{};
+    for (final c in plan.changes) {
+      final loc = byId[c.id];
+      // Belt-and-braces: the fingerprint already guarantees these flags
+      // haven't changed since the engine excluded such rows.
+      if (loc == null ||
+          loc.isDone ||
+          loc.isAccommodation ||
+          loc.isMultiDay) {
+        continue;
+      }
+      if (c.newDay == null) {
+        targetDayById[c.id] = null;
+      } else {
+        byTargetDay.putIfAbsent(c.newDay!, () => <String>{}).add(c.id);
+      }
+    }
+    // Same-day duplicate choke point per target day; a row blocked by a
+    // race (collaborator added the same place meanwhile) parks in the
+    // bucket — visible and fixable, never silently skipped.
+    var racedToBucket = 0;
+    for (final entry in byTargetDay.entries) {
+      final allowed =
+          _allowedForDay(entry.value, entry.key, excludeMoving: true);
+      for (final id in entry.value) {
+        if (allowed.contains(id)) {
+          targetDayById[id] = entry.key;
+        } else {
+          targetDayById[id] = null;
+          racedToBucket++;
+        }
+      }
+    }
+    if (targetDayById.isEmpty) {
+      return const ApplyDistributionResult(ApplyDistributionStatus.applied);
+    }
+
+    final snapshot = <String, (DateTime?, DateTime?)>{
+      for (final id in targetDayById.keys)
+        id: (byId[id]!.scheduledDate, byId[id]!.scheduledEndDate)
+    };
+
+    final updated = [
+      for (final l in current)
+        targetDayById.containsKey(l.id)
+            ? l.copyWith(
+                scheduledDate: targetDayById[l.id],
+                scheduledEndDate: null,
+              )
+            : l,
+    ];
+    // Route state is day-scoped and now stale — same reset as addLocation.
+    state = state.copyWith(
+      pinnedLocations: updated,
+      optimizedLocationsForSelectedDate: [],
+      isRoutePreview: false,
+      optimizedRoute: [],
+      legPolylines: [],
+      legDetails: [],
+      totalTravelTime: Duration.zero,
+      totalDistance: 0.0,
+    );
+    selectLeg(null);
+
+    final updates = <String, Map<String, dynamic>>{
+      for (final e in targetDayById.entries)
+        e.key: e.value == null
+            ? {'scheduled_date': null}
+            : {
+                'scheduled_date': e.value!.toIso8601String(),
+                'scheduled_end_date': null,
+              }
+    };
+    try {
+      await _ref
+          .read(locationRepositoryProvider)
+          .updateLocationsBatch(updates);
+    } catch (e) {
+      debugPrint('applyDistribution: batch write failed: $e');
+    }
+
+    _distributionSnapshot = snapshot;
+    _snapshotFingerprint = distributionFingerprint(state.pinnedLocations);
+    final toBucket =
+        targetDayById.values.where((d) => d == null).length;
+    return ApplyDistributionResult(
+      ApplyDistributionStatus.applied,
+      moved: targetDayById.length - toBucket,
+      toBucket: toBucket,
+      racedToBucket: racedToBucket,
+    );
+  }
+
+  /// Restores the dates captured by the last [applyDistribution]. Refuses
+  /// (returns false) when anything — own edit, collaborator, another
+  /// device — changed the rows since, so undo can never clobber newer
+  /// work.
+  Future<bool> revertDistribution() async {
+    final snapshot = _distributionSnapshot;
+    final expected = _snapshotFingerprint;
+    if (snapshot == null || expected == null) return false;
+    if (distributionFingerprint(state.pinnedLocations) != expected) {
+      _distributionSnapshot = null;
+      _snapshotFingerprint = null;
+      return false;
+    }
+
+    final updated = [
+      for (final l in state.pinnedLocations)
+        snapshot.containsKey(l.id)
+            ? l.copyWith(
+                scheduledDate: snapshot[l.id]!.$1,
+                scheduledEndDate: snapshot[l.id]!.$2,
+              )
+            : l,
+    ];
+    state = state.copyWith(
+      pinnedLocations: updated,
+      optimizedLocationsForSelectedDate: [],
+      isRoutePreview: false,
+      optimizedRoute: [],
+      legPolylines: [],
+      legDetails: [],
+      totalTravelTime: Duration.zero,
+      totalDistance: 0.0,
+    );
+    selectLeg(null);
+
+    final updates = <String, Map<String, dynamic>>{
+      for (final e in snapshot.entries)
+        e.key: e.value.$1 == null
+            ? {'scheduled_date': null}
+            : {
+                'scheduled_date': e.value.$1!.toIso8601String(),
+                'scheduled_end_date': e.value.$2?.toIso8601String(),
+              }
+    };
+    try {
+      await _ref
+          .read(locationRepositoryProvider)
+          .updateLocationsBatch(updates);
+    } catch (e) {
+      debugPrint('revertDistribution: batch write failed: $e');
+    }
+    _distributionSnapshot = null;
+    _snapshotFingerprint = null;
+    return true;
+  }
+
+  /// Clears [locationId]'s date: the row moves to the trip's Unscheduled
+  /// bucket but stays in the trip. Refused for rows that must keep a day —
+  /// accommodations (DB CHECK requires a date), completed places, and
+  /// multi-day stays.
+  Future<void> clearLocationSchedule(String locationId) async {
+    final hasAccess = await _hasWriteAccess();
+    if (!hasAccess) {
+      debugPrint('clearLocationSchedule: Permission denied');
+      return;
+    }
+    final idx = state.pinnedLocations.indexWhere((l) => l.id == locationId);
+    if (idx == -1) return;
+    final loc = state.pinnedLocations[idx];
+    if (loc.isAccommodation || loc.isDone || loc.isMultiDay) {
+      debugPrint('clearLocationSchedule: refused for '
+          '${loc.isAccommodation ? 'accommodation' : loc.isDone ? 'done' : 'multi-day'} row');
+      return;
+    }
+
+    final updated = [
+      for (final l in state.pinnedLocations)
+        if (l.id == locationId)
+          l.copyWith(scheduledDate: null, scheduledEndDate: null)
+        else
+          l,
+    ];
+    state = state.copyWith(pinnedLocations: updated);
+
+    try {
+      await _ref.read(locationRepositoryProvider).updateLocation(locationId, {
+        'scheduled_date': null,
+      });
+    } catch (e) {
+      debugPrint('Error clearing schedule: $e');
+    }
+  }
+
   Future<void> updateLocationScheduledDate(
       String locationId, DateTime newDate) async {
     // Permission check at function level
@@ -849,9 +1075,11 @@ class TripNotifier extends StateNotifier<TripState> {
     DateTime? movedSpanEnd;
     final updatedLocations = locations.map((loc) {
       if (loc.id == locationId) {
-        // A stay range moves WHOLE — see shiftedSpanEnd.
+        // A stay range moves WHOLE — see shiftedSpanEnd. An unscheduled row
+        // has no span (repo clears end with the date), so its oldStart is
+        // moot — newDate keeps the delta at zero.
         movedSpanEnd = shiftedSpanEnd(
-          oldStart: loc.scheduledDate ?? loc.addedAt,
+          oldStart: loc.scheduledDate ?? newDate,
           oldEnd: loc.scheduledEndDate,
           newStart: newDate,
         );
@@ -957,7 +1185,13 @@ class TripNotifier extends StateNotifier<TripState> {
       return;
     }
     final loc = state.pinnedLocations[idx];
-    final startRaw = loc.scheduledDate ?? loc.addedAt;
+    // An unscheduled row isn't ON any day — removing it "from a day" can
+    // only mean removing it outright.
+    final startRaw = loc.scheduledDate;
+    if (startRaw == null) {
+      await removeLocation(locationId);
+      return;
+    }
     final start = DateTime(startRaw.year, startRaw.month, startRaw.day);
     final endRaw = loc.scheduledEndDate ?? startRaw;
     final end = DateTime(endRaw.year, endRaw.month, endRaw.day);
@@ -1055,7 +1289,9 @@ class TripNotifier extends StateNotifier<TripState> {
     final e = DateTime(end.year, end.month, end.day);
     return state.pinnedLocations.where((loc) {
       if (loc.id == locationId || !loc.isAccommodation) return false;
-      final oRaw = loc.scheduledDate ?? loc.addedAt;
+      // Accommodations always carry dates (DB CHECK) — null can't conflict.
+      final oRaw = loc.scheduledDate;
+      if (oRaw == null) return false;
       final oS = DateTime(oRaw.year, oRaw.month, oRaw.day);
       final oERaw = loc.scheduledEndDate ?? oRaw;
       final oE = DateTime(oERaw.year, oERaw.month, oERaw.day);
@@ -1238,8 +1474,9 @@ class TripNotifier extends StateNotifier<TripState> {
     final spanEnds = <String, DateTime?>{};
     final updatedLocations = state.pinnedLocations.map((loc) {
       if (locationIds.contains(loc.id)) {
+        // Unscheduled rows have no span — oldStart is moot (delta zero).
         final newEnd = shiftedSpanEnd(
-          oldStart: loc.scheduledDate ?? loc.addedAt,
+          oldStart: loc.scheduledDate ?? newDate,
           oldEnd: loc.scheduledEndDate,
           newStart: newDate,
         );
@@ -1369,10 +1606,19 @@ class TripNotifier extends StateNotifier<TripState> {
     state = state.copyWith(currentLocation: location);
   }
 
+  /// [finalLocationId]: the user's optional "end the day at" stop. null =
+  /// let the optimizer decide. Stored in state so re-runs can replay it.
   Future<void> generateOptimizedRoute(
-      {String? startLocationId, required DateTime selectedDate}) async {
+      {String? startLocationId,
+      String? finalLocationId,
+      required DateTime selectedDate}) async {
     // OPTIMIZATION: Cancel previous route generation debounce if it exists
     _routeOptimizationDebounceTimer?.cancel();
+
+    // Show "Optimizing…" from the tap, not 500 ms later — the debounce gap
+    // read as the button doing nothing. The early-return paths below reset
+    // the flag, and the real run's finally block always clears it.
+    _ref.read(isGeneratingRouteProvider.notifier).state = true;
 
     // OPTIMIZATION: Debounce the route generation by 500ms to prevent excessive API calls
     // when user is rapidly changing dates or locations
@@ -1380,6 +1626,7 @@ class TripNotifier extends StateNotifier<TripState> {
         Timer(const Duration(milliseconds: 500), () {
       _performRouteOptimization(
         startLocationId: startLocationId,
+        finalLocationId: finalLocationId,
         selectedDate: selectedDate,
       );
     });
@@ -1387,6 +1634,7 @@ class TripNotifier extends StateNotifier<TripState> {
 
   Future<void> _performRouteOptimization({
     String? startLocationId,
+    String? finalLocationId,
     required DateTime selectedDate,
   }) async {
     // Filter locations to only include those active on the selected date.
@@ -1398,9 +1646,21 @@ class TripNotifier extends StateNotifier<TripState> {
       return loc.isActiveOnDate(selectedDate);
     }).toList();
 
-    if (locationsForDate.isEmpty) return;
+    if (locationsForDate.isEmpty) {
+      _ref.read(isGeneratingRouteProvider.notifier).state = false;
+      return;
+    }
 
-    _ref.read(isGeneratingRouteProvider.notifier).state = true;
+    // Google Routes hard-caps a chain at 25 intermediates, and loop-home
+    // days route every stop as one. Refuse up front — the trip sheet
+    // pre-checks and shows the over-cap dialog, this guard covers the
+    // remaining entry points (start-point confirm, timing-warning reruns)
+    // via routeOverCapProvider, which the sheet listens on.
+    if (locationsForDate.length > MultiModalRouter.maxRoutableStopsPerDay) {
+      _ref.read(routeOverCapProvider.notifier).state = locationsForDate.length;
+      _ref.read(isGeneratingRouteProvider.notifier).state = false;
+      return;
+    }
 
     try {
       // 1. Determine the starting point and the list of locations to be optimized.
@@ -1590,13 +1850,27 @@ class TripNotifier extends StateNotifier<TripState> {
       // ended at the last sight. The router appends a routed return leg.
       // (An accommodation elsewhere in the list is already pinned as the
       // day's destination — no return leg needed there.)
+      // "Return to accommodation" (per-trip, default ON): the day ends at
+      // the hotel. OFF = open-ended day — no loop-home leg, and an in-list
+      // accommodation is routed as an ordinary stop.
+      final returnToAcc =
+          await LegModePrefs.returnToAccommodation(routingTripId);
       LocationModel? returnAccommodation;
       final dayAccommodations =
           locationsForDate.where((l) => l.isAccommodation).toList();
-      if (dayAccommodations.isNotEmpty &&
+      if (returnToAcc &&
+          dayAccommodations.isNotEmpty &&
           effectiveStartLocationId == dayAccommodations.first.id) {
         returnAccommodation = dayAccommodations.first;
       }
+      // The user's "end the day at" stop — honored only if it's actually
+      // one of today's routed stops (not the start anchor, not dropped).
+      final finalId = finalLocationId != null &&
+              finalLocationId != effectiveStartLocationId &&
+              finalOrderedWaypoints.any((l) => l.id == finalLocationId)
+          ? finalLocationId
+          : null;
+      state = state.copyWith(finalLocationId: finalId ?? '');
       final routeResult = await MultiModalRouter.routeItinerary(
         origin: startPoint,
         originId: effectiveStartLocationId.isEmpty
@@ -1608,6 +1882,8 @@ class TripNotifier extends StateNotifier<TripState> {
         legModeOverrides: legOverrides,
         maxWalkMeters: prefMaxWalk.toDouble(),
         returnTo: returnAccommodation,
+        finalStopId: finalId,
+        endAtAccommodation: returnToAcc,
       ).timeout(
         const Duration(seconds: 45),
         onTimeout: () {
@@ -2118,6 +2394,31 @@ final tripProvider = StateNotifierProvider<TripNotifier, TripState>((ref) {
 
 // A simple provider to track the loading state of route generation
 final isGeneratingRouteProvider = StateProvider<bool>((ref) => false);
+
+/// Set (to the offending stop count) when an optimize attempt was refused
+/// because the day exceeds [MultiModalRouter.maxRoutableStopsPerDay].
+/// The trip sheet listens, shows the over-cap dialog, and resets to null.
+final routeOverCapProvider = StateProvider<int?>((ref) => null);
+
+enum ApplyDistributionStatus { applied, stale, denied }
+
+/// Outcome of [TripNotifier.applyDistribution]. [racedToBucket] counts rows
+/// that were headed for a day but lost a same-day duplicate race and were
+/// parked in the Unscheduled bucket instead.
+class ApplyDistributionResult {
+  final ApplyDistributionStatus status;
+  final int moved;
+  final int toBucket;
+  final int racedToBucket;
+  const ApplyDistributionResult(this.status,
+      {this.moved = 0, this.toBucket = 0, this.racedToBucket = 0});
+}
+
+/// How many of the active trip's places sit in the Unscheduled bucket
+/// (no date). Drives the map sheet's "Unscheduled (N)" pill.
+final unscheduledCountProvider = Provider<int>((ref) => ref.watch(
+    tripProvider.select((s) =>
+        s.pinnedLocations.where((l) => l.scheduledDate == null).length)));
 
 // A provider to signal the UI to zoom to fit the optimized route
 final zoomToFitRouteTrigger = StateProvider<int>((ref) => 0);

@@ -2,6 +2,8 @@ import 'dart:math' as math;
 
 import 'package:confetti/confetti.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'app_toast.dart';
 
 import '../services/subscription_limit_service.dart';
 import 'free_places_meter.dart';
@@ -309,18 +311,26 @@ class _FirstOptimizeDialogState extends State<_FirstOptimizeDialog> {
   }
 }
 
-/// Post-trip recap ("the trip, by the numbers") — shown once per trip in the
-/// T+1..T+3 window after it ends. The share CTA is the point: it rides the
-/// moment people are already posting trip photos, so the recap card becomes
-/// behavioral residue with attribution.
+/// Post-trip prompt — shown once per trip in the T+1..T+3 window after it
+/// ends. The trip is done; the ask is to PUBLISH it so others can copy it
+/// by code. [onPublish] performs the publish and returns the share code;
+/// on success this dialog closes and [showTripCodeDialog] takes over. For a
+/// trip that's already public, pass [existingCode] — the prompt skips
+/// straight to the code.
 Future<void> showTripRecapDialog(
   BuildContext context, {
   required String tripName,
   required int days,
   required int places,
   required Duration timeSaved,
-  VoidCallback? onShare,
+  Future<String?> Function()? onPublish,
+  String? existingCode,
 }) {
+  if (existingCode != null) {
+    return showTripCodeDialog(context,
+        tripName: tripName, code: existingCode, justPublished: false);
+  }
+
   String fmt(Duration d) {
     final h = d.inHours;
     final m = d.inMinutes % 60;
@@ -333,6 +343,7 @@ Future<void> showTripRecapDialog(
     builder: (ctx) {
       final theme = Theme.of(ctx);
       final primary = theme.colorScheme.primary;
+      var publishing = false;
 
       Widget stat(String value, String label) => Column(
             children: [
@@ -346,6 +357,124 @@ Future<void> showTripRecapDialog(
             ],
           );
 
+      return StatefulBuilder(builder: (ctx, setState) {
+        return Dialog(
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(24, 28, 24, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text('🧳', style: TextStyle(fontSize: 44)),
+                const SizedBox(height: 12),
+                Text(
+                  '$tripName is now completed.',
+                  textAlign: TextAlign.center,
+                  style: theme.textTheme.titleLarge
+                      ?.copyWith(fontWeight: FontWeight.w800),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  'Want to publish it for others to see?',
+                  textAlign: TextAlign.center,
+                  style: theme.textTheme.bodyMedium
+                      ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                ),
+                const SizedBox(height: 18),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    stat('$days', days == 1 ? 'day' : 'days'),
+                    stat('$places', places == 1 ? 'place' : 'places'),
+                    if (timeSaved >= const Duration(minutes: 5))
+                      stat('~${fmt(timeSaved)}', 'saved'),
+                  ],
+                ),
+                const SizedBox(height: 22),
+                if (onPublish != null)
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      onPressed: publishing
+                          ? null
+                          : () async {
+                              setState(() => publishing = true);
+                              String? code;
+                              try {
+                                code = await onPublish();
+                              } catch (_) {
+                                code = null;
+                              }
+                              if (!ctx.mounted) return;
+                              if (code == null) {
+                                setState(() => publishing = false);
+                                AppToast.error(ctx,
+                                    "Couldn't publish. Check your connection.");
+                                return;
+                              }
+                              // Hand over to the code dialog on the ROOT
+                              // navigator context, which outlives this one.
+                              final rootCtx =
+                                  Navigator.of(ctx, rootNavigator: true)
+                                      .context;
+                              Navigator.of(ctx).pop();
+                              if (rootCtx.mounted) {
+                                showTripCodeDialog(rootCtx,
+                                    tripName: tripName,
+                                    code: code,
+                                    justPublished: true);
+                              }
+                            },
+                      icon: publishing
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.public_rounded, size: 18),
+                      label: Text(publishing ? 'Publishing…' : 'Publish trip'),
+                      style: FilledButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14)),
+                      ),
+                    ),
+                  ),
+                TextButton(
+                  onPressed:
+                      publishing ? null : () => Navigator.of(ctx).pop(),
+                  child: const Text('Not now'),
+                ),
+              ],
+            ),
+          ),
+        );
+      });
+    },
+  );
+}
+
+/// The trip's share code, front and center: tap to copy, plus a reminder
+/// that the same code lives on the trip page. Shown right after publishing
+/// from the completed-trip prompt (or instead of it when already public).
+Future<void> showTripCodeDialog(
+  BuildContext context, {
+  required String tripName,
+  required String code,
+  required bool justPublished,
+}) {
+  final display = code.startsWith('TRIP-') ? code : 'TRIP-$code';
+  return showDialog<void>(
+    context: context,
+    builder: (ctx) {
+      final theme = Theme.of(ctx);
+      final primary = theme.colorScheme.primary;
+      void copy() {
+        Clipboard.setData(ClipboardData(text: display));
+        AppToast.success(ctx, 'Code copied — send it to anyone!');
+      }
+
       return Dialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
         child: Padding(
@@ -353,48 +482,77 @@ Future<void> showTripRecapDialog(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Text('🧳', style: TextStyle(fontSize: 44)),
+              Icon(Icons.public_rounded, size: 40, color: primary),
               const SizedBox(height: 12),
               Text(
-                'How was $tripName?',
+                justPublished
+                    ? '$tripName is published!'
+                    : '$tripName is now completed.',
                 textAlign: TextAlign.center,
                 style: theme.textTheme.titleLarge
                     ?.copyWith(fontWeight: FontWeight.w800),
               ),
               const SizedBox(height: 6),
               Text(
-                'Your trip, by the numbers:',
+                justPublished
+                    ? 'Share this code with others — anyone with it can copy '
+                        'your trip as their own.'
+                    : "It's already public. Share this code with others — "
+                        'anyone with it can copy your trip as their own.',
+                textAlign: TextAlign.center,
                 style: theme.textTheme.bodyMedium
                     ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
               ),
               const SizedBox(height: 18),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: [
-                  stat('$days', days == 1 ? 'day' : 'days'),
-                  stat('$places', places == 1 ? 'place' : 'places'),
-                  if (timeSaved >= const Duration(minutes: 5))
-                    stat('~${fmt(timeSaved)}', 'saved'),
-                ],
-              ),
-              const SizedBox(height: 22),
-              if (onShare != null)
-                SizedBox(
-                  width: double.infinity,
-                  child: FilledButton.icon(
-                    onPressed: () {
-                      Navigator.of(ctx).pop();
-                      onShare();
-                    },
-                    icon: const Icon(Icons.ios_share_rounded, size: 18),
-                    label: const Text('Share the recap'),
-                    style: FilledButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(14)),
-                    ),
+              InkWell(
+                borderRadius: BorderRadius.circular(14),
+                onTap: copy,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 18, vertical: 14),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: primary.withValues(alpha: 0.45)),
+                    color: primary.withValues(alpha: 0.08),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        display,
+                        style: theme.textTheme.titleLarge?.copyWith(
+                          fontFamily: 'monospace',
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 2,
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Icon(Icons.copy_rounded, size: 20, color: primary),
+                    ],
                   ),
                 ),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                'You can also find this code on the trip page.',
+                textAlign: TextAlign.center,
+                style: theme.textTheme.bodySmall
+                    ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+              ),
+              const SizedBox(height: 18),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  onPressed: copy,
+                  icon: const Icon(Icons.copy_rounded, size: 18),
+                  label: const Text('Copy code'),
+                  style: FilledButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14)),
+                  ),
+                ),
+              ),
               TextButton(
                 onPressed: () => Navigator.of(ctx).pop(),
                 child: const Text('Done'),

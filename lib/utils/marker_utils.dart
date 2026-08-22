@@ -159,6 +159,10 @@ class MarkerUtils {
   /// Creates a custom bitmap with a number and a name.
   /// Returns a [MarkerBitmapResult] containing the bitmap and the correct anchor
   /// to align the circle center with the map coordinate.
+  /// Amber used for "might be closed" pins and their warning line — the
+  /// same amber the Unscheduled bucket and the planner warnings use.
+  static const Color warningAmber = Color(0xFFFFB300);
+
   static Future<MarkerBitmapResult> getCustomMarkerBitmap({
     required int number,
     required String name,
@@ -169,6 +173,9 @@ class MarkerUtils {
     double size = 20,
     bool isSkipped = false,
     bool isDone = false,
+    // Optional amber caution line drawn under the name (e.g. "might be
+    // closed on this date"). Wraps to two lines like the name.
+    String? warningLine,
   }) async {
     final ui.PictureRecorder pictureRecorder = ui.PictureRecorder();
 
@@ -263,14 +270,58 @@ class MarkerUtils {
     // onto two lines instead of vanishing into an ellipsis.
     namePainter.layout(maxWidth: 170);
 
+    // Optional caution line under the name, amber with the same halo so
+    // it stays legible over any map tile.
+    TextPainter? warningPainter;
+    if (warningLine != null && warningLine.trim().isNotEmpty) {
+      warningPainter = TextPainter(
+          textDirection: TextDirection.ltr,
+          textAlign: TextAlign.center,
+          maxLines: 2,
+          ellipsis: '...');
+      warningPainter.text = TextSpan(
+        text: warningLine,
+        style: TextStyle(
+          fontSize: 10.5,
+          fontWeight: FontWeight.w700,
+          color: warningAmber,
+          shadows: [
+            Shadow(
+                color: isDarkMode
+                    ? Colors.black.withValues(alpha: 0.9)
+                    : Colors.white.withValues(alpha: 0.95),
+                blurRadius: 3,
+                offset: const Offset(0, 0)),
+            Shadow(
+                color: isDarkMode
+                    ? Colors.black.withValues(alpha: 0.7)
+                    : Colors.white.withValues(alpha: 0.8),
+                blurRadius: 6,
+                offset: const Offset(0, 1)),
+          ],
+        ),
+      );
+      warningPainter.layout(maxWidth: 170);
+    }
+    const double warningGap = 2.0;
+    final double warningHeight =
+        warningPainter == null ? 0 : warningPainter.height + warningGap;
+
     // --- 2. Calculate Canvas Dimensions ---
     final double circleRadius = size / 2;
     const double shadowRadius = 4.0; // Shadow offset
     const double paddingBelowCircle = 16.0; // Increased padding
-    final double totalWidth =
-        namePainter.width > size ? namePainter.width : size;
-    final double totalHeight =
-        size + paddingBelowCircle + namePainter.height + shadowRadius;
+    final double textWidth = warningPainter == null
+        ? namePainter.width
+        : (warningPainter.width > namePainter.width
+            ? warningPainter.width
+            : namePainter.width);
+    final double totalWidth = textWidth > size ? textWidth : size;
+    final double totalHeight = size +
+        paddingBelowCircle +
+        namePainter.height +
+        warningHeight +
+        shadowRadius;
     final double canvasCenterX = totalWidth / 2;
 
     final Canvas canvas = Canvas(pictureRecorder);
@@ -359,6 +410,14 @@ class MarkerUtils {
       canvas,
       Offset(canvasCenterX - namePainter.width / 2, size + paddingBelowCircle),
     );
+    // …and the caution line under the name.
+    if (warningPainter != null) {
+      warningPainter.paint(
+        canvas,
+        Offset(canvasCenterX - warningPainter.width / 2,
+            size + paddingBelowCircle + namePainter.height + warningGap),
+      );
+    }
 
     // --- 4. Convert to Bitmap ---
     final ui.Image img = await pictureRecorder

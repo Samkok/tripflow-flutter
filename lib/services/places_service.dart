@@ -817,6 +817,41 @@ class PlacesService {
     }
   }
 
+  /// City-level reverse geocode: the locality (falling back to the level-1
+  /// administrative area) containing [coordinates], or null when Google has
+  /// neither. Used to NAME auto-detected city clusters — display only,
+  /// never persisted. `result_type` keeps the response tiny.
+  static Future<String?> getLocalityFromCoordinates(
+      LatLng coordinates) async {
+    try {
+      final url = 'https://maps.googleapis.com/maps/api/geocode/json'
+          '?latlng=${coordinates.latitude},${coordinates.longitude}'
+          '&result_type=locality|administrative_area_level_1'
+          '&key=${ApiService.googleMapsApiKey}';
+      final response = await ApiService.dio.get(url);
+      final data = response.data;
+      if (data['status'] != 'OK' || (data['results'] as List).isEmpty) {
+        return null;
+      }
+      String? locality;
+      String? adminArea;
+      for (final result in data['results'] as List) {
+        for (final component in result['address_components'] as List) {
+          final types = (component['types'] as List).cast<Object?>();
+          if (types.contains('locality')) {
+            locality ??= component['long_name'] as String?;
+          } else if (types.contains('administrative_area_level_1')) {
+            adminArea ??= component['long_name'] as String?;
+          }
+        }
+      }
+      return locality ?? adminArea;
+    } catch (e) {
+      debugPrint('Error reverse-geocoding locality: $e');
+      return null;
+    }
+  }
+
   static Future<PlaceDetails?> getPlaceFromCoordinates(
       LatLng coordinates) async {
     try {

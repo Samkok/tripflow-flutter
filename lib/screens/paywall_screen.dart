@@ -29,6 +29,9 @@ enum PaywallTrigger {
   /// The free saved-place allowance is used up (see
   /// [SubscriptionLimitService.freePlaceAllowance]).
   placeLimit,
+
+  /// Applying an Auto-plan proposal (the preview is free; Apply is Pro).
+  autoPlan,
 }
 
 /// True while a paywall route is on the Navigator stack. Lets app-level
@@ -316,10 +319,20 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
     final isTrialExpired = widget.trigger == PaywallTrigger.trialExpired;
     final isPlaceLimit = widget.trigger == PaywallTrigger.placeLimit;
 
+    final isAutoPlan = widget.trigger == PaywallTrigger.autoPlan;
+
     final String headline;
     final String subheadline;
     final IconData heroIcon;
-    if (isPlaceLimit) {
+    if (isAutoPlan) {
+      // They've SEEN their plan — the preview is the pitch; frame Pro as
+      // the one tap that makes it real.
+      headline = 'Let VoyZa plan your days';
+      subheadline = hasEligibleTrial
+          ? 'Your plan is ready — apply it with Pro, free for 3 days.'
+          : 'Your plan is ready — apply it and every day falls into place.';
+      heroIcon = Icons.auto_awesome_rounded;
+    } else if (isPlaceLimit) {
       // The user hit the gate mid-flow with a trip in progress — frame the
       // upgrade around continuing what they're building right now.
       headline =

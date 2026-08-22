@@ -18,7 +18,6 @@ import 'package:voyza/providers/onboarding_provider.dart';
 import 'package:voyza/screens/trip_details_screen.dart';
 import 'package:voyza/services/analytics_service.dart';
 import 'package:voyza/services/anonymous_user_service.dart';
-import 'package:voyza/services/route_share_card_service.dart';
 import 'package:voyza/services/time_saved_ledger_service.dart';
 import 'package:voyza/widgets/celebration_dialogs.dart';
 import 'package:voyza/utils/countries.dart';
@@ -44,6 +43,17 @@ import 'package:voyza/widgets/rotating_globe_background.dart';
 import 'package:voyza/widgets/trip_collaborators_row.dart';
 import 'package:voyza/widgets/trip_skeleton.dart';
 
+/// Home-list filter. "Gone" = the trip's last day is already past.
+enum _TripFilter {
+  all('All'),
+  active('Active'),
+  ongoing('On Going'),
+  gone('Gone');
+
+  const _TripFilter(this.label);
+  final String label;
+}
+
 class TripScreen extends ConsumerStatefulWidget {
   const TripScreen({super.key});
 
@@ -64,6 +74,10 @@ class _TripScreenState extends ConsumerState<TripScreen> {
   // sink to the end either way).
   final _tripSearchController = TextEditingController();
   String _tripQuery = '';
+
+  /// Home-list filter chips under the search field. Single-select, [all]
+  /// by default. "Gone" = the trip's last day is already past.
+  _TripFilter _tripFilter = _TripFilter.all;
   bool _tripSortAsc = false;
 
   final _newTripBtnKey = GlobalKey();
@@ -162,20 +176,24 @@ class _TripScreenState extends ConsumerState<TripScreen> {
         await prefs.setBool(shownKey, true);
         if (!mounted) return;
         AnalyticsService.instance.tripRecapShown();
+        // "Trip is completed — publish it?" Publishing mints the share code
+        // server-side; the code dialog follows. Already-public trips go
+        // straight to their code.
         await showTripRecapDialog(
           context,
           tripName: trip.name,
           days: days < 1 ? 1 : days,
           places: places,
           timeSaved: saved,
-          onShare: () => RouteShareCardService.instance.shareRecapCard(
-            tripName: trip.name,
-            days: days < 1 ? 1 : days,
-            places: places,
-            timeSaved: saved,
-            anonymous: false,
-            tripId: trip.id,
-          ),
+          existingCode:
+              trip.isPublic && trip.shareCode != null ? trip.shareCode : null,
+          onPublish: () async {
+            final code = await ref
+                .read(tripRepositoryProvider)
+                .setTripPublic(trip.id, true);
+            ref.invalidate(userTripsProvider);
+            return code;
+          },
         );
         return; // at most one recap per launch
       }
@@ -221,6 +239,39 @@ class _TripScreenState extends ConsumerState<TripScreen> {
 
     out.sort((a, b) => _compareTripStart(startOf(a), startOf(b)));
     return out;
+  }
+
+  // ── Date classification (cheap: a handful of day compares per build) ──
+  static DateTime _todayKey() {
+    final n = DateTime.now();
+    return DateTime(n.year, n.month, n.day);
+  }
+
+  static DateTime? _dayOf(DateTime? d) =>
+      d == null ? null : DateTime(d.year, d.month, d.day);
+
+  /// Today lies within [start..end] (inclusive). Both dates required.
+  static bool _isOngoing(DateTime? start, DateTime? end, DateTime today) {
+    final s = _dayOf(start), e = _dayOf(end);
+    if (s == null || e == null) return false;
+    return !today.isBefore(s) && !today.isAfter(e);
+  }
+
+  /// The trip's last day is behind us (end date, else start date).
+  static bool _isGone(DateTime? start, DateTime? end, DateTime today) {
+    final last = _dayOf(end) ?? _dayOf(start);
+    return last != null && today.isAfter(last);
+  }
+
+  /// Dates straight off a shared row's embedded trip map — no Trip parse.
+  static (DateTime?, DateTime?) _rowDates(Map<String, dynamic> row) {
+    final t = row['trips'] as Map<String, dynamic>;
+    final s = t['start_date'] as String?;
+    final e = t['end_date'] as String?;
+    return (
+      s == null ? null : DateTime.tryParse(s),
+      e == null ? null : DateTime.tryParse(e),
+    );
   }
 
   /// Checklist tap → set the guide bus and put the right screen on stage.
@@ -747,8 +798,59 @@ class _TripScreenState extends ConsumerState<TripScreen> {
         sharedTripsAsync.valueOrNull ?? const [], activeTripId);
     final searching = _tripQuery.trim().isNotEmpty;
 
-    final hideYourTripsHeader = (ownedTrips.isNotEmpty &&
-            ownedTrips.every((t) => t.id == activeTripId)) ||
+    // ── Filter chips + On Going section ──────────────────────────────────
+    // Classified once per build from the already-searched/sorted lists.
+    // Own + shared trips whose dates include today form the On Going
+    // section (pulled out of the lists below, like the active trip);
+    // "Gone" shows only trips whose last day has passed.
+    final today = _todayKey();
+    final filter = _tripFilter;
+    final ongoingOwn = ownedMatches
+        .where((t) => _isOngoing(t.startDate, t.endDate, today))
+        .toList();
+    final ongoingShared = sharedMatches.where((d) {
+      final (s, e) = _rowDates(d);
+      return _isOngoing(s, e, today);
+    }).toList();
+    final ongoingIds = {
+      for (final t in ongoingOwn) t.id,
+      for (final d in ongoingShared)
+        (d['trips'] as Map<String, dynamic>)['id'] as String,
+    };
+    final List<Trip> listOwn;
+    final List<Map<String, dynamic>> listShared;
+    switch (filter) {
+      case _TripFilter.all:
+        listOwn =
+            ownedMatches.where((t) => !ongoingIds.contains(t.id)).toList();
+        listShared = sharedMatches
+            .where((d) => !ongoingIds
+                .contains((d['trips'] as Map<String, dynamic>)['id']))
+            .toList();
+      case _TripFilter.gone:
+        listOwn = ownedMatches
+            .where((t) => _isGone(t.startDate, t.endDate, today))
+            .toList();
+        listShared = sharedMatches.where((d) {
+          final (s, e) = _rowDates(d);
+          return _isGone(s, e, today);
+        }).toList();
+      case _TripFilter.active:
+      case _TripFilter.ongoing:
+        listOwn = const [];
+        listShared = const [];
+    }
+    final showActiveSection =
+        (filter == _TripFilter.all || filter == _TripFilter.active) &&
+            activeTrip != null;
+    final showOngoingSection =
+        (filter == _TripFilter.all || filter == _TripFilter.ongoing) &&
+            (ongoingOwn.isNotEmpty || ongoingShared.isNotEmpty);
+    final showLists =
+        filter == _TripFilter.all || filter == _TripFilter.gone;
+
+    final hideYourTripsHeader = !showLists ||
+        listOwn.isEmpty ||
         // A search that matches nothing here shouldn't leave a bare
         // "Your Trips" heading over empty space.
         (searching && ownedMatches.isEmpty);
@@ -1106,11 +1208,52 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                     ),
                   ),
 
+                // Filter chips: All · Active · On Going · Gone. Single-select;
+                // primary-tinted like every other chip row in the app.
+                if (tripsAsync.valueOrNull?.isNotEmpty ?? false)
+                  SliverToBoxAdapter(
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+                      child: Wrap(
+                        spacing: 8,
+                        runSpacing: 6,
+                        children: [
+                          for (final f in _TripFilter.values)
+                            ChoiceChip(
+                              label: Text(f.label),
+                              selected: _tripFilter == f,
+                              onSelected: (_) =>
+                                  setState(() => _tripFilter = f),
+                              showCheckmark: false,
+                              visualDensity: VisualDensity.compact,
+                              labelStyle: Theme.of(context)
+                                  .textTheme
+                                  .labelMedium
+                                  ?.copyWith(
+                                    fontWeight: FontWeight.w700,
+                                    color: _tripFilter == f
+                                        ? Theme.of(context)
+                                            .colorScheme
+                                            .onPrimary
+                                        : Theme.of(context)
+                                            .colorScheme
+                                            .onSurface,
+                                  ),
+                              selectedColor:
+                                  Theme.of(context).colorScheme.primary,
+                              shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(9)),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ),
+
                 const SliverPadding(padding: EdgeInsets.symmetric(vertical: 8)),
 
                 // Active trip section — its full card, pinned above the
                 // lists (and excluded from them so it never shows twice).
-                if (activeTrip != null) ...[
+                if (showActiveSection) ...[
                   SliverToBoxAdapter(
                     child: Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -1161,6 +1304,95 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                   ),
                 ],
 
+                // On Going section — own AND shared trips whose dates
+                // include today. Mixed list; shared rows keep their
+                // permission badge via the shared card.
+                if (showOngoingSection)
+                  SliverMainAxisGroup(
+                    slivers: [
+                      SliverToBoxAdapter(
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+                          child: Row(
+                            children: [
+                              Icon(
+                                Icons.directions_walk_rounded,
+                                size: 20,
+                                color: Theme.of(context).colorScheme.primary,
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                'On Going',
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .titleLarge
+                                    ?.copyWith(fontWeight: FontWeight.w600),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      SliverList(
+                        delegate: SliverChildBuilderDelegate(
+                          (context, index) {
+                            final Widget card;
+                            if (index < ongoingOwn.length) {
+                              card = _buildTripCard(context, ongoingOwn[index]);
+                            } else {
+                              final data =
+                                  ongoingShared[index - ongoingOwn.length];
+                              final tripData =
+                                  data['trips'] as Map<String, dynamic>;
+                              final permission = data['permission'] as String;
+                              card = _buildSharedTripCard(
+                                  context, Trip.fromJson(tripData), permission);
+                            }
+                            return Padding(
+                              padding: const EdgeInsets.only(
+                                  left: 16, right: 16, bottom: 12),
+                              child: card,
+                            );
+                          },
+                          childCount: ongoingOwn.length + ongoingShared.length,
+                        ),
+                      ),
+                      const SliverPadding(
+                          padding: EdgeInsets.only(bottom: 8)),
+                    ],
+                  ),
+
+                // Filter empty states — the chip picked something that has
+                // no trips right now. One line, never a bare heading.
+                if ((filter == _TripFilter.active && activeTrip == null) ||
+                    (filter == _TripFilter.ongoing && !showOngoingSection) ||
+                    (filter == _TripFilter.gone &&
+                        listOwn.isEmpty &&
+                        listShared.isEmpty &&
+                        (tripsAsync.valueOrNull?.isNotEmpty ?? false)))
+                  SliverToBoxAdapter(
+                    child: Padding(
+                      padding: const EdgeInsets.all(28),
+                      child: Center(
+                        child: Text(
+                          switch (filter) {
+                            _TripFilter.active => 'No active trip right now.',
+                            _TripFilter.ongoing =>
+                              'No trip is happening today.',
+                            _TripFilter.gone => 'No past trips yet.',
+                            _TripFilter.all => '',
+                          },
+                          style: Theme.of(context)
+                              .textTheme
+                              .bodyMedium
+                              ?.copyWith(
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .onSurfaceVariant),
+                        ),
+                      ),
+                    ),
+                  ),
+
                 // Trips List
                 if (!hideYourTripsHeader)
                   SliverToBoxAdapter(
@@ -1193,14 +1425,18 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                       );
                     }
 
-                    // The active trip already has its own section above.
-                    final listTrips = _filterAndSortTrips(
-                        trips.where((t) => t.id != activeTripId).toList());
+                    // Hidden under the Active / On Going chips.
+                    if (!showLists) {
+                      return const SliverToBoxAdapter(child: SizedBox.shrink());
+                    }
+                    // The active trip has its own section above; ongoing
+                    // trips sit in theirs; the chip filter did the rest.
+                    final listTrips = listOwn;
                     if (listTrips.isEmpty && searching) {
                       // Only claim "nothing matches" when the shared section
                       // is empty under this query too — otherwise the message
                       // would sit directly above visible shared results.
-                      if (sharedMatches.isNotEmpty) {
+                      if (listShared.isNotEmpty || showOngoingSection) {
                         return const SliverToBoxAdapter(
                             child: SizedBox.shrink());
                       }
@@ -1258,11 +1494,10 @@ class _TripScreenState extends ConsumerState<TripScreen> {
 
                 // Shared Trips Section
                 sharedTripsAsync.when(
-                  data: (allSharedTrips) {
-                    // Excludes the active trip (own section above), applies
-                    // the same name search and start-date sort as Your Trips.
-                    final sharedTrips =
-                        _filterAndSortSharedTrips(allSharedTrips, activeTripId);
+                  data: (_) {
+                    // Already searched/sorted/classified above: excludes the
+                    // active trip and the On Going rows, honors the chip.
+                    final sharedTrips = showLists ? listShared : const [];
                     if (sharedTrips.isEmpty) {
                       // Also covers "filtered to nothing": the heading stays
                       // hidden rather than labelling an empty section.
@@ -2640,9 +2875,10 @@ class _TripScreenState extends ConsumerState<TripScreen> {
     final days = contiguousTripDates([
       trip.startDate,
       trip.endDate,
+      // Unscheduled rows (null) don't define trip days.
       for (final l in tripLocs) ...[
-        l.scheduledDate ?? l.createdAt,
-        l.scheduledEndDate ?? l.scheduledDate ?? l.createdAt,
+        l.scheduledDate,
+        l.scheduledEndDate,
       ],
     ]);
     if (days.isEmpty) {

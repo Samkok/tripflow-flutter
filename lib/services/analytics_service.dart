@@ -56,6 +56,29 @@ class AnalyticsService {
   void routeOptimized(int stops, {int minutesSaved = 0}) =>
       _fire('route_optimized', {'stops': stops, 'minutes_saved': minutesSaved});
 
+  /// Auto-plan preview computed and shown (free — the aha before the gate).
+  void autoPlanPreviewed(
+          {required int stops,
+          required int cities,
+          required int days,
+          required int unscheduled}) =>
+      _fire('auto_plan_previewed', {
+        'stops': stops,
+        'cities': cities,
+        'days': days,
+        'unscheduled': unscheduled,
+      });
+
+  /// Auto-plan applied (Pro): [moved] date writes, [toBucket] parked.
+  void autoPlanApplied({required int moved, required int toBucket}) =>
+      _fire('auto_plan_applied', {'moved': moved, 'to_bucket': toBucket});
+
+  void autoPlanUndone() => _fire('auto_plan_undone', {});
+
+  /// The >25-stops-per-day dialog redirected into Auto-plan.
+  void autoPlanOvercapRedirect(int stops) =>
+      _fire('auto_plan_overcap_redirect', {'stops': stops});
+
   /// A free trial was started.
   void trialStarted(String product) =>
       _fire('trial_started', {'product': product});

@@ -35,20 +35,24 @@ class AppToast {
   static const Duration _defaultDuration = Duration(seconds: 2);
 
   static void success(BuildContext context, String message,
-          {Duration? duration}) =>
-      _show(context, ToastKind.success, message, duration);
+          {Duration? duration, String? actionLabel, VoidCallback? onAction}) =>
+      _show(context, ToastKind.success, message, duration,
+          actionLabel: actionLabel, onAction: onAction);
 
   static void error(BuildContext context, String message,
-          {Duration? duration}) =>
-      _show(context, ToastKind.error, message, duration);
+          {Duration? duration, String? actionLabel, VoidCallback? onAction}) =>
+      _show(context, ToastKind.error, message, duration,
+          actionLabel: actionLabel, onAction: onAction);
 
   static void warning(BuildContext context, String message,
-          {Duration? duration}) =>
-      _show(context, ToastKind.warning, message, duration);
+          {Duration? duration, String? actionLabel, VoidCallback? onAction}) =>
+      _show(context, ToastKind.warning, message, duration,
+          actionLabel: actionLabel, onAction: onAction);
 
   static void info(BuildContext context, String message,
-          {Duration? duration}) =>
-      _show(context, ToastKind.info, message, duration);
+          {Duration? duration, String? actionLabel, VoidCallback? onAction}) =>
+      _show(context, ToastKind.info, message, duration,
+          actionLabel: actionLabel, onAction: onAction);
 
   /// Generic entry point if the caller already has a [ToastKind] in hand
   /// (e.g. derived from an enum/state). Prefer the type-specific helpers
@@ -58,19 +62,27 @@ class AppToast {
     ToastKind kind,
     String message, {
     Duration? duration,
+    String? actionLabel,
+    VoidCallback? onAction,
   }) =>
-      _show(context, kind, message, duration);
+      _show(context, kind, message, duration,
+          actionLabel: actionLabel, onAction: onAction);
 
   static void dismiss() {
     _currentState?.startReverse();
   }
 
+  /// [actionLabel]/[onAction] add an inline text action (e.g. "Undo")
+  /// between the message and the close button; tapping it runs the
+  /// callback and dismisses the toast. Pair it with a longer [duration].
   static void _show(
     BuildContext context,
     ToastKind kind,
     String message,
-    Duration? duration,
-  ) {
+    Duration? duration, {
+    String? actionLabel,
+    VoidCallback? onAction,
+  }) {
     final overlay = Overlay.maybeOf(context, rootOverlay: true);
     if (overlay == null) return;
 
@@ -85,6 +97,8 @@ class AppToast {
       builder: (_) => _AppToast(
         kind: kind,
         message: message,
+        actionLabel: actionLabel,
+        onAction: onAction,
         duration: duration ?? _defaultDuration,
         onRemove: () {
           if (identical(_currentEntry, entry)) {
@@ -108,6 +122,8 @@ class AppToast {
 class _AppToast extends StatefulWidget {
   final ToastKind kind;
   final String message;
+  final String? actionLabel;
+  final VoidCallback? onAction;
   final Duration duration;
   final VoidCallback onRemove;
   final void Function(_AppToastState state) onMounted;
@@ -115,6 +131,8 @@ class _AppToast extends StatefulWidget {
   const _AppToast({
     required this.kind,
     required this.message,
+    this.actionLabel,
+    this.onAction,
     required this.duration,
     required this.onRemove,
     required this.onMounted,
@@ -251,6 +269,25 @@ class _AppToastState extends State<_AppToast>
                             ),
                           ),
                         ),
+                        if (widget.actionLabel != null) ...[
+                          const SizedBox(width: 6),
+                          TextButton(
+                            onPressed: () {
+                              widget.onAction?.call();
+                              startReverse();
+                            },
+                            style: TextButton.styleFrom(
+                              foregroundColor: theme.colorScheme.primary,
+                              visualDensity: VisualDensity.compact,
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 10),
+                              minimumSize: const Size(0, 32),
+                              textStyle: theme.textTheme.labelLarge
+                                  ?.copyWith(fontWeight: FontWeight.w800),
+                            ),
+                            child: Text(widget.actionLabel!),
+                          ),
+                        ],
                         const SizedBox(width: 4),
                         IconButton(
                           tooltip: 'Dismiss',

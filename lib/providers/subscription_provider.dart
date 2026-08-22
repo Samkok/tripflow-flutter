@@ -694,12 +694,15 @@ class SubscriptionNotifier extends StateNotifier<SubscriptionState> {
     }
   }
 
-  /// Start periodic conflict monitoring (every 30 seconds)
+  /// Start periodic conflict monitoring (every 2 minutes — was 30 s: a
+  /// defensive cross-check, not a feature; webhooks + realtime carry real
+  /// changes, and the SDK's customer-info cache is ~5 min anyway. Waking
+  /// every 30 s on every screen was pure battery/thermal overhead).
   void _startConflictMonitoring() {
     debugPrint('SubscriptionProvider: 🕐 Starting conflict monitoring');
     _conflictMonitoringTimer?.cancel();
     _conflictMonitoringTimer = Timer.periodic(
-      const Duration(seconds: 30),
+      const Duration(minutes: 2),
       (_) => _performConflictCheck(),
     );
   }

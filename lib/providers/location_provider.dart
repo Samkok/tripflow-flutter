@@ -33,7 +33,9 @@ final tripCardStatsProvider = Provider<Map<String, TripCardStats>>((ref) {
     final tripId = location.tripId;
     if (tripId == null) continue;
     counts[tripId] = (counts[tripId] ?? 0) + 1;
-    final d = location.scheduledDate ?? location.createdAt;
+    // Unscheduled rows count toward the trip but don't define its range.
+    final d = location.scheduledDate;
+    if (d == null) continue;
     final start = starts[tripId];
     if (start == null || d.isBefore(start)) starts[tripId] = d;
     final end = ends[tripId];

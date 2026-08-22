@@ -28,6 +28,10 @@ import 'package:voyza/services/subscription_limit_service.dart';
 import 'package:voyza/models/location_model.dart';
 import 'package:voyza/widgets/celebration_dialogs.dart';
 import 'package:voyza/widgets/location_detail_sheet.dart';
+import 'package:voyza/widgets/auto_plan_sheet.dart';
+import 'package:voyza/providers/trip_listener_provider.dart';
+import 'package:voyza/providers/user_trip_provider.dart';
+import 'package:voyza/utils/date_picker_utils.dart';
 import 'package:voyza/widgets/location_photo_gallery.dart';
 import 'package:voyza/providers/local_active_trip_provider.dart';
 import 'package:voyza/providers/trip_provider.dart';
@@ -95,6 +99,9 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
   /// Session-only view state, deliberately not persisted — like the photo
   /// collapse set — and it never writes to the locations themselves.
   final Map<DateTime, bool> _sortByAddedDays = {};
+
+  /// Collapse state of the Unscheduled-bucket section (session-scoped).
+  bool _unscheduledCollapsed = false;
 
   void _enterSelectionMode(String id) {
     setState(() {
@@ -263,15 +270,20 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
       final tripLocations =
           all.where((l) => l.tripId == widget.trip.id).toList();
       final target = tripLocations.firstWhere((l) => l.id == targetId);
-      final day = _dayKey(target.scheduledDate ?? target.createdAt);
+      final targetStart = target.scheduledDate;
       // Same day-cover rule as _buildLocationsList: the group holds every
-      // location whose scheduled range covers the target's first day.
-      final dateGroup = tripLocations.where((l) {
-        final startRaw = l.scheduledDate ?? l.createdAt;
-        final s = _dayKey(startRaw);
-        final e = _dayKey(l.scheduledEndDate ?? startRaw);
-        return !day.isBefore(s) && !day.isAfter(e);
-      }).toList();
+      // location whose scheduled range covers the target's first day. An
+      // unscheduled target groups with the other Unscheduled-bucket rows.
+      final dateGroup = targetStart == null
+          ? tripLocations.where((l) => l.scheduledDate == null).toList()
+          : tripLocations.where((l) {
+              final startRaw = l.scheduledDate;
+              if (startRaw == null) return false;
+              final day = _dayKey(targetStart);
+              final s = _dayKey(startRaw);
+              final e = _dayKey(l.scheduledEndDate ?? startRaw);
+              return !day.isBefore(s) && !day.isAfter(e);
+            }).toList();
       var index = dateGroup.indexWhere((l) => l.id == targetId);
       if (index < 0) index = 0;
       _showLocationDetail(target, index, dateGroup);
@@ -431,6 +443,60 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
                     overflow: TextOverflow.ellipsis,
                   ),
                   actions: [
+                    // Auto-plan: cluster → order cities → spread across
+                    // days. Operates on the ACTIVE trip's state, so it only
+                    // shows when THIS trip is the active one, with 2+
+                    // places to arrange. Badge dot when the trip clearly
+                    // needs it (bucket rows, or an overloaded day).
+                    Consumer(builder: (context, ref, _) {
+                      final activeId = ref
+                          .watch(realtimeActiveTripProvider)
+                          .valueOrNull
+                          ?.id;
+                      if (activeId != widget.trip.id) {
+                        return const SizedBox.shrink();
+                      }
+                      final placeCount = ref.watch(tripProvider
+                          .select((s) => s.pinnedLocations.length));
+                      if (placeCount < 2) return const SizedBox.shrink();
+                      final unscheduled =
+                          ref.watch(unscheduledCountProvider);
+                      final overloaded = ref.watch(tripProvider.select((s) {
+                        final perDay = <DateTime, int>{};
+                        for (final l in s.pinnedLocations) {
+                          final d = l.scheduledDate;
+                          if (d == null) continue;
+                          final k = DateTime(d.year, d.month, d.day);
+                          perDay[k] = (perDay[k] ?? 0) + 1;
+                        }
+                        return perDay.values
+                            .any((c) => c > 12); // clearly too many
+                      }));
+                      final needsAttention = unscheduled > 0 || overloaded;
+                      return IconButton(
+                        tooltip: 'Auto-plan my days',
+                        onPressed: () => showAutoPlanSheet(context),
+                        icon: Stack(
+                          clipBehavior: Clip.none,
+                          children: [
+                            const Icon(Icons.auto_awesome_rounded),
+                            if (needsAttention)
+                              Positioned(
+                                right: -2,
+                                top: -2,
+                                child: Container(
+                                  width: 8,
+                                  height: 8,
+                                  decoration: const BoxDecoration(
+                                    color: Color(0xFFFFB300),
+                                    shape: BoxShape.circle,
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                      );
+                    }),
                     // Team members button - only visible to trip owner.
                     // Guests see it too (they own their local trips), but
                     // tapping it prompts sign-up: collaboration needs an
@@ -702,9 +768,11 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
     return contiguousTripDates([
       _trip.startDate,
       _trip.endDate,
+      // Unscheduled rows (null dates) don't stretch the axis — they render
+      // in the Unscheduled section, not on a day. Nulls are skipped.
       for (final loc in locations) ...[
-        loc.scheduledDate ?? loc.createdAt,
-        loc.scheduledEndDate ?? loc.scheduledDate ?? loc.createdAt,
+        loc.scheduledDate,
+        loc.scheduledEndDate,
       ],
     ]);
   }
@@ -718,8 +786,15 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
     // SavedLocation instance reused across day groups so edits/drag still
     // work via id.
     final groupedByDay = <DateTime, List<SavedLocation>>{};
+    final unscheduled = <SavedLocation>[];
     for (final location in locations) {
-      final startRaw = location.scheduledDate ?? location.createdAt;
+      final startRaw = location.scheduledDate;
+      if (startRaw == null) {
+        // No date = the trip's Unscheduled bucket, rendered as its own
+        // section above the day list.
+        unscheduled.add(location);
+        continue;
+      }
       final start = _dayKey(startRaw);
       final endRaw = location.scheduledEndDate ?? startRaw;
       final end = _dayKey(endRaw);
@@ -734,9 +809,10 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
 
     final allDates = _buildAllDates(locations);
 
-    // If the trip has no date range AND no locations, fall back to the
-    // standard empty state below the trip info card.
-    if (allDates.isEmpty) {
+    // If the trip has no date range AND no locations anywhere (days or the
+    // Unscheduled bucket), fall back to the standard empty state below the
+    // trip info card.
+    if (allDates.isEmpty && unscheduled.isEmpty) {
       return Column(
         children: [
           _buildTripInfoSection(),
@@ -757,6 +833,16 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
         SliverToBoxAdapter(
           child: _buildTripInfoSection(),
         ),
+        // Places that belong to the trip but sit on NO day. Rendered above
+        // the day list so leftovers are impossible to miss; each card can
+        // be dragged onto any day below (or scheduled via its own sheet).
+        if (unscheduled.isNotEmpty)
+          SliverToBoxAdapter(
+            child: _buildUnscheduledSection(
+              unscheduled,
+              hasWriteAccess: hasWriteAccess,
+            ),
+          ),
         SliverList(
           delegate: SliverChildBuilderDelegate(
             (context, index) {
@@ -867,6 +953,64 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
         ),
       ),
     );
+  }
+
+  /// Publish / unpublish from the trip page. Confirms first (publishing is
+  /// privacy-affecting; unpublishing revokes every code holder). The server
+  /// mints the code on first publish and keeps it across re-publishes.
+  Future<void> _setTripPublished(bool goPublic) async {
+    final trip = _trip;
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text(goPublic ? 'Make this trip public?' : 'Make it private?'),
+        content: Text(
+          goPublic
+              ? 'You\'ll get a share code. Anyone with it can copy '
+                  '"${trip.name}" as their own trip — they never see your '
+                  'name, your edits, or your progress, and you can turn '
+                  'this off any time.'
+              : 'People who have your code will no longer be able to copy '
+                  'this trip. Making it public again restores the same code.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(goPublic ? 'Publish' : 'Go private'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true || !mounted) return;
+    try {
+      final code = await ref
+          .read(tripRepositoryProvider)
+          .setTripPublic(trip.id, goPublic);
+      ref.invalidate(userTripsProvider);
+      if (!mounted) return;
+      setState(() {
+        _tripOverride = trip.copyWith(
+          isPublic: goPublic,
+          shareCode: goPublic ? (code ?? trip.shareCode) : trip.shareCode,
+        );
+      });
+      AppToast.success(
+          context,
+          goPublic
+              ? 'Trip published — tap the code to copy it'
+              : 'Trip is private again');
+    } catch (e) {
+      debugPrint('setTripPublic failed: $e');
+      if (mounted) {
+        AppToast.error(
+            context, 'Could not update sharing. Check your connection.');
+      }
+    }
   }
 
   Widget _buildTripInfoSection() {
@@ -987,6 +1131,111 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
                 );
               }),
             ],
+            // ── Sharing: publish for copy-by-code; the code (tap to copy)
+            // once public. Owner-only and signed-in (the RPC enforces both).
+            Consumer(builder: (context, ref, _) {
+              final signedIn = ref.watch(currentUserIdProvider) != null;
+              final isOwner =
+                  ref.watch(isTripOwnerProvider(widget.trip.id)).valueOrNull ??
+                      false;
+              if (!signedIn || !isOwner) return const SizedBox.shrink();
+              final theme = Theme.of(context);
+              final primary = theme.colorScheme.primary;
+              final trip = _trip;
+              final hasCode = trip.isPublic && trip.shareCode != null;
+              if (!hasCode) {
+                return Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          'Publish to get a share code others can copy '
+                          'this trip with.',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                              height: 1.3),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      OutlinedButton.icon(
+                        onPressed: () => _setTripPublished(true),
+                        icon: const Icon(Icons.public_rounded, size: 16),
+                        label: const Text('Publish'),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: primary,
+                          side: BorderSide(
+                              color: primary.withValues(alpha: 0.5)),
+                          visualDensity: VisualDensity.compact,
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12)),
+                          textStyle: theme.textTheme.labelLarge
+                              ?.copyWith(fontWeight: FontWeight.w700),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              }
+              final display = 'TRIP-${trip.shareCode}';
+              return Padding(
+                padding: const EdgeInsets.only(top: 12),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(11),
+                        onTap: () {
+                          Clipboard.setData(ClipboardData(text: display));
+                          AppToast.success(
+                              context, 'Code copied — send it to anyone!');
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 9),
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(11),
+                            border: Border.all(
+                                color: primary.withValues(alpha: 0.45)),
+                            color: primary.withValues(alpha: 0.08),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(Icons.public_rounded,
+                                  size: 16, color: primary),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  display,
+                                  style: theme.textTheme.titleSmall?.copyWith(
+                                    fontFamily: 'monospace',
+                                    fontWeight: FontWeight.w800,
+                                    letterSpacing: 1.4,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              Icon(Icons.copy_rounded,
+                                  size: 16, color: primary),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    TextButton(
+                      onPressed: () => _setTripPublished(false),
+                      style: TextButton.styleFrom(
+                        foregroundColor: theme.colorScheme.onSurfaceVariant,
+                        visualDensity: VisualDensity.compact,
+                      ),
+                      child: const Text('Go private'),
+                    ),
+                  ],
+                ),
+              );
+            }),
             if (widget.trip.description != null &&
                 widget.trip.description!.isNotEmpty) ...[
               const SizedBox(height: 12),
@@ -1111,6 +1360,290 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
     }
   }
 
+  /// The trip's Unscheduled bucket: places that belong to the trip but sit
+  /// on no day. Mirrors [_buildDateSection]'s visual language (chip header,
+  /// drop-target highlight, same cards) with an amber identity so it can't
+  /// be mistaken for a day. The whole section is a [DragTarget]: dropping a
+  /// dated card here clears its date (guarded — accommodations, completed
+  /// places, and multi-day stays keep their days).
+  Widget _buildUnscheduledSection(
+    List<SavedLocation> unscheduled, {
+    required bool hasWriteAccess,
+  }) {
+    final theme = Theme.of(context);
+    const amber = Color(0xFFFFB300);
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 16, left: 16, right: 16),
+      child: DragTarget<SavedLocation>(
+        onWillAcceptWithDetails: (details) {
+          if (!hasWriteAccess) return false;
+          final loc = details.data;
+          // Only dated, movable rows can be un-dated by dropping here.
+          return loc.scheduledDate != null &&
+              !loc.isAccommodation &&
+              !loc.isDone &&
+              !loc.isMultiDay;
+        },
+        onAcceptWithDetails: (details) =>
+            _moveLocationToUnscheduled(details.data),
+        builder: (context, candidate, rejected) {
+          final highlighted = candidate.isNotEmpty;
+          return AnimatedContainer(
+            duration: const Duration(milliseconds: 150),
+            padding: const EdgeInsets.all(6),
+            decoration: BoxDecoration(
+              color: highlighted
+                  ? amber.withValues(alpha: 0.14)
+                  : amber.withValues(alpha: 0.05),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: highlighted ? amber : amber.withValues(alpha: 0.35),
+                width: highlighted ? 2 : 1.2,
+              ),
+              boxShadow: highlighted
+                  ? [
+                      BoxShadow(
+                        color: amber.withValues(alpha: 0.35),
+                        blurRadius: 16,
+                      ),
+                    ]
+                  : null,
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Flexible(
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: amber.withValues(alpha: 0.18),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.inventory_2_outlined,
+                                size: 15, color: amber),
+                            const SizedBox(width: 6),
+                            Flexible(
+                              child: Text(
+                                'Unscheduled',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: theme.textTheme.labelLarge?.copyWith(
+                                  color: amber,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              '${unscheduled.length}',
+                              style: theme.textTheme.labelSmall?.copyWith(
+                                color: amber.withValues(alpha: 0.8),
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        // The "I insist" path: put EVERY unscheduled place
+                        // on one chosen day, no planner involved. Same-day
+                        // duplicates of that day's occupants are skipped and
+                        // reported, never silently dropped.
+                        if (hasWriteAccess)
+                          IconButton(
+                            onPressed: () =>
+                                _scheduleAllUnscheduled(unscheduled),
+                            icon: const Icon(Icons.event_available_rounded,
+                                color: amber),
+                            iconSize: 22,
+                            visualDensity: VisualDensity.compact,
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints(
+                                minWidth: 40, minHeight: 32),
+                            tooltip: 'Put all on one day',
+                          ),
+                        // One-tap fix for the whole bucket — Auto-plan
+                        // spreads these onto days. Active trip only (the
+                        // planner works on active-trip state).
+                        Consumer(builder: (context, ref, _) {
+                          final activeId = ref
+                              .watch(realtimeActiveTripProvider)
+                              .valueOrNull
+                              ?.id;
+                          if (activeId != widget.trip.id ||
+                              !hasWriteAccess) {
+                            return const SizedBox.shrink();
+                          }
+                          return TextButton.icon(
+                            onPressed: () => showAutoPlanSheet(context),
+                            icon: const Icon(Icons.auto_awesome_rounded,
+                                size: 15),
+                            label: const Text('Plan'),
+                            style: TextButton.styleFrom(
+                              foregroundColor: amber,
+                              visualDensity: VisualDensity.compact,
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8),
+                            ),
+                          );
+                        }),
+                        IconButton(
+                          onPressed: () => setState(() =>
+                              _unscheduledCollapsed = !_unscheduledCollapsed),
+                          icon: Icon(
+                            _unscheduledCollapsed
+                                ? Icons.expand_more_rounded
+                                : Icons.expand_less_rounded,
+                            color: amber,
+                          ),
+                          iconSize: 22,
+                          visualDensity: VisualDensity.compact,
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(
+                              minWidth: 40, minHeight: 32),
+                          tooltip: _unscheduledCollapsed ? 'Show' : 'Hide',
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+                if (!_unscheduledCollapsed) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    'On no day yet — drag each onto a day below, open a '
+                    'card to schedule it, or use the buttons above to put '
+                    'them all on one day or let Auto-plan spread them.',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  ListView.separated(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    itemCount: unscheduled.length,
+                    separatorBuilder: (context, index) =>
+                        const SizedBox(height: 8),
+                    itemBuilder: (context, index) => _buildLocationCard(
+                      unscheduled[index],
+                      index,
+                      unscheduled,
+                      hasWriteAccess: hasWriteAccess,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  /// Bulk "put all on one day": the user picks a day and every unscheduled
+  /// place lands on it — however many that is (their call; the optimizer's
+  /// over-cap dialog will speak up later if it's too many to route). Runs
+  /// the shared same-day duplicate guard once for the whole batch and
+  /// writes through the batch path (one Hive commit, one upsert).
+  Future<void> _scheduleAllUnscheduled(List<SavedLocation> rows) async {
+    if (rows.isEmpty) return;
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final all = ref.read(savedLocationsProvider).valueOrNull ??
+        const <SavedLocation>[];
+    final tripRows = all.where((l) => l.tripId == widget.trip.id);
+    final highlighted = {
+      for (final l in tripRows)
+        if (l.scheduledDate != null) _dayKey(l.scheduledDate!)
+    };
+    final picked = await DatePickerUtils.showCustomDatePicker(
+      context: context,
+      initialDate: _trip.startDate != null && !_trip.startDate!.isBefore(today)
+          ? _trip.startDate!
+          : today,
+      firstDate: today,
+      lastDate: DateTime(now.year + 5),
+      highlightedDates: highlighted,
+    );
+    if (picked == null || !mounted) return;
+    final day = _dayKey(picked);
+
+    final dup = filterSameDayDuplicates(
+      moving: rows.map(placeKeyOfSaved),
+      occupantsOnDay: tripRows
+          .where((l) =>
+              l.scheduledDate != null &&
+              !rows.any((r) => r.id == l.id) &&
+              l.isActiveOnDate(day))
+          .map(placeKeyOfSaved),
+    );
+    final allowed = rows.where((r) => dup.allowedIds.contains(r.id)).toList();
+    if (allowed.isEmpty) {
+      AppToast.warning(context,
+          'All of these are already on ${DateFormat('MMM d').format(day)}.');
+      return;
+    }
+    try {
+      await ref.read(locationRepositoryProvider).updateLocationsBatch({
+        for (final r in allowed)
+          r.id: {
+            'scheduled_date': day.toIso8601String(),
+            'scheduled_end_date': null,
+          },
+      });
+      if (!mounted) return;
+      final skipped = rows.length - allowed.length;
+      AppToast.success(
+        context,
+        '${allowed.length} ${allowed.length == 1 ? 'place' : 'places'} '
+        'scheduled on ${DateFormat('MMM d').format(day)}'
+        '${skipped > 0 ? ' · $skipped already there, skipped' : ''}.',
+        duration: const Duration(seconds: 4),
+      );
+    } catch (e) {
+      debugPrint('scheduleAllUnscheduled failed: $e');
+      if (!mounted) return;
+      AppToast.error(context, "Couldn't schedule them. Try again.");
+    }
+  }
+
+  /// Clears [location]'s date — it moves to the Unscheduled bucket but
+  /// stays in the trip. Repository-direct like [_moveLocationToDate] so it
+  /// works on any writable trip, active or not; RLS backstops auth.
+  Future<void> _moveLocationToUnscheduled(SavedLocation location) async {
+    if (location.isAccommodation) {
+      AppToast.warning(context, 'Accommodations need a date.');
+      return;
+    }
+    if (location.isDone || location.isMultiDay) {
+      AppToast.info(context, 'Completed places and stays keep their days.');
+      return;
+    }
+    try {
+      await ref.read(locationRepositoryProvider).updateLocation(
+        location.id,
+        {'scheduled_date': null},
+      );
+      if (!mounted) return;
+      AppToast.info(context, '"${location.name}" moved to Unscheduled.');
+    } catch (e) {
+      debugPrint('moveLocationToUnscheduled failed: $e');
+      if (!mounted) return;
+      AppToast.error(context, "Couldn't move \"${location.name}\".");
+    }
+  }
+
   Widget _buildDateSection(
     DateTime day,
     List<SavedLocation> locations, {
@@ -1143,8 +1676,10 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
         onWillAcceptWithDetails: (details) {
           if (!hasWriteAccess) return false;
           // Reject re-drops onto the same day to keep highlight feedback
-          // honest and avoid a no-op write.
-          final src = details.data.scheduledDate ?? details.data.createdAt;
+          // honest and avoid a no-op write. A row dragged out of the
+          // Unscheduled bucket (null date) is welcome on ANY day.
+          final src = details.data.scheduledDate;
+          if (src == null) return true;
           return _dayKey(src) != day;
         },
         onAcceptWithDetails: (details) =>
@@ -1539,8 +2074,9 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
           .any((l) => l.isActiveOnDate(dayKey));
       // Multi-day stays move WHOLE: shifting only the start left
       // start > end and the row disappeared from every day section.
+      // Unscheduled rows have no span — oldStart is moot (delta zero).
       final newEnd = shiftedSpanEnd(
-        oldStart: location.scheduledDate ?? location.createdAt,
+        oldStart: location.scheduledDate ?? newDay,
         oldEnd: location.scheduledEndDate,
         newStart: newDay,
       );

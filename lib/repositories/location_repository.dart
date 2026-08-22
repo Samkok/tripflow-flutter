@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -99,6 +98,53 @@ class LocationRepository {
     }
 
     await _repairLegacySyncFlags(prefs);
+    await _backfillUnscheduledDates(prefs);
+  }
+
+  static const String _unscheduledBackfillKey = 'unscheduled_backfill_v1';
+
+  /// ONE-TIME backfill for the Unscheduled-bucket semantics flip.
+  ///
+  /// Until the flip, a row with no [SavedLocation.scheduledDate] PHANTOM-
+  /// rendered: trip details showed it on its `createdAt` day, map surfaces
+  /// on whatever day was selected. `isActiveOnDate` now returns false for
+  /// null (the row lives in the Unscheduled bucket instead), so without
+  /// this stamp every legacy undated row would silently jump from the day
+  /// the user has been seeing it on into the bucket. Stamping
+  /// `scheduledDate = local day of createdAt` reproduces the trip-details
+  /// phantom exactly — zero visual change on upgrade day.
+  ///
+  /// Stamped rows are marked dirty (`isSynced: false`): the dirty-guard in
+  /// [fetchRemoteLocations] then protects the stamp from being overwritten
+  /// by the server's (still-null) copy, and the normal sync passes push it
+  /// out opportunistically. Devices that re-run this on the same row stamp
+  /// the same local day (createdAt is immutable), so collaborators
+  /// converge. Rows null-dated AFTER this flip are deliberate bucket rows
+  /// written through the normal paths — this one-shot never sees them.
+  Future<void> _backfillUnscheduledDates(SharedPreferences prefs) async {
+    if (prefs.getBool(_unscheduledBackfillKey) ?? false) return;
+    final box = _box;
+    if (box == null || !box.isOpen) return;
+
+    final stamped = <String, SavedLocation>{
+      for (final loc in box.values)
+        if (loc.scheduledDate == null)
+          loc.id: loc.copyWith(
+            isSynced: false,
+            scheduledDate: DateTime(
+              loc.createdAt.year,
+              loc.createdAt.month,
+              loc.createdAt.day,
+            ),
+          ),
+    };
+    if (stamped.isNotEmpty) {
+      await box.putAll(stamped);
+      debugPrint(
+          'LocationRepository: backfilled ${stamped.length} undated rows to '
+          'their created-day (unscheduled-bucket flip)');
+    }
+    await prefs.setBool(_unscheduledBackfillKey, true);
   }
 
   /// ONE-TIME repair of the `isSynced` flag on already-cached rows.
@@ -197,8 +243,26 @@ class LocationRepository {
     final localLocation = _box!.get(id);
     if (localLocation == null) return;
 
-    // BUGFIX: Use copyWith to safely update the location instead of JSON round-trip
-    // This avoids potential issues with fromJson() not handling all fields
+    // Mark as not synced since we made local changes
+    final updatedLocation =
+        _applyWhitelisted(localLocation, updates).copyWith(isSynced: false);
+
+    // Save updated location locally
+    await _box!.put(id, updatedLocation);
+
+    // Sync update to remote if authenticated
+    final user = _supabase.auth.currentUser;
+    if (user != null) {
+      await syncLocation(updatedLocation);
+    }
+  }
+
+  /// Applies a whitelisted update map to [localLocation] via type-safe
+  /// copyWith calls (no JSON round-trip). Shared by [updateLocation] and
+  /// [updateLocationsBatch] so single and bulk writes can never drift.
+  /// Unknown keys are silently ignored — add new columns HERE.
+  SavedLocation _applyWhitelisted(
+      SavedLocation localLocation, Map<String, dynamic> updates) {
     var updatedLocation = localLocation;
 
     // Apply updates using copyWith for type-safe updates
@@ -222,7 +286,13 @@ class LocationRepository {
       final dateStr = updates['scheduled_date'];
       final parsedDate =
           dateStr is String ? DateTime.parse(dateStr) : dateStr as DateTime?;
-      updatedLocation = updatedLocation.copyWith(scheduledDate: parsedDate);
+      // Sentinel-aware in copyWith: null really clears the date — the row
+      // moves to the Unscheduled bucket. An unscheduled row must never
+      // keep a span end (DB CHECK end >= start assumes a start), so the
+      // range is cleared with it.
+      updatedLocation = parsedDate == null
+          ? updatedLocation.copyWith(scheduledDate: null, scheduledEndDate: null)
+          : updatedLocation.copyWith(scheduledDate: parsedDate);
     }
     if (updates.containsKey('stay_duration')) {
       updatedLocation = updatedLocation.copyWith(
@@ -276,16 +346,62 @@ class LocationRepository {
       updatedLocation = updatedLocation.copyWith(scheduledEndDate: parsed);
     }
 
-    // Mark as not synced since we made local changes
-    updatedLocation = updatedLocation.copyWith(isSynced: false);
+    return updatedLocation;
+  }
 
-    // Save updated location locally
-    await _box!.put(id, updatedLocation);
+  /// Bulk sibling of [updateLocation]: applies each row's whitelisted
+  /// update map (see [_applyWhitelisted] — identical semantics, so single
+  /// and batch writes can never drift), commits ONE Hive `putAll`, then —
+  /// when authenticated — upserts to Supabase in chunks of 100.
+  ///
+  /// UPDATE-only by design: the collaborator push-notification trigger
+  /// fires on INSERT, so a distribution applied through here sends ZERO
+  /// pushes (a copy/insert-based apply would ping every member per row).
+  /// Ownership rule matches [syncLocation]: only anonymous-origin rows are
+  /// stamped with the current user's id — rows that already have an owner
+  /// keep it (the documented ownership-flip trap in shared trips).
+  /// A failed chunk stays dirty locally and is retried by the normal
+  /// [syncUnsyncedLocations] passes.
+  Future<void> updateLocationsBatch(
+      Map<String, Map<String, dynamic>> updatesById) async {
+    await _ensureInitialized();
 
-    // Sync update to remote if authenticated
+    final dirty = <String, SavedLocation>{};
+    for (final entry in updatesById.entries) {
+      final local = _box!.get(entry.key);
+      if (local == null) continue;
+      dirty[entry.key] =
+          _applyWhitelisted(local, entry.value).copyWith(isSynced: false);
+    }
+    if (dirty.isEmpty) return;
+    await _box!.putAll(dirty);
+
     final user = _supabase.auth.currentUser;
-    if (user != null) {
-      await syncLocation(updatedLocation);
+    if (user == null) return; // guest: local-only, syncs on login
+
+    final toSync = [
+      for (final loc in dirty.values)
+        loc.source == 'local'
+            ? loc.copyWith(userId: user.id, source: 'synced')
+            : loc
+    ];
+    for (var i = 0; i < toSync.length; i += 100) {
+      final end = i + 100 > toSync.length ? toSync.length : i + 100;
+      final chunk = toSync.sublist(i, end);
+      try {
+        await _supabase
+            .from('locations')
+            .upsert([for (final l in chunk) l.toJson()]);
+        final now = DateTime.now();
+        await _box!.putAll({
+          for (final l in chunk)
+            l.id: l.copyWith(
+                isSynced: true, lastSyncedAt: now, source: 'synced')
+        });
+      } catch (e) {
+        debugPrint('updateLocationsBatch: chunk $i-$end failed ($e) — '
+            'rows stay dirty for the next sync pass');
+      }
     }
   }
 
@@ -485,8 +601,14 @@ class LocationRepository {
           // middle of the home → trip-details push transition, growing
           // with the account's location count. Steady-state refreshes now
           // write nothing and stay silent.
+          //
+          // contentSignature, NOT toJson equality: rows created on THIS
+          // device hold a local-time createdAt and a fresher lastSyncedAt
+          // than their server copy, so JSON never matched for them and they
+          // were rewritten on every refresh — the storm survived for exactly
+          // the user's own places.
           if (existing != null &&
-              jsonEncode(existing.toJson()) == jsonEncode(remoteLoc.toJson())) {
+              existing.contentSignature() == remoteLoc.contentSignature()) {
             unchanged++;
             continue;
           }
@@ -588,12 +710,15 @@ class LocationRepository {
     // in the app (home trip cards, trip details, the map pipeline). Swallow
     // no-op emissions here so every consumer inherits the fix.
     // Order-sensitive by design: a genuine reorder still emits.
+    // contentSignature (not toJson): sync-metadata-only rewrites — the
+    // isSynced/lastSyncedAt flip after a push, a server echo's UTC
+    // created_at — change nothing the UI shows, so they must not emit.
     String? lastFingerprint;
     await for (final locations in _createWatchStream()) {
       final buffer = StringBuffer();
       for (final location in locations) {
         buffer
-          ..write(location.toJson().toString())
+          ..write(location.contentSignature())
           ..write('');
       }
       final fingerprint = buffer.toString();
@@ -814,6 +939,19 @@ class LocationRepository {
       if (payload.eventType == PostgresChangeEvent.insert ||
           payload.eventType == PostgresChangeEvent.update) {
         final newLoc = SavedLocation.fromJson(payload.newRecord);
+        final existing = _box!.get(newLoc.id);
+        if (existing != null) {
+          // A pending local edit wins until it has pushed — an echo of an
+          // OLDER version must not clobber it (the push's own echo follows
+          // and converges). Same guard as fetchRemoteLocations.
+          if (!existing.isSynced) return;
+          // Own-write echo / no-op update: identical content → no rewrite.
+          // Each put re-emits the full list to every watcher; a batch of N
+          // edits used to come back as N full-app rebuild storms.
+          if (existing.contentSignature() == newLoc.contentSignature()) {
+            return;
+          }
+        }
         _box!.put(newLoc.id, newLoc);
       } else if (payload.eventType == PostgresChangeEvent.delete) {
         final oldRecord = payload.oldRecord;

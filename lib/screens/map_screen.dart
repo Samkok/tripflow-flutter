@@ -55,6 +55,7 @@ import '../providers/subscription_provider.dart';
 import '../services/analytics_service.dart';
 import '../widgets/celebration_dialogs.dart';
 import '../widgets/free_places_meter.dart';
+import '../widgets/auto_plan_sheet.dart';
 import '../widgets/map_tutorial.dart';
 // import '../widgets/referral_prompt.dart'; // DISABLED with first-optimize celebration (2026-08-07)
 import '../widgets/map_widget.dart';
@@ -493,7 +494,10 @@ class _MapScreenState extends ConsumerState<MapScreen>
         final last = _lastAppliedHeading;
         if (last != null) {
           final delta = ((h - last + 540) % 360) - 180;
-          if (delta.abs() < 3) return;
+          // 5° (was 3°): a hand-held phone drifts a few degrees constantly;
+          // each pass through this gate is a frame (and a re-blur of the
+          // glass sheet). 5° is still below what the eye reads on the beam.
+          if (delta.abs() < 5) return;
         }
         _lastAppliedHeading = h;
         ref.read(deviceHeadingProvider.notifier).state = h;
@@ -525,7 +529,13 @@ class _MapScreenState extends ConsumerState<MapScreen>
   /// AppLifecycleState.resumed, and no background location mode is declared
   /// on either platform. Ticks are cheap and skipped entirely when there's
   /// nothing to detect (no active trip, or every stop already prompted).
-  static const Duration _arrivalPollInterval = Duration(seconds: 20);
+  static const Duration _arrivalPollInterval = Duration(seconds: 30);
+
+  /// Fix + candidate set the last arrival check ran against — a stationary
+  /// device re-reports the same fix, and the same fix against the same
+  /// stops can't produce a new arrival. (A stop added while standing on it
+  /// changes the set, so it's still noticed.)
+  String? _lastArrivalCheckKey;
 
   void _startArrivalPolling() {
     _arrivalPollTimer?.cancel();
@@ -567,8 +577,21 @@ class _MapScreenState extends ConsumerState<MapScreen>
 
     _arrivalCheckInFlight = true;
     try {
-      final fix = await LocationService.getCurrentLocation();
+      // While the map's own position stream is live, its latest fix IS the
+      // device's position (the 5 m filter only goes quiet when the device
+      // does) — reuse it instead of spinning up a second GPS request every
+      // poll. A discrete fix is taken only when the stream is off (other
+      // tabs) or hasn't produced anything yet.
+      final streamed =
+          _isTrackingLocation ? ref.read(tripProvider).currentLocation : null;
+      final fix = streamed ?? await LocationService.getCurrentLocation();
       if (fix == null || !mounted) return;
+      // Unchanged since the last check → nothing can have changed. Skips
+      // the per-stop distance math on every idle tick.
+      final ids = candidates.map((l) => l.id).toList()..sort();
+      final key = '${fix.latitude},${fix.longitude}|${ids.join(',')}';
+      if (key == _lastArrivalCheckKey) return;
+      _lastArrivalCheckKey = key;
       await _maybePromptArrival(fix);
     } catch (e) {
       debugPrint('arrival poll: $e');
@@ -1984,6 +2007,12 @@ class _MapScreenState extends ConsumerState<MapScreen>
                                     ),
                                   ),
                                   const SizedBox(width: 10),
+                                  // Auto-plan — the whole-trip action,
+                                  // right where the trip is named: cluster
+                                  // places into cities, order them, spread
+                                  // across days. Sits before the day pill.
+                                  const _AutoPlanPill(),
+                                  const SizedBox(width: 6),
                                   // Day selector — replaces the old owner
                                   // pill and shows for EVERY trip (owned or
                                   // shared): selected date + "Day N", tap
@@ -3141,6 +3170,94 @@ class _MapScreenState extends ConsumerState<MapScreen>
   }
 }
 
+/// Frosted "Plan my days" pill in the active-trip badge, left of the day
+/// pill — the map-screen entry to Auto-plan. Same glass styling as
+/// [_DayPill] so the badge reads as one control strip. Shows once the trip
+/// has 2+ places (nothing to arrange before that); an amber dot flags a
+/// trip that clearly needs it (Unscheduled places, or a day with 12+).
+class _AutoPlanPill extends ConsumerWidget {
+  const _AutoPlanPill();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final placeCount =
+        ref.watch(tripProvider.select((s) => s.pinnedLocations.length));
+    if (placeCount < 2) return const SizedBox.shrink();
+    final unscheduled = ref.watch(unscheduledCountProvider);
+    final overloaded = ref.watch(tripProvider.select((s) {
+      final perDay = <DateTime, int>{};
+      for (final l in s.pinnedLocations) {
+        final d = l.scheduledDate;
+        if (d == null) continue;
+        final k = DateTime(d.year, d.month, d.day);
+        perDay[k] = (perDay[k] ?? 0) + 1;
+      }
+      return perDay.values.any((c) => c > 12);
+    }));
+    final needsAttention = unscheduled > 0 || overloaded;
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () => showAutoPlanSheet(context),
+        child: Tooltip(
+          message: 'Plan my days',
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.18),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: Colors.white.withValues(alpha: 0.45),
+                width: 1.2,
+              ),
+            ),
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.auto_awesome_rounded,
+                        size: 16, color: Colors.white),
+                    const SizedBox(height: 1),
+                    Text(
+                      'Plan',
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.92),
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 0.3,
+                      ),
+                    ),
+                  ],
+                ),
+                if (needsAttention)
+                  Positioned(
+                    right: -4,
+                    top: -3,
+                    child: Container(
+                      width: 8,
+                      height: 8,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFFB300),
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                            color: Colors.white.withValues(alpha: 0.8),
+                            width: 1),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// Frosted day-selector pill on the right edge of the active-trip badge.
 ///
 /// Shows the selected day's date with its 1-based index in the trip
@@ -3160,8 +3277,9 @@ class _DayPill extends ConsumerWidget {
       trip?.startDate,
       trip?.endDate,
       for (final loc in locations) ...[
-        loc.scheduledDate ?? loc.addedAt,
-        loc.scheduledEndDate ?? loc.scheduledDate ?? loc.addedAt,
+        // Unscheduled rows (null) don't define trip days.
+        loc.scheduledDate,
+        loc.scheduledEndDate,
       ],
     ]);
 
@@ -3348,8 +3466,9 @@ class _DayPickerSheetState extends ConsumerState<_DayPickerSheet> {
       trip?.startDate,
       trip?.endDate,
       for (final loc in locations) ...[
-        loc.scheduledDate ?? loc.addedAt,
-        loc.scheduledEndDate ?? loc.scheduledDate ?? loc.addedAt,
+        // Unscheduled rows (null) don't define trip days.
+        loc.scheduledDate,
+        loc.scheduledEndDate,
       ],
     ]);
 

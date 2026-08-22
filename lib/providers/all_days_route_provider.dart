@@ -10,6 +10,9 @@ import '../providers/trip_listener_provider.dart';
 import '../providers/trip_provider.dart';
 import '../services/google_maps_service.dart';
 import '../services/marker_cache_service.dart';
+import '../services/multi_modal_router.dart';
+import '../utils/marker_utils.dart';
+import '../utils/polyline_simplify.dart';
 import '../utils/trip_dates.dart';
 
 /// "All days" mode for the map: instead of showing the selected date's route,
@@ -50,7 +53,9 @@ final activeTripDayAxisProvider = Provider<List<DateTime>>((ref) {
     trip?.startDate,
     trip?.endDate,
     for (final loc in locations) ...[
-      loc.scheduledDate ?? loc.addedAt,
+      // Unscheduled rows (null) don't stretch the axis — they live in the
+      // bucket, not on a day. contiguousTripDates skips nulls.
+      loc.scheduledDate,
       loc.scheduledEndDate,
     ],
   ]);
@@ -149,13 +154,17 @@ final allDayRoutesProvider =
       }
     }
 
-    final details = await GoogleMapsService.getOptimizedRouteDetails(
-      origin: stops.first.coordinates,
-      destination: stops.last,
-      waypoints:
-          stops.length > 2 ? stops.sublist(1, stops.length - 1) : const [],
-      optimizeWaypoints: true,
-    );
+    // Over the Routes 25-intermediate cap: skip the doomed API call and go
+    // straight to the offline fallback below (straight segments).
+    final details = stops.length - 2 > MultiModalRouter.maxRoutableStopsPerDay
+        ? const <String, dynamic>{}
+        : await GoogleMapsService.getOptimizedRouteDetails(
+            origin: stops.first.coordinates,
+            destination: stops.last,
+            waypoints:
+                stops.length > 2 ? stops.sublist(1, stops.length - 1) : const [],
+            optimizeWaypoints: true,
+          );
     var points = (details['routePoints'] as List<LatLng>?) ?? const <LatLng>[];
     if (points.isEmpty) {
       // Offline / API failure: straight segments through the stops.
@@ -186,26 +195,30 @@ final allDaysPolylinesProvider = Provider<Set<Polyline>>((ref) {
     final dayId = day.toIso8601String();
     final zBase = 2 * (axis.indexOf(day) + 1);
 
+    // Display-only thinning + no geodesic interpolation: a whole day's
+    // road geometry per day, several days at once — every vertex is SDK
+    // work on each zoom frame.
+    final drawn = simplifyForDisplay(points);
     polylines.add(Polyline(
       polylineId: PolylineId('all_day_${dayId}_shadow'),
-      points: points,
+      points: drawn,
       color: Colors.black.withValues(alpha: 0.12),
       width: 8,
       startCap: Cap.roundCap,
       endCap: Cap.roundCap,
       jointType: JointType.round,
-      geodesic: true,
+      geodesic: false,
       zIndex: zBase,
     ));
     polylines.add(Polyline(
       polylineId: PolylineId('all_day_$dayId'),
-      points: points,
+      points: drawn,
       color: color.withValues(alpha: 0.9),
       width: 6,
       startCap: Cap.roundCap,
       endCap: Cap.roundCap,
       jointType: JointType.round,
-      geodesic: true,
+      geodesic: false,
       zIndex: zBase + 1,
     ));
   }
@@ -269,18 +282,24 @@ final allDaysMarkersProvider = FutureProvider<Set<Marker>>((ref) async {
     }
   }
 
-  final results = await Future.wait(specs.map(
-    (spec) => markerCache.getNumberedMarker(
+  final results = await Future.wait(specs.map((spec) {
+    // Amber + caution line when Google lists no hours for that weekday —
+    // a "might", never a verdict (Places hours are often stale).
+    final mightBeClosed =
+        !spec.loc.isDone && spec.loc.mightBeClosedOn(spec.day);
+    return markerCache.getNumberedMarker(
       isStart: false,
       number: spec.number,
       name: spec.loc.name,
-      backgroundColor: spec.color,
+      backgroundColor: mightBeClosed ? MarkerUtils.warningAmber : spec.color,
       textColor: Colors.white,
       isDarkMode: isDarkMode,
       isSkipped: false,
       isDone: spec.loc.isDone,
-    ),
-  ));
+      warningLine:
+          mightBeClosed ? 'Might be closed on this date — please check' : null,
+    );
+  }));
 
   final markers = <Marker>{};
   for (var i = 0; i < specs.length; i++) {
