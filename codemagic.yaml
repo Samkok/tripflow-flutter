@@ -185,8 +185,20 @@ workflows:
       # Single build step — `flutter build ipa` runs pub get + pod install and
       # produces the signed .ipa; the earlier standalone `flutter build ios`
       # was redundant and has been removed.
+      #
+      # --export-options-plist is REQUIRED. Without it Flutter gives xcodebuild
+      # a bare {method} plist, so at EXPORT time Xcode must guess a profile
+      # from whatever is installed — and its automatic matching ignores
+      # non-Xcode-managed profiles like the one fetched above. The archive
+      # signs fine, then export dies with `exportArchive "Runner.app" requires
+      # a provisioning profile with the … features` (Aug 2026, build 35).
+      # `xcode-project use-profiles` writes $HOME/export_options.plist with
+      # the exact profile + certificate the archive was signed with.
       - name: Build iOS App
-        script: flutter build ipa --release --build-number=$BUILD_NUMBER
+        script: |
+          flutter build ipa --release \
+            --build-number=$BUILD_NUMBER \
+            --export-options-plist="$HOME/export_options.plist"
     artifacts:
       - build/ios/ipa/*.ipa
 
