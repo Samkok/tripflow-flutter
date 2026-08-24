@@ -15,6 +15,7 @@ import '../services/referral_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/subscription_limit_service.dart';
 import '../services/supabase_service.dart';
+import '../utils/plan_pricing.dart';
 import '../widgets/app_toast.dart';
 import '../widgets/referral_prompt.dart';
 import '../widgets/sign_up_required_sheet.dart';
@@ -171,7 +172,14 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
     if (_loggedDiag) return;
     final monthly = ref.read(monthlyPackageProvider).asData?.value;
     final yearly = ref.read(yearlyPackageProvider).asData?.value;
-    if (monthly == null && yearly == null) return; // not loaded yet
+    final weekly = ref.read(weeklyPackageProvider).asData?.value;
+    final lifetime = ref.read(lifetimePackageProvider).asData?.value;
+    if (monthly == null &&
+        yearly == null &&
+        weekly == null &&
+        lifetime == null) {
+      return; // not loaded yet
+    }
     _loggedDiag = true;
     void dump(String label, Package? p) {
       if (p == null) {
@@ -196,6 +204,8 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
 
     dump('monthly', monthly);
     dump('yearly', yearly);
+    dump('weekly', weekly);
+    dump('lifetime', lifetime);
     final info = ref.read(subscriptionProvider).customerInfo;
     final ent = info?.entitlements.all[RevenueCatConfig.entitlementVoyZaPro];
     debugPrint(
@@ -314,7 +324,11 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
 
   Widget _buildHeroSection(BuildContext context) {
     final theme = Theme.of(context);
-    final hasEligibleTrial = _anyPackageHasEligibleIntroOffer();
+    // Actual trial length from the store products (e.g. "7 days") — never
+    // hardcoded, so a store-side trial change can't make this copy lie.
+    // Null when no eligible FREE trial exists (none configured, already
+    // used, or the intro offer is a paid one).
+    final trialPhrase = _eligibleTrialPhrase();
     final hasUsedTrialBefore = _anyPackageHasIntroOfferButIneligible();
     final isTrialExpired = widget.trigger == PaywallTrigger.trialExpired;
     final isPlaceLimit = widget.trigger == PaywallTrigger.placeLimit;
@@ -328,8 +342,8 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
       // They've SEEN their plan — the preview is the pitch; frame Pro as
       // the one tap that makes it real.
       headline = 'Let VoyZa plan your days';
-      subheadline = hasEligibleTrial
-          ? 'Your plan is ready — apply it with Pro, free for 3 days.'
+      subheadline = trialPhrase != null
+          ? 'Your plan is ready — apply it with Pro, free for $trialPhrase.'
           : 'Your plan is ready — apply it and every day falls into place.';
       heroIcon = Icons.auto_awesome_rounded;
     } else if (isPlaceLimit) {
@@ -337,16 +351,16 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
       // upgrade around continuing what they're building right now.
       headline =
           "You've used all ${SubscriptionLimitService.effectiveAllowanceOf(ref)} free places";
-      subheadline = hasEligibleTrial
-          ? 'Go unlimited with Pro — try it free for 3 days.'
+      subheadline = trialPhrase != null
+          ? 'Go unlimited with Pro — try it free for $trialPhrase.'
           : 'Go unlimited with VoyZa Pro to keep building your trip.';
       heroIcon = Icons.add_location_alt_rounded;
     } else if (isTrialExpired || hasUsedTrialBefore) {
       headline = 'Your free trial has ended';
       subheadline = 'Subscribe to keep creating trips and locations.';
       heroIcon = Icons.lock_clock;
-    } else if (hasEligibleTrial) {
-      headline = 'Try VoyZa Pro free for 3 days';
+    } else if (trialPhrase != null) {
+      headline = 'Try VoyZa Pro free for $trialPhrase';
       subheadline =
           'Then continue with a subscription. Cancel anytime in your store account.';
       heroIcon = Icons.card_giftcard;
@@ -488,13 +502,27 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
         eligibility, package.storeProduct.identifier);
   }
 
-  /// True when at least one loaded package has a trial AND the device is
-  /// eligible for it.
-  bool _anyPackageHasEligibleIntroOffer() {
-    final monthly = ref.watch(monthlyPackageProvider).asData?.value;
-    final yearly = ref.watch(yearlyPackageProvider).asData?.value;
-    return _packageHasEligibleTrial(monthly) ||
-        _packageHasEligibleTrial(yearly);
+  /// The subscription packages the paywall can sell, in display priority
+  /// order (the preselected annual first). Lifetime is deliberately absent —
+  /// a one-time purchase has no trial semantics.
+  List<Package> _subscriptionPackages() => [
+        ref.watch(yearlyPackageProvider).asData?.value,
+        ref.watch(monthlyPackageProvider).asData?.value,
+        ref.watch(weeklyPackageProvider).asData?.value,
+      ].whereType<Package>().toList();
+
+  /// Trial length phrase (e.g. "7 days") from the first plan with an
+  /// eligible FREE trial, for headline copy. Null when nothing free is
+  /// claimable — including paid intro offers, which must never be
+  /// advertised as "free".
+  String? _eligibleTrialPhrase() {
+    for (final p in _subscriptionPackages()) {
+      final label = _trialLabelFor(p); // e.g. "7 days free"
+      if (label != null && label.endsWith(' free')) {
+        return label.substring(0, label.length - ' free'.length);
+      }
+    }
+    return null;
   }
 
   /// True when at least one loaded package has an intro offer configured but
@@ -502,23 +530,15 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
   /// used the trial on this Apple ID / Google account. Used to swap to "trial
   /// has ended" copy so we don't dangle a benefit they can't actually claim.
   bool _anyPackageHasIntroOfferButIneligible() {
-    final monthly = ref.watch(monthlyPackageProvider).asData?.value;
-    final yearly = ref.watch(yearlyPackageProvider).asData?.value;
     final eligibility = ref.watch(introEligibilityProvider).asData?.value;
     if (eligibility == null) return false;
-    bool ineligible(Package? p) {
-      if (p == null) return false;
-      if (p.storeProduct.introductoryPrice == null) return false;
-      return eligibility[p.storeProduct.identifier] ==
-          IntroEligibilityStatus.introEligibilityStatusIneligible;
-    }
-
-    final monthlyHasOffer = monthly?.storeProduct.introductoryPrice != null;
-    final yearlyHasOffer = yearly?.storeProduct.introductoryPrice != null;
-    if (!monthlyHasOffer && !yearlyHasOffer) return false;
-    final monthlyBlocked = monthlyHasOffer ? ineligible(monthly) : true;
-    final yearlyBlocked = yearlyHasOffer ? ineligible(yearly) : true;
-    return monthlyBlocked && yearlyBlocked;
+    final withOffer = _subscriptionPackages()
+        .where((p) => p.storeProduct.introductoryPrice != null)
+        .toList();
+    if (withOffer.isEmpty) return false;
+    return withOffer.every((p) =>
+        eligibility[p.storeProduct.identifier] ==
+        IntroEligibilityStatus.introEligibilityStatusIneligible);
   }
 
   /// Human-readable label for an intro offer, e.g. "3 days free".
@@ -662,6 +682,8 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
   Widget _buildSubscriptionOptions(BuildContext context) {
     final monthlyPackageAsync = ref.watch(monthlyPackageProvider);
     final yearlyPackageAsync = ref.watch(yearlyPackageProvider);
+    final weeklyPackageAsync = ref.watch(weeklyPackageProvider);
+    final lifetimePackageAsync = ref.watch(lifetimePackageProvider);
 
     // Auto-select yearly package if nothing is selected
     yearlyPackageAsync.whenData((package) {
@@ -676,73 +698,111 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
       }
     });
 
+    // One slot per plan. A plan the offering doesn't carry renders nothing,
+    // so this screen works unchanged before/after the store gains the
+    // weekly Trip Pass and lifetime products.
+    Widget slot(AsyncValue<Package?> async, Widget Function(Package) build) =>
+        async.when(
+          data: (package) => package != null
+              ? Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: build(package),
+                )
+              : const SizedBox.shrink(),
+          loading: () => Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: _buildLoadingCard(),
+          ),
+          error: (_, __) => const SizedBox.shrink(),
+        );
+
     return Column(
       children: [
-        // Yearly option (recommended)
-        yearlyPackageAsync.when(
-          data: (package) => package != null
-              ? _buildPackageCard(
-                  context,
-                  package: package,
-                  isRecommended: true,
-                  title: 'Yearly',
-                  subtitle: _yearlySavingsLabel(
-                      monthlyPackageAsync.asData?.value, package),
-                )
-              : const SizedBox.shrink(),
-          loading: () => _buildLoadingCard(),
-          error: (_, __) => const SizedBox.shrink(),
+        // Yearly — the anchor, preselected, carries the trial.
+        slot(
+          yearlyPackageAsync,
+          (package) => _buildPackageCard(
+            context,
+            package: package,
+            isRecommended: true,
+            title: 'Yearly',
+            subtitle: _yearlySavingsLabel(
+              monthlyPackageAsync.asData?.value,
+              weeklyPackageAsync.asData?.value,
+              package,
+            ),
+          ),
         ),
-        const SizedBox(height: 12),
-
-        // Monthly option
-        monthlyPackageAsync.when(
-          data: (package) => package != null
-              ? _buildPackageCard(
-                  context,
-                  package: package,
-                  isRecommended: false,
-                  title: 'Monthly',
-                  subtitle: 'Flexible billing',
-                )
-              : const SizedBox.shrink(),
-          loading: () => _buildLoadingCard(),
-          error: (_, __) => const SizedBox.shrink(),
+        // Weekly "Trip Pass" — the episodic-traveler plan: one week of Pro
+        // sized to a single trip.
+        slot(
+          weeklyPackageAsync,
+          (package) => _buildPackageCard(
+            context,
+            package: package,
+            isRecommended: false,
+            title: 'Trip Pass',
+            subtitle: '1 week of Pro — perfect for a single trip',
+          ),
+        ),
+        // Monthly — the flexible middle option.
+        slot(
+          monthlyPackageAsync,
+          (package) => _buildPackageCard(
+            context,
+            package: package,
+            isRecommended: false,
+            title: 'Monthly',
+            subtitle: 'Flexible billing',
+          ),
+        ),
+        // Lifetime — one-time purchase, always last (the "never subscribe"
+        // escape hatch).
+        slot(
+          lifetimePackageAsync,
+          (package) => _buildPackageCard(
+            context,
+            package: package,
+            isRecommended: false,
+            title: 'Lifetime',
+            subtitle: 'Pay once, keep Pro forever',
+          ),
         ),
       ],
     );
   }
 
-  /// Computes the real annual saving vs paying monthly, from the live store
-  /// prices — never hardcoded (which drifts when prices change and risks a
-  /// misleading-pricing rejection). Falls back to "Best value" when either
-  /// price is unavailable or the annual plan isn't actually cheaper.
-  String _yearlySavingsLabel(Package? monthly, Package? yearly) {
-    final m = monthly?.storeProduct.price;
-    final y = yearly?.storeProduct.price;
-    if (m == null || y == null || m <= 0) return 'Best value';
-    final annualizedMonthly = m * 12;
-    final pct = ((annualizedMonthly - y) / annualizedMonthly * 100).round();
-    if (pct <= 0) return 'Best value';
+  /// Computes the real annual saving vs the cheapest shorter plan on offer
+  /// (12 × monthly or 52 × weekly), from the live store prices — never
+  /// hardcoded (which drifts when prices change and risks a
+  /// misleading-pricing rejection). Falls back to "Best value" when no
+  /// baseline exists or the annual plan isn't actually cheaper.
+  String _yearlySavingsLabel(
+      Package? monthly, Package? weekly, Package yearly) {
+    final pct = annualSavingsPercent(
+      annualPrice: yearly.storeProduct.price,
+      monthlyPrice: monthly?.storeProduct.price,
+      weeklyPrice: weekly?.storeProduct.price,
+    );
+    if (pct == null) return 'Best value';
     return 'Best value · Save $pct%';
   }
 
-  /// Per-month equivalent for an annual package (e.g. "Just \$2.92/mo, billed
-  /// annually"). Anchors the yearly plan below the monthly plan's headline
-  /// price — the strongest lever for annual conversion. Null when it can't be
-  /// computed safely.
-  String? _perMonthLine(Package package) {
+  /// Small-unit price anchor for the annual package: per WEEK when the
+  /// offering also sells the weekly Trip Pass (so the yearly card undercuts
+  /// its headline price directly), per month otherwise. Null when it can't
+  /// be computed safely.
+  String? _annualAnchorLine(Package package) {
     if (package.packageType != PackageType.annual) return null;
     final price = package.storeProduct.price;
     final code = package.storeProduct.currencyCode;
-    if (price <= 0 || code.isEmpty) return null;
-    try {
-      final perMonth =
-          NumberFormat.simpleCurrency(name: code).format(price / 12);
-      return 'Just $perMonth/mo, billed annually';
-    } catch (_) {
-      return null;
+    final hasWeekly = ref.watch(weeklyPackageProvider).asData?.value != null;
+    if (hasWeekly) {
+      final perWeek = perWeekOfAnnual(annualPrice: price, currencyCode: code);
+      return perWeek == null ? null : 'Just $perWeek/week, billed annually';
     }
+    final perMonth = perMonthOfAnnual(annualPrice: price, currencyCode: code);
+    return perMonth == null ? null : 'Just $perMonth/mo, billed annually';
   }
 
   Widget _buildPackageCard(
@@ -754,8 +814,12 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
   }) {
     final theme = Theme.of(context);
     final priceString = package.storeProduct.priceString;
-    final period =
-        package.packageType == PackageType.annual ? '/year' : '/month';
+    final period = switch (package.packageType) {
+      PackageType.annual => '/year',
+      PackageType.weekly => '/week',
+      PackageType.lifetime => 'one-time',
+      _ => '/month',
+    };
     final isSelected = _selectedPackage?.identifier == package.identifier;
     // Cross-platform trial label (iOS introductoryPrice / Android free phase),
     // null when there's no eligible trial — so we never dangle "3 days free"
@@ -763,7 +827,7 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
     final trialLabel = _trialLabelFor(package);
     final effectiveSubtitle =
         trialLabel != null ? '$trialLabel, then $priceString$period' : subtitle;
-    final perMonthLine = _perMonthLine(package);
+    final anchorLine = _annualAnchorLine(package);
 
     return GestureDetector(
       onTap: () {
@@ -858,10 +922,10 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
                       color: theme.colorScheme.onSurfaceVariant,
                     ),
                   ),
-                  if (perMonthLine != null) ...[
+                  if (anchorLine != null) ...[
                     const SizedBox(height: 2),
                     Text(
-                      perMonthLine,
+                      anchorLine,
                       style: theme.textTheme.labelSmall?.copyWith(
                         // Selected card's fill is primaryContainer — primary
                         // text vanished into it (cyan on cyan). Use the
@@ -1146,8 +1210,12 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
     final String label;
     if (selected == null) {
       label = 'Select a Plan';
+    } else if (selected.packageType == PackageType.lifetime) {
+      label = 'Get lifetime access';
     } else if (selectedHasEligibleTrial) {
       label = 'Start free trial';
+    } else if (selected.packageType == PackageType.weekly) {
+      label = 'Start my Trip Pass';
     } else {
       final planName =
           selected.packageType == PackageType.annual ? 'Yearly' : 'Monthly';
@@ -1183,10 +1251,13 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
   /// otherwise it reassures on cancellation.
   Widget _buildReassuranceLine(BuildContext context) {
     final theme = Theme.of(context);
-    final hasTrial = _packageHasEligibleTrial(_selectedPackage);
-    final text = hasTrial
-        ? 'No payment due now · Cancel anytime'
-        : 'Cancel anytime · billed through your store account';
+    final isLifetime = _selectedPackage?.packageType == PackageType.lifetime;
+    final hasTrial = !isLifetime && _packageHasEligibleTrial(_selectedPackage);
+    final text = isLifetime
+        ? 'One-time payment · no subscription, yours forever'
+        : hasTrial
+            ? 'No payment due now · Cancel anytime'
+            : 'Cancel anytime · billed through your store account';
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [

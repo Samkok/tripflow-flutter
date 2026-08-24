@@ -208,10 +208,10 @@ class UserProfileRepository {
     try {
       // Try to upsert so existing record isn't overwritten if webhook beat us here
       final now = DateTime.now().toIso8601String();
+      // Fallback only — matches the store trial length (7 days); the
+      // RevenueCat webhook overwrites the exact date when it arrives.
       final expiresAtStr = trialExpiresAt?.toIso8601String() ??
-          DateTime.now()
-              .add(const Duration(days: 3))
-              .toIso8601String(); // Default 3-day trial
+          DateTime.now().add(const Duration(days: 7)).toIso8601String();
 
       await _supabase.from('user_subscriptions').upsert(
         {

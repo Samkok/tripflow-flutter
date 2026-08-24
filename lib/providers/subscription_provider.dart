@@ -148,6 +148,46 @@ final yearlyPackageProvider = FutureProvider<Package?>((ref) async {
   );
 });
 
+/// Provider for the weekly package — the "Trip Pass" (one week of Pro,
+/// sized to a single trip's planning + travel window). Null until the
+/// store offering carries a weekly package, so builds that predate the
+/// store configuration simply don't render the card.
+final weeklyPackageProvider = FutureProvider<Package?>((ref) async {
+  final packagesAsync = ref.watch(availablePackagesProvider);
+
+  return packagesAsync.when(
+    data: (packages) {
+      try {
+        return packages.firstWhere((p) => p.packageType == PackageType.weekly);
+      } catch (e) {
+        return null;
+      }
+    },
+    loading: () => null,
+    error: (_, __) => null,
+  );
+});
+
+/// Provider for the lifetime package — a ONE-TIME purchase (non-consumable
+/// in-app product) that grants the premium entitlement forever. Same
+/// null-until-configured behavior as [weeklyPackageProvider].
+final lifetimePackageProvider = FutureProvider<Package?>((ref) async {
+  final packagesAsync = ref.watch(availablePackagesProvider);
+
+  return packagesAsync.when(
+    data: (packages) {
+      try {
+        return packages
+            .firstWhere((p) => p.packageType == PackageType.lifetime);
+      } catch (e) {
+        return null;
+      }
+    },
+    loading: () => null,
+    error: (_, __) => null,
+  );
+});
+
 /// Per-product intro-offer (free-trial) eligibility for the current device.
 ///
 /// Backed by [Purchases.checkTrialOrIntroductoryPriceEligibility], which on
@@ -161,9 +201,11 @@ final introEligibilityProvider =
     FutureProvider<Map<String, IntroEligibilityStatus>>((ref) async {
   final monthly = await ref.watch(monthlyPackageProvider.future);
   final yearly = await ref.watch(yearlyPackageProvider.future);
+  final weekly = await ref.watch(weeklyPackageProvider.future);
   final productIds = <String>{
     if (monthly != null) monthly.storeProduct.identifier,
     if (yearly != null) yearly.storeProduct.identifier,
+    if (weekly != null) weekly.storeProduct.identifier,
   }.toList();
   if (productIds.isEmpty) return const {};
   try {

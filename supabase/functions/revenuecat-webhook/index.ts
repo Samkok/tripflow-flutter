@@ -310,9 +310,12 @@ function determineSubscriptionStatus(
     return 'expired';  // Past expiration
   }
 
-  // Non-renewing purchase - check expiration
+  // Non-renewing purchase. A LIFETIME unlock (non-consumable in-app product)
+  // arrives as this event with NO expiration — that is permanently active,
+  // not expired. Only a dated non-renewing purchase (a fixed-length pass)
+  // can lapse.
   if (eventType === 'NON_RENEWING_PURCHASE') {
-    if (expirationDate && expirationDate > now) {
+    if (expirationDate === null || expirationDate > now) {
       return 'active';
     }
     return 'expired';

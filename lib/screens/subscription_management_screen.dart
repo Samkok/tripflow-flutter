@@ -132,7 +132,22 @@ class _SubscriptionManagementScreenState
             const SizedBox(height: 16),
             expirationAsync.when(
               data: (expiration) {
-                if (expiration == null) return const SizedBox.shrink();
+                if (expiration == null) {
+                  // Only a lifetime unlock has an active entitlement with no
+                  // expiration (trials, promos and subscriptions all carry
+                  // one) — say so instead of showing nothing.
+                  final ent =
+                      ref.watch(voyZaProEntitlementProvider).asData?.value;
+                  if (ent != null && ent.expirationDate == null) {
+                    return Text(
+                      'Lifetime access — pay once, yours forever',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: Colors.white.withValues(alpha: 0.8),
+                      ),
+                    );
+                  }
+                  return const SizedBox.shrink();
+                }
                 final formattedDate =
                     '${expiration.day}/${expiration.month}/${expiration.year}';
                 return willRenewAsync.when(
