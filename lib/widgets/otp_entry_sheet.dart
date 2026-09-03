@@ -512,6 +512,7 @@ class _OtpEntrySheetState extends ConsumerState<OtpEntrySheet> {
             child: Opacity(
               opacity: 0,
               child: TextField(
+                cursorOpacityAnimates: false,
                 controller: _codeCtrl,
                 focusNode: _focus,
                 autofocus: true,

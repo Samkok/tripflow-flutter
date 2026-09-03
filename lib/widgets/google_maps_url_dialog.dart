@@ -53,6 +53,7 @@ class _GoogleMapsUrlDialogState extends State<GoogleMapsUrlDialog> {
             ),
             const SizedBox(height: 16),
             TextField(
+              cursorOpacityAnimates: false,
               controller: _controller,
               autofocus: true,
               decoration: InputDecoration(

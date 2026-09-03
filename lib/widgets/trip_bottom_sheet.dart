@@ -1968,6 +1968,7 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
         valueListenable: _searchQuery,
         builder: (context, query, _) {
           return TextField(
+            cursorOpacityAnimates: false,
             controller: _searchController,
             onChanged: (value) => _searchQuery.value = value,
             textInputAction: TextInputAction.search,

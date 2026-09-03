@@ -175,6 +175,7 @@ class _ChangeEmailScreenState extends ConsumerState<ChangeEmailScreen> {
                     ),
                     const SizedBox(height: 28),
                     TextFormField(
+                      cursorOpacityAnimates: false,
                       initialValue: currentEmail,
                       enabled: false,
                       decoration: const InputDecoration(
@@ -184,6 +185,7 @@ class _ChangeEmailScreenState extends ConsumerState<ChangeEmailScreen> {
                     ),
                     const SizedBox(height: 20),
                     TextFormField(
+                      cursorOpacityAnimates: false,
                       controller: _passwordController,
                       obscureText: _obscure,
                       enabled: !blocked,
@@ -205,6 +207,7 @@ class _ChangeEmailScreenState extends ConsumerState<ChangeEmailScreen> {
                     ),
                     const SizedBox(height: 20),
                     TextFormField(
+                      cursorOpacityAnimates: false,
                       controller: _newEmailController,
                       keyboardType: TextInputType.emailAddress,
                       autocorrect: false,

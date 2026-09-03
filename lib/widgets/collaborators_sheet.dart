@@ -339,6 +339,7 @@ class _CollaboratorsSheetState extends ConsumerState<CollaboratorsSheet> {
 
                           // Email input
                           TextField(
+                            cursorOpacityAnimates: false,
                             controller: _emailController,
                             keyboardType: TextInputType.emailAddress,
                             decoration: InputDecoration(

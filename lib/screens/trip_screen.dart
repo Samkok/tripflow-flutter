@@ -849,6 +849,17 @@ class _TripScreenState extends ConsumerState<TripScreen> {
     final showLists =
         filter == _TripFilter.all || filter == _TripFilter.gone;
 
+    // The activate-trip coach spotlights ONE Activate button. Trips whose
+    // dates include today live in the On Going section ABOVE the list, so
+    // the first inactive card in render order wins: On Going first, then
+    // the list. (Keying only `index == 0` of the list left the coach with no
+    // target whenever the user's only trip was ongoing — "Show me" did
+    // nothing.)
+    final String? spotlightActivateTripId =
+        showOngoingSection && ongoingOwn.isNotEmpty
+            ? ongoingOwn.first.id
+            : (showLists && listOwn.isNotEmpty ? listOwn.first.id : null);
+
     final hideYourTripsHeader = !showLists ||
         listOwn.isEmpty ||
         // A search that matches nothing here shouldn't leave a bare
@@ -1136,6 +1147,7 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                             child: SizedBox(
                               height: 44,
                               child: TextField(
+                                cursorOpacityAnimates: false,
                                 controller: _tripSearchController,
                                 onChanged: (v) =>
                                     setState(() => _tripQuery = v),
@@ -1337,7 +1349,10 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                           (context, index) {
                             final Widget card;
                             if (index < ongoingOwn.length) {
-                              card = _buildTripCard(context, ongoingOwn[index]);
+                              final t = ongoingOwn[index];
+                              card = _buildTripCard(context, t,
+                                  spotlightActivate:
+                                      t.id == spotlightActivateTripId);
                             } else {
                               final data =
                                   ongoingShared[index - ongoingOwn.length];
@@ -1476,7 +1491,8 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                             return Padding(
                               padding: const EdgeInsets.only(bottom: 12),
                               child: _buildTripCard(context, trip,
-                                  spotlightActivate: index == 0),
+                                  spotlightActivate:
+                                      trip.id == spotlightActivateTripId),
                             );
                           },
                           childCount: listTrips.length,
@@ -3575,6 +3591,7 @@ class _EditTripDialogState extends State<_EditTripDialog> {
         mainAxisSize: MainAxisSize.min,
         children: [
           TextField(
+            cursorOpacityAnimates: false,
             controller: _nameController,
             maxLength: 30,
             decoration: InputDecoration(
@@ -3589,6 +3606,7 @@ class _EditTripDialogState extends State<_EditTripDialog> {
           ),
           const SizedBox(height: 12),
           TextField(
+            cursorOpacityAnimates: false,
             controller: _descriptionController,
             minLines: 2,
             maxLines: 3,

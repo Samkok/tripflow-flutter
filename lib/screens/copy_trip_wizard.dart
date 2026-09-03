@@ -271,6 +271,7 @@ class _CopyTripWizardState extends ConsumerState<CopyTripWizard> {
           ),
           const SizedBox(height: 24),
           TextField(
+            cursorOpacityAnimates: false,
             controller: _codeController,
             autofocus: true,
             textCapitalization: TextCapitalization.characters,

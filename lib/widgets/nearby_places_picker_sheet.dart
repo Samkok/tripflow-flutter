@@ -134,6 +134,7 @@ class _NearbyPlacesPickerSheetState extends State<NearbyPlacesPickerSheet> {
                     Padding(
                       padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
                       child: TextField(
+                        cursorOpacityAnimates: false,
                         controller: _searchController,
                         onChanged: (v) => setState(() => _query = v.trim()),
                         decoration: InputDecoration(

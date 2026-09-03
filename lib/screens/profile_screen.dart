@@ -251,6 +251,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     required IconData icon,
   }) {
     return TextFormField(
+      cursorOpacityAnimates: false,
       controller: controller,
       textCapitalization: TextCapitalization.words,
       decoration: InputDecoration(

@@ -1843,6 +1843,7 @@ class LocationDetailSheet extends ConsumerWidget {
             ],
           ),
           content: TextField(
+            cursorOpacityAnimates: false,
             controller: textController,
             autofocus: true,
             maxLength: 30,

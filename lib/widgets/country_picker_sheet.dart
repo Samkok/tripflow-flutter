@@ -101,6 +101,7 @@ class _CountryPickerSheetState extends State<_CountryPickerSheet> {
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16),
                 child: TextField(
+                  cursorOpacityAnimates: false,
                   controller: _searchController,
                   onChanged: (v) => setState(() => _query = v.trim()),
                   autofocus: false,

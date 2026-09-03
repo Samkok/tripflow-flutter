@@ -110,6 +110,10 @@ TutorialCoachMark buildMapTutorial(
     // making the user wait for it.
     focusAnimationDuration: const Duration(milliseconds: 250),
     unFocusAnimationDuration: const Duration(milliseconds: 200),
+    // No pulsing spotlight: the package repaints the full-screen scrim
+    // every frame while pulsing — measured at ~48 fps / 67 % CPU for as
+    // long as a step is on screen. A static cutout reads just as well.
+    pulseEnable: false,
     pulseAnimationDuration: const Duration(milliseconds: 300),
     beforeFocus: (target) => lastStep = (target.identify as int?) ?? 0,
     onFinish: onFinish,

@@ -285,6 +285,7 @@ class _SecurityScreenState extends ConsumerState<SecurityScreen> {
           ),
           const SizedBox(height: 20),
           TextFormField(
+            cursorOpacityAnimates: false,
             controller: _currentPasswordController,
             obscureText: _step1Obscure,
             enabled: !blocked,
@@ -384,6 +385,7 @@ class _SecurityScreenState extends ConsumerState<SecurityScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 TextFormField(
+                  cursorOpacityAnimates: false,
                   controller: _newPasswordController,
                   obscureText: _newObscure,
                   decoration: InputDecoration(
@@ -454,6 +456,7 @@ class _SecurityScreenState extends ConsumerState<SecurityScreen> {
 
           // Confirm password field
           TextFormField(
+            cursorOpacityAnimates: false,
             controller: _confirmPasswordController,
             obscureText: _confirmObscure,
             decoration: InputDecoration(

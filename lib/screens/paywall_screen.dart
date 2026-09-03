@@ -1167,6 +1167,7 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
         children: [
           Expanded(
             child: TextField(
+              cursorOpacityAnimates: false,
               controller: _codeController,
               autofocus: true,
               textCapitalization: TextCapitalization.characters,

@@ -345,6 +345,7 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
                         ),
                         const SizedBox(height: 40),
                         TextFormField(
+                          cursorOpacityAnimates: false,
                           controller: _emailController,
                           focusNode: _emailFocusNode,
                           keyboardType: TextInputType.emailAddress,
@@ -454,6 +455,7 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
                               : Padding(
                                   padding: const EdgeInsets.only(top: 8),
                                   child: TextFormField(
+                                    cursorOpacityAnimates: false,
                                     controller: _referralCodeController,
                                     autofocus: true,
                                     textCapitalization:
@@ -661,6 +663,7 @@ class _NewPasswordFieldState extends State<_NewPasswordField> {
   @override
   Widget build(BuildContext context) {
     return TextFormField(
+      cursorOpacityAnimates: false,
       controller: widget.controller,
       obscureText: !_visible,
       autofillHints: const [AutofillHints.newPassword],

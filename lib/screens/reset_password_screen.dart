@@ -87,6 +87,7 @@ class _ResetPasswordScreenState extends ConsumerState<ResetPasswordScreen> {
                   ),
                   const SizedBox(height: 40),
                   TextFormField(
+                    cursorOpacityAnimates: false,
                     controller: _passwordController,
                     obscureText: !_isPasswordVisible,
                     decoration: InputDecoration(
@@ -114,6 +115,7 @@ class _ResetPasswordScreenState extends ConsumerState<ResetPasswordScreen> {
                   ),
                   const SizedBox(height: 20),
                   TextFormField(
+                    cursorOpacityAnimates: false,
                     controller: _confirmController,
                     obscureText: !_isConfirmVisible,
                     decoration: InputDecoration(

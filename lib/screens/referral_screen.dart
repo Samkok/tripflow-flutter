@@ -355,6 +355,7 @@ class _ReferralScreenState extends ConsumerState<ReferralScreen> {
                           children: [
                             Expanded(
                               child: TextField(
+                                cursorOpacityAnimates: false,
                                 controller: _codeController,
                                 textCapitalization:
                                     TextCapitalization.characters,

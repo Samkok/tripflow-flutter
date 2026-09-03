@@ -267,6 +267,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                                 ),
                                 const SizedBox(height: 40),
                                 TextFormField(
+                                  cursorOpacityAnimates: false,
                                   controller: _emailController,
                                   focusNode: _emailFocusNode,
                                   keyboardType: TextInputType.emailAddress,
@@ -309,6 +310,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                                 ),
                                 const SizedBox(height: 20),
                                 TextFormField(
+                                  cursorOpacityAnimates: false,
                                   controller: _passwordController,
                                   obscureText: !_isPasswordVisible,
                                   autofillHints: const [AutofillHints.password],

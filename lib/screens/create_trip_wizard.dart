@@ -616,6 +616,7 @@ class _CreateTripWizardState extends ConsumerState<CreateTripWizard> {
         caption: 'Give it a name you\'ll recognize at a glance.',
       ),
       control: TextField(
+        cursorOpacityAnimates: false,
         controller: _nameController,
         autofocus: true,
         textCapitalization: TextCapitalization.sentences,
@@ -644,6 +645,7 @@ class _CreateTripWizardState extends ConsumerState<CreateTripWizard> {
       control: Column(
         children: [
           TextField(
+            cursorOpacityAnimates: false,
             controller: _buddyController,
             keyboardType: TextInputType.emailAddress,
             autocorrect: false,

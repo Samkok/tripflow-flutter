@@ -88,6 +88,7 @@ class _SearchWidgetState extends ConsumerState<SearchWidget> {
             builder: (context, ref, child) {
               final searchQuery = ref.watch(searchQueryProvider);
               return TextField(
+                cursorOpacityAnimates: false,
                 focusNode: widget.focusNode,
                 controller: _searchController,
                 onChanged: _onSearchChanged,

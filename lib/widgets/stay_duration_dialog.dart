@@ -199,6 +199,7 @@ void showStayDurationDialog(
                       children: [
                         Expanded(
                           child: TextField(
+                            cursorOpacityAnimates: false,
                             controller: customController,
                             keyboardType: TextInputType.number,
                             onTap: () =>

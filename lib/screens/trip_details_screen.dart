@@ -86,6 +86,21 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
   final Set<String> _selectedIds = {};
   List<SavedLocation> _currentTripLocations = [];
 
+  /// Last count handed to the checklist from the stream builder — so a
+  /// rebuild that changes nothing doesn't schedule another provider write.
+  int? _lastReportedChecklistCount;
+
+  /// Content equality for the cached trip list: same ids in the same order.
+  /// The stream builder produces a NEW list object on every build, so an
+  /// identity check (`!=`) was always true.
+  static bool _sameLocationIds(List<SavedLocation> a, List<SavedLocation> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i].id != b[i].id) return false;
+    }
+    return true;
+  }
+
   // Per-location COLLAPSE state for the photo dropdown. Tracks the
   // ids of cards the user has explicitly collapsed; everything else is
   // expanded by default. (Previously this tracked expanded ids, so the
@@ -323,6 +338,14 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
       await ref
           .read(localActiveTripIdProvider.notifier)
           .setActiveTrip(widget.trip.id);
+      // Checklist step 3 completes on ANY activation path, not only the home
+      // card's button — guests activate here and the trips-list reconcile
+      // only sees server-side `isActive`, so without this the step stayed
+      // pending while the trip was plainly active. No guide chaining from
+      // here: the "Go to map" spotlight lives on the home card.
+      await ref
+          .read(checklistProvider.notifier)
+          .mark(ChecklistStep.activateTrip, silent: true);
       if (mounted) {
         AppToast.success(context, '${widget.trip.name} is now active');
       }
@@ -624,6 +647,7 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       child: TextField(
+        cursorOpacityAnimates: false,
         controller: _searchController,
         decoration: InputDecoration(
           hintText: 'Search locations...',
@@ -703,15 +727,19 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
             allLocations.where((loc) => loc.tripId == widget.trip.id).toList();
 
         // Checklist step 2 progress: report this trip's live count (marks
-        // the step at 3). Post-frame — never mutate providers during build.
+        // the step at 3). Post-frame — never mutate providers during build —
+        // and only when the count actually changed.
         final checklistCount = tripLocations.length;
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) {
-            ref
-                .read(checklistProvider.notifier)
-                .reportTripLocationCount(checklistCount);
-          }
-        });
+        if (checklistCount != _lastReportedChecklistCount) {
+          _lastReportedChecklistCount = checklistCount;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) {
+              ref
+                  .read(checklistProvider.notifier)
+                  .reportTripLocationCount(checklistCount);
+            }
+          });
+        }
 
         // Apply search filter if query is not empty
         if (_searchQuery.isNotEmpty) {
@@ -732,10 +760,17 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
         // per-date add affordances). _buildLocationsList falls back to the
         // empty state itself when the trip has no dates either.
 
-        // Keep a reference so the selection-mode AppBar can select all
-        if (_currentTripLocations != tripLocations) {
+        // Keep a reference so the selection-mode AppBar can select all.
+        // Compare by CONTENT: `tripLocations` is a fresh list every build,
+        // so the old identity check was always true and its post-frame
+        // setState re-ran this build on every frame — the whole screen
+        // rendered at ~48 fps / 62 % CPU while idle (measured). The field
+        // is updated in place for the body; the post-frame setState exists
+        // only to refresh the AppBar's select-all state on a real change.
+        if (!_sameLocationIds(_currentTripLocations, tripLocations)) {
+          _currentTripLocations = tripLocations;
           WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (mounted) setState(() => _currentTripLocations = tripLocations);
+            if (mounted) setState(() {});
           });
         }
 
@@ -2577,6 +2612,7 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
                         padding: const EdgeInsets.symmetric(
                             horizontal: 16, vertical: 8),
                         child: TextField(
+                          cursorOpacityAnimates: false,
                           controller: _searchController,
                           focusNode: _searchFocusNode,
                           autofocus: true,

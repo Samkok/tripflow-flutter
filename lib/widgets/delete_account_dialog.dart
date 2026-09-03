@@ -181,6 +181,7 @@ class _DeleteAccountDialogState extends ConsumerState<DeleteAccountDialog> {
         ),
         const SizedBox(height: 16),
         TextField(
+          cursorOpacityAnimates: false,
           controller: _emailController,
           decoration: InputDecoration(
             labelText: 'Enter your email',

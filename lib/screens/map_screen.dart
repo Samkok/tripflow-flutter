@@ -1316,6 +1316,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
               RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
           title: const Text('Set Zone Distance'),
           content: TextField(
+            cursorOpacityAnimates: false,
             controller: textController,
             autofocus: true,
             keyboardType: const TextInputType.numberWithOptions(decimal: false),
