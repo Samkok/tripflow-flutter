@@ -147,9 +147,17 @@ class _MainScreenState extends ConsumerState<MainScreen> {
 
     return Scaffold(
       extendBody: true, // Allows body to extend behind the bottom nav
+      // TickerMode per tab: IndexedStack keeps offstage tabs alive but does
+      // NOT mute their tickers, so any animation left running on a hidden
+      // tab keeps the whole app rendering at vsync (measured: a single
+      // hidden spinner held every tab at ~45 fps / ~50 % CPU). Gating here
+      // makes that class of bug impossible rather than fixing it per widget.
       body: IndexedStack(
         index: _selectedIndex,
-        children: _widgetOptions,
+        children: [
+          for (var i = 0; i < _widgetOptions.length; i++)
+            TickerMode(enabled: i == _selectedIndex, child: _widgetOptions[i]),
+        ],
       ),
       bottomNavigationBar: _buildCustomBottomNavBar(),
     );

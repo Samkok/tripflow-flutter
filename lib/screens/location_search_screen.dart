@@ -405,6 +405,11 @@ class _LocationSearchScreenState extends ConsumerState<LocationSearchScreen> {
               // change to the still-mounted map screen behind us and
               // visually "pulls it down" for a moment.)
               onChanged: _onSearchChanged,
+              // iOS animates the caret's opacity by default, which kept this
+              // screen rendering at ~40 fps (re-blurring the pill each frame)
+              // the whole time the field was focused. A plain blink is two
+              // cheap frames a second.
+              cursorOpacityAnimates: false,
               // Rounded, transparent, bordered — a floating pill over the
               // globe rather than a flat strip welded to the app bar.
               decoration: InputDecoration(

@@ -12,7 +12,7 @@ import 'package:tutorial_coach_mark/tutorial_coach_mark.dart';
 import 'package:voyza/core/theme.dart';
 import 'package:voyza/screens/location_search_screen.dart';
 // import 'package:voyza/screens/login_screen.dart'; // DISABLED with first-optimize celebration (2026-08-07)
-import 'package:voyza/widgets/pulsing_glow.dart';
+import 'package:voyza/widgets/static_glow.dart';
 import 'package:voyza/widgets/route_leg_sheet.dart';
 import 'package:voyza/providers/onboarding_checklist_provider.dart';
 import 'package:voyza/widgets/onboarding_checklist.dart';
@@ -2265,7 +2265,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
                           // The share FAB is the growth surface — a pulsing glow
                           // makes it the standout affordance in the column.
                           if (hasRoute && !isGenerating)
-                            PulsingGlow(
+                            StaticGlow(
                               glowColor: Theme.of(context).colorScheme.primary,
                               child: FloatingActionButton(
                                 heroTag: 'shareRouteFab',
@@ -2380,12 +2380,21 @@ class _MapScreenState extends ConsumerState<MapScreen>
               // Keeping both conditions prevents the overlay from dismissing
               // prematurely while bitmap generation is still in flight.
               final isReady = syncDone && markersAsync.hasValue;
+              // The faded-out overlay stays mounted (AnimatedOpacity keeps
+              // its child), and its indeterminate spinner used to keep
+              // ticking every vsync behind opacity 0 — dirtying the tree and
+              // re-rendering the whole map tab (six blur layers over the
+              // platform view) at 30-60 fps forever, on EVERY tab since an
+              // IndexedStack doesn't mute offstage tickers. Measured on the
+              // simulator: ~45 fps / 50% CPU idle → 0 fps once the spinner
+              // leaves the tree. (Do NOT wrap this in TickerMode — that also
+              // mutes the fade itself, and the overlay never dismisses.)
               return AnimatedOpacity(
                 opacity: isReady ? 0.0 : 1.0,
                 duration: const Duration(milliseconds: 500),
                 child: IgnorePointer(
                   ignoring: isReady,
-                  child: _buildLoadingOverlay(context),
+                  child: _buildLoadingOverlay(context, spinning: !isReady),
                 ),
               );
             },
@@ -2395,7 +2404,10 @@ class _MapScreenState extends ConsumerState<MapScreen>
     );
   }
 
-  Widget _buildLoadingOverlay(BuildContext context) {
+  /// [spinning] false removes the indeterminate spinner from the tree (its
+  /// ticker is disposed) — the overlay is fading out at that point, so the
+  /// missing spinner is invisible, and nothing keeps scheduling frames.
+  Widget _buildLoadingOverlay(BuildContext context, {required bool spinning}) {
     return Container(
       color: Theme.of(context).scaffoldBackgroundColor,
       child: SafeArea(
@@ -2430,10 +2442,12 @@ class _MapScreenState extends ConsumerState<MapScreen>
               SizedBox(
                 width: 24,
                 height: 24,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2.5,
-                  color: Theme.of(context).colorScheme.primary,
-                ),
+                child: spinning
+                    ? CircularProgressIndicator(
+                        strokeWidth: 2.5,
+                        color: Theme.of(context).colorScheme.primary,
+                      )
+                    : null,
               ),
             ],
           ),

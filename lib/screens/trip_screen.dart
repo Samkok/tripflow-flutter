@@ -27,7 +27,7 @@ import 'package:voyza/widgets/country_flag_icon.dart';
 import 'package:voyza/utils/same_day_place_guard.dart';
 import 'package:voyza/utils/trip_dates.dart';
 import 'package:voyza/widgets/country_picker_sheet.dart';
-import 'package:voyza/widgets/pulsing_glow.dart';
+import 'package:voyza/widgets/static_glow.dart';
 import 'package:voyza/providers/onboarding_checklist_provider.dart';
 import 'package:voyza/widgets/onboarding_checklist.dart';
 import 'package:voyza/widgets/app_update_badge.dart';
@@ -1060,7 +1060,7 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                       // THE creation affordance — glowing, big, unmissable.
                       child: Column(
                         children: [
-                          PulsingGlow(
+                          StaticGlow(
                             shape: BoxShape.rectangle,
                             borderRadius: BorderRadius.circular(18),
                             glowColor: Theme.of(context).colorScheme.primary,

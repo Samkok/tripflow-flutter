@@ -29,7 +29,7 @@ import 'accommodation_prompts.dart';
 import 'app_toast.dart';
 import 'leg_rail.dart';
 import 'optimized_location_card.dart';
-import 'pulsing_glow.dart';
+import 'static_glow.dart';
 import '../services/csv_service.dart';
 import '../services/places_service.dart';
 
@@ -958,7 +958,7 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
               );
 
               if (!canTap) return button;
-              return _sheetPulsingGlow(glowColor: primaryColor, child: button);
+              return _sheetStaticGlow(glowColor: primaryColor, child: button);
             }),
             const SizedBox(width: 8),
             Container(
@@ -2458,7 +2458,7 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
       );
 
       final primary = canGlow
-          ? _sheetPulsingGlow(glowColor: primaryColor, child: button)
+          ? _sheetStaticGlow(glowColor: primaryColor, child: button)
           : button;
 
       // Clear is available from the map's FAB column — no duplicate in the
@@ -2929,12 +2929,9 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
 }
 
 /// Sheet-button glow in this sheet's visual language, via the shared
-/// [PulsingGlow] — which self-caps at 8 pulses and then settles. The private
-/// unbounded copy this replaced kept a 60fps ticker alive for the whole
-/// session whenever the Optimize button was glowable (IndexedStack does not
-/// mute offstage tickers), keeping the CPU out of idle even on other tabs.
-Widget _sheetPulsingGlow({required Color glowColor, required Widget child}) {
-  return PulsingGlow(
+/// [StaticGlow] (no animation — see that widget for the measurements).
+Widget _sheetStaticGlow({required Color glowColor, required Widget child}) {
+  return StaticGlow(
     glowColor: glowColor,
     shape: BoxShape.rectangle,
     borderRadius: BorderRadius.circular(12),
@@ -2943,7 +2940,6 @@ Widget _sheetPulsingGlow({required Color glowColor, required Widget child}) {
     maxSpread: 3,
     minAlpha: 0.25,
     maxAlpha: 0.70,
-    period: const Duration(milliseconds: 1600),
     child: child,
   );
 }

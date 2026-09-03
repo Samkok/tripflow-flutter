@@ -39,7 +39,7 @@ import 'package:voyza/widgets/accommodation_prompts.dart';
 import 'package:voyza/utils/same_day_place_guard.dart';
 import 'package:voyza/utils/trip_dates.dart';
 import 'package:voyza/services/trip_day_service.dart';
-import 'package:voyza/widgets/pulsing_glow.dart';
+import 'package:voyza/widgets/static_glow.dart';
 import 'package:voyza/widgets/rotating_globe_background.dart';
 
 class TripDetailsScreen extends ConsumerStatefulWidget {
@@ -570,7 +570,7 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
                   data: (hasWriteAccess) => hasWriteAccess
                       // Single glowing Add Location FAB — the old secondary
                       // "Add Existing" entry confused more than it helped.
-                      ? PulsingGlow(
+                      ? StaticGlow(
                           shape: BoxShape.rectangle,
                           borderRadius: BorderRadius.circular(16),
                           glowColor: Theme.of(context).colorScheme.primary,
