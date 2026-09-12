@@ -291,7 +291,8 @@ class LocationRepository {
       // keep a span end (DB CHECK end >= start assumes a start), so the
       // range is cleared with it.
       updatedLocation = parsedDate == null
-          ? updatedLocation.copyWith(scheduledDate: null, scheduledEndDate: null)
+          ? updatedLocation.copyWith(
+              scheduledDate: null, scheduledEndDate: null)
           : updatedLocation.copyWith(scheduledDate: parsedDate);
     }
     if (updates.containsKey('stay_duration')) {
@@ -395,8 +396,8 @@ class LocationRepository {
         final now = DateTime.now();
         await _box!.putAll({
           for (final l in chunk)
-            l.id: l.copyWith(
-                isSynced: true, lastSyncedAt: now, source: 'synced')
+            l.id:
+                l.copyWith(isSynced: true, lastSyncedAt: now, source: 'synced')
         });
       } catch (e) {
         debugPrint('updateLocationsBatch: chunk $i-$end failed ($e) — '
@@ -433,8 +434,37 @@ class LocationRepository {
       // We need to ensure box is ready before writing
       if (_box == null || !_box!.isOpen) await _ensureInitialized();
       await _box!.put(syncedLoc.id, syncedLoc);
+    } on PostgrestException catch (e) {
+      debugPrint('Sync failed for ${location.name}: $e');
+      // The server REFUSED the write (RLS / permission), not a blip: the
+      // row would otherwise sit "pending" forever — and a pending row
+      // ignores every realtime update and survives every ghost sweep, so
+      // this device would stop seeing other members' edits and deletes for
+      // it. Fall back to the server's copy of the row instead.
+      if (e.code == '42501' || e.code == '403') {
+        await _revertToRemoteCopy(location.id);
+      }
     } catch (e) {
       debugPrint('Sync failed for ${location.name}: $e');
+    }
+  }
+
+  /// Replaces the local row with the server's version (or drops it when
+  /// the server no longer has it). Best-effort — a network failure leaves
+  /// the pending row for the next sync pass.
+  Future<void> _revertToRemoteCopy(String id) async {
+    try {
+      final row =
+          await _supabase.from('locations').select().eq('id', id).maybeSingle();
+      if (_box == null || !_box!.isOpen) await _ensureInitialized();
+      if (row == null) {
+        await _box!.delete(id);
+      } else {
+        await _box!.put(id, SavedLocation.fromJson(row));
+      }
+      debugPrint('syncLocation: local edit to $id discarded (server refused)');
+    } catch (e) {
+      debugPrint('syncLocation: could not revert $id to the server copy: $e');
     }
   }
 
@@ -557,20 +587,21 @@ class LocationRepository {
   /// Typically called on app start or refresh.
   /// Fetches ALL locations the user has access to (owned + collaborative trips).
   /// RLS policies handle access control automatically.
-  Future<void> fetchRemoteLocations() async {
+  ///
+  /// Returns true when the cache now mirrors the server, false when the
+  /// server couldn't be reached (nothing was changed locally). Callers that
+  /// promise the user "up to date" must check it — a swallowed failure here
+  /// used to leave the refresh button reporting success while a member's
+  /// deletion stayed on screen.
+  Future<bool> fetchRemoteLocations() async {
     await _ensureInitialized();
     final user = _supabase.auth.currentUser;
-    if (user == null) return; // Anonymous user only sees local
+    if (user == null) return true; // Anonymous user only sees local
 
     try {
       // Don't filter by user_id - let RLS policies handle access control
       // This will return locations the user owns AND locations from trips they collaborate on
-      final response = await _supabase
-          .from('locations')
-          .select()
-          .order('created_at', ascending: false);
-
-      final List<dynamic> data = response;
+      final List<dynamic> data = await _selectAllVisibleLocations();
       debugPrint(
           'fetchRemoteLocations: Fetched ${data.length} locations (including collaborative trips)');
 
@@ -643,8 +674,34 @@ class LocationRepository {
         debugPrint(
             'fetchRemoteLocations: removed ${ghosts.length} remotely-deleted rows');
       }
+      return true;
     } catch (e) {
       debugPrint('Error fetching remote locations: $e');
+      return false;
+    }
+  }
+
+  /// The one select behind [fetchRemoteLocations], retried once behind an
+  /// explicit session refresh when the token has expired: after a long
+  /// suspension the first request often races the SDK's own refresh and
+  /// fails with an expired JWT — a silent failure that made "refresh" a
+  /// no-op exactly when the user needed it most.
+  Future<List<dynamic>> _selectAllVisibleLocations() async {
+    Future<List<dynamic>> select() async => await _supabase
+        .from('locations')
+        .select()
+        .order('created_at', ascending: false) as List<dynamic>;
+    try {
+      return await select();
+    } on PostgrestException catch (e) {
+      final expired = e.code == 'PGRST301' ||
+          e.code == '401' ||
+          e.message.toLowerCase().contains('jwt');
+      if (!expired) rethrow;
+      debugPrint(
+          'fetchRemoteLocations: token expired — refreshing session, retrying');
+      await _supabase.auth.refreshSession();
+      return await select();
     }
   }
 
@@ -880,19 +937,40 @@ class LocationRepository {
   Timer? _retryTimer;
   int _retryAttempt = 0;
   bool _teardownInProgress = false;
+  bool _everSubscribed = false;
+  DateTime? _lastCatchUpAt;
+
+  /// Channel health as reported by the subscribe callback (the channel's own
+  /// state getters are package-internal). `_channelLive` is true between a
+  /// 'subscribed' and the next error/close; `_joinInFlight` while a join is
+  /// pending its first status.
+  bool _channelLive = false;
+  bool _joinInFlight = false;
 
   void subscribeToRealtimeChanges() {
     final user = _supabase.auth.currentUser;
     if (user == null) return;
 
-    // Healthy (or join in flight) for this user — nothing to do.
-    if (_subscription != null && _subscribedUserId == user.id) return;
-
-    // Different user than the active channel (logout → login): rebuild.
-    if (_subscription != null) _resetChannel();
+    if (_subscription != null && _subscribedUserId == user.id) {
+      // Healthy (or join in flight) for this user — nothing to do. A channel
+      // that is errored/closed with NO retry pending (the backoff timer can
+      // be lost across an app suspension) is rebuilt right here, so a
+      // resume / manual refresh always ends with a live registration.
+      if (_channelLive || _joinInFlight || (_retryTimer?.isActive ?? false)) {
+        return;
+      }
+      debugPrint(
+          'LocationRealtime: channel dead with no retry pending — rebuilding');
+      _resetChannel();
+    } else if (_subscription != null) {
+      // Different user than the active channel (logout → login): rebuild.
+      _resetChannel();
+    }
 
     _retryTimer?.cancel();
     _subscribedUserId = user.id;
+    _joinInFlight = true;
+    _channelLive = false;
     debugPrint('LocationRealtime: subscribing for user ${user.id}');
 
     _subscription = _supabase
@@ -907,13 +985,25 @@ class LocationRepository {
       switch (status) {
         case RealtimeSubscribeStatus.subscribed:
           _retryAttempt = 0;
+          _joinInFlight = false;
+          _channelLive = true;
           debugPrint('LocationRealtime: ✅ subscribed');
+          // A REJOIN (socket drop, app suspension, token refresh, retry)
+          // means events were missed: postgres_changes are never replayed,
+          // so the only way to converge is one diff fetch. The very first
+          // join skips it — the launch sync is already fetching.
+          if (_everSubscribed) _scheduleCatchUp('rejoin');
+          _everSubscribed = true;
         case RealtimeSubscribeStatus.channelError:
         case RealtimeSubscribeStatus.timedOut:
+          _joinInFlight = false;
+          _channelLive = false;
           debugPrint(
               'LocationRealtime: ❌ $status${error != null ? ' ($error)' : ''} — will retry');
           _scheduleRetry();
         case RealtimeSubscribeStatus.closed:
+          _joinInFlight = false;
+          _channelLive = false;
           // Fires for our own teardown too — only retry server closes.
           if (!_teardownInProgress) {
             debugPrint('LocationRealtime: channel closed — will retry');
@@ -1001,5 +1091,48 @@ class LocationRepository {
     _retryTimer?.cancel();
     _retryAttempt = 0;
     _resetChannel();
+  }
+
+  /// Diff-fetch + pending-push pass, debounced so a flapping channel can't
+  /// storm the server. Fire-and-forget; see [catchUp] for the awaitable form.
+  void _scheduleCatchUp(String reason) {
+    final now = DateTime.now();
+    final last = _lastCatchUpAt;
+    if (last != null && now.difference(last) < const Duration(seconds: 8)) {
+      return;
+    }
+    unawaited(catchUp(reason));
+  }
+
+  /// Converges the local cache with the server: pulls everything this
+  /// account can see (adds, edits, and — via the ghost sweep — deletes made
+  /// while no live channel was listening), then re-pushes any local edit
+  /// whose upload failed earlier. Returns false when the server couldn't be
+  /// reached (the cache is left as it was).
+  Future<bool> catchUp(String reason) async {
+    _lastCatchUpAt = DateTime.now();
+    debugPrint('LocationRealtime: catch-up ($reason)');
+    final ok = await fetchRemoteLocations();
+    if (ok) {
+      try {
+        await syncUnsyncedLocations();
+      } catch (e) {
+        debugPrint('LocationRealtime: pending push after catch-up failed: $e');
+      }
+    }
+    return ok;
+  }
+
+  /// App came back to the foreground. Two things went stale while it was
+  /// suspended: the realtime channel (the OS drops the socket, and every
+  /// change other members made meanwhile is gone for good — postgres_changes
+  /// don't replay) and therefore the local cache. Make sure a live channel
+  /// exists for the signed-in user, then diff-fetch so their edits and
+  /// deletes land NOW instead of at the next cold start. Anonymous users
+  /// have nothing remote to reconcile.
+  Future<void> reconcileAfterResume() async {
+    if (_supabase.auth.currentUser == null) return;
+    subscribeToRealtimeChanges(); // no-op while the channel is healthy
+    await catchUp('resume');
   }
 }

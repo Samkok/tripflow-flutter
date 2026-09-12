@@ -25,6 +25,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../services/route_share_card_service.dart';
 import '../services/trip_day_service.dart';
 import '../utils/trip_dates.dart';
+import '../utils/same_day_place_guard.dart';
 import '../services/time_saved_ledger_service.dart';
 import '../utils/geo_utils.dart';
 import '../providers/location_provider.dart';
@@ -48,6 +49,7 @@ import '../services/location_add_service.dart';
 import '../services/subscription_limit_service.dart';
 import '../services/onboarding_service.dart';
 import '../providers/nearby_radius_provider.dart';
+import '../providers/arrival_radius_provider.dart';
 import '../providers/zoom_fit_settings_provider.dart';
 import '../utils/countries.dart';
 import '../widgets/app_toast.dart';
@@ -130,6 +132,11 @@ class _MapScreenState extends ConsumerState<MapScreen>
   /// permission-prompting first-init flow.
   bool _sensorsStoppedByTabGate = false;
 
+  /// GPS + compass were released because the app went to the background;
+  /// the resume handler restarts them (fresh native session, see
+  /// [didChangeAppLifecycleState]).
+  bool _sensorsStoppedByLifecycle = false;
+
   // OPTIMIZATION: Cache for lifecycle management
   AppLifecycleState? _lastLifecycleState;
 
@@ -199,15 +206,26 @@ class _MapScreenState extends ConsumerState<MapScreen>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _lastLifecycleState = state;
     if (state == AppLifecycleState.paused) {
-      // App is backgrounded - stop location + compass tracking to save battery
-      _locationSubscription?.pause();
-      _compassSubscription?.pause();
+      // Backgrounded: release GPS + compass outright (the OS suspends the
+      // process anyway) and remember to bring them back on resume.
+      if (_isTrackingLocation) {
+        _stopSensorStreams();
+        _sensorsStoppedByLifecycle = true;
+      }
       // …and stop arrival polling entirely (no background location, ever).
       _stopArrivalPolling();
     } else if (state == AppLifecycleState.resumed) {
-      // App is resumed - resume location + compass tracking
-      _locationSubscription?.resume();
-      _compassSubscription?.resume();
+      // Foreground again: RESTART the streams instead of resume()-ing the
+      // old subscriptions. After a suspension the native session is often
+      // stalled — CoreLocation stops delivering to a when-in-use app in the
+      // background and doesn't reliably pick up again, the fused provider
+      // likewise — and resume() on a stalled stream was the frozen-dot /
+      // frozen-beam bug after switching apps. A fresh listen re-issues
+      // startUpdatingLocation and re-arms the compass.
+      if (_sensorsStoppedByLifecycle) {
+        _sensorsStoppedByLifecycle = false;
+        _startLocationTracking();
+      }
       _startArrivalPolling();
     }
   }
@@ -431,6 +449,21 @@ class _MapScreenState extends ConsumerState<MapScreen>
         // Handle location stream errors gracefully
         debugPrint('Location stream error: $error');
       },
+      onDone: () {
+        // The platform stream only ends on cancel — if it ended while we
+        // still think we're tracking, the dot would silently freeze.
+        // Restart shortly (foreground only; the resume handler covers the
+        // backgrounded case).
+        if (!mounted || !_isTrackingLocation) return;
+        debugPrint('Location stream ended unexpectedly — restarting');
+        _stopSensorStreams();
+        Future.delayed(const Duration(seconds: 2), () {
+          if (!mounted || _lastLifecycleState == AppLifecycleState.paused) {
+            return;
+          }
+          _startLocationTracking();
+        });
+      },
     );
   }
 
@@ -512,7 +545,11 @@ class _MapScreenState extends ConsumerState<MapScreen>
   /// one of TODAY's not-yet-done stops on the active trip, offer to mark it
   /// done. Prompted at most once per stop per session (declining doesn't
   /// nag again), and never while another arrival dialog is up.
-  static const double _arrivalRadiusMeters = 10;
+  ///
+  /// The radius is the user's Settings › Arrival radius (10–100 m) — the
+  /// same value the map draws as the dotted ring around the current
+  /// location, so what the user sees is exactly what triggers the ask.
+  double get _arrivalRadiusMeters => ref.read(arrivalRadiusProvider);
   final Set<String> _arrivalPromptedIds = {};
   bool _arrivalDialogOpen = false;
   Timer? _arrivalPollTimer;
@@ -521,7 +558,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
   /// Dedicated arrival poll. The movement stream can't drive this: it emits
   /// only on movement (5m native + 3m state filter), so a user already
   /// standing at the stop when the app opens produces NO event inside the
-  /// 10m arrival ring. A slow timer taking its own fix is the only trigger
+  /// arrival ring. A slow timer taking its own fix is the only trigger
   /// that also notices arrivals that happened while the app was closed.
   ///
   /// FOREGROUND-ONLY, by three independent guards: the timer is started on
@@ -589,7 +626,10 @@ class _MapScreenState extends ConsumerState<MapScreen>
       // Unchanged since the last check → nothing can have changed. Skips
       // the per-stop distance math on every idle tick.
       final ids = candidates.map((l) => l.id).toList()..sort();
-      final key = '${fix.latitude},${fix.longitude}|${ids.join(',')}';
+      // The radius is part of the key: widening it while standing still
+      // must be able to pull a stop into range.
+      final key = '${fix.latitude},${fix.longitude}'
+          '|${_arrivalRadiusMeters.round()}|${ids.join(',')}';
       if (key == _lastArrivalCheckKey) return;
       _lastArrivalCheckKey = key;
       await _maybePromptArrival(fix);
@@ -988,17 +1028,51 @@ class _MapScreenState extends ConsumerState<MapScreen>
         duration: const Duration(seconds: 3),
       );
 
-      final nearby = await PlacesService.searchNearbyPlaces(
-        coordinates,
-        radiusMeters: radius,
-      );
+      List<NearbyPlace> nearby = const [];
+      String? initialError;
+      try {
+        nearby = await PlacesService.searchNearbyPlaces(
+          coordinates,
+          radiusMeters: radius,
+        );
+      } on NearbySearchException {
+        // Open the sheet anyway, in its error state: the user retries from
+        // there. A failed request used to render as "No places found".
+        initialError =
+            'Couldn\'t load nearby places — check your connection and try again.';
+      }
       if (!mounted) return;
       AppToast.dismiss();
+
+      // Places already on the selected day can't be added again (same-day
+      // rule, enforced in LocationAddService) — hand the picker the day's
+      // stops so it marks matching results instead of letting the user
+      // tick them and get a refusal after the fact.
+      final day = dayKey(selectedDate);
+      final occupantsOnDay = <PlaceKey>[
+        for (final l in ref.read(tripProvider).pinnedLocations)
+          if (l.scheduledDate != null && l.isActiveOnDate(day))
+            placeKeyOfModel(l),
+      ];
 
       final picked = await showNearbyPlacesPicker(
         context,
         places: nearby,
         radiusMeters: radius,
+        occupantsOnDay: occupantsOnDay,
+        initialError: initialError,
+        // Apply in the sheet: the new radius becomes the default for the
+        // next long-press, then the same spot is searched again.
+        onRequery: (r) async {
+          await ref.read(nearbyRadiusProvider.notifier).set(r.toDouble());
+          return PlacesService.searchNearbyPlaces(coordinates, radiusMeters: r);
+        },
+        // Typing in the sheet: the loaded list is capped at 20 prominent
+        // places per category, so a specific place can be missing from it
+        // even though the search bar finds it by name — ask Google for
+        // that name around the same spot.
+        onSearchText: (q, r) =>
+            PlacesService.searchNearbyByText(q, coordinates, radiusMeters: r),
       );
       if (picked.isEmpty || !mounted) return;
 
@@ -1464,9 +1538,16 @@ class _MapScreenState extends ConsumerState<MapScreen>
 
     // Listen for the zoom trigger after route optimization
     ref.listen<int>(zoomToFitRouteTrigger, (previous, next) {
-      if (next > (previous ?? 0)) {
-        _zoomToFitTrip();
+      if (next <= (previous ?? 0)) return;
+      // A From/To preview is ONE leg between two pins: frame that pair (its
+      // polyline, which starts and ends at the pins) instead of the whole
+      // day — fitting every stop zoomed the pair out to nothing.
+      final tripState = ref.read(tripProvider);
+      if (tripState.isRoutePreview && tripState.optimizedRoute.isNotEmpty) {
+        _zoomToFitRoute(tripState.optimizedRoute, padding: 90.0);
+        return;
       }
+      _zoomToFitTrip();
     });
 
     // The "aha" moment: a delight event (optimization / day completion) passed
@@ -2036,6 +2117,12 @@ class _MapScreenState extends ConsumerState<MapScreen>
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
+                  // Pin status filter (All / Active / Skipped / Done) —
+                  // hides/shows pins in place, no reload. Lives in this
+                  // shared column (not the trip badge) so it's there for
+                  // loose places on a trip-less map too; it hides itself
+                  // when the day has nothing to filter.
+                  const _PinFilterBar(),
                   Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -2137,7 +2224,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
                     ],
                   ),
                   // Goal-gradient progress: free users see how much of the
-                  // 5-place allowance is used, live. Hidden for Pro.
+                  // free-place allowance (10) is used, live. Hidden for Pro.
                   const Padding(
                     padding: EdgeInsets.only(top: 8),
                     child: FreePlacesProgressChip(),
@@ -2465,14 +2552,27 @@ class _MapScreenState extends ConsumerState<MapScreen>
     if (_isManualRefreshing) return;
     setState(() => _isManualRefreshing = true);
     try {
-      await Future.wait([
-        performInitialLocationSync(ref.read(locationRepositoryProvider)),
+      final repository = ref.read(locationRepositoryProvider);
+      // Re-arm realtime first: a channel that died while the app was in the
+      // background comes back here, so the refresh fixes "no live updates"
+      // as well as stale data.
+      repository.subscribeToRealtimeChanges();
+      final results = await Future.wait<Object?>([
+        performInitialLocationSync(repository),
         // Floor so the spinner reads as action, not flicker.
         Future.delayed(const Duration(milliseconds: 600)),
       ]);
       ref.invalidate(userTripsProvider);
       ref.invalidate(sharedTripsProvider);
-      if (mounted) AppToast.success(context, 'Everything is up to date');
+      if (!mounted) return;
+      // Be honest: the fetch failing used to be swallowed and still toast
+      // "up to date" — with a member's deleted stop still on the map.
+      if (results.first != true) {
+        AppToast.error(context,
+            'Couldn\'t reach the server — showing what\'s on this device.');
+        return;
+      }
+      AppToast.success(context, 'Everything is up to date');
     } catch (e) {
       debugPrint('Manual refresh failed: $e');
       if (mounted) {
@@ -3145,7 +3245,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
         CameraUpdate.newLatLngBounds(bounds, 80.0)); // 80.0 padding
   }
 
-  void _zoomToFitRoute(List<LatLng> routePoints) {
+  void _zoomToFitRoute(List<LatLng> routePoints, {double padding = 60.0}) {
     if (_mapController == null || routePoints.isEmpty) return;
 
     if (routePoints.length == 1) {
@@ -3171,8 +3271,8 @@ class _MapScreenState extends ConsumerState<MapScreen>
       northeast: LatLng(maxLat, maxLng),
     );
 
-    _mapController!.animateCamera(
-        CameraUpdate.newLatLngBounds(bounds, 60.0)); // 60.0 padding
+    _mapController!
+        .animateCamera(CameraUpdate.newLatLngBounds(bounds, padding));
   }
 
   String _formatDistance(double distanceInMeters) {
@@ -3264,6 +3364,185 @@ class _AutoPlanPill extends ConsumerWidget {
                       ),
                     ),
                   ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Status filter for the map's pins — All / Active / Skipped / Done — sitting
+/// above the search bar (under the trip badge when a trip is active; loose
+/// places on a trip-less map get it too). A pure VIEW toggle: nothing is
+/// written and no marker bitmaps are rebuilt; [MapWidget] simply leaves the
+/// hidden pins out of the set it hands to GoogleMap, so a tap flips the map
+/// instantly. Routes, zones and the current-location dot stay put.
+///
+/// Each chip carries the count of pins it would show and a chip with nothing
+/// to show is disabled — so it's always clear WHY the map looks the way it
+/// does, and a tap can never blank the map. Counts follow the map's scope:
+/// the selected day, or every day in Entire-trip mode (which never draws
+/// skipped stops, so "Skipped" reads 0 there). If the active filter runs dry
+/// (the last skipped stop was un-skipped, the day changed) it falls back to
+/// All on its own.
+class _PinFilterBar extends ConsumerWidget {
+  const _PinFilterBar();
+
+  static const _labels = {
+    MapPinFilter.all: 'All',
+    MapPinFilter.active: 'Active',
+    MapPinFilter.skipped: 'Skipped',
+    MapPinFilter.done: 'Done',
+  };
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final allDays = ref.watch(allDaysModeProvider);
+    final List<LocationModel> scope = allDays
+        ? ref
+            .watch(allDayStopsProvider)
+            .values
+            .expand((stops) => stops)
+            .toList()
+        : ref.watch(locationsForSelectedDateProvider);
+    if (scope.isEmpty) return const SizedBox.shrink();
+
+    final filter = ref.watch(mapPinFilterProvider);
+    final counts = <MapPinFilter, int>{
+      for (final f in MapPinFilter.values)
+        f: scope
+            .where((l) =>
+                pinMatchesFilter(f, isSkipped: l.isSkipped, isDone: l.isDone))
+            .length,
+    };
+
+    // Self-heal: a filter that would hide every pin snaps back to All.
+    if (filter != MapPinFilter.all && counts[filter] == 0) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!context.mounted) return;
+        if (ref.read(mapPinFilterProvider) == filter) {
+          ref.read(mapPinFilterProvider.notifier).state = MapPinFilter.all;
+        }
+      });
+    }
+
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Container(
+        padding: const EdgeInsets.all(3),
+        decoration: BoxDecoration(
+          color: theme.cardColor.withValues(alpha: 0.94),
+          borderRadius: BorderRadius.circular(14),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.14),
+              blurRadius: 10,
+              offset: const Offset(0, 3),
+            ),
+          ],
+        ),
+        child: Row(
+          children: [
+            for (final f in MapPinFilter.values)
+              Expanded(
+                child: _PinFilterChip(
+                  label: _labels[f]!,
+                  count: counts[f]!,
+                  selected: f == filter,
+                  enabled: f == MapPinFilter.all || counts[f]! > 0,
+                  onTap: () =>
+                      ref.read(mapPinFilterProvider.notifier).state = f,
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// One segment of [_PinFilterBar]: label + count. Selected = filled with
+/// the primary color; disabled (nothing to show) = faded and inert.
+class _PinFilterChip extends StatelessWidget {
+  final String label;
+  final int count;
+  final bool selected;
+  final bool enabled;
+  final VoidCallback onTap;
+
+  const _PinFilterChip({
+    required this.label,
+    required this.count,
+    required this.selected,
+    required this.enabled,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final primary = theme.colorScheme.primary;
+    final Color fg = selected
+        ? Colors.black
+        : theme.colorScheme.onSurface.withValues(alpha: enabled ? 0.78 : 0.32);
+    return Semantics(
+      button: true,
+      selected: selected,
+      enabled: enabled,
+      label: '$label, $count pins',
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(11),
+          onTap: enabled && !selected ? onTap : null,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 160),
+            curve: Curves.easeOut,
+            padding: const EdgeInsets.symmetric(vertical: 7, horizontal: 4),
+            decoration: BoxDecoration(
+              color: selected ? primary : Colors.transparent,
+              borderRadius: BorderRadius.circular(11),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Flexible(
+                  child: Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: fg,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.2,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 4),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                  decoration: BoxDecoration(
+                    color: selected
+                        ? Colors.black.withValues(alpha: 0.14)
+                        : theme.colorScheme.onSurface
+                            .withValues(alpha: enabled ? 0.08 : 0.04),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    '$count',
+                    style: TextStyle(
+                      color: fg,
+                      fontSize: 10.5,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
               ],
             ),
           ),

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'dart:ui' show ImageFilter;
 
 import 'package:voyza/core/theme.dart';
@@ -37,8 +38,10 @@ import 'package:voyza/providers/local_active_trip_provider.dart';
 import 'package:voyza/providers/trip_provider.dart';
 import 'package:voyza/widgets/accommodation_prompts.dart';
 import 'package:voyza/utils/same_day_place_guard.dart';
+import 'package:voyza/utils/search_text.dart';
 import 'package:voyza/utils/trip_dates.dart';
 import 'package:voyza/services/trip_day_service.dart';
+import 'package:voyza/services/trip_rollover_service.dart';
 import 'package:voyza/widgets/static_glow.dart';
 import 'package:voyza/widgets/rotating_globe_background.dart';
 
@@ -114,6 +117,22 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
   /// Session-only view state, deliberately not persisted — like the photo
   /// collapse set — and it never writes to the locations themselves.
   final Map<DateTime, bool> _sortByAddedDays = {};
+
+  /// Per-day fold state the user set by tapping a header (true = folded).
+  /// Days without an entry use the default: folded when the day is already
+  /// behind the traveller on an ONGOING trip, open otherwise (see
+  /// [_buildDateSection]). Lives for this screen's lifetime only.
+  final Map<DateTime, bool> _dayFoldOverrides = {};
+
+  /// Ongoing-trip landing: the day list opens scrolled to today, once per
+  /// screen life. The sliver builds lazily, so the scroll pages down until
+  /// today's section exists, then aligns it just under the header.
+  final GlobalKey _todayDayKey = GlobalKey();
+  bool _didAutoScrollToToday = false;
+
+  /// Today's header colour on the day list — a different hue from every
+  /// other day, so the eye lands on "now" first.
+  static const Color _todayGreen = Color(0xFF34C759);
 
   /// Collapse state of the Unscheduled-bucket section (session-scoped).
   bool _unscheduledCollapsed = false;
@@ -211,6 +230,11 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
   @override
   void initState() {
     super.initState();
+    // Ongoing trip with "carry unvisited places forward" on: catch up now
+    // (once per trip per day) so the page shows today's real plan.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) unawaited(TripRolloverService.runIfDue(ref));
+    });
     _locationsStream = ref.read(locationRepositoryProvider).watchLocations();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       // Checklist: the add-locations guide is pre-armed by the wizard (or a
@@ -472,18 +496,15 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
                     // places to arrange. Badge dot when the trip clearly
                     // needs it (bucket rows, or an overloaded day).
                     Consumer(builder: (context, ref, _) {
-                      final activeId = ref
-                          .watch(realtimeActiveTripProvider)
-                          .valueOrNull
-                          ?.id;
+                      final activeId =
+                          ref.watch(realtimeActiveTripProvider).valueOrNull?.id;
                       if (activeId != widget.trip.id) {
                         return const SizedBox.shrink();
                       }
-                      final placeCount = ref.watch(tripProvider
-                          .select((s) => s.pinnedLocations.length));
+                      final placeCount = ref.watch(
+                          tripProvider.select((s) => s.pinnedLocations.length));
                       if (placeCount < 2) return const SizedBox.shrink();
-                      final unscheduled =
-                          ref.watch(unscheduledCountProvider);
+                      final unscheduled = ref.watch(unscheduledCountProvider);
                       final overloaded = ref.watch(tripProvider.select((s) {
                         final perDay = <DateTime, int>{};
                         for (final l in s.pinnedLocations) {
@@ -744,7 +765,7 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
         // Apply search filter if query is not empty
         if (_searchQuery.isNotEmpty) {
           tripLocations = tripLocations
-              .where((loc) => loc.name.toLowerCase().contains(_searchQuery))
+              .where((loc) => matchesSearchQuery(loc.name, _searchQuery))
               .toList();
           // A search with no hits keeps the plain empty state — day slots
           // full of empty groups would read as "no results" badly.
@@ -790,6 +811,76 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
   /// past-date edit lockout).
   bool _isPastDay(DateTime day) =>
       _dayKey(day).isBefore(_dayKey(DateTime.now()));
+
+  bool _busyRollover = false;
+
+  /// Owner toggle for "carry unvisited places forward". Persists on the
+  /// trip, then — when switched ON — runs the carry-over immediately so the
+  /// effect is visible right away instead of at the next launch.
+  Future<void> _setAutoRoll(bool enabled) async {
+    if (_busyRollover) return;
+    setState(() => _busyRollover = true);
+    try {
+      final updated = await ref
+          .read(tripRepositoryProvider)
+          .updateTrip(_trip.id, autoRollUnvisited: enabled);
+      ref.invalidate(userTripsProvider);
+      if (!mounted) return;
+      setState(() => _tripOverride = updated);
+      if (enabled) {
+        final notice = await TripRolloverService.rollNow(ref, updated);
+        if (!mounted) return;
+        AppToast.success(
+          context,
+          notice == null
+              ? 'On — unvisited places will move to the current day.'
+              : notice.message,
+          duration: notice == null ? null : const Duration(seconds: 5),
+        );
+      } else {
+        AppToast.info(context, 'Off — places stay on their planned day.');
+      }
+    } catch (e) {
+      if (mounted) {
+        AppToast.error(context, 'Couldn\'t update this setting. $e');
+      }
+    } finally {
+      if (mounted) setState(() => _busyRollover = false);
+    }
+  }
+
+  /// Ongoing trip: open on today. Runs once per screen life, after the
+  /// first frame that laid the day list out.
+  void _scheduleAutoScrollToToday() {
+    if (_didAutoScrollToToday) return;
+    _didAutoScrollToToday = true;
+    WidgetsBinding.instance
+        .addPostFrameCallback((_) => _autoScrollToToday(attempt: 0));
+  }
+
+  /// The day list is a lazy sliver: today's section doesn't exist until it
+  /// is near the viewport, so `ensureVisible` alone can't reach it. Page
+  /// the list down until the keyed section is built, then align it just
+  /// under the header. Bounded so a missing key can never loop forever.
+  void _autoScrollToToday({required int attempt}) {
+    if (!mounted || !_listScrollController.hasClients) return;
+    final ctx = _todayDayKey.currentContext;
+    if (ctx != null) {
+      Scrollable.ensureVisible(
+        ctx,
+        alignment: 0.02,
+        duration: const Duration(milliseconds: 350),
+        curve: Curves.easeOutCubic,
+      );
+      return;
+    }
+    final pos = _listScrollController.position;
+    if (attempt >= 40 || pos.pixels >= pos.maxScrollExtent - 1) return;
+    _listScrollController.jumpTo(math.min(
+        pos.pixels + pos.viewportDimension * 0.9, pos.maxScrollExtent));
+    WidgetsBinding.instance
+        .addPostFrameCallback((_) => _autoScrollToToday(attempt: attempt + 1));
+  }
 
   /// Builds the full, gap-free list of dates to display: the contiguous span
   /// from the earliest to the latest date the trip touches — the trip's
@@ -844,6 +935,16 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
 
     final allDates = _buildAllDates(locations);
 
+    // Ongoing trip = it has started and today is on or before its last day.
+    // Only then does every day except today fold up (the page opens on
+    // "now", with the rest a tap away); on a finished trip EVERY day is
+    // past, and folding them all would hide the whole memory of the trip.
+    final today = _dayKey(DateTime.now());
+    final tripOngoing = allDates.isNotEmpty &&
+        allDates.first.isBefore(today) &&
+        !allDates.last.isBefore(today);
+    if (tripOngoing && _searchQuery.isEmpty) _scheduleAutoScrollToToday();
+
     // If the trip has no date range AND no locations anywhere (days or the
     // Unscheduled bucket), fall back to the standard empty state below the
     // trip info card.
@@ -886,11 +987,16 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
               }
               final day = allDates[index];
               final dateGroup = groupedByDay[day] ?? const <SavedLocation>[];
-              return _buildDateSection(
+              final section = _buildDateSection(
                 day,
                 dateGroup,
                 hasWriteAccess: hasWriteAccess,
+                tripOngoing: tripOngoing,
               );
+              // Keyed so the ongoing-trip landing can scroll to it.
+              return day == today
+                  ? KeyedSubtree(key: _todayDayKey, child: section)
+                  : section;
             },
             childCount: allDates.length +
                 ((hasWriteAccess && _searchQuery.isEmpty) ? 1 : 0),
@@ -1166,6 +1272,54 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
                 );
               }),
             ],
+            // ── Carry unvisited places forward (owner, dated trips only) ──
+            if (_trip.startDate != null && _trip.endDate != null)
+              Consumer(builder: (context, ref, _) {
+                final isOwner = ref
+                        .watch(isTripOwnerProvider(widget.trip.id))
+                        .valueOrNull ??
+                    false;
+                if (!isOwner) return const SizedBox.shrink();
+                final theme = Theme.of(context);
+                final on = _trip.autoRollUnvisited;
+                return Padding(
+                  padding: const EdgeInsets.only(top: 10),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      Icon(Icons.update_rounded,
+                          size: 16, color: theme.colorScheme.primary),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Carry unvisited places forward',
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: theme.colorScheme.primary,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            Text(
+                              'Each new day, places you didn\'t visit move '
+                              'to today. A place already planned that day '
+                              'stays where it is.',
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: theme.colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Switch.adaptive(
+                        value: on,
+                        onChanged: _busyRollover ? null : _setAutoRoll,
+                      ),
+                    ],
+                  ),
+                );
+              }),
             // ── Sharing: publish for copy-by-code; the code (tap to copy)
             // once public. Owner-only and signed-in (the RPC enforces both).
             Consumer(builder: (context, ref, _) {
@@ -1199,8 +1353,8 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
                         label: const Text('Publish'),
                         style: OutlinedButton.styleFrom(
                           foregroundColor: primary,
-                          side: BorderSide(
-                              color: primary.withValues(alpha: 0.5)),
+                          side:
+                              BorderSide(color: primary.withValues(alpha: 0.5)),
                           visualDensity: VisualDensity.compact,
                           shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(12)),
@@ -1516,8 +1670,7 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
                               .watch(realtimeActiveTripProvider)
                               .valueOrNull
                               ?.id;
-                          if (activeId != widget.trip.id ||
-                              !hasWriteAccess) {
+                          if (activeId != widget.trip.id || !hasWriteAccess) {
                             return const SizedBox.shrink();
                           }
                           return TextButton.icon(
@@ -1528,8 +1681,8 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
                             style: TextButton.styleFrom(
                               foregroundColor: amber,
                               visualDensity: VisualDensity.compact,
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 8),
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 8),
                             ),
                           );
                         }),
@@ -1545,8 +1698,8 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
                           iconSize: 22,
                           visualDensity: VisualDensity.compact,
                           padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(
-                              minWidth: 40, minHeight: 32),
+                          constraints:
+                              const BoxConstraints(minWidth: 40, minHeight: 32),
                           tooltip: _unscheduledCollapsed ? 'Show' : 'Hide',
                         ),
                       ],
@@ -1595,8 +1748,8 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
     if (rows.isEmpty) return;
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
-    final all = ref.read(savedLocationsProvider).valueOrNull ??
-        const <SavedLocation>[];
+    final all =
+        ref.read(savedLocationsProvider).valueOrNull ?? const <SavedLocation>[];
     final tripRows = all.where((l) => l.tripId == widget.trip.id);
     final highlighted = {
       for (final l in tripRows)
@@ -1683,12 +1836,27 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
     DateTime day,
     List<SavedLocation> locations, {
     required bool hasWriteAccess,
+    bool tripOngoing = false,
   }) {
     final dateLabel = DateFormat('MMMM dd, yyyy').format(day);
     final theme = Theme.of(context);
     // A place can only be added to today or a future day. Past days stay
     // read-only for adding (existing cards can still be dragged around).
     final canAddHere = hasWriteAccess && !_isPastDay(day);
+
+    // Every day folds from its header (chevron on the date chip). On an
+    // ONGOING trip every day but today starts folded, so the page opens on
+    // the day being lived; on any other trip every day starts open. A
+    // search shows everything — a hit inside a folded day would otherwise
+    // look like a miss.
+    final isPast = _isPastDay(day);
+    final isToday = _dayKey(day) == _dayKey(DateTime.now());
+    final foldable = _searchQuery.isEmpty;
+    final foldedByDefault = tripOngoing && !isToday;
+    // Today's header is green; every other day keeps the primary tint.
+    final accent = isToday ? _todayGreen : theme.colorScheme.primary;
+    final folded = foldable && (_dayFoldOverrides[day] ?? foldedByDefault);
+    void toggleFold() => setState(() => _dayFoldOverrides[day] = !folded);
 
     // Header sort toggle. null = natural order; true = oldest added first;
     // false = newest added first. Sorts on createdAt — the exact value the
@@ -1763,40 +1931,82 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
                     // accessibility text scales truncates instead of
                     // overflowing the header Row.
                     Flexible(
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 6),
-                        decoration: BoxDecoration(
-                          color:
-                              theme.colorScheme.primary.withValues(alpha: 0.15),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Flexible(
-                              child: Text(
-                                dateLabel,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: theme.textTheme.labelLarge?.copyWith(
-                                  color: theme.colorScheme.primary,
-                                  fontWeight: FontWeight.w600,
+                      child: InkWell(
+                        // Foldable days toggle from the date chip (and from
+                        // the folded summary row below).
+                        onTap: foldable ? toggleFold : null,
+                        borderRadius: BorderRadius.circular(8),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 6),
+                          decoration: BoxDecoration(
+                            color:
+                                accent.withValues(alpha: isToday ? 0.22 : 0.15),
+                            borderRadius: BorderRadius.circular(8),
+                            border: isToday
+                                ? Border.all(
+                                    color: accent.withValues(alpha: 0.6),
+                                    width: 1.2)
+                                : null,
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (foldable) ...[
+                                Icon(
+                                  folded
+                                      ? Icons.chevron_right_rounded
+                                      : Icons.expand_more_rounded,
+                                  size: 18,
+                                  color: accent,
+                                ),
+                                const SizedBox(width: 2),
+                              ],
+                              Flexible(
+                                child: Text(
+                                  dateLabel,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: theme.textTheme.labelLarge?.copyWith(
+                                    color: accent,
+                                    fontWeight: isToday
+                                        ? FontWeight.w800
+                                        : FontWeight.w600,
+                                  ),
                                 ),
                               ),
-                            ),
-                            if (locations.isNotEmpty) ...[
-                              const SizedBox(width: 8),
-                              Text(
-                                '${locations.length}',
-                                style: theme.textTheme.labelSmall?.copyWith(
-                                  color: theme.colorScheme.primary
-                                      .withValues(alpha: 0.7),
-                                  fontWeight: FontWeight.w600,
+                              if (isToday) ...[
+                                const SizedBox(width: 8),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 6, vertical: 1.5),
+                                  decoration: BoxDecoration(
+                                    color: _todayGreen,
+                                    borderRadius: BorderRadius.circular(6),
+                                  ),
+                                  child: const Text(
+                                    'Today',
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 10.5,
+                                      fontWeight: FontWeight.w800,
+                                      letterSpacing: 0.3,
+                                    ),
+                                  ),
                                 ),
-                              ),
+                              ],
+                              if (locations.isNotEmpty) ...[
+                                const SizedBox(width: 8),
+                                Text(
+                                  '${locations.length}',
+                                  style: theme.textTheme.labelSmall?.copyWith(
+                                    color: accent.withValues(alpha: 0.8),
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ],
                             ],
-                          ],
+                          ),
                         ),
                       ),
                     ),
@@ -1810,7 +2020,7 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
                         // order, which is also the drag order) → oldest
                         // first (arrow up) → newest first (arrow down).
                         // The arrow always points the way the dates run.
-                        if (locations.length > 1)
+                        if (locations.length > 1 && !folded)
                           IconButton(
                             onPressed: () => setState(() {
                               final current = _sortByAddedDays[day];
@@ -1864,36 +2074,91 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
                     ),
                   ],
                 ),
-                const SizedBox(height: 12),
-                if (locations.isEmpty)
-                  canAddHere
-                      ? InkWell(
-                          onTap: () => _showAddLocationForDate(day),
-                          borderRadius: BorderRadius.circular(10),
-                          child: _buildEmptyDayPlaceholder(
-                              highlighted: highlighted, canAdd: true),
-                        )
-                      : _buildEmptyDayPlaceholder(highlighted: highlighted)
-                else
-                  ListView.separated(
-                    shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    itemCount: displayLocations.length,
-                    separatorBuilder: (context, index) =>
-                        const SizedBox(height: 8),
-                    // displayLocations everywhere (card, index, group) so the
-                    // detail sheet's swipe-through order matches the screen.
-                    itemBuilder: (context, index) => _buildLocationCard(
-                      displayLocations[index],
-                      index,
-                      displayLocations,
-                      hasWriteAccess: hasWriteAccess,
+                if (folded)
+                  _buildFoldedDaySummary(day, locations, isPast: isPast)
+                else ...[
+                  const SizedBox(height: 12),
+                  if (locations.isEmpty)
+                    canAddHere
+                        ? InkWell(
+                            onTap: () => _showAddLocationForDate(day),
+                            borderRadius: BorderRadius.circular(10),
+                            child: _buildEmptyDayPlaceholder(
+                                highlighted: highlighted, canAdd: true),
+                          )
+                        : _buildEmptyDayPlaceholder(highlighted: highlighted)
+                  else
+                    ListView.separated(
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      itemCount: displayLocations.length,
+                      separatorBuilder: (context, index) =>
+                          const SizedBox(height: 8),
+                      // displayLocations everywhere (card, index, group) so
+                      // the detail sheet's swipe-through order matches the
+                      // screen.
+                      itemBuilder: (context, index) => _buildLocationCard(
+                        displayLocations[index],
+                        index,
+                        displayLocations,
+                        hasWriteAccess: hasWriteAccess,
+                      ),
                     ),
-                  ),
+                ],
               ],
             ),
           );
         },
+      ),
+    );
+  }
+
+  /// One-line stand-in for a folded day — what's on it and a nudge that it
+  /// opens on tap. Tappable itself, so the whole header area unfolds, not
+  /// just the date chip. Past days read in the past tense ("was planned").
+  Widget _buildFoldedDaySummary(
+    DateTime day,
+    List<SavedLocation> locations, {
+    required bool isPast,
+  }) {
+    final theme = Theme.of(context);
+    final n = locations.length;
+    final done = locations.where((l) => l.isDone).length;
+    final String summary;
+    if (n == 0) {
+      summary = isPast ? 'Nothing was planned' : 'Nothing planned yet';
+    } else {
+      final places = '$n place${n == 1 ? '' : 's'}';
+      summary = done == 0
+          ? places
+          : done == n
+              ? '$places · all done'
+              : '$places · $done done';
+    }
+    final muted = theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.75);
+    return InkWell(
+      onTap: () => setState(() => _dayFoldOverrides[day] = false),
+      borderRadius: BorderRadius.circular(8),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(6, 8, 6, 2),
+        child: Row(
+          children: [
+            Icon(
+              isPast ? Icons.history_rounded : Icons.unfold_more_rounded,
+              size: 14,
+              color: muted,
+            ),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text(
+                '$summary · tap to show',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.bodySmall?.copyWith(color: muted),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -2511,6 +2776,7 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
               l.scheduledDate != null &&
               l.isActiveOnDate(day))
           .map(placeKeyOfSaved),
+      samePlace: isLikelySamePlace,
     ).allowedIds.isEmpty;
   }
 
@@ -2533,6 +2799,11 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
         scrollController.position.maxScrollExtent * 0.8) {
       ref.read(tripDetailSearchProvider.notifier).loadMore();
     }
+  }
+
+  String _formatDistance(int distanceMeters) {
+    if (distanceMeters < 1000) return '${distanceMeters}m away';
+    return '${(distanceMeters / 1000).toStringAsFixed(1)}km away';
   }
 
   @override
@@ -2852,15 +3123,43 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
             prediction.mainText,
             style: const TextStyle(fontWeight: FontWeight.w600),
           ),
-          subtitle: Text(
-            prediction.secondaryText,
-            style: TextStyle(
-              color: Theme.of(context)
-                  .textTheme
-                  .bodyMedium
-                  ?.color
-                  ?.withValues(alpha: 0.6),
-            ),
+          subtitle: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                prediction.secondaryText,
+                style: TextStyle(
+                  color: Theme.of(context)
+                      .textTheme
+                      .bodyMedium
+                      ?.color
+                      ?.withValues(alpha: 0.6),
+                ),
+              ),
+              // Distance from the device — same "Xkm away" line the map's
+              // search screen shows, so both add paths read identically.
+              // Null when the device has no fix (search still works).
+              if (prediction.distanceMeters != null) ...[
+                const SizedBox(height: 4),
+                Row(
+                  children: [
+                    Icon(
+                      Icons.near_me,
+                      size: 12,
+                      color: Theme.of(context).colorScheme.primary,
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      _formatDistance(prediction.distanceMeters!),
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: Theme.of(context).colorScheme.primary,
+                            fontWeight: FontWeight.w600,
+                          ),
+                    ),
+                  ],
+                ),
+              ],
+            ],
           ),
           onTap: () => _addLocationToTrip(prediction),
         );

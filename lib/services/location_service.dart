@@ -188,9 +188,17 @@ class LocationService {
                 distanceFilter: 5,
               );
 
+    // Errors must NOT end this stream. `await for` rethrows the first error
+    // the platform stream emits — a transient kCLErrorLocationUnknown, a
+    // provider hiccup right after the app comes back from the background —
+    // and that terminated the generator for good: the dot froze for the rest
+    // of the session. Geolocator's own stream survives its errors (updates
+    // keep coming after them), so log and keep pulling.
     await for (final position in Geolocator.getPositionStream(
       locationSettings: locationSettings,
-    )) {
+    ).handleError((Object error) {
+      debugPrint('Position stream error (stream kept alive): $error');
+    })) {
       yield LatLng(position.latitude, position.longitude);
     }
   }

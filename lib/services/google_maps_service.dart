@@ -45,6 +45,11 @@ class GoogleMapsService {
         'status': status,
       };
 
+  /// Routes API cap on free `intermediates` per request. Not a cap on a
+  /// day: [MultiModalRouter.routeItinerary] routes longer days as several
+  /// consecutive requests of at most this many stops each.
+  static const int maxIntermediates = 25;
+
   static Future<Map<String, dynamic>> getOptimizedRouteDetails({
     required LatLng origin,
     LocationModel? destination,
@@ -70,15 +75,16 @@ class GoogleMapsService {
     assert(!(mode == 'transit' && waypoints.isNotEmpty),
         'transit routing is single-leg only');
 
-    // Routes API hard limit: at most 25 `intermediates` per request
-    // (waypoints become intermediates only when a destination is given).
-    // Callers pre-check MultiModalRouter.maxRoutableStopsPerDay; this
-    // pre-flight turns a guaranteed 400 — which the catch below would
-    // report as a mode-level 'empty' and trigger pointless fallback calls
-    // — into an immediate explicit error with zero network traffic.
-    if (destination != null && waypoints.length > 25) {
+    // Routes API hard limit: at most [maxIntermediates] `intermediates` per
+    // request (waypoints become intermediates only when a destination is
+    // given). The router splits longer days into segments; this pre-flight
+    // turns a guaranteed 400 — which the catch below would report as a
+    // mode-level 'empty' and trigger pointless fallback calls — into an
+    // immediate explicit error with zero network traffic.
+    if (destination != null && waypoints.length > maxIntermediates) {
       debugPrint('getOptimizedRouteDetails: ${waypoints.length} intermediates '
-          'exceed the Routes API limit of 25 — refusing before the request.');
+          'exceed the Routes API limit of $maxIntermediates — refusing before '
+          'the request.');
       return _emptyResult('error');
     }
 

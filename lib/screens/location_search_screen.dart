@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:google_maps_url_extractor/google_maps_url_extractor.dart';
+import 'package:intl/intl.dart';
 import 'package:uuid/uuid.dart';
 import 'package:voyza/core/theme.dart';
 import 'package:voyza/models/location_model.dart';
@@ -14,6 +15,8 @@ import 'package:voyza/providers/trip_collaborator_provider.dart';
 import 'package:voyza/providers/trip_provider.dart';
 import 'package:voyza/services/location_add_service.dart';
 import 'package:voyza/services/places_service.dart';
+import 'package:voyza/utils/same_day_place_guard.dart';
+import 'package:voyza/utils/trip_dates.dart';
 import 'package:voyza/widgets/app_toast.dart';
 import 'package:voyza/widgets/google_maps_url_dialog.dart';
 import 'package:voyza/widgets/rotating_globe_background.dart';
@@ -46,15 +49,44 @@ class _LocationSearchScreenState extends ConsumerState<LocationSearchScreen> {
   bool _isAddingPlace = false;
   bool _focusRequested = false;
 
-  /// Returns true when [placeId] already corresponds to a location on the
-  /// active trip. Lets the screen short-circuit duplicates BEFORE paying
-  /// for Place Details enrichment and prevents a redundant repository
-  /// write. Empty / null place ids never match.
-  bool _isAlreadyInTrip(String? placeId) {
-    if (placeId == null || placeId.isEmpty) return false;
-    final pinned = ref.read(tripProvider).pinnedLocations;
-    return pinned.any((l) => l.placeId == placeId);
+  /// Same-day duplicate check — the one shared rule every schedule path
+  /// uses ([filterSameDayDuplicates]): a place may repeat across a trip's
+  /// days, but never within one day. Runs against the SELECTED day only,
+  /// so a place the trip already visits on another day can be added again
+  /// here. Cheap enough to run before paying for Place Details (place_id
+  /// only) and again after (canonical id + name/coords for rows that never
+  /// had a place_id).
+  bool _isAlreadyOnSelectedDay({
+    String? placeId,
+    String? name,
+    double? lat,
+    double? lng,
+  }) {
+    final hasId = placeId != null && placeId.isNotEmpty;
+    final hasName = name != null && name.isNotEmpty;
+    if (!hasId && !hasName) return false;
+    final day = dayKey(ref.read(selectedDateProvider));
+    final candidate = (
+      id: '',
+      placeId: placeId,
+      name: name ?? '',
+      lat: lat ?? double.nan,
+      lng: lng ?? double.nan,
+    );
+    final occupants = ref
+        .read(tripProvider)
+        .pinnedLocations
+        .where((l) => l.scheduledDate != null && l.isActiveOnDate(day))
+        .map(placeKeyOfModel);
+    return filterSameDayDuplicates(
+      moving: [candidate],
+      occupantsOnDay: occupants,
+      samePlace: isLikelySamePlace,
+    ).allowedIds.isEmpty;
   }
+
+  String _selectedDayLabel() =>
+      DateFormat('MMM d').format(ref.read(selectedDateProvider));
 
   /// Reset the screen back to its "ready for the next search" state after
   /// a successful add or a duplicate hit. The user stays on the screen
@@ -176,13 +208,13 @@ class _LocationSearchScreenState extends ConsumerState<LocationSearchScreen> {
     }
 
     // Cheap duplicate check using the prediction's place_id — saves the
-    // round-trip cost of Place Details when the pick is already in the
-    // trip. Tell the user, reset the search so they can pick the next
-    // place, and bail.
-    if (_isAlreadyInTrip(prediction.placeId)) {
+    // round-trip cost of Place Details when the pick is already on the
+    // selected day. Tell the user, reset the search so they can pick the
+    // next place, and bail.
+    if (_isAlreadyOnSelectedDay(placeId: prediction.placeId)) {
       AppToast.warning(
         context,
-        '"${prediction.mainText}" is already in your trip',
+        '"${prediction.mainText}" is already planned for ${_selectedDayLabel()}',
       );
       _resetSearchForNextAdd();
       return;
@@ -199,10 +231,15 @@ class _LocationSearchScreenState extends ConsumerState<LocationSearchScreen> {
       // variants, etc.). Re-check duplicates against the canonical id
       // before committing.
       final canonicalPlaceId = placeDetails.placeId ?? prediction.placeId;
-      if (_isAlreadyInTrip(canonicalPlaceId)) {
+      if (_isAlreadyOnSelectedDay(
+        placeId: canonicalPlaceId,
+        name: placeDetails.name,
+        lat: placeDetails.coordinates.latitude,
+        lng: placeDetails.coordinates.longitude,
+      )) {
         AppToast.warning(
           context,
-          '"${placeDetails.name}" is already in your trip',
+          '"${placeDetails.name}" is already planned for ${_selectedDayLabel()}',
         );
         _resetSearchForNextAdd();
         return;
@@ -220,6 +257,11 @@ class _LocationSearchScreenState extends ConsumerState<LocationSearchScreen> {
         photoAttributions: placeDetails.photoAttributions,
         placeId: canonicalPlaceId,
         originalName: placeDetails.name,
+        // Hours ride along from the same Place Details call — this path
+        // used to drop them, leaving every map-searched place hour-less.
+        googleOpeningHours: placeDetails.openingHours,
+        hoursLastRefreshedAt:
+            placeDetails.openingHours != null ? DateTime.now() : null,
       );
 
       final added = await LocationAddService(ref).beforeAddingLocation(
@@ -319,13 +361,19 @@ class _LocationSearchScreenState extends ConsumerState<LocationSearchScreen> {
         return;
       }
 
-      // Reject the paste if the decoded place is already on the trip —
-      // mirrors the tap-to-add path so both entry points behave the same.
-      if (_isAlreadyInTrip(placeDetails.placeId)) {
+      // Reject the paste if the decoded place is already on the selected
+      // day — mirrors the tap-to-add path so both entry points behave the
+      // same (same place on ANOTHER day is fine).
+      if (_isAlreadyOnSelectedDay(
+        placeId: placeDetails.placeId,
+        name: placeDetails.name,
+        lat: placeDetails.coordinates.latitude,
+        lng: placeDetails.coordinates.longitude,
+      )) {
         if (mounted) {
           AppToast.warning(
             context,
-            '"${placeDetails.name}" is already in your trip',
+            '"${placeDetails.name}" is already planned for ${_selectedDayLabel()}',
           );
           _resetSearchForNextAdd();
         }

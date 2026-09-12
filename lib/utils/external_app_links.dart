@@ -48,15 +48,7 @@ Future<void> openDirectionsInGoogleMaps({
   List<LocationModel> waypoints = const [],
   String mode = 'drive',
 }) async {
-  // VoyZa leg mode → Google Maps deeplink travelmode. bicycling covers both
-  // cycle modes (no motorcycle travelmode exists); 'direct' hands off as
-  // walking — the closest thing to "find your own way".
-  final travelmode = switch (mode) {
-    'walk' || 'direct' => 'walking',
-    'transit' => 'transit',
-    'bicycle' || 'two_wheeler' => 'bicycling',
-    _ => 'driving',
-  };
+  final travelmode = _travelModeParam(mode);
   final params = <String, String>{
     'api': '1',
     'origin': _coordsParam(origin),
@@ -136,6 +128,38 @@ Future<void> openGrabRoute({
     debugPrint('Could not launch Grab: $e');
   }
 }
+
+/// Opens turn-by-turn navigation in Google Maps from the device's CURRENT
+/// position to [destination]. Leaving `origin` out is the documented way to
+/// start from the user's location (Google Maps resolves it itself, so this
+/// works even when VoyZa has no GPS fix yet); `dir_action=navigate` jumps
+/// straight into navigation instead of the route preview when the app can.
+/// The destination is anchored to its place_id when we have one.
+Future<void> openNavigationToLocation(
+  LocationModel destination, {
+  String mode = 'drive',
+}) async {
+  final params = <String, String>{
+    'api': '1',
+    'destination': _coordsParam(destination),
+    'travelmode': _travelModeParam(mode),
+    'dir_action': 'navigate',
+    if (destination.placeId != null && destination.placeId!.isNotEmpty)
+      'destination_place_id': destination.placeId!,
+  };
+  final url = Uri.https('www.google.com', '/maps/dir/', params);
+  await _launchOrFallback(url, fallbackCoords: destination.coordinates);
+}
+
+/// VoyZa leg mode → Google Maps deeplink travelmode. bicycling covers both
+/// cycle modes (no motorcycle travelmode exists); 'direct' hands off as
+/// walking — the closest thing to "find your own way".
+String _travelModeParam(String mode) => switch (mode) {
+      'walk' || 'direct' => 'walking',
+      'transit' => 'transit',
+      'bicycle' || 'two_wheeler' => 'bicycling',
+      _ => 'driving',
+    };
 
 String _coordsParam(LocationModel l) =>
     '${l.coordinates.latitude},${l.coordinates.longitude}';

@@ -31,6 +31,11 @@ class OptimizedLocationCard extends ConsumerStatefulWidget {
   final DraggableScrollableController? sheetController;
   final Function(LatLng)? onLocationTap;
 
+  /// false = the day has no optimized route yet, so the "N." prefix (a
+  /// visit order) is withheld; the start flag and done/skipped glyphs
+  /// still show.
+  final bool showNumber;
+
   const OptimizedLocationCard({
     super.key,
     required this.location,
@@ -38,6 +43,7 @@ class OptimizedLocationCard extends ConsumerStatefulWidget {
     required this.scrollController,
     required this.sheetController,
     required this.onLocationTap,
+    this.showNumber = true,
   });
 
   @override
@@ -368,7 +374,7 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
                               Icon(Icons.flag_rounded, size: 18, color: accent),
                         ),
                       )
-                    else
+                    else if (widget.showNumber)
                       TextSpan(
                         text: '$number. ',
                         style: titleStyle?.copyWith(color: accent),
@@ -841,9 +847,8 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
         ? null
         : DateTime(startRaw.year, startRaw.month, startRaw.day);
     final endRaw = location.scheduledEndDate ?? startRaw;
-    final end = endRaw == null
-        ? null
-        : DateTime(endRaw.year, endRaw.month, endRaw.day);
+    final end =
+        endRaw == null ? null : DateTime(endRaw.year, endRaw.month, endRaw.day);
     final spansHere = start != null &&
         end != null &&
         end.isAfter(start) &&

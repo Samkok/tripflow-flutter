@@ -21,6 +21,11 @@ class Trip {
   /// maintained server-side). The owner's endorsement number.
   final int copyCount;
 
+  /// Owner setting: while the trip is ongoing, stops left active (not done,
+  /// not skipped) on a day that has passed are moved to today by the
+  /// owner's app. See TripRolloverService. Off by default.
+  final bool autoRollUnvisited;
+
   final DateTime createdAt;
   final DateTime updatedAt;
 
@@ -39,6 +44,7 @@ class Trip {
     this.isPublic = false,
     this.shareCode,
     this.copyCount = 0,
+    this.autoRollUnvisited = false,
     required this.createdAt,
     required this.updatedAt,
   });
@@ -63,6 +69,7 @@ class Trip {
       isPublic: json['is_public'] as bool? ?? false,
       shareCode: json['share_code'] as String?,
       copyCount: json['copy_count'] as int? ?? 0,
+      autoRollUnvisited: json['auto_roll_unvisited'] as bool? ?? false,
       createdAt: DateTime.parse(json['created_at'] as String),
       updatedAt: DateTime.parse(json['updated_at'] as String),
     );
@@ -84,6 +91,7 @@ class Trip {
       'is_public': isPublic,
       'share_code': shareCode,
       'copy_count': copyCount,
+      'auto_roll_unvisited': autoRollUnvisited,
       'created_at': createdAt.toIso8601String(),
       'updated_at': updatedAt.toIso8601String(),
     };
@@ -132,6 +140,7 @@ class Trip {
     bool? isPublic,
     String? shareCode,
     int? copyCount,
+    bool? autoRollUnvisited,
     DateTime? createdAt,
     DateTime? updatedAt,
   }) {
@@ -150,6 +159,7 @@ class Trip {
       isPublic: isPublic ?? this.isPublic,
       shareCode: shareCode ?? this.shareCode,
       copyCount: copyCount ?? this.copyCount,
+      autoRollUnvisited: autoRollUnvisited ?? this.autoRollUnvisited,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
     );

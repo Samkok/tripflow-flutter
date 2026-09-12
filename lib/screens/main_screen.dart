@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -5,6 +7,8 @@ import 'package:voyza/core/theme.dart';
 import 'package:voyza/providers/auth_provider.dart';
 import 'package:voyza/providers/location_provider.dart';
 import 'package:voyza/providers/onboarding_provider.dart';
+import 'package:voyza/services/trip_rollover_service.dart';
+import 'package:voyza/widgets/app_toast.dart';
 import 'dart:ui';
 import 'package:voyza/screens/trip_screen.dart';
 import 'package:voyza/screens/map_screen.dart';
@@ -41,6 +45,11 @@ class _MainScreenState extends ConsumerState<MainScreen> {
       // not be mutated during build/init.
       ref.read(selectedTabIndexProvider.notifier).state = _selectedIndex;
 
+      // A carry-forward that ran before this screen existed (resume hook
+      // while onboarding/auth was up) still gets its one toast.
+      final pendingRollover = ref.read(rolloverNoticeProvider);
+      if (pendingRollover != null) _showRolloverNotice(pendingRollover);
+
       final repository = ref.read(locationRepositoryProvider);
       // Cap how long the loading overlay can block: if the fetch is slow, reveal
       // the map anyway (cached/empty) and let it populate reactively via the
@@ -54,6 +63,9 @@ class _MainScreenState extends ConsumerState<MainScreen> {
       if (mounted) {
         ref.read(initialSyncCompleteProvider.notifier).state = true;
       }
+      // Ongoing trips with "carry unvisited places forward" on: move what
+      // wasn't visited on past days to today (once per trip per day).
+      if (mounted) unawaited(TripRolloverService.runIfDue(ref));
       // One-time analytics consent prompt for EU/UK/CH users (no-op elsewhere).
       if (mounted) {
         await maybeShowAnalyticsConsent(context);
@@ -71,6 +83,15 @@ class _MainScreenState extends ConsumerState<MainScreen> {
         ref.read(mapTutorialRecheckProvider.notifier).state++;
       }
     });
+  }
+
+  /// The single in-app alert for an automatic carry-forward run — same
+  /// sentence the other members receive as a push.
+  void _showRolloverNotice(RolloverNotice notice) {
+    ref.read(rolloverNoticeProvider.notifier).state = null; // consume
+    if (!mounted) return;
+    AppToast.info(context, notice.message,
+        duration: const Duration(seconds: 5));
   }
 
   static final List<Widget> _widgetOptions = <Widget>[
@@ -102,6 +123,13 @@ class _MainScreenState extends ConsumerState<MainScreen> {
         if (!mounted || !context.mounted) return;
         showChecklistCompleteCelebration(context);
       });
+    });
+
+    // "Carry unvisited places forward" moved something on this device: ONE
+    // toast here (the other members get one push each, server-side).
+    // Consumed on show so nothing re-fires on rebuild.
+    ref.listen<RolloverNotice?>(rolloverNoticeProvider, (prev, next) {
+      if (next != null) _showRolloverNotice(next);
     });
 
     // One-shot tab-switch requests (e.g. trip activated → jump to Map).

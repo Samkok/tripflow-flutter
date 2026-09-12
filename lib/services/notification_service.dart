@@ -366,6 +366,7 @@ class NotificationService {
     switch (type) {
       case 'collaborator_added':
       case 'location_added':
+      case 'trip_rollover':
         _requestOpenTrip(tripId, locationId);
         break;
       default:

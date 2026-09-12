@@ -463,6 +463,9 @@ class _SearchWidgetState extends ConsumerState<SearchWidget> {
         photoAttributions: placeDetails.photoAttributions,
         placeId: placeDetails.placeId ?? prediction.placeId,
         originalName: placeDetails.name,
+        googleOpeningHours: placeDetails.openingHours,
+        hoursLastRefreshedAt:
+            placeDetails.openingHours != null ? DateTime.now() : null,
       );
 
       final added = await LocationAddService(ref).beforeAddingLocation(

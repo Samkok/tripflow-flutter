@@ -13,8 +13,10 @@ LocationModel _place(int i) => LocationModel(
     );
 
 void main() {
-  test('constant matches the Routes API intermediates limit', () {
-    expect(MultiModalRouter.maxRoutableStopsPerDay, 25);
+  test('segment size matches the Routes API intermediates limit', () {
+    expect(GoogleMapsService.maxIntermediates, 25);
+    expect(
+        MultiModalRouter.routeSegmentStops, GoogleMapsService.maxIntermediates);
   });
 
   test('getOptimizedRouteDetails refuses >25 intermediates with no network',

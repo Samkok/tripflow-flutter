@@ -25,7 +25,7 @@ Color freePlaceSegmentColor(BuildContext context, int index,
 /// the limit is worth surfacing again next session.
 final freePlacesChipDismissedProvider = StateProvider<bool>((_) => false);
 
-/// Segmented "N of 5 free places used" goal-gradient meter. Pure UI —
+/// Segmented "N of 10 free places used" goal-gradient meter. Pure UI —
 /// used inside the first-trip celebration and the map-screen progress chip.
 class FreePlacesMeter extends StatelessWidget {
   final int used;
@@ -94,7 +94,8 @@ class FreePlacesProgressChip extends ConsumerWidget {
     if (all == null) return const SizedBox.shrink(); // stream not ready yet
 
     final userId = ref.watch(currentUserIdProvider);
-    // Base 5 + permanent referral bonus slots (loads async; base until then).
+    // Base allowance (10) + permanent referral bonus slots (loads async;
+    // base until then).
     final totalAllowance = SubscriptionLimitService.freePlaceAllowance +
         (ref.watch(referralBonusPlacesProvider).valueOrNull ?? 0);
     final used = (userId == null
@@ -148,12 +149,17 @@ class FreePlacesProgressChip extends ConsumerWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
+          // Segment width scales with the allowance so ten (or more, with
+          // referral slots) segments still fit beside the label on a
+          // narrow phone.
           ...List.generate(total, (i) {
             final filled = i < used;
+            final compact = total > 6;
             return Container(
-              width: 16,
+              width: compact ? 9 : 16,
               height: 6,
-              margin: EdgeInsets.only(right: i == total - 1 ? 8 : 4),
+              margin: EdgeInsets.only(
+                  right: i == total - 1 ? 8 : (compact ? 3 : 4)),
               decoration: BoxDecoration(
                 color: filled
                     ? freePlaceSegmentColor(context, i, total: total)

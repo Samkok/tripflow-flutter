@@ -10,7 +10,6 @@ import '../providers/trip_listener_provider.dart';
 import '../providers/trip_provider.dart';
 import '../services/google_maps_service.dart';
 import '../services/marker_cache_service.dart';
-import '../services/multi_modal_router.dart';
 import '../utils/marker_utils.dart';
 import '../utils/polyline_simplify.dart';
 import '../utils/trip_dates.dart';
@@ -83,10 +82,23 @@ final tripDayColorsProvider = Provider<Map<DateTime, Color>>((ref) {
 final allDayStopsProvider = Provider<Map<DateTime, List<LocationModel>>>((ref) {
   final axis = ref.watch(activeTripDayAxisProvider);
   final locations = ref.watch(tripProvider.select((s) => s.pinnedLocations));
+  // The optimized day keeps its ROUTE order, so its numbers match the
+  // single-day map and list; every other day is unordered (and unnumbered).
+  final optimized = ref
+      .watch(tripProvider.select((s) => s.optimizedLocationsForSelectedDate));
+  final optimizedDay =
+      optimized.isEmpty ? null : _dayKey(ref.watch(selectedDateProvider));
   final byDay = <DateTime, List<LocationModel>>{};
   for (final day in axis) {
     final stops =
         locations.where((l) => !l.isSkipped && l.isActiveOnDate(day)).toList();
+    if (optimizedDay != null && day == optimizedDay) {
+      final rank = {
+        for (var i = 0; i < optimized.length; i++) optimized[i].id: i
+      };
+      stops.sort(
+          (a, b) => (rank[a.id] ?? 1 << 20).compareTo(rank[b.id] ?? 1 << 20));
+    }
     if (stops.isNotEmpty) byDay[day] = stops;
   }
   return byDay;
@@ -95,6 +107,36 @@ final allDayStopsProvider = Provider<Map<DateTime, List<LocationModel>>>((ref) {
 /// Process-lifetime cache of fetched day-route geometry, keyed by the day's
 /// stop signature. Bounded so a long session can't grow it unboundedly.
 final Map<String, List<LatLng>> _dayRouteCache = {};
+
+/// Road geometry through [stops] (≥2), in segments of at most
+/// [GoogleMapsService.maxIntermediates] free stops per request so days of
+/// any length draw. Each segment is optimized internally and ends at a
+/// fixed stop the next segment starts from. Empty on any failure — the
+/// caller falls back to straight lines.
+Future<List<LatLng>> _fetchDayGeometry(List<LocationModel> stops) async {
+  const cap = GoogleMapsService.maxIntermediates;
+  final out = <LatLng>[];
+  var from = stops.first;
+  var i = 1;
+  while (i < stops.length) {
+    final end = i + cap + 1 > stops.length ? stops.length : i + cap + 1;
+    final segment = stops.sublist(i, end); // ≤cap intermediates + destination
+    final details = await GoogleMapsService.getOptimizedRouteDetails(
+      origin: from.coordinates,
+      destination: segment.last,
+      waypoints: segment.length > 1
+          ? segment.sublist(0, segment.length - 1)
+          : const <LocationModel>[],
+      optimizeWaypoints: true,
+    );
+    final pts = (details['routePoints'] as List<LatLng>?) ?? const <LatLng>[];
+    if (pts.isEmpty) return const <LatLng>[];
+    out.addAll(pts);
+    from = segment.last;
+    i = end;
+  }
+  return out;
+}
 
 String _daySignature(DateTime day, List<LocationModel> stops) {
   final ids = stops
@@ -154,18 +196,10 @@ final allDayRoutesProvider =
       }
     }
 
-    // Over the Routes 25-intermediate cap: skip the doomed API call and go
-    // straight to the offline fallback below (straight segments).
-    final details = stops.length - 2 > MultiModalRouter.maxRoutableStopsPerDay
-        ? const <String, dynamic>{}
-        : await GoogleMapsService.getOptimizedRouteDetails(
-            origin: stops.first.coordinates,
-            destination: stops.last,
-            waypoints:
-                stops.length > 2 ? stops.sublist(1, stops.length - 1) : const [],
-            optimizeWaypoints: true,
-          );
-    var points = (details['routePoints'] as List<LatLng>?) ?? const <LatLng>[];
+    // Days with more stops than one request allows are fetched as
+    // consecutive segments in list order — the overview only needs road
+    // geometry, not a re-ordering across segments.
+    var points = await _fetchDayGeometry(stops);
     if (points.isEmpty) {
       // Offline / API failure: straight segments through the stops.
       points = stops.map((l) => l.coordinates).toList(growable: false);
@@ -249,6 +283,13 @@ final allDaysMarkersProvider = FutureProvider<Set<Marker>>((ref) async {
   final isDarkMode = ref.watch(themeProvider) == ThemeMode.dark;
 
   final markerCache = MarkerCacheService();
+  // Numbers only on the day whose route has been optimized (its stops are
+  // in route order, see allDayStopsProvider); every other day's pins carry
+  // a plain dot — an unordered day has no "stop 3".
+  final routeActive =
+      ref.watch(tripProvider.select((s) => s.optimizedRoute.isNotEmpty));
+  final optimizedDay =
+      routeActive ? _dayKey(ref.watch(selectedDateProvider)) : null;
 
   // Numbering is order-dependent per day → compute all specs synchronously,
   // THEN rasterize every bitmap in PARALLEL. The serial awaits here were
@@ -290,6 +331,7 @@ final allDaysMarkersProvider = FutureProvider<Set<Marker>>((ref) async {
     return markerCache.getNumberedMarker(
       isStart: false,
       number: spec.number,
+      showNumber: optimizedDay != null && spec.day == optimizedDay,
       name: spec.loc.name,
       backgroundColor: mightBeClosed ? MarkerUtils.warningAmber : spec.color,
       textColor: Colors.white,

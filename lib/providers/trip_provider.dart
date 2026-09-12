@@ -872,10 +872,7 @@ class TripNotifier extends StateNotifier<TripState> {
       final loc = byId[c.id];
       // Belt-and-braces: the fingerprint already guarantees these flags
       // haven't changed since the engine excluded such rows.
-      if (loc == null ||
-          loc.isDone ||
-          loc.isAccommodation ||
-          loc.isMultiDay) {
+      if (loc == null || loc.isDone || loc.isAccommodation || loc.isMultiDay) {
         continue;
       }
       if (c.newDay == null) {
@@ -941,17 +938,14 @@ class TripNotifier extends StateNotifier<TripState> {
               }
     };
     try {
-      await _ref
-          .read(locationRepositoryProvider)
-          .updateLocationsBatch(updates);
+      await _ref.read(locationRepositoryProvider).updateLocationsBatch(updates);
     } catch (e) {
       debugPrint('applyDistribution: batch write failed: $e');
     }
 
     _distributionSnapshot = snapshot;
     _snapshotFingerprint = distributionFingerprint(state.pinnedLocations);
-    final toBucket =
-        targetDayById.values.where((d) => d == null).length;
+    final toBucket = targetDayById.values.where((d) => d == null).length;
     return ApplyDistributionResult(
       ApplyDistributionStatus.applied,
       moved: targetDayById.length - toBucket,
@@ -1005,9 +999,7 @@ class TripNotifier extends StateNotifier<TripState> {
               }
     };
     try {
-      await _ref
-          .read(locationRepositoryProvider)
-          .updateLocationsBatch(updates);
+      await _ref.read(locationRepositoryProvider).updateLocationsBatch(updates);
     } catch (e) {
       debugPrint('revertDistribution: batch write failed: $e');
     }
@@ -1651,17 +1643,6 @@ class TripNotifier extends StateNotifier<TripState> {
       return;
     }
 
-    // Google Routes hard-caps a chain at 25 intermediates, and loop-home
-    // days route every stop as one. Refuse up front — the trip sheet
-    // pre-checks and shows the over-cap dialog, this guard covers the
-    // remaining entry points (start-point confirm, timing-warning reruns)
-    // via routeOverCapProvider, which the sheet listens on.
-    if (locationsForDate.length > MultiModalRouter.maxRoutableStopsPerDay) {
-      _ref.read(routeOverCapProvider.notifier).state = locationsForDate.length;
-      _ref.read(isGeneratingRouteProvider.notifier).state = false;
-      return;
-    }
-
     try {
       // 1. Determine the starting point and the list of locations to be optimized.
       LatLng startPoint;
@@ -2270,14 +2251,44 @@ class TripNotifier extends StateNotifier<TripState> {
   /// route, which is intentional: the user is asking to see this specific
   /// pair, and the existing Clear Route controls can wipe it just like an
   /// optimization result.
-  Future<void> previewRouteBetween(LocationModel from, LocationModel to) async {
+  Future<void> previewRouteBetween(LocationModel from, LocationModel to) =>
+      _previewLeg(from: from, to: to, originIsDevice: false);
+
+  /// In-app "take me there": one leg from the device's CURRENT position to
+  /// [to], drawn with the same engine as [previewRouteBetween]. The origin
+  /// is a synthetic stop with id 'current_location' — the id every consumer
+  /// already understands from the optimizer's GPS start anchor (coordFor,
+  /// the list's rail origin, the leg sheet). It is deliberately NOT put in
+  /// the optimized list: the marker pipeline keys bitmaps by id, and a stop
+  /// called 'current_location' would overwrite the blue dot's icon.
+  /// Returns false (nothing drawn) when there is no GPS fix yet.
+  Future<bool> previewRouteFromCurrentLocation(LocationModel to) async {
+    final here = state.currentLocation;
+    if (here == null) return false;
+    final origin = LocationModel(
+      id: 'current_location',
+      name: 'Current location',
+      address: '',
+      coordinates: here,
+      addedAt: DateTime.fromMillisecondsSinceEpoch(0),
+      scheduledDate: to.scheduledDate,
+    );
+    await _previewLeg(from: origin, to: to, originIsDevice: true);
+    return true;
+  }
+
+  Future<void> _previewLeg({
+    required LocationModel from,
+    required LocationModel to,
+    required bool originIsDevice,
+  }) async {
     if (from.id == to.id) return;
     _ref.read(isGeneratingRouteProvider.notifier).state = true;
     try {
       // Same brain as the optimizer: honor a stored per-leg override for
       // this exact pair, then run the AUTO ladder with the user's max-walk
       // preference — the preview used to hardcode the car.
-      final previewTripId = from.tripId ?? 'no_trip';
+      final previewTripId = from.tripId ?? to.tripId ?? 'no_trip';
       final previewOverrides =
           await LegModePrefs.overridesForTrip(previewTripId);
       final prefMaxWalk = await LegModePrefs.maxWalkMeters();
@@ -2348,7 +2359,10 @@ class TripNotifier extends StateNotifier<TripState> {
       state = state.copyWith(
         pinnedLocations: updatedPinned,
         isRoutePreview: true,
-        optimizedLocationsForSelectedDate: [updatedFrom, updatedTo],
+        // Device origin: only the destination is a stop (it numbers as 1);
+        // the leg's fromId + startLocationId carry 'current_location'.
+        optimizedLocationsForSelectedDate:
+            originIsDevice ? [updatedTo] : [updatedFrom, updatedTo],
         optimizedRoute: routePoints,
         legPolylines: legPolylines,
         legDetails: legDetails,
@@ -2398,7 +2412,6 @@ final isGeneratingRouteProvider = StateProvider<bool>((ref) => false);
 /// Set (to the offending stop count) when an optimize attempt was refused
 /// because the day exceeds [MultiModalRouter.maxRoutableStopsPerDay].
 /// The trip sheet listens, shows the over-cap dialog, and resets to null.
-final routeOverCapProvider = StateProvider<int?>((ref) => null);
 
 enum ApplyDistributionStatus { applied, stale, denied }
 

@@ -106,6 +106,9 @@ final cachedMarkerBitmapsProvider =
     return markerCache.getNumberedMarker(
       isStart: spec.isStart,
       number: spec.number,
+      // Sequence numbers mean "visit order" — which only exists once the
+      // day is optimized. Before that, pins carry a plain dot.
+      showNumber: routeActive,
       // The start pin says so in words — the flag alone read as "just
       // another marker" and its numbering confused the map↔list mapping.
       name: spec.isStart ? '${spec.loc.name} (Start here)' : spec.loc.name,
@@ -115,9 +118,8 @@ final cachedMarkerBitmapsProvider =
       isDarkMode: isDarkMode,
       isSkipped: spec.loc.isSkipped,
       isDone: spec.loc.isDone,
-      warningLine: mightBeClosed
-          ? 'Might be closed on this date — please check'
-          : null,
+      warningLine:
+          mightBeClosed ? 'Might be closed on this date — please check' : null,
     );
   }));
   for (var i = 0; i < specs.length; i++) {
@@ -276,10 +278,17 @@ final memoizedAutomaticZonesProvider = Provider<Set<Circle>>((ref) {
       ref.watch(tripProvider.select((state) => state.pinnedLocations));
   final selectedDate = ref.watch(selectedDateProvider);
   final threshold = ref.watch(proximityThresholdCommittedProvider);
+  // The pin status filter hides zones with their pins: a circle around a
+  // stop whose pin is filtered out would be an orphan on the map.
+  final pinFilter = ref.watch(mapPinFilterProvider);
 
   // Filter locations to only include those for the selected date and are not skipped.
   final locationsForDate = allLocations.where((loc) {
     if (loc.isSkipped) return false;
+    if (!pinMatchesFilter(pinFilter,
+        isSkipped: loc.isSkipped, isDone: loc.isDone)) {
+      return false;
+    }
 
     // This logic now mirrors `locationsForSelectedDateProvider` exactly.
     if (loc.scheduledDate == null) {
@@ -439,7 +448,8 @@ final styledPolylinesProvider = Provider<Set<Polyline>>((ref) {
                 startCap: Cap.roundCap,
                 endCap: Cap.roundCap,
                 jointType: JointType.round,
-                geodesic: false, // road paths, not great circles — no per-segment interpolation
+                geodesic:
+                    false, // road paths, not great circles — no per-segment interpolation
                 zIndex: 1,
               ),
             );
@@ -466,7 +476,8 @@ final styledPolylinesProvider = Provider<Set<Polyline>>((ref) {
               startCap: Cap.roundCap,
               endCap: Cap.roundCap,
               jointType: JointType.round,
-              geodesic: false, // road paths, not great circles — no per-segment interpolation
+              geodesic:
+                  false, // road paths, not great circles — no per-segment interpolation
               zIndex: isRunSelected ? 12 : (isRide ? (emphasized ? 10 : 6) : 5),
             ),
           );
@@ -483,7 +494,8 @@ final styledPolylinesProvider = Provider<Set<Polyline>>((ref) {
                 startCap: Cap.roundCap,
                 endCap: Cap.roundCap,
                 jointType: JointType.round,
-                geodesic: false, // road paths, not great circles — no per-segment interpolation
+                geodesic:
+                    false, // road paths, not great circles — no per-segment interpolation
                 zIndex: 13,
               ),
             );
@@ -500,14 +512,15 @@ final styledPolylinesProvider = Provider<Set<Polyline>>((ref) {
           Polyline(
             polylineId: PolylineId('${polylineId}_shadow'),
             points: legPoints,
-            color: Colors.black
-                .withValues(alpha: isHighlighted ? 0.2 : (isWalk ? 0.22 : 0.12)),
+            color: Colors.black.withValues(
+                alpha: isHighlighted ? 0.2 : (isWalk ? 0.22 : 0.12)),
             width: isHighlighted ? 10 : (isWalk ? 7 : 8),
             consumeTapEvents: false,
             startCap: Cap.roundCap,
             endCap: Cap.roundCap,
             jointType: JointType.round,
-            geodesic: false, // road paths, not great circles — no per-segment interpolation
+            geodesic:
+                false, // road paths, not great circles — no per-segment interpolation
             zIndex: 1,
           ),
         );
@@ -547,7 +560,8 @@ final styledPolylinesProvider = Provider<Set<Polyline>>((ref) {
           // Round joints for smooth corners
           jointType: JointType.round,
           // Geodesic for accurate path representation
-          geodesic: false, // road paths, not great circles — no per-segment interpolation
+          geodesic:
+              false, // road paths, not great circles — no per-segment interpolation
           // Higher z-index for main polyline
           zIndex: isHighlighted ? 10 : 5,
         ),
@@ -565,7 +579,8 @@ final styledPolylinesProvider = Provider<Set<Polyline>>((ref) {
             startCap: Cap.roundCap,
             endCap: Cap.roundCap,
             jointType: JointType.round,
-            geodesic: false, // road paths, not great circles — no per-segment interpolation
+            geodesic:
+                false, // road paths, not great circles — no per-segment interpolation
             zIndex: 11,
           ),
         );

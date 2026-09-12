@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
@@ -170,12 +171,15 @@ class MarkerUtils {
     Color textColor = Colors.white,
     required bool isDarkMode,
     bool isStart = false,
-    double size = 20,
+    double size = 22,
     bool isSkipped = false,
     bool isDone = false,
     // Optional amber caution line drawn under the name (e.g. "might be
     // closed on this date"). Wraps to two lines like the name.
     String? warningLine,
+    // false = no visit order yet (day not optimized): a small white dot
+    // sits in the pin instead of a number.
+    bool showNumber = true,
   }) async {
     final ui.PictureRecorder pictureRecorder = ui.PictureRecorder();
 
@@ -221,7 +225,7 @@ class MarkerUtils {
           color: textColor,
         ),
       );
-    } else {
+    } else if (showNumber) {
       contentPainter.text = TextSpan(
         text: number.toString(),
         style: TextStyle(
@@ -230,6 +234,9 @@ class MarkerUtils {
           color: textColor,
         ),
       );
+    } else {
+      // Unordered stop: the dot drawn below stands in for the number.
+      contentPainter.text = const TextSpan(text: '');
     }
     contentPainter.layout();
 
@@ -307,25 +314,39 @@ class MarkerUtils {
     final double warningHeight =
         warningPainter == null ? 0 : warningPainter.height + warningGap;
 
-    // --- 2. Calculate Canvas Dimensions ---
-    final double circleRadius = size / 2;
-    const double shadowRadius = 4.0; // Shadow offset
-    const double paddingBelowCircle = 16.0; // Increased padding
+    // --- 2. Geometry: a classic teardrop pin whose TIP is the coordinate ---
+    //
+    //   head — circle of radius r centred at (cx, cy), carrying the number,
+    //          icon, or (no visit order yet) a hollow white ring;
+    //   tip  — (cx, tipY), 2.2 r below the head's centre; the sides are the
+    //          two tangents from the tip to the head, so the outline is one
+    //          smooth path used for the shadow, the white border and the
+    //          fill alike;
+    //   name — and the caution line hang under the tip.
+    // The marker's anchor is the tip, so what the pin points at IS the place.
+    final double r = size / 2;
+    const double borderWidth = 3.0;
+    const double shadowPad = 6.0; // room for the blurred shadow all round
+    const double labelGap = 6.0; // tip → first label line
+    final double pinWidth = size + borderWidth + shadowPad * 2;
     final double textWidth = warningPainter == null
         ? namePainter.width
-        : (warningPainter.width > namePainter.width
-            ? warningPainter.width
-            : namePainter.width);
-    final double totalWidth = textWidth > size ? textWidth : size;
-    final double totalHeight = size +
-        paddingBelowCircle +
-        namePainter.height +
-        warningHeight +
-        shadowRadius;
-    final double canvasCenterX = totalWidth / 2;
+        : math.max(warningPainter.width, namePainter.width);
+    final double totalWidth = math.max(textWidth, pinWidth);
+    final double cx = totalWidth / 2;
+    final double cy = shadowPad + borderWidth / 2 + r;
+    final double tipY = cy + r * 2.2;
+    // The white outline's rounded join reaches half its width past the
+    // fill's tip — that outer point is what the eye reads as "the point".
+    final double anchorTipY = tipY + borderWidth / 2;
+    final double labelTop = anchorTipY + labelGap;
+    final double totalHeight =
+        labelTop + namePainter.height + warningHeight + shadowPad;
 
     final Canvas canvas = Canvas(pictureRecorder);
     canvas.scale(dpr);
+
+    final Path pin = _teardropPath(cx: cx, cy: cy, r: r, tipY: tipY);
 
     // --- 3. Draw the Elements ---
 
@@ -356,66 +377,74 @@ class MarkerUtils {
       canvas.saveLayer(null, Paint()..colorFilter = greyscaleFilter);
     }
 
-    // Draw shadow for depth (multiple layers for softer shadow)
-    final Paint shadowPaint1 = Paint()
-      ..color = Colors.black.withValues(alpha: 0.15)
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4);
-    final Paint shadowPaint2 = Paint()
-      ..color = Colors.black.withValues(alpha: 0.1)
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8);
+    // Shadow: two soft layers, offset down so the pin reads as standing on
+    // the map rather than painted on it.
+    canvas.drawPath(
+      pin.shift(const Offset(0, 2.5)),
+      Paint()
+        ..color = Colors.black.withValues(alpha: 0.10)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8),
+    );
+    canvas.drawPath(
+      pin.shift(const Offset(0, 1.5)),
+      Paint()
+        ..color = Colors.black.withValues(alpha: 0.18)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4),
+    );
 
-    canvas.drawCircle(Offset(canvasCenterX, circleRadius + 2), circleRadius + 1,
-        shadowPaint2);
+    // White outline for contrast on any tile, then the coloured body.
+    canvas.drawPath(
+      pin,
+      Paint()
+        ..color = Colors.white
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = borderWidth
+        ..strokeJoin = StrokeJoin.round,
+    );
+    canvas.drawPath(
+      pin,
+      Paint()
+        ..color = isStart
+            ? Colors.green.shade600
+            : (isDone ? Colors.green.shade500 : backgroundColor)
+        ..style = PaintingStyle.fill,
+    );
+
+    // Inner highlight for a little depth on the head.
     canvas.drawCircle(
-        Offset(canvasCenterX, circleRadius + 1), circleRadius, shadowPaint1);
+      Offset(cx, cy - r * 0.3),
+      r * 0.4,
+      Paint()
+        ..color = Colors.white.withValues(alpha: 0.3)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2),
+    );
 
-    // Draw white border/stroke for better contrast
-    final Paint borderPaint = Paint()
-      ..color = Colors.white
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 3.0;
+    // No visit order yet (day not optimized): the classic hollow ring in the
+    // head instead of a number.
+    if (!showNumber && !isStart && !isDone && !isSkipped) {
+      canvas.drawCircle(
+        Offset(cx, cy),
+        r * 0.42,
+        Paint()
+          ..color = textColor
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = r * 0.22,
+      );
+    }
 
-    canvas.drawCircle(
-        Offset(canvasCenterX, circleRadius), circleRadius, borderPaint);
-
-    // Draw the main circle with gradient effect
-    final Paint circlePaint = Paint()
-      ..color = isStart
-          ? Colors.green.shade600
-          : (isDone ? Colors.green.shade500 : backgroundColor)
-      ..style = PaintingStyle.fill;
-
-    canvas.drawCircle(
-        Offset(canvasCenterX, circleRadius), circleRadius - 1.5, circlePaint);
-
-    // Draw inner highlight for 3D effect
-    final Paint highlightPaint = Paint()
-      ..color = Colors.white.withValues(alpha: 0.3)
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2);
-
-    canvas.drawCircle(Offset(canvasCenterX, circleRadius - circleRadius * 0.3),
-        circleRadius * 0.4, highlightPaint);
-
-    // Draw the number/icon inside the circle
+    // Number / icon centred in the head.
     contentPainter.paint(
       canvas,
-      Offset(
-        canvasCenterX - contentPainter.width / 2,
-        circleRadius - contentPainter.height / 2,
-      ),
+      Offset(cx - contentPainter.width / 2, cy - contentPainter.height / 2),
     );
 
-    // Draw the name below the circle
-    namePainter.paint(
-      canvas,
-      Offset(canvasCenterX - namePainter.width / 2, size + paddingBelowCircle),
-    );
-    // …and the caution line under the name.
+    // Name under the tip, then the caution line under the name.
+    namePainter.paint(canvas, Offset(cx - namePainter.width / 2, labelTop));
     if (warningPainter != null) {
       warningPainter.paint(
         canvas,
-        Offset(canvasCenterX - warningPainter.width / 2,
-            size + paddingBelowCircle + namePainter.height + warningGap),
+        Offset(cx - warningPainter.width / 2,
+            labelTop + namePainter.height + warningGap),
       );
     }
 
@@ -430,16 +459,42 @@ class MarkerUtils {
           BitmapDescriptor.defaultMarker, const Offset(0.5, 1.0));
     }
 
-    final double anchorX = canvasCenterX / totalWidth;
-    final double anchorY = (size / 2) / totalHeight;
-
+    // Anchor = the tip: the point the pin draws on the map is the place.
     return MarkerBitmapResult(
       BitmapDescriptor.bytes(
         data.buffer.asUint8List(),
         imagePixelRatio: dpr,
       ),
-      Offset(anchorX, anchorY),
+      Offset(cx / totalWidth, anchorTipY / totalHeight),
     );
+  }
+
+  /// Outline of a map pin: a circle (the head) joined to a point below it by
+  /// the two tangents from that point to the circle — one closed path, so
+  /// shadow, border and fill all share the same silhouette.
+  static Path _teardropPath({
+    required double cx,
+    required double cy,
+    required double r,
+    required double tipY,
+  }) {
+    final double d = tipY - cy; // the tip sits d below the centre, d > r
+    final double beta = math.acos(r / d); // centre angle to a tangent point
+    final double px = r * math.sin(beta);
+    final double py = cy + r * math.cos(beta);
+    // Flutter measures arc angles from +x, clockwise (y grows downward):
+    // the right tangent point sits at π/2 − β; sweeping negatively by
+    // 2π − 2β walks over the top of the head to the left tangent point.
+    return Path()
+      ..moveTo(cx, tipY)
+      ..lineTo(cx + px, py)
+      ..arcTo(
+        Rect.fromCircle(center: Offset(cx, cy), radius: r),
+        math.pi / 2 - beta,
+        -(2 * math.pi - 2 * beta),
+        false,
+      )
+      ..close();
   }
 
   /// Creates a combined distance label + Open Maps button as one bitmap.

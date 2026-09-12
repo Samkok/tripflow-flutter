@@ -172,3 +172,27 @@ class MapZoomToLegRequest {
 
 final mapZoomToLegRequestProvider =
     StateProvider<MapZoomToLegRequest?>((_) => null);
+
+/// Which of the active trip's pins the map shows, by stop status. A pure
+/// VIEW filter: nothing is written, no marker bitmaps are rebuilt — MapWidget
+/// just leaves hidden pins out of the set it hands to GoogleMap, so a toggle
+/// is an instant marker diff. Routes, zones and the current-location dot are
+/// never filtered. Written by the filter bar under the active-trip badge.
+enum MapPinFilter { all, active, skipped, done }
+
+final mapPinFilterProvider =
+    StateProvider<MapPinFilter>((_) => MapPinFilter.all);
+
+/// The one place the filter's meaning lives — the bar's counts and the
+/// widget's marker filtering both call this, so they can never disagree.
+bool pinMatchesFilter(
+  MapPinFilter filter, {
+  required bool isSkipped,
+  required bool isDone,
+}) =>
+    switch (filter) {
+      MapPinFilter.all => true,
+      MapPinFilter.active => !isSkipped && !isDone,
+      MapPinFilter.skipped => isSkipped,
+      MapPinFilter.done => isDone,
+    };

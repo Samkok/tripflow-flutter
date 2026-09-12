@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:intl/intl.dart';
@@ -7,9 +8,11 @@ import 'package:voyza/models/saved_location.dart'
     show OpeningPeriod, SavedLocation;
 import 'package:voyza/models/trip.dart';
 import 'package:voyza/providers/user_trip_provider.dart';
+import 'package:voyza/services/country_match_service.dart';
 import 'package:voyza/services/timing_simulation.dart' show kNeverCloses;
 import 'package:voyza/providers/location_provider.dart';
 import 'package:voyza/utils/same_day_place_guard.dart';
+import 'package:voyza/utils/search_text.dart';
 import 'package:voyza/providers/map_ui_state_provider.dart';
 import 'package:voyza/providers/trip_listener_provider.dart';
 import 'package:voyza/providers/trip_provider.dart';
@@ -581,12 +584,9 @@ class LocationDetailSheet extends ConsumerWidget {
                           child:
                               Icon(Icons.flag_rounded, size: 20, color: accent),
                         ),
-                      )
-                    else
-                      TextSpan(
-                        text: '$number. ',
-                        style: titleStyle?.copyWith(color: accent),
                       ),
+                    // No "N." prefix: the number is a route position, and
+                    // this sheet is about the place itself.
                     TextSpan(text: updatedLocation.name),
                   ],
                 ),
@@ -596,6 +596,23 @@ class LocationDetailSheet extends ConsumerWidget {
               ),
             ),
             const SizedBox(width: 8),
+            // Copy the name — for pasting into a taxi app, a chat, a
+            // booking site. Everyone gets it (no edit permission needed).
+            IconButton(
+              visualDensity: VisualDensity.compact,
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+              tooltip: 'Copy name',
+              icon: Icon(Icons.copy_rounded,
+                  size: 18, color: Theme.of(context).colorScheme.primary),
+              onPressed: () async {
+                await Clipboard.setData(
+                    ClipboardData(text: updatedLocation.name));
+                if (context.mounted) {
+                  AppToast.success(context, 'Name copied');
+                }
+              },
+            ),
             IconButton(
               visualDensity: VisualDensity.compact,
               padding: EdgeInsets.zero,
@@ -805,51 +822,23 @@ class LocationDetailSheet extends ConsumerWidget {
             ),
           ],
         ),
-        // Unscheduled escape hatch: clears the date — the place stays in
-        // the trip, parked in the Unscheduled bucket (trip details).
-        // Hidden for rows that must keep a day: accommodations (DB CHECK),
-        // completed places, and multi-day stays.
-        if (canEdit &&
-            updatedLocation.scheduledDate != null &&
-            updatedLocation.tripId != null &&
-            !updatedLocation.isAccommodation &&
-            !updatedLocation.isDone &&
-            !updatedLocation.isMultiDay)
-          Align(
-            alignment: Alignment.centerLeft,
-            child: TextButton.icon(
-              icon: const Icon(Icons.event_busy_rounded, size: 16),
-              label: const Text('No date — move to Unscheduled'),
-              style: TextButton.styleFrom(
-                foregroundColor: Theme.of(context).colorScheme.onSurfaceVariant,
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-                visualDensity: VisualDensity.compact,
-              ),
-              onPressed: () async {
-                final inActivePinned = ref
-                    .read(tripProvider)
-                    .pinnedLocations
-                    .any((l) => l.id == updatedLocation.id);
-                if (inActivePinned) {
-                  await ref
-                      .read(tripProvider.notifier)
-                      .clearLocationSchedule(updatedLocation.id);
-                } else {
-                  // Non-active trip (opened from trip details): repository-
-                  // direct, same bypass pattern trip_details uses. RLS
-                  // backstops auth.
-                  await ref
-                      .read(locationRepositoryProvider)
-                      .updateLocation(updatedLocation.id, {
-                    'scheduled_date': null,
-                  });
-                }
-                if (!context.mounted) return;
-                AppToast.info(context,
-                    '"${updatedLocation.name}" moved to Unscheduled.');
-              },
-            ),
+        // Route here from wherever the user is right now, drawn IN the app
+        // (same leg engine as From/To, origin = the blue dot). Map context
+        // only: from the trip page there's no map under this sheet to draw
+        // on, and the location may belong to a trip that isn't the active
+        // one. Disabled when the device is known to be in a different
+        // country from the place — a leg from abroad is never what was
+        // meant (see [_RouteFromHereButton]).
+        if (locationsForDate == null) ...[
+          const SizedBox(height: 8),
+          _RouteFromHereButton(
+            location: updatedLocation,
+            knownCountry: _knownCountryOf(ref, updatedLocation),
+            device: ref.read(tripProvider).currentLocation,
+            onPressed: () =>
+                _previewFromCurrentLocation(context, ref, updatedLocation),
           ),
+        ],
         // Route preview row — pick another stop to use as the start ("From")
         // or end ("To") of a single-leg route drawn on the map. Disabled
         // when there's no other location on the selected date to pair with.
@@ -1010,6 +999,60 @@ class LocationDetailSheet extends ConsumerWidget {
       if (!context.mounted) return;
       AppToast.error(context, 'Could not remove from trip: $e');
     }
+  }
+
+  /// In-app "take me there": draws the route from the device's current
+  /// position to [target] on the map instead of handing off to Google Maps.
+  /// Same dismiss → collapse → scroll-reset choreography as
+  /// [_pickAndPreviewRoute]; the map's zoom listener then frames the leg.
+  /// The country the place is known to sit in without a lookup: its trip's
+  /// tag. Loose places, and places on an untagged trip, return null — the
+  /// button then geocodes the pin once instead.
+  String? _knownCountryOf(WidgetRef ref, LocationModel loc) {
+    final id = loc.tripId;
+    if (id == null) return null;
+    final active = ref.read(realtimeActiveTripProvider).valueOrNull;
+    if (active != null && active.id == id) return active.countryCode;
+    final all = ref.read(userTripsProvider).asData?.value ?? const <Trip>[];
+    for (final t in all) {
+      if (t.id == id) return t.countryCode;
+    }
+    return null;
+  }
+
+  Future<void> _previewFromCurrentLocation(
+    BuildContext context,
+    WidgetRef ref,
+    LocationModel target,
+  ) async {
+    if (ref.read(tripProvider).currentLocation == null) {
+      AppToast.warning(
+          context, 'Waiting for your location — try again in a moment.');
+      return;
+    }
+
+    Navigator.of(context).pop();
+
+    final collapse = parentSheetController?.animateTo(
+      0.12,
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeInOut,
+    );
+    void resetScroll() {
+      if (parentScrollController.hasClients) {
+        parentScrollController.jumpTo(0);
+      }
+    }
+
+    if (collapse != null) {
+      collapse.then((_) => resetScroll());
+    } else {
+      WidgetsBinding.instance.addPostFrameCallback((_) => resetScroll());
+    }
+
+    await ref
+        .read(tripProvider.notifier)
+        .previewRouteFromCurrentLocation(target);
   }
 
   /// Opens a small picker listing the other locations on the selected date.
@@ -2113,7 +2156,7 @@ enum _RouteEndpoint { from, to }
 
 enum _OverrideAction { pickTime, never }
 
-class _RouteEndpointPicker extends StatelessWidget {
+class _RouteEndpointPicker extends StatefulWidget {
   final String title;
   final String subtitle;
   final List<LocationModel> candidates;
@@ -2125,10 +2168,32 @@ class _RouteEndpointPicker extends StatelessWidget {
   });
 
   @override
+  State<_RouteEndpointPicker> createState() => _RouteEndpointPickerState();
+}
+
+class _RouteEndpointPickerState extends State<_RouteEndpointPicker> {
+  final TextEditingController _searchController = TextEditingController();
+  String _query = '';
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final candidates = widget.candidates;
+    // Same forgiving match as every other "find my place" box: case- and
+    // accent-insensitive, any word order (see matchesSearchQuery).
+    final visible = _query.trim().isEmpty
+        ? candidates
+        : candidates
+            .where((l) => matchesSearchQuery('${l.name} ${l.address}', _query))
+            .toList();
     return DraggableScrollableSheet(
-      initialChildSize: 0.55,
+      initialChildSize: 0.6,
       minChildSize: 0.35,
       maxChildSize: 0.9,
       expand: false,
@@ -2156,14 +2221,14 @@ class _RouteEndpointPicker extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          title,
+                          widget.title,
                           style: theme.textTheme.titleLarge?.copyWith(
                             fontWeight: FontWeight.bold,
                           ),
                         ),
                         const SizedBox(height: 2),
                         Text(
-                          subtitle,
+                          widget.subtitle,
                           style: theme.textTheme.bodySmall?.copyWith(
                             color: theme.colorScheme.onSurfaceVariant,
                           ),
@@ -2179,74 +2244,123 @@ class _RouteEndpointPicker extends StatelessWidget {
                 ],
               ),
             ),
+            // Search — long days have too many stops to scan by eye.
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 4, 20, 10),
+              child: TextField(
+                cursorOpacityAnimates: false,
+                controller: _searchController,
+                onChanged: (v) => setState(() => _query = v),
+                decoration: InputDecoration(
+                  isDense: true,
+                  hintText: 'Search these stops…',
+                  prefixIcon: const Icon(Icons.search, size: 20),
+                  suffixIcon: _query.isEmpty
+                      ? null
+                      : IconButton(
+                          tooltip: 'Clear',
+                          icon: const Icon(Icons.clear, size: 18),
+                          onPressed: () {
+                            _searchController.clear();
+                            setState(() => _query = '');
+                          },
+                        ),
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(
+                      color: theme.dividerColor.withValues(alpha: 0.4),
+                    ),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(
+                      color: theme.dividerColor.withValues(alpha: 0.4),
+                    ),
+                  ),
+                ),
+              ),
+            ),
             const Divider(height: 1),
             Expanded(
-              child: ListView.separated(
-                controller: scrollController,
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                itemCount: candidates.length,
-                separatorBuilder: (_, __) => const SizedBox(height: 4),
-                itemBuilder: (context, i) {
-                  final loc = candidates[i];
-                  return Material(
-                    color: theme.cardColor,
-                    borderRadius: BorderRadius.circular(12),
-                    child: InkWell(
-                      borderRadius: BorderRadius.circular(12),
-                      onTap: () => Navigator.of(context).pop(loc),
+              child: visible.isEmpty
+                  ? Center(
                       child: Padding(
-                        padding: const EdgeInsets.all(12),
-                        child: Row(
-                          children: [
-                            CircleAvatar(
-                              radius: 18,
-                              backgroundColor: theme.colorScheme.primary
-                                  .withValues(alpha: 0.15),
-                              child: Text(
-                                '${i + 1}',
-                                style: TextStyle(
-                                  color: theme.colorScheme.primary,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
+                        padding: const EdgeInsets.all(32),
+                        child: Text(
+                          'No stops match "$_query".',
+                          textAlign: TextAlign.center,
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ),
+                    )
+                  : ListView.separated(
+                      controller: scrollController,
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 8),
+                      itemCount: visible.length,
+                      separatorBuilder: (_, __) => const SizedBox(height: 4),
+                      itemBuilder: (context, i) {
+                        final loc = visible[i];
+                        return Material(
+                          color: theme.cardColor,
+                          borderRadius: BorderRadius.circular(12),
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(12),
+                            onTap: () => Navigator.of(context).pop(loc),
+                            child: Padding(
+                              padding: const EdgeInsets.all(12),
+                              child: Row(
                                 children: [
-                                  Text(
-                                    loc.name,
-                                    style: theme.textTheme.titleSmall
-                                        ?.copyWith(fontWeight: FontWeight.w600),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
+                                  CircleAvatar(
+                                    radius: 18,
+                                    backgroundColor: theme.colorScheme.primary
+                                        .withValues(alpha: 0.15),
+                                    child: Icon(Icons.place_outlined,
+                                        size: 18,
+                                        color: theme.colorScheme.primary),
                                   ),
-                                  if (loc.address.isNotEmpty) ...[
-                                    const SizedBox(height: 2),
-                                    Text(
-                                      loc.address,
-                                      style:
-                                          theme.textTheme.bodySmall?.copyWith(
-                                        color:
-                                            theme.colorScheme.onSurfaceVariant,
-                                      ),
-                                      maxLines: 2,
-                                      overflow: TextOverflow.ellipsis,
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          loc.name,
+                                          style: theme.textTheme.titleSmall
+                                              ?.copyWith(
+                                                  fontWeight: FontWeight.w600),
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                        if (loc.address.isNotEmpty) ...[
+                                          const SizedBox(height: 2),
+                                          Text(
+                                            loc.address,
+                                            style: theme.textTheme.bodySmall
+                                                ?.copyWith(
+                                              color: theme
+                                                  .colorScheme.onSurfaceVariant,
+                                            ),
+                                            maxLines: 2,
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        ],
+                                      ],
                                     ),
-                                  ],
+                                  ),
+                                  const Icon(Icons.chevron_right, size: 22),
                                 ],
                               ),
                             ),
-                            const Icon(Icons.chevron_right, size: 22),
-                          ],
-                        ),
-                      ),
+                          ),
+                        );
+                      },
                     ),
-                  );
-                },
-              ),
             ),
           ],
         );
@@ -2308,6 +2422,128 @@ class _LabeledAction extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// "Route from my location", gated on the device being in the SAME COUNTRY
+/// as the place: an in-app leg from another country is never what the user
+/// meant. [CountryMatchService] answers from cache whenever it can, so the
+/// button usually opens in its final state; while a lookup runs it is
+/// disabled with a spinner, and an unknown answer (lookup failed) leaves it
+/// usable rather than locking it on a flaky geocode. No device fix at all
+/// also leaves it usable — tapping then explains that the location is
+/// unknown, as before.
+class _RouteFromHereButton extends StatefulWidget {
+  final LocationModel location;
+
+  /// ISO-2 of the place's trip, when tagged; null means "geocode the pin".
+  final String? knownCountry;
+  final LatLng? device;
+  final VoidCallback onPressed;
+
+  const _RouteFromHereButton({
+    required this.location,
+    required this.knownCountry,
+    required this.device,
+    required this.onPressed,
+  });
+
+  @override
+  State<_RouteFromHereButton> createState() => _RouteFromHereButtonState();
+}
+
+class _RouteFromHereButtonState extends State<_RouteFromHereButton> {
+  bool? _sameCountry; // null = unknown
+  bool _checking = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _check();
+  }
+
+  @override
+  void didUpdateWidget(covariant _RouteFromHereButton old) {
+    super.didUpdateWidget(old);
+    if (old.location.id != widget.location.id ||
+        old.knownCountry != widget.knownCountry ||
+        old.device != widget.device) {
+      _check();
+    }
+  }
+
+  Future<void> _check() async {
+    final device = widget.device;
+    if (device == null) {
+      _sameCountry = null;
+      _checking = false;
+      return;
+    }
+    final svc = CountryMatchService.instance;
+    final cached = svc.cachedVerdict(
+      device: device,
+      placeKey: widget.location.id,
+      knownPlaceCountry: widget.knownCountry,
+    );
+    if (cached != null) {
+      _sameCountry = cached;
+      _checking = false;
+      return;
+    }
+    _checking = true;
+    final verdict = await svc.verdict(
+      device: device,
+      place: widget.location.coordinates,
+      placeKey: widget.location.id,
+      knownPlaceCountry: widget.knownCountry,
+    );
+    if (!mounted) return;
+    setState(() {
+      _sameCountry = verdict;
+      _checking = false;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final blocked = _sameCountry == false;
+    final enabled = !_checking && !blocked;
+    final tint = enabled ? theme.colorScheme.primary : theme.disabledColor;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: double.infinity,
+          child: OutlinedButton.icon(
+            icon: _checking
+                ? SizedBox(
+                    width: 16,
+                    height: 16,
+                    child:
+                        CircularProgressIndicator(strokeWidth: 2, color: tint),
+                  )
+                : Icon(Icons.navigation_rounded, size: 18, color: tint),
+            label: const Text('Route from my location'),
+            onPressed: enabled ? widget.onPressed : null,
+            style: OutlinedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+              side: BorderSide(color: tint.withValues(alpha: 0.3)),
+            ),
+          ),
+        ),
+        if (blocked)
+          Padding(
+            padding: const EdgeInsets.only(top: 6, left: 4),
+            child: Text(
+              'Unavailable — you\'re in a different country from this place.',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ),
+      ],
     );
   }
 }

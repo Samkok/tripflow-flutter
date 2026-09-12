@@ -63,7 +63,7 @@ class TermsScreen extends StatelessWidget {
                 _buildSection(
                   context,
                   '6. Subscriptions (VoyZa Pro)',
-                  'VoyZa Pro is an optional auto-renewing subscription sold through ${Platform.isIOS ? 'the App Store' : 'the Play Store'}. Pricing, billing period, and any free-trial terms are shown at the point of purchase and are billed by the store. Subscriptions renew automatically unless cancelled at least 24 hours before the end of the current period; you can manage or cancel them in your ${Platform.isIOS ? 'App Store' : 'Play Store'} account settings. To keep our free tier fair, we use a device identifier to enforce one free trial per device.',
+                  'VoyZa Pro is an optional auto-renewing subscription sold through ${Platform.isIOS ? 'the App Store' : 'the Play Store'}. Pricing, billing period, and any free-trial terms are shown at the point of purchase and are billed by the store. Subscriptions renew automatically unless cancelled at least 24 hours before the end of the current period; you can manage or cancel them in your ${Platform.isIOS ? 'App Store' : 'Play Store'} account settings. To keep our free tier fair, we use a device identifier to enforce one free trial per device. The free plan includes a limited number of saved places (currently 10 per account, plus any bonus slots earned through the referral program); VoyZa Pro removes this cap. We may adjust the free allowance from time to time.',
                 ),
                 _buildSection(
                   context,
@@ -99,7 +99,7 @@ class TermsScreen extends StatelessWidget {
                 _buildContactSection(context),
                 const SizedBox(height: 24),
                 const Text(
-                  'Last updated: July 3, 2026',
+                  'Last updated: September 12, 2026',
                   style: TextStyle(
                       fontStyle: FontStyle.italic, color: Colors.grey),
                 ),

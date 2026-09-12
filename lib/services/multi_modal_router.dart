@@ -71,13 +71,10 @@ class MultiModalRouter {
   /// the live value arrives via routeItinerary's [maxWalkMeters].
   static const double longWalkMeters = 1000;
 
-  /// Hard ceiling on how many stops one day can route as a single chain.
-  /// Google Routes caps `intermediates` at 25 per request, and loop-home
-  /// days send EVERY stop as an intermediate — beyond this the TSP call is
-  /// a guaranteed 400 that used to cascade into N per-leg calls and a 45s
-  /// timeout ending in an empty route with no error. Callers refuse and
-  /// redirect the user to spread the day instead.
-  static const int maxRoutableStopsPerDay = 25;
+  /// Free stops per Google request — the SEGMENT size, not a day cap. A
+  /// day with more stops is routed as consecutive segments of this many
+  /// (see [routeItinerary]); there is no limit on stops per day any more.
+  static const int routeSegmentStops = GoogleMapsService.maxIntermediates;
 
   // ── Leg cache ───────────────────────────────────────────────────────────
   // Session-scoped: keyed by endpoints+mode (+30-min departure band for
@@ -548,30 +545,70 @@ class MultiModalRouter {
       // (final / accommodation / far point) is the pinned destination.
       final dest = closedTour ? returnTo : stops.last;
       final inter = closedTour ? stops : stops.sublist(0, stops.length - 1);
-      final res = await GoogleMapsService.getOptimizedRouteDetails(
-        origin: origin,
-        destination: dest,
-        waypoints: inter,
-        optimizeWaypoints: true,
-        mode: anchorMode,
-      );
-      if (res['status'] == 'ok') {
+      // Google caps ONE request at [routeSegmentStops] free stops. Longer
+      // days are routed as consecutive SEGMENTS along the client heuristic's
+      // macro order (cluster → nearest neighbour): each segment's internal
+      // order is still Google's travel-time TSP, and a segment's last stop
+      // is pinned as its end so the segments chain seamlessly into the
+      // next. One segment = the classic single call. This replaced the old
+      // 25-stop refusal — a day can now hold any number of stops.
+      const cap = routeSegmentStops;
+      final segmentCount = inter.isEmpty ? 1 : (inter.length + cap - 1) ~/ cap;
+      final orderedAll = <LocationModel>[];
+      final legsAll = <LegRoute>[];
+      var segOrigin = origin;
+      var allOk = true;
+      for (var c = 0; c < segmentCount && allOk; c++) {
+        final segEnd =
+            (c + 1) * cap > inter.length ? inter.length : (c + 1) * cap;
+        final segment = inter.sublist(c * cap, segEnd);
+        final isLast = c == segmentCount - 1;
+        // Last segment: the day's real destination (open day: the pinned
+        // last stop; closed tour: home). Earlier segments: their own last
+        // stop, so the next segment starts exactly where this one ends.
+        final LocationModel segDest = isLast ? dest : segment.last;
+        final segInter =
+            isLast ? segment : segment.sublist(0, segment.length - 1);
+        final res = await GoogleMapsService.getOptimizedRouteDetails(
+          origin: segOrigin,
+          destination: segDest,
+          waypoints: segInter,
+          optimizeWaypoints: true,
+          mode: anchorMode,
+        );
+        if (res['status'] != 'ok') {
+          allOk = false;
+          break;
+        }
         final det = res['legDetails'] as List<Map<String, dynamic>>;
         final pol = res['legPolylines'] as List<List<LatLng>>;
         final order = (res['waypointOrder'] as List).cast<int>();
-        if (det.length == inter.length + 1 && order.length == inter.length) {
-          stops = [for (final k in order) inter[k], if (!closedTour) dest];
-          // Closed tour: the response's LAST leg (final stop → accommodation)
-          // is deliberately not kept — the dedicated return-leg block below
-          // re-routes it with the full ladder/override/clock treatment,
-          // exactly as it did before. Only the ORDER (and the stop-to-stop
-          // leg geometry) comes from this closed-tour call.
-          chain = [
-            for (var i = 0; i < stops.length; i++)
-              legFrom(det[i], pol[i], anchorMode)
-          ];
-          chainReady = true;
+        if (det.length != segInter.length + 1 ||
+            order.length != segInter.length) {
+          allOk = false;
+          break;
         }
+        // Closed tour, last segment: the response's LAST leg (final stop →
+        // accommodation) is deliberately not kept — the dedicated return-leg
+        // block below re-routes it with the full ladder/override/clock
+        // treatment. Only the ORDER (and the stop-to-stop leg geometry)
+        // comes from this call.
+        final keepDest = !(isLast && closedTour);
+        final segOrdered = <LocationModel>[
+          for (final k in order) segInter[k],
+          if (keepDest) segDest,
+        ];
+        for (var i = 0; i < segOrdered.length; i++) {
+          legsAll.add(legFrom(det[i], pol[i], anchorMode));
+        }
+        orderedAll.addAll(segOrdered);
+        segOrigin =
+            (segOrdered.isNotEmpty ? segOrdered.last : segDest).coordinates;
+      }
+      if (allOk) {
+        stops = orderedAll;
+        chain = legsAll;
+        chainReady = true;
       }
     }
 
@@ -739,8 +776,8 @@ class MultiModalRouter {
             leg = walkLeg;
           } else {
             final transitLeg = transitEnabled ? await fetch('transit') : null;
-            final transitOk = transitLeg != null &&
-                _transitWalkOk(transitLeg, maxWalkMeters);
+            final transitOk =
+                transitLeg != null && _transitWalkOk(transitLeg, maxWalkMeters);
             leg = transitOk
                 ? transitLeg
                 : ((chainMode == 'drive' ? base : null) ??

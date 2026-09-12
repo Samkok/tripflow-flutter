@@ -25,11 +25,12 @@ class SubscriptionLimitService {
   SubscriptionLimitService(this._ref);
 
   /// Saved-place allowance for free users. Copy in the paywall and the
-  /// onboarding/goal-gradient surfaces assumes this value; update them
-  /// together if it ever changes.
-  static const int freePlaceAllowance = 5;
+  /// onboarding/goal-gradient surfaces reads this constant; the Terms
+  /// (section 6) state it in words — update both together if it changes.
+  /// Raised 5 → 10 on 2026-09-12 (owner call).
+  static const int freePlaceAllowance = 10;
 
-  /// The user's ACTUAL allowance: the base 5 plus permanent bonus slots
+  /// The user's ACTUAL allowance: the base 10 plus permanent bonus slots
   /// earned from referrals (+2 per redemption, capped server-side at +10).
   /// Falls back to the base while the profile row is still loading.
   static int effectiveAllowanceOf(WidgetRef ref) =>

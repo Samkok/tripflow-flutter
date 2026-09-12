@@ -16,12 +16,10 @@ import '../utils/date_picker_utils.dart';
 import '../utils/geo_utils.dart';
 import '../utils/same_day_place_guard.dart';
 import '../services/leg_mode_prefs.dart';
-import '../services/multi_modal_router.dart';
 import '../services/review_prompt_service.dart';
 import '../screens/trip_details_screen.dart';
 import 'auto_plan_sheet.dart';
 import 'timing_warnings_sheet.dart';
-import '../services/analytics_service.dart';
 import '../utils/trip_date_validator.dart';
 import '../utils/trip_dates.dart';
 import '../core/theme.dart';
@@ -30,6 +28,7 @@ import 'app_toast.dart';
 import 'leg_rail.dart';
 import 'optimized_location_card.dart';
 import 'static_glow.dart';
+import '../utils/search_text.dart';
 import '../services/csv_service.dart';
 import '../services/places_service.dart';
 
@@ -57,7 +56,7 @@ class TripBottomSheet extends ConsumerStatefulWidget {
   /// onboarding checklist's "add places" step mirrors this number by hand
   /// (onboarding_checklist_provider / onboarding_checklist), keep them in
   /// step. Distinct from [SubscriptionLimitService.freePlaceAllowance] (the
-  /// paywall cap of 5) — 2 unlocks Optimize, 5 hits the wall.
+  /// paywall cap of 10) — 2 unlocks Optimize, 10 hits the wall.
   /// Lowered from 3 → 2 (owner call, 2026-08-15): even a two-stop day has a
   /// real best order + travel times worth showing.
   static const int ahaThreshold = 2;
@@ -138,13 +137,17 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
     super.dispose();
   }
 
-  /// Case-insensitive match over the fields a traveller would search by.
+  /// Unoptimized active list order: newest-added first (default) or oldest
+  /// first. Toggled from the "Active stops" header; ignored once a route
+  /// exists (the list then follows the route order).
+  bool _activeNewestFirst = true;
+
+  /// Forgiving match over the fields a traveller would search by: case-
+  /// and diacritic-insensitive, any word order (see [matchesSearchQuery]),
+  /// so "ben thanh" finds "Chợ Bến Thành".
   bool _matchesQuery(LocationModel loc, String query) {
-    if (query.isEmpty) return true;
-    final q = query.trim().toLowerCase();
-    if (q.isEmpty) return true;
-    return loc.name.toLowerCase().contains(q) ||
-        loc.address.toLowerCase().contains(q);
+    if (query.trim().isEmpty) return true;
+    return matchesSearchQuery('${loc.name} ${loc.address}', query);
   }
 
   /// Snap targets shared between the drag-handle tap and the sticky-region
@@ -217,14 +220,6 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
     // guaranteed alive for every day-switch source (map day picker, Whole
     // trip date headers, external focus requests).
     ref.watch(routeClearerProvider);
-    // Over-cap refusals from optimize paths that bypass _onOptimizePressed's
-    // own pre-check (start-point confirm, timing-warning reruns). Safe as a
-    // listen: optimize only runs while the map tab (and this sheet) is live.
-    ref.listen<int?>(routeOverCapProvider, (prev, count) {
-      if (count == null) return;
-      ref.read(routeOverCapProvider.notifier).state = null;
-      _showOverCapDialog(context, ref, count);
-    });
     // OPTIMIZATION: Watch only specific fields to prevent rebuilds during drag
     // Don't watch entire tripState here since it rebuilds on every state change
     final hasPinnedLocations =
@@ -797,8 +792,7 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                                 .textTheme
                                 .labelSmall
                                 ?.copyWith(
-                                    color: amber,
-                                    fontWeight: FontWeight.w700),
+                                    color: amber, fontWeight: FontWeight.w700),
                           ),
                           const Icon(Icons.chevron_right_rounded,
                               size: 14, color: amber),
@@ -1741,6 +1735,16 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
         ref.watch(tripProvider.select((s) => s.startLocationId));
     final railStartIsCurrent = railStartId == 'current_location';
 
+    // Unoptimized day: the active list is sorted by when each place was
+    // ADDED (newest first by default; the header toggles it). Once a route
+    // exists the list follows the route order — sorting would break the
+    // map ↔ list numbering.
+    if (!railRouteActive) {
+      allNormal.sort((a, b) => _activeNewestFirst
+          ? b.addedAt.compareTo(a.addedAt)
+          : a.addedAt.compareTo(b.addedAt));
+    }
+
     // When the route starts AT a stop, that stop is the anchor, not stop #1
     // — the map numbers the remaining stops 1…n-1 and flags the start. The
     // list must match: start card gets number 0 (rendered as the start
@@ -1795,6 +1799,61 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
           addedAt: DateTime.fromMillisecondsSinceEpoch(0),
         );
 
+    // ── Active stops header: count, and the sort toggle while the day is
+    // unoptimized (route order takes over once optimized).
+    if (normalLocations.isNotEmpty) {
+      final theme = Theme.of(context);
+      widgets.add(Padding(
+        padding: const EdgeInsets.only(top: 4, bottom: 6, left: 4, right: 4),
+        child: Row(
+          children: [
+            Icon(Icons.place_outlined,
+                size: 18, color: theme.colorScheme.primary),
+            const SizedBox(width: 8),
+            Text(
+              'Active stops',
+              style: theme.textTheme.titleMedium
+                  ?.copyWith(color: theme.colorScheme.primary),
+            ),
+            const SizedBox(width: 6),
+            Text(
+              '${allNormal.length}',
+              style: theme.textTheme.labelMedium?.copyWith(
+                color: theme.colorScheme.primary.withValues(alpha: 0.7),
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const Spacer(),
+            if (railRouteActive)
+              Text(
+                'Route order',
+                style: theme.textTheme.labelSmall
+                    ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+              )
+            else
+              TextButton.icon(
+                onPressed: () =>
+                    setState(() => _activeNewestFirst = !_activeNewestFirst),
+                icon: Icon(
+                  _activeNewestFirst
+                      ? Icons.arrow_downward_rounded
+                      : Icons.arrow_upward_rounded,
+                  size: 16,
+                ),
+                label:
+                    Text(_activeNewestFirst ? 'Newest first' : 'Oldest first'),
+                style: TextButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  foregroundColor: theme.colorScheme.onSurfaceVariant,
+                  textStyle: theme.textTheme.labelMedium,
+                ),
+              ),
+          ],
+        ),
+      ));
+    }
+
     // Normal (upcoming) locations - directly add to list. Rails key off the
     // POSITION in the unfiltered list (numbering shifts when the start stop
     // leads it, so `number` no longer equals position).
@@ -1822,6 +1881,8 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
           key: ValueKey(location.id),
           location: location,
           number: number,
+          // A visit order only exists once the day is optimized.
+          showNumber: railRouteActive,
           scrollController: scrollController,
           sheetController: sheetController,
           onLocationTap: onLocationTap,
@@ -2175,6 +2236,10 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
     final selectedDate = ref.watch(selectedDateProvider);
     final today =
         DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
+    // Whole-trip list: numbers only on the optimized day (the map does the
+    // same) — an unordered day has no "stop 3".
+    final optimizedActive =
+        ref.watch(tripProvider.select((s) => s.optimizedRoute.isNotEmpty));
 
     final searching = query.trim().isNotEmpty;
     final widgets = <Widget>[];
@@ -2231,6 +2296,7 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
           key: ValueKey('all_${date.toIso8601String()}_${loc.id}'),
           location: loc,
           number: number,
+          showNumber: optimizedActive && date == selectedDate,
           scrollController: scrollController,
           sheetController: sheetController,
           onLocationTap: onLocationTap,
@@ -2544,18 +2610,6 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
       }
       return;
     }
-    // Google Routes caps one day's chain at 25 intermediates — refuse with
-    // guidance instead of the old silent 400→fallback→45s-timeout dead end.
-    final capDay = ref.read(selectedDateProvider);
-    final dayStops = ref
-        .read(tripProvider)
-        .pinnedLocations
-        .where((l) => !l.isSkipped && !l.isDone && l.isActiveOnDate(capDay))
-        .length;
-    if (dayStops > MultiModalRouter.maxRoutableStopsPerDay) {
-      _showOverCapDialog(context, ref, dayStops);
-      return;
-    }
     if (!isReoptimizing) {
       final lifetimeOptimizes =
           await ReviewPromptService.instance.getSuccessfulOptimizeCount();
@@ -2569,79 +2623,6 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
     }
     if (!context.mounted) return;
     _showChooseStartPointDialog(context, ref, isReoptimizing: isReoptimizing);
-  }
-
-  /// The day exceeds [MultiModalRouter.maxRoutableStopsPerDay]: explain and
-  /// redirect. Primary action opens trip details, where days can be
-  /// reorganized (and, once Auto-plan ships, planned automatically).
-  void _showOverCapDialog(BuildContext context, WidgetRef ref, int stopCount) {
-    showDialog<void>(
-      context: context,
-      builder: (dialogContext) {
-        return AlertDialog(
-          backgroundColor: Theme.of(context).cardColor,
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: Text('$stopCount stops is a lot for one day'),
-          content: const Text(
-              'Routes work best with under '
-              '${MultiModalRouter.maxRoutableStopsPerDay} stops in a day. '
-              'Auto-plan can spread them across your trip, or move some '
-              'yourself.'),
-          // One full-width Row (not two bare action children): the
-          // default OverflowBar stacks actions vertically the moment their
-          // combined width exceeds the dialog — these two always share a
-          // row, each taking half.
-          actions: [
-            SizedBox(
-              width: double.infinity,
-              child: Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: () {
-                        Navigator.of(dialogContext).pop();
-                        final trip =
-                            ref.read(realtimeActiveTripProvider).valueOrNull;
-                        if (trip == null) return;
-                        Navigator.of(context).push(
-                          MaterialPageRoute(
-                              builder: (_) => TripDetailsScreen(trip: trip)),
-                        );
-                      },
-                      style: OutlinedButton.styleFrom(
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12)),
-                      ),
-                      child: const Text('Do it myself'),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: ElevatedButton(
-                      onPressed: () {
-                        AnalyticsService.instance
-                            .autoPlanOvercapRedirect(stopCount);
-                        Navigator.of(dialogContext).pop();
-                        showAutoPlanSheet(context);
-                      },
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Theme.of(context).colorScheme.primary,
-                        foregroundColor:
-                            Theme.of(context).colorScheme.onPrimary,
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12)),
-                      ),
-                      child: const Text('Auto-plan'),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        );
-      },
-    );
   }
 
   void _showChooseStartPointDialog(BuildContext context, WidgetRef ref,
@@ -2966,6 +2947,15 @@ class _StartPointSheetState extends ConsumerState<_StartPointSheet> {
   String? _selectedStartId;
   bool _initialized = false;
 
+  /// Set once the user taps a start tile themselves. The async in-country
+  /// promotion of the device GPS (see build) must never override an
+  /// explicit pick.
+  bool _userPickedStart = false;
+  void _pickStart(String? v) => setState(() {
+        _selectedStartId = v;
+        _userPickedStart = true;
+      });
+
   /// Optional "end the day at" stop (null = let the optimizer decide).
   String? _selectedFinalId;
 
@@ -3188,20 +3178,44 @@ class _StartPointSheetState extends ConsumerState<_StartPointSheet> {
     final currentLocationDisabled =
         hasCurrentLocation && currentLocationMismatch;
 
-    // Default selection on first build — runs once. The day's accommodation
-    // wins (routes naturally start from where you're staying); then the
-    // device GPS unless it's known to be in the wrong country; then stops.
+    // Is the device CONFIRMED to be in the trip's country (or, for a
+    // country-less trip, near the day's stops)? Only a positive answer
+    // promotes the GPS to the default start — "unknown" (lookup pending or
+    // failed) keeps the accommodation-first order below.
+    final bool inTripRegion;
+    if (tripCountry != null) {
+      inTripRegion =
+          _currentCountryCode != null && _currentCountryCode == tripCountry;
+    } else {
+      inTripRegion =
+          hasCurrentLocation && dayStops.isNotEmpty && !currentLocationMismatch;
+    }
+    final preferCurrent =
+        hasCurrentLocation && !currentLocationDisabled && inTripRegion;
+
+    // Default selection. Priority: the device GPS when we KNOW the user is
+    // in the trip's country (they're on the ground — the day starts from
+    // where they stand); else the day's accommodation (routes naturally
+    // start from where you slept); else the GPS unless it's known to be in
+    // the wrong country; then stops. The country lookup is async, so the
+    // GPS promotion is re-applied on later builds until the user picks a
+    // tile themselves ([_userPickedStart]).
+    String? fallbackStart() => dayAccommodations.isNotEmpty
+        ? dayAccommodations.first.id
+        : (hasCurrentLocation && !currentLocationDisabled)
+            ? 'current_location'
+            : (activeStops.isNotEmpty
+                ? activeStops.first.id
+                : (inactiveStops.isNotEmpty ? inactiveStops.first.id : null));
     if (!_initialized) {
       _initialized = true;
-      final canPreselectCurrent =
-          hasCurrentLocation && !currentLocationDisabled;
-      _selectedStartId = dayAccommodations.isNotEmpty
-          ? dayAccommodations.first.id
-          : canPreselectCurrent
-              ? 'current_location'
-              : (activeStops.isNotEmpty
-                  ? activeStops.first.id
-                  : (inactiveStops.isNotEmpty ? inactiveStops.first.id : null));
+      _selectedStartId = preferCurrent ? 'current_location' : fallbackStart();
+    } else if (!_userPickedStart &&
+        preferCurrent &&
+        _selectedStartId != 'current_location') {
+      // The country lookup landed AFTER the first build and confirmed the
+      // user is in the trip's country — promote the GPS now.
+      _selectedStartId = 'current_location';
     } else if (currentLocationDisabled &&
         _selectedStartId == 'current_location') {
       // The country lookup landed AFTER the first build and invalidated
@@ -3308,8 +3322,7 @@ class _StartPointSheetState extends ConsumerState<_StartPointSheet> {
                             subtitle: 'Your stay — start the day from here',
                             value: loc.id,
                             groupValue: _selectedStartId,
-                            onChanged: (v) =>
-                                setState(() => _selectedStartId = v),
+                            onChanged: _pickStart,
                           )),
                       // Round trip: does the day END back at the hotel?
                       // Fed into the optimizer as its fixed destination /
@@ -3349,12 +3362,11 @@ class _StartPointSheetState extends ConsumerState<_StartPointSheet> {
                                       tripId, v);
                                 },
                                 dense: true,
-                                contentPadding: const EdgeInsets.symmetric(
-                                    horizontal: 12),
+                                contentPadding:
+                                    const EdgeInsets.symmetric(horizontal: 12),
                                 title: Text('Return to accommodation',
-                                    style: theme.textTheme.bodyMedium
-                                        ?.copyWith(
-                                            fontWeight: FontWeight.w600)),
+                                    style: theme.textTheme.bodyMedium?.copyWith(
+                                        fontWeight: FontWeight.w600)),
                                 activeTrackColor: theme.colorScheme.primary,
                               ),
                               Padding(
@@ -3396,10 +3408,12 @@ class _StartPointSheetState extends ConsumerState<_StartPointSheet> {
                                 : 'You\'re far from these stops — pick a stop to start from instead.')
                             : (_countryCheckInFlight && tripCountry != null
                                 ? 'Checking whether you\'re in the trip\'s country…'
-                                : 'Use device GPS as the start anchor'),
+                                : (inTripRegion && tripCountry != null
+                                    ? 'You\'re in this trip\'s country — start from where you stand'
+                                    : 'Use device GPS as the start anchor')),
                         value: 'current_location',
                         groupValue: _selectedStartId,
-                        onChanged: (v) => setState(() => _selectedStartId = v),
+                        onChanged: _pickStart,
                         disabled: currentLocationDisabled,
                       ),
                       const SizedBox(height: 16),
@@ -3422,8 +3436,7 @@ class _StartPointSheetState extends ConsumerState<_StartPointSheet> {
                                 loc.address.isNotEmpty ? loc.address : null,
                             value: loc.id,
                             groupValue: _selectedStartId,
-                            onChanged: (v) =>
-                                setState(() => _selectedStartId = v),
+                            onChanged: _pickStart,
                           )),
                     if (inactiveStops.isNotEmpty) ...[
                       const SizedBox(height: 16),
@@ -3457,8 +3470,7 @@ class _StartPointSheetState extends ConsumerState<_StartPointSheet> {
                                 loc.address.isNotEmpty ? loc.address : null,
                             value: loc.id,
                             groupValue: _selectedStartId,
-                            onChanged: (v) =>
-                                setState(() => _selectedStartId = v),
+                            onChanged: _pickStart,
                             statusChip: _StatusChip(
                               label: loc.isDone ? 'Done' : 'Skipped',
                               color: loc.isDone
@@ -3489,7 +3501,8 @@ class _StartPointSheetState extends ConsumerState<_StartPointSheet> {
                           ? null
                           : candidates
                               .firstWhere((l) => l.id == _selectedFinalId);
-                      final accName = hasAcc ? dayAccommodations.first.name : '';
+                      final accName =
+                          hasAcc ? dayAccommodations.first.name : '';
                       final String note;
                       if (chosen == null) {
                         note = roundTrip
@@ -3532,9 +3545,8 @@ class _StartPointSheetState extends ConsumerState<_StartPointSheet> {
                                 leading: Icon(Icons.flag_outlined,
                                     color: theme.colorScheme.primary),
                                 title: loc.name,
-                                subtitle: loc.address.isNotEmpty
-                                    ? loc.address
-                                    : null,
+                                subtitle:
+                                    loc.address.isNotEmpty ? loc.address : null,
                                 value: loc.id,
                                 groupValue: _selectedFinalId ?? '',
                                 onChanged: (v) =>

@@ -308,6 +308,15 @@ String? _extractCountryCode(dynamic addressComponents) {
   return null;
 }
 
+/// The Nearby Search request could not be completed (offline, Google 5xx,
+/// quota or key problem). Distinct from an empty result on purpose.
+class NearbySearchException implements Exception {
+  const NearbySearchException();
+
+  @override
+  String toString() => 'NearbySearchException: nearby search request failed';
+}
+
 class PlacesService {
   static Future<List<PlacePrediction>> searchPlaces(
     String query, {
@@ -715,11 +724,18 @@ class PlacesService {
   /// can render thumbnails without follow-ups; per-place enrichment (full
   /// address, more photos, country code) only happens when the user
   /// actually selects a POI to add.
+  ///
+  /// Throws [NearbySearchException] when the request itself failed (offline,
+  /// a Google 5xx, quota / key errors) so callers can show "couldn't load"
+  /// with a retry instead of a misleading "no places here". Failures of the
+  /// supplementary typed pages are tolerated — the unfiltered page is still
+  /// a valid answer.
   static Future<List<NearbyPlace>> searchNearbyPlaces(
     LatLng center, {
     required int radiusMeters,
   }) async {
     final initial = await _nearbySearchPage(center, radiusMeters, null);
+    if (initial == null) throw const NearbySearchException();
 
     // Sparse area — the single page returned everything Google had. No
     // need to spend more API calls.
@@ -751,7 +767,7 @@ class PlacesService {
 
     final all = <NearbyPlace>[...initial];
     for (final page in extraPages) {
-      all.addAll(page);
+      all.addAll(page ?? const []);
     }
     return _dedupeAndSortNearby(all, center, radiusMeters);
   }
@@ -776,9 +792,10 @@ class PlacesService {
   }
 
   /// One Nearby Search request — optionally narrowed by `type`. Returns
-  /// an empty list on any failure / non-OK status so callers can `addAll`
-  /// without guarding for nulls.
-  static Future<List<NearbyPlace>> _nearbySearchPage(
+  /// null when the request FAILED (network, non-OK status) and a list —
+  /// possibly empty, on ZERO_RESULTS — when Google actually answered, so
+  /// the caller can tell "nothing here" from "couldn't ask".
+  static Future<List<NearbyPlace>?> _nearbySearchPage(
     LatLng center,
     int radiusMeters,
     String? type,
@@ -798,7 +815,7 @@ class PlacesService {
       if (status != 'OK' && status != 'ZERO_RESULTS') {
         debugPrint(
             'searchNearbyPlaces: non-OK status $status (type=${type ?? "*"})');
-        return const [];
+        return null;
       }
       final results = data['results'] as List? ?? const [];
       final out = <NearbyPlace>[];
@@ -813,16 +830,71 @@ class PlacesService {
       return out;
     } catch (e) {
       debugPrint('searchNearbyPlaces failed (type=${type ?? "*"}): $e');
-      return const [];
+      return null;
     }
+  }
+
+  /// Name search around the long-press point, for the Nearby picker's
+  /// search box. [searchNearbyPlaces] answers "what's around here?" with
+  /// at most 20 prominent places per category, so a specific café or shop
+  /// the user knows is right there is often NOT in that list — while the
+  /// search bar finds it, because the search bar is a name search. This is
+  /// that same Text Search, biased to [center] and [radiusMeters].
+  ///
+  /// The bias is soft — a unique name may come back from further out — so
+  /// results are sorted by distance from [center] and each carries its
+  /// `distanceMeters`; the picker shows that distance rather than hiding
+  /// anything, since the user typed the name on purpose.
+  ///
+  /// Throws [NearbySearchException] when the request itself failed, like
+  /// [searchNearbyPlaces]; an empty list means Google had no match.
+  static Future<List<NearbyPlace>> searchNearbyByText(
+    String query,
+    LatLng center, {
+    required int radiusMeters,
+  }) async {
+    final q = query.trim();
+    if (q.isEmpty) return const [];
+    final url = 'https://maps.googleapis.com/maps/api/place/textsearch/json'
+        '?query=${Uri.encodeComponent(q)}'
+        '&location=${center.latitude},${center.longitude}'
+        '&radius=$radiusMeters'
+        '&key=${ApiService.googlePlacesApiKey}';
+    Map<String, dynamic>? data;
+    try {
+      final raw = (await ApiService.dio.get(url)).data;
+      if (raw is Map) data = Map<String, dynamic>.from(raw);
+    } catch (e) {
+      debugPrint('searchNearbyByText failed: $e');
+      throw const NearbySearchException();
+    }
+    final status = data?['status'];
+    if (data == null || (status != 'OK' && status != 'ZERO_RESULTS')) {
+      debugPrint('searchNearbyByText: non-OK status $status');
+      throw const NearbySearchException();
+    }
+    final results = data['results'] as List? ?? const [];
+    final out = <NearbyPlace>[];
+    for (final r in results) {
+      if (r is! Map) continue;
+      final json = Map<String, dynamic>.from(r);
+      // Text Search says `formatted_address` where Nearby Search says
+      // `vicinity`; the tile's subtitle reads the latter.
+      if (json['vicinity'] == null && json['formatted_address'] != null) {
+        json['vicinity'] = json['formatted_address'];
+      }
+      final place = NearbyPlace.fromJson(json, origin: center);
+      if (place != null) out.add(place);
+    }
+    out.sort((a, b) => a.distanceMeters.compareTo(b.distanceMeters));
+    return out;
   }
 
   /// City-level reverse geocode: the locality (falling back to the level-1
   /// administrative area) containing [coordinates], or null when Google has
   /// neither. Used to NAME auto-detected city clusters — display only,
   /// never persisted. `result_type` keeps the response tiny.
-  static Future<String?> getLocalityFromCoordinates(
-      LatLng coordinates) async {
+  static Future<String?> getLocalityFromCoordinates(LatLng coordinates) async {
     try {
       final url = 'https://maps.googleapis.com/maps/api/geocode/json'
           '?latlng=${coordinates.latitude},${coordinates.longitude}'
@@ -848,6 +920,35 @@ class PlacesService {
       return locality ?? adminArea;
     } catch (e) {
       debugPrint('Error reverse-geocoding locality: $e');
+      return null;
+    }
+  }
+
+  /// Country-level reverse geocode: the ISO-2 code of the country that
+  /// contains [coordinates], or null when Google can't say. With
+  /// `result_type=country` the answer is a single component — the cheapest
+  /// "which country is this?" there is (no Place Details enrichment, unlike
+  /// [getPlaceFromCoordinates]). Used by CountryMatchService to gate
+  /// "Route from my location".
+  static Future<String?> getCountryCodeFromCoordinates(
+      LatLng coordinates) async {
+    try {
+      final url = 'https://maps.googleapis.com/maps/api/geocode/json'
+          '?latlng=${coordinates.latitude},${coordinates.longitude}'
+          '&result_type=country'
+          '&key=${ApiService.googleMapsApiKey}';
+      final response = await ApiService.dio.get(url);
+      final data = response.data;
+      if (data['status'] != 'OK' || (data['results'] as List).isEmpty) {
+        return null;
+      }
+      for (final result in data['results'] as List) {
+        final code = _extractCountryCode(result['address_components']);
+        if (code != null) return code;
+      }
+      return null;
+    } catch (e) {
+      debugPrint('Error reverse-geocoding country: $e');
       return null;
     }
   }

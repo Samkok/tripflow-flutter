@@ -42,6 +42,7 @@ import 'package:voyza/screens/copy_trip_wizard.dart';
 import 'package:voyza/widgets/rotating_globe_background.dart';
 import 'package:voyza/widgets/trip_collaborators_row.dart';
 import 'package:voyza/widgets/trip_skeleton.dart';
+import 'package:voyza/utils/search_text.dart';
 
 /// Home-list filter. "Gone" = the trip's last day is already past.
 enum _TripFilter {
@@ -202,10 +203,7 @@ class _TripScreenState extends ConsumerState<TripScreen> {
     }
   }
 
-  bool _matchesTripQuery(String name) {
-    final q = _tripQuery.trim().toLowerCase();
-    return q.isEmpty || name.toLowerCase().contains(q);
-  }
+  bool _matchesTripQuery(String name) => matchesSearchQuery(name, _tripQuery);
 
   int _compareTripStart(DateTime? sa, DateTime? sb) {
     if (sa == null && sb == null) return 0;
@@ -455,14 +453,23 @@ class _TripScreenState extends ConsumerState<TripScreen> {
     }
   }
 
-  /// "Go to map" on the active trip card: pre-select the trip's first day
-  /// (when it has dates) so the map opens on day one, then jump tabs.
+  /// "Go to map" on the active trip card: pre-select the day the map should
+  /// open on, then jump tabs. An ONGOING trip (today inside its date range)
+  /// lands on today — the day the traveller is actually living — while a
+  /// trip that hasn't started yet (or has no end date) lands on day one.
   void _goToMapForTrip(Trip trip) {
     final start = trip.startDate;
     if (start != null) {
+      final startDay = DateTime(start.year, start.month, start.day);
+      final end = trip.endDate;
+      final now = DateTime.now();
+      final today = DateTime(now.year, now.month, now.day);
+      final ongoing = end != null &&
+          !today.isBefore(startDay) &&
+          !today.isAfter(DateTime(end.year, end.month, end.day));
       ref.read(allDaysModeProvider.notifier).state = false;
       ref.read(selectedDateProvider.notifier).state =
-          DateTime(start.year, start.month, start.day);
+          ongoing ? today : startDay;
       // Nudge the trip sheet onto the "Selected Day" toggle so the landing
       // actually shows day one (the toggle otherwise keeps its last state).
       ref.read(mapDayFocusRequestProvider.notifier).state++;
@@ -512,10 +519,10 @@ class _TripScreenState extends ConsumerState<TripScreen> {
       // Real Lisbon spots, intentionally out of geographic order so Optimize
       // visibly reorders them. (name, lat, lng)
       //
-      // Exactly 5 — the sample writes straight to the repository (bypassing
-      // the LocationAddService gate), so it must not exceed
-      // SubscriptionLimitService.freePlaceAllowance or a brand-new free user
-      // would be over their allowance the moment they tap the demo.
+      // Five stops — the sample writes straight to the repository (bypassing
+      // the LocationAddService gate), so it must stay within
+      // SubscriptionLimitService.freePlaceAllowance (10) or a brand-new free
+      // user would be over their allowance the moment they tap the demo.
       const places = <(String, double, double)>[
         ('Time Out Market', 38.7067, -9.1459),
         ('Belém Tower', 38.6916, -9.2160),
@@ -572,8 +579,8 @@ class _TripScreenState extends ConsumerState<TripScreen> {
       final anonId = await AnonymousUserService.id;
       final seededKey = 'sample_seeded_$anonId';
       // Idempotency: the sample CTA is reachable from BOTH onboarding and the
-      // Trips empty state. Re-seeding would push the user to 8/5 places and slam
-      // them into the paywall on their next add, so seed at most once per device.
+      // Trips empty state. Re-seeding would double the sample's places and eat
+      // most of the free allowance, so seed at most once per device.
       if (prefs.getBool(seededKey) ?? false) {
         ref.read(mainTabRequestProvider.notifier).state = 1; // Map tab
         return;
@@ -584,9 +591,9 @@ class _TripScreenState extends ConsumerState<TripScreen> {
       final locationRepository = ref.read(locationRepositoryProvider);
 
       // Same Lisbon spots as the authed sample, but 4 (not 5): these local rows
-      // count toward SubscriptionLimitService.freePlaceAllowance (5), so seeding
-      // 4 leaves one free slot before the paywall. Still > the aha threshold, so
-      // Optimize visibly reorders them.
+      // count toward SubscriptionLimitService.freePlaceAllowance (10), so
+      // seeding 4 leaves plenty of free slots before the paywall. Still > the
+      // aha threshold, so Optimize visibly reorders them.
       const places = <(String, double, double)>[
         ('Time Out Market', 38.7067, -9.1459),
         ('Belém Tower', 38.6916, -9.2160),
@@ -846,8 +853,7 @@ class _TripScreenState extends ConsumerState<TripScreen> {
     final showOngoingSection =
         (filter == _TripFilter.all || filter == _TripFilter.ongoing) &&
             (ongoingOwn.isNotEmpty || ongoingShared.isNotEmpty);
-    final showLists =
-        filter == _TripFilter.all || filter == _TripFilter.gone;
+    final showLists = filter == _TripFilter.all || filter == _TripFilter.gone;
 
     // The activate-trip coach spotlights ONE Activate button. Trips whose
     // dates include today live in the On Going section ABOVE the list, so
@@ -1371,8 +1377,7 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                           childCount: ongoingOwn.length + ongoingShared.length,
                         ),
                       ),
-                      const SliverPadding(
-                          padding: EdgeInsets.only(bottom: 8)),
+                      const SliverPadding(padding: EdgeInsets.only(bottom: 8)),
                     ],
                   ),
 

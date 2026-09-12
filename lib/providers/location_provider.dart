@@ -175,13 +175,17 @@ final initialSyncCompleteProvider = StateProvider<bool>((ref) => false);
 /// map reactively via watchLocations(), so awaiting it here was pure overlay
 /// latency (it never needed to gate the first paint). This is what made the map
 /// linger on "Loading your locations…" after sign-in.
-Future<void> performInitialLocationSync(LocationRepository repository) async {
+///
+/// Returns whether the display-critical fetch reached the server (false =
+/// the cache was left as it was; the manual refresh button tells the user).
+Future<bool> performInitialLocationSync(LocationRepository repository) async {
   // Display-critical: populates the Hive cache the map renders from.
-  await repository.fetchRemoteLocations();
+  final fetched = await repository.fetchRemoteLocations();
 
   // Fire-and-forget. Runs AFTER the fetch above (sequential, so no racing Hive
   // writes) and surfaces through the location stream once done.
   unawaited(_runBackgroundLocationSync(repository));
+  return fetched;
 }
 
 /// Background continuation of [performInitialLocationSync]: uploads and the

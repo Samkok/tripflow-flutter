@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:voyza/models/location_model.dart';
 import 'package:voyza/providers/all_days_route_provider.dart';
+import 'package:voyza/providers/arrival_ring_provider.dart';
 import 'package:voyza/providers/optimized_map_overlay_provider.dart';
 import 'package:voyza/providers/trip_provider.dart';
 import '../providers/map_ui_state_provider.dart';
@@ -22,10 +23,14 @@ class MapWidget extends ConsumerWidget {
     this.temporaryDrawing,
   });
 
-  // OPTIMIZATION: Helper to reduce marker rebuild frequency
+  // OPTIMIZATION: Helper to reduce marker rebuild frequency. Also applies
+  // the status pin filter (All / Active / Skipped / Done): hidden pins are
+  // simply left out of the set handed to GoogleMap — no bitmap work, no
+  // provider reload — so toggling the filter is a cheap marker diff.
   Set<Marker> _buildMarkers(
     Set<Marker> overlayMarkers,
     List<LocationModel> locationsForDate,
+    MapPinFilter pinFilter,
   ) {
     // OPTIMIZATION: Limit marker processing to visible markers only
     // This prevents excessive marker object creation
@@ -33,30 +38,29 @@ class MapWidget extends ConsumerWidget {
       return overlayMarkers;
     }
 
-    return overlayMarkers.map((marker) {
+    final out = <Marker>{};
+    for (final marker in overlayMarkers) {
       final id = marker.markerId.value;
-      // Skip special markers (current location, route markers)
+      // Special markers (current location, route markers) pass through.
       if (id == 'current_location' ||
           id.startsWith('leg_') ||
           id.startsWith('route_')) {
-        return marker;
+        out.add(marker);
+        continue;
       }
-
-      // Find corresponding location with error handling
-      try {
-        final location = locationsForDate.firstWhere(
-          (loc) => loc.id == marker.markerId.value,
-          orElse: () => locationsForDate.first,
-        );
-
-        return marker.copyWith(
-          onTapParam: () => onMarkerTap?.call(location),
-        );
-      } catch (e) {
-        // Return original marker if something goes wrong
-        return marker;
+      final idx = locationsForDate.indexWhere((loc) => loc.id == id);
+      if (idx == -1) {
+        out.add(marker);
+        continue;
       }
-    }).toSet();
+      final location = locationsForDate[idx];
+      if (!pinMatchesFilter(pinFilter,
+          isSkipped: location.isSkipped, isDone: location.isDone)) {
+        continue;
+      }
+      out.add(marker.copyWith(onTapParam: () => onMarkerTap?.call(location)));
+    }
+    return out;
   }
 
   @override
@@ -70,6 +74,7 @@ class MapWidget extends ConsumerWidget {
     // current-location marker is kept from the base set so the user doesn't
     // lose themselves.
     final allDaysMode = ref.watch(allDaysModeProvider);
+    final pinFilter = ref.watch(mapPinFilterProvider);
     final allDaysPolylines = ref.watch(allDaysPolylinesProvider);
     final allDaysMarkers =
         ref.watch(allDaysMarkersProvider).valueOrNull ?? const <Marker>{};
@@ -82,23 +87,42 @@ class MapWidget extends ConsumerWidget {
         // All-days pins open the same location detail modal as single-day
         // pins: parse the location id back out of the marker id and route
         // the tap through the shared onMarkerTap callback.
-        final tappableAllDays = allDaysMarkers.map((m) {
+        // The status pin filter applies here too (same rule as the
+        // single-day path): hidden pins are dropped from the set.
+        final tappableAllDays = <Marker>{};
+        for (final m in allDaysMarkers) {
           final locId = locationIdFromAllDaysMarker(m.markerId.value);
-          if (locId == null) return m;
+          if (locId == null) {
+            tappableAllDays.add(m);
+            continue;
+          }
           final idx = pinnedLocations.indexWhere((l) => l.id == locId);
-          if (idx == -1) return m;
+          if (idx == -1) {
+            tappableAllDays.add(m);
+            continue;
+          }
           final loc = pinnedLocations[idx];
-          return m.copyWith(onTapParam: () => onMarkerTap?.call(loc));
-        }).toSet();
+          if (!pinMatchesFilter(pinFilter,
+              isSkipped: loc.isSkipped, isDone: loc.isDone)) {
+            continue;
+          }
+          tappableAllDays
+              .add(m.copyWith(onTapParam: () => onMarkerTap?.call(loc)));
+        }
         final markers = allDaysMode
             ? {
                 ...tappableAllDays,
                 ...overlayState.markers
                     .where((m) => m.markerId.value == 'current_location'),
               }
-            : _buildMarkers(overlayState.markers, locationsForDate);
-        final polylines =
-            allDaysMode ? allDaysPolylines : overlayState.polylines;
+            : _buildMarkers(overlayState.markers, locationsForDate, pinFilter);
+        // The dotted arrival ring around the current-location dot rides on
+        // the same tick that already moves that dot — no extra rebuilds.
+        final ring = ref.watch(arrivalRingPolylineProvider);
+        final polylines = {
+          ...(allDaysMode ? allDaysPolylines : overlayState.polylines),
+          if (ring != null) ring,
+        };
         final circles =
             allDaysMode ? const <Circle>{} : overlayState.automaticZones;
         // OPTIMIZATION: Wrap in RepaintBoundary to prevent parent repaints

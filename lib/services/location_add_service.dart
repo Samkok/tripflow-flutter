@@ -18,7 +18,9 @@ import '../services/anonymous_user_service.dart';
 import '../services/onboarding_service.dart';
 import '../services/places_service.dart';
 import '../services/subscription_limit_service.dart';
+import '../utils/same_day_place_guard.dart';
 import '../utils/trip_date_validator.dart';
+import '../utils/trip_dates.dart';
 import '../widgets/accommodation_prompts.dart';
 import '../widgets/app_toast.dart';
 
@@ -58,7 +60,7 @@ class LocationAddService {
 
   /// Goal-gradient feedback after a NEW place is persisted (create paths
   /// only — attach paths don't consume the allowance). Free users get a
-  /// "N of 5 free places used" toast; the very first place ever gets a
+  /// "N of 10 free places used" toast; the very first place ever gets a
   /// warmer nudge toward the 3-place Optimize threshold instead.
   ///
   /// Applies to ANONYMOUS users too (one-time flags keyed to the persistent
@@ -173,6 +175,93 @@ class LocationAddService {
     return fallback?.countryCode;
   }
 
+  /// Google sometimes omits `opening_hours` from a Place Details response
+  /// for a place that normally carries them (partial / transient replies),
+  /// so a place can land in the trip hour-less even though Google knows its
+  /// hours — and the timing warnings, the hours block and the closing-time
+  /// checks all go quiet for it. When a NEW row was written without hours,
+  /// re-fetch shortly after the add and persist whatever comes back.
+  ///
+  /// Fire-and-forget: never throws, never blocks the add flow. Two attempts
+  /// (3s, then 12s), then give up — some places simply have no hours and
+  /// the user can still refresh by hand from the detail sheet. Repository
+  /// captured up front: the calling widget (search screen / sheet) may be
+  /// disposed by the time the timer fires, and `ref` dies with it.
+  void _scheduleHoursBackfill(
+    String locationId,
+    String? placeId, {
+    required bool hasHours,
+  }) {
+    if (hasHours || placeId == null || placeId.isEmpty) return;
+    final repo = _ref.read(locationRepositoryProvider);
+    unawaited(() async {
+      const delays = [Duration(seconds: 3), Duration(seconds: 12)];
+      for (final delay in delays) {
+        await Future<void>.delayed(delay);
+        try {
+          final details = await PlacesService.getPlaceDetails(placeId);
+          final hours = details?.openingHours;
+          if (hours == null) continue;
+          await repo.updateLocation(locationId, {
+            'google_opening_hours': hours,
+            'hours_last_refreshed_at': DateTime.now(),
+          });
+          debugPrint('hours backfill: filled hours for $locationId');
+          return;
+        } catch (e) {
+          debugPrint('hours backfill for $locationId failed: $e');
+        }
+      }
+    }());
+  }
+
+  /// True when [location] is the same place as a stop already active on its
+  /// target day in the active map context — the day it carries, else the
+  /// selected day. Occupants are the map's pinned rows: the active trip's
+  /// places, or the loose places on a trip-less map. Same identity rule as
+  /// every reschedule path ([filterSameDayDuplicates]): place_id, else
+  /// name + coordinates.
+  bool _isDuplicateOnDay(LocationModel location) {
+    final day =
+        dayKey(location.scheduledDate ?? _ref.read(selectedDateProvider));
+    final occupants = _ref
+        .read(tripProvider)
+        .pinnedLocations
+        .where((l) =>
+            l.id != location.id &&
+            l.scheduledDate != null &&
+            l.isActiveOnDate(day))
+        .map(placeKeyOfModel);
+    return filterSameDayDuplicates(
+      moving: [placeKeyOfModel(location)],
+      occupantsOnDay: occupants,
+      samePlace: isLikelySamePlace,
+    ).allowedIds.isEmpty;
+  }
+
+  /// [SavedLocation] twin of [_isDuplicateOnDay] for the trip-page add
+  /// flow: occupants are the rows of the SAME trip (null trip = the user's
+  /// loose places). An unscheduled add has no day to collide on.
+  bool _isSavedDuplicateOnDay(SavedLocation location) {
+    final start = location.scheduledDate;
+    if (start == null) return false;
+    final day = dayKey(start);
+    final all = _ref.read(savedLocationsProvider).valueOrNull ??
+        const <SavedLocation>[];
+    final occupants = all
+        .where((l) =>
+            l.id != location.id &&
+            l.tripId == location.tripId &&
+            l.scheduledDate != null &&
+            l.isActiveOnDate(day))
+        .map(placeKeyOfSaved);
+    return filterSameDayDuplicates(
+      moving: [placeKeyOfSaved(location)],
+      occupantsOnDay: occupants,
+      samePlace: isLikelySamePlace,
+    ).allowedIds.isEmpty;
+  }
+
   /// Adds a [LocationModel] via the active trip context (map / search flow).
   /// Returns true if the location was added; false if the paywall blocked
   /// it, the user cancelled the date confirmation, or the strict country
@@ -193,6 +282,24 @@ class LocationAddService {
     /// paywall.
     bool skipLimitCheck = false,
   }) async {
+    // Same-day duplicate gate — THE shared rule (a place may repeat across
+    // a trip's days, never within one), applied here so every add path
+    // inherits it. The nearby picker and the inline search had no check of
+    // their own, so a place already on the day could be added twice from
+    // them. Runs before the paywall: a duplicate must never show an
+    // upgrade prompt.
+    if (_isDuplicateOnDay(location)) {
+      if (context.mounted) {
+        final day =
+            dayKey(location.scheduledDate ?? _ref.read(selectedDateProvider));
+        AppToast.warning(
+          context,
+          '"${location.name}" is already planned for ${DateFormat('MMM d').format(day)}',
+        );
+      }
+      return false;
+    }
+
     if (!skipLimitCheck) {
       final canAdd = await SubscriptionLimitService(_ref).canAddPlace(context);
       if (!canAdd) return false;
@@ -236,6 +343,11 @@ class LocationAddService {
     // active trip via that provider to assign tripId, so reordering keeps
     // the new location correctly tagged with its trip.
     await _ref.read(tripProvider.notifier).addLocation(location);
+    _scheduleHoursBackfill(
+      location.id,
+      location.placeId,
+      hasHours: location.googleOpeningHours != null,
+    );
 
     if (activeTrip != null && result.didExtend) {
       await _persistTripDateExtension(activeTrip, result);
@@ -256,6 +368,18 @@ class LocationAddService {
     SavedLocation location, {
     String? locationCountryCode,
   }) async {
+    // Same-day duplicate gate (see beforeAddingLocation) — scoped to THIS
+    // row's trip, since the trip page often isn't the active map trip.
+    if (_isSavedDuplicateOnDay(location)) {
+      if (context.mounted) {
+        AppToast.warning(
+          context,
+          '"${location.name}" is already planned for ${DateFormat('MMM d').format(dayKey(location.scheduledDate!))}',
+        );
+      }
+      return false;
+    }
+
     final canAdd = await SubscriptionLimitService(_ref).canAddPlace(context);
     if (!canAdd) return false;
 
@@ -294,6 +418,11 @@ class LocationAddService {
     // the subsequent userTripsProvider invalidation can't strand it
     // mid-write.
     await _ref.read(locationRepositoryProvider).addLocation(location);
+    _scheduleHoursBackfill(
+      location.id,
+      location.placeId,
+      hasHours: location.googleOpeningHours != null,
+    );
 
     if (trip != null && result.didExtend) {
       await _persistTripDateExtension(trip, result);

@@ -327,6 +327,7 @@ class TripRepository {
     String? countryCode,
     bool clearCountryCode = false,
     bool clearDates = false,
+    bool? autoRollUnvisited,
   }) async {
     try {
       final updates = <String, dynamic>{
@@ -347,6 +348,7 @@ class TripRepository {
           'country_code': null
         else if (countryCode != null)
           'country_code': countryCode.toUpperCase(),
+        if (autoRollUnvisited != null) 'auto_roll_unvisited': autoRollUnvisited,
         'updated_at': DateTime.now().toIso8601String(),
       };
 

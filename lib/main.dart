@@ -29,6 +29,8 @@ import 'services/referral_service.dart';
 import 'services/review_prompt_service.dart';
 import 'services/analytics_consent_service.dart';
 import 'repositories/location_repository.dart';
+import 'providers/location_provider.dart';
+import 'services/trip_rollover_service.dart';
 
 import 'package:firebase_core/firebase_core.dart';
 import 'package:hive_flutter/hive_flutter.dart';
@@ -333,6 +335,28 @@ class _MyAppState extends ConsumerState<MyApp> with WidgetsBindingObserver {
     if (state == AppLifecycleState.resumed) {
       debugPrint('App resumed - refreshing subscription status');
       _refreshSubscriptionOnResume();
+      // Locations: realtime doesn't replay what happened while we were
+      // suspended (the OS drops the socket), so re-check the channel and
+      // diff-fetch — members' edits and deletes land now, not at the next
+      // cold start. No-op for guests.
+      unawaited(_reconcileLocationsOnResume());
+    }
+  }
+
+  /// Cold start delivers a 'resumed' BEFORE Supabase has finished
+  /// initializing; touching the location repository then trips the SDK's
+  /// "initialize before Supabase.instance" assertion (red screen at launch).
+  /// Wait for init, like the subscription refresh waits for RevenueCat.
+  Future<void> _reconcileLocationsOnResume() async {
+    try {
+      await SupabaseService.waitForInitialization();
+      if (!mounted) return;
+      await ref.read(locationRepositoryProvider).reconcileAfterResume();
+      if (!mounted) return;
+      // A new day may have started while the app was away.
+      await TripRolloverService.runIfDue(ref);
+    } catch (e) {
+      debugPrint('Location reconcile on resume failed: $e');
     }
   }
 

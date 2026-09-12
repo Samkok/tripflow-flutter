@@ -15,7 +15,7 @@ import 'package:voyza/widgets/rotating_globe_background.dart';
 
 import '../providers/auth_provider.dart';
 import '../providers/email_verified_provider.dart';
-import '../providers/nearby_radius_provider.dart';
+import '../providers/arrival_radius_provider.dart';
 import '../providers/zoom_fit_settings_provider.dart';
 import '../services/notification_service.dart';
 import '../services/analytics_consent_service.dart';
@@ -120,7 +120,7 @@ class SettingsScreen extends ConsumerWidget {
               const SizedBox(height: 12),
               const _LocationTile(),
               const SizedBox(height: 12),
-              const _NearbyRadiusTile(),
+              const _ArrivalRadiusTile(),
               const SizedBox(height: 12),
               const _IncludeCurrentInFitTile(),
               const SizedBox(height: 12),
@@ -1201,84 +1201,6 @@ class _NotificationTileState extends State<_NotificationTile>
 // via [nearbyRadiusProvider]; default 300m.
 // ---------------------------------------------------------------------------
 
-class _NearbyRadiusTile extends ConsumerWidget {
-  const _NearbyRadiusTile();
-
-  String _format(double meters) {
-    final m = meters.round();
-    if (m < 1000) return '${m}m';
-    return '${(m / 1000).toStringAsFixed(m % 1000 == 0 ? 0 : 1)}km';
-  }
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final value = ref.watch(nearbyRadiusProvider);
-    final theme = Theme.of(context);
-    return Container(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-      decoration: BoxDecoration(
-        color: theme.cardColor,
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.05),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(Icons.radar_outlined,
-                  color: theme.colorScheme.primary, size: 22),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Nearby places radius',
-                      style: theme.textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      'When you long-press the map, places within this distance show up.',
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 8),
-              Text(
-                _format(value),
-                style: theme.textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.bold,
-                  color: theme.colorScheme.primary,
-                ),
-              ),
-            ],
-          ),
-          Slider(
-            value: value,
-            min: NearbyRadiusNotifier.minRadius,
-            max: NearbyRadiusNotifier.maxRadius,
-            divisions: 19,
-            label: _format(value),
-            onChanged: (v) => ref.read(nearbyRadiusProvider.notifier).set(v),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Include current location in zoom-to-fit — toggles whether the map's
 // "zoom to fit" FAB also fits the device's current position into the
@@ -1543,3 +1465,84 @@ class _TrialStatusTileState extends ConsumerState<_TrialStatusTile> {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Arrival radius — how close the device must be to one of today's stops
+// before the map asks whether to mark it done. Drawn on the map as the
+// dotted ring around the current-location dot. 10–100 m; persisted via
+// [arrivalRadiusProvider].
+// ---------------------------------------------------------------------------
+
+class _ArrivalRadiusTile extends ConsumerWidget {
+  const _ArrivalRadiusTile();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final value = ref.watch(arrivalRadiusProvider);
+    final theme = Theme.of(context);
+    final label = '${value.round()} m';
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+      decoration: BoxDecoration(
+        color: theme.cardColor,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.adjust_rounded,
+                  color: theme.colorScheme.primary, size: 22),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Arrival radius',
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      'When a stop comes within this distance of you, '
+                      'VoyZa asks whether to mark it done. It\'s the dotted '
+                      'ring around your position on the map.',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                label,
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.bold,
+                  color: theme.colorScheme.primary,
+                ),
+              ),
+            ],
+          ),
+          Slider(
+            value: value,
+            min: ArrivalRadiusNotifier.minRadius,
+            max: ArrivalRadiusNotifier.maxRadius,
+            divisions: 18,
+            label: label,
+            onChanged: (v) => ref.read(arrivalRadiusProvider.notifier).set(v),
+          ),
+        ],
+      ),
+    );
+  }
+}
