@@ -2122,7 +2122,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
                   // shared column (not the trip badge) so it's there for
                   // loose places on a trip-less map too; it hides itself
                   // when the day has nothing to filter.
-                  const _PinFilterBar(),
+                  _PinFilterBar(onSelected: _zoomToFitTrip),
                   Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -2742,19 +2742,21 @@ class _MapScreenState extends ConsumerState<MapScreen>
       return;
     }
 
-    // The day fit frames what's left to DO: skipped and done stops keep
-    // their pins but don't drive the camera. (Entire-trip mode differs by
-    // design — [_zoomToFitAllDays] keeps done stops in the story via
-    // [allDayStopsProvider], which only drops skipped ones.) When every stop
-    // on the day is done/skipped there's nothing "left", so fall back to
-    // framing all of them rather than doing nothing.
+    // The day fit frames exactly what the pin filter shows: All → every
+    // stop on the day, Active / Skipped / Done → just those. The filter bar
+    // never leaves a filter that would hide everything (it snaps back to
+    // All), but guard anyway so a fit can never frame nothing.
     final allOnDate = ref.read(locationsForSelectedDateProvider);
-    final active = allOnDate.where((l) => !l.isSkipped && !l.isDone).toList();
-    final locations = active.isEmpty ? allOnDate : active;
+    final filter = ref.read(mapPinFilterProvider);
+    final shown = allOnDate
+        .where((l) =>
+            pinMatchesFilter(filter, isSkipped: l.isSkipped, isDone: l.isDone))
+        .toList();
+    final locations = shown.isEmpty ? allOnDate : shown;
+    final shownIds = {for (final l in locations) l.id};
     final excludedIds = <String>{
-      if (active.isNotEmpty)
-        for (final l in allOnDate)
-          if (l.isSkipped || l.isDone) l.id,
+      for (final l in allOnDate)
+        if (!shownIds.contains(l.id)) l.id,
     };
     final includeCurrent = ref.read(includeCurrentInFitProvider);
     final currentLocation = ref.read(tripProvider).currentLocation;
@@ -2869,13 +2871,23 @@ class _MapScreenState extends ConsumerState<MapScreen>
     final stopsByDay = ref.read(allDayStopsProvider);
     final routes = ref.read(allDayRoutesProvider).valueOrNull ?? const {};
 
-    final stops = <LatLng>[
-      for (final dayStops in stopsByDay.values)
-        for (final loc in dayStops) loc.coordinates,
+    // Same rule as the day fit: frame what the pin filter shows. Route
+    // geometry rides along only under All — a filtered view's routes still
+    // run through the hidden pins and would drag the frame back to them.
+    final filter = ref.read(mapPinFilterProvider);
+    final allStops = <LocationModel>[
+      for (final dayStops in stopsByDay.values) ...dayStops,
     ];
+    final shownStops = allStops
+        .where((l) =>
+            pinMatchesFilter(filter, isSkipped: l.isSkipped, isDone: l.isDone))
+        .toList();
+    final framed = shownStops.isEmpty ? allStops : shownStops;
+    final stops = <LatLng>[for (final loc in framed) loc.coordinates];
     final points = <LatLng>[
       ...stops,
-      for (final route in routes.values) ...route,
+      if (filter == MapPinFilter.all)
+        for (final route in routes.values) ...route,
     ];
 
     if (points.length < 2) {
@@ -3388,7 +3400,11 @@ class _AutoPlanPill extends ConsumerWidget {
 /// (the last skipped stop was un-skipped, the day changed) it falls back to
 /// All on its own.
 class _PinFilterBar extends ConsumerWidget {
-  const _PinFilterBar();
+  /// Called after a chip is tapped — the map fits itself to what the chosen
+  /// filter shows, so picking "Done" frames the done stops, and so on.
+  final VoidCallback? onSelected;
+
+  const _PinFilterBar({this.onSelected});
 
   static const _labels = {
     MapPinFilter.all: 'All',
@@ -3453,8 +3469,13 @@ class _PinFilterBar extends ConsumerWidget {
                   count: counts[f]!,
                   selected: f == filter,
                   enabled: f == MapPinFilter.all || counts[f]! > 0,
-                  onTap: () =>
-                      ref.read(mapPinFilterProvider.notifier).state = f,
+                  onTap: () {
+                    ref.read(mapPinFilterProvider.notifier).state = f;
+                    // Let the marker set rebuild for the new filter before
+                    // the camera frames it.
+                    WidgetsBinding.instance
+                        .addPostFrameCallback((_) => onSelected?.call());
+                  },
                 ),
               ),
           ],
