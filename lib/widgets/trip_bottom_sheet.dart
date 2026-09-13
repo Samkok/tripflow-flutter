@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'dart:ui' show ImageFilter;
 
+import 'package:flutter/foundation.dart' show setEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -99,10 +101,32 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
   /// handle or the sticky region (header + route summary).
   final ScrollController _listScrollController = ScrollController();
 
-  /// Plan search: filters the location cards by name/address. Kept as a
-  /// notifier so typing rebuilds only the list bodies, not the whole sheet.
+  /// Plan search: filters the location cards by name/address.
+  ///
+  /// Two notifiers on purpose. [_searchQuery] follows every keystroke and
+  /// drives only the field itself (its clear button). [_listQuery] is what
+  /// the list bodies listen to: it changes after a short typing pause, and
+  /// only when the set of matching stops actually changed. Every card in
+  /// the trip is built under that listener, so with a few dozen stops a
+  /// rebuild per keystroke is what made typing lag.
   final TextEditingController _searchController = TextEditingController();
   final ValueNotifier<String> _searchQuery = ValueNotifier<String>('');
+  final ValueNotifier<String> _listQuery = ValueNotifier<String>('');
+  Timer? _searchSettleTimer;
+  Set<String>? _lastListMatchIds;
+  static const _searchSettle = Duration(milliseconds: 150);
+
+  /// Keeps the field's element (focus, IME session) when the body switches
+  /// between its list and its centred empty/no-match layout mid-typing —
+  /// without it the keyboard closed the moment a query matched nothing.
+  final GlobalKey _searchFieldKey = GlobalKey();
+
+  // normalizeSearchText once per query and once per stop, not once per
+  // (stop × keystroke).
+  String? _memoQuery;
+  String _memoNormalizedQuery = '';
+  final Map<String, ({String name, String address, String folded})>
+      _foldedHaystacks = {};
 
   // Provider to clear the optimized route when the date changes.
   // This prevents showing an old route on a new day's location list.
@@ -132,8 +156,10 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
     _tabController.dispose();
     _summaryCompact.dispose();
     _listScrollController.dispose();
+    _searchSettleTimer?.cancel();
     _searchController.dispose();
     _searchQuery.dispose();
+    _listQuery.dispose();
     super.dispose();
   }
 
@@ -146,8 +172,60 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
   /// and diacritic-insensitive, any word order (see [matchesSearchQuery]),
   /// so "ben thanh" finds "Chợ Bến Thành".
   bool _matchesQuery(LocationModel loc, String query) {
-    if (query.trim().isEmpty) return true;
-    return matchesSearchQuery('${loc.name} ${loc.address}', query);
+    final q = _normalizedQuery(query);
+    if (q.isEmpty) return true;
+    return matchesNormalizedQuery(_foldedHaystack(loc), q);
+  }
+
+  String _normalizedQuery(String query) {
+    if (query != _memoQuery) {
+      _memoQuery = query;
+      _memoNormalizedQuery = normalizeSearchText(query);
+    }
+    return _memoNormalizedQuery;
+  }
+
+  String _foldedHaystack(LocationModel loc) {
+    final hit = _foldedHaystacks[loc.id];
+    if (hit != null && hit.name == loc.name && hit.address == loc.address) {
+      return hit.folded;
+    }
+    final folded = normalizeSearchText('${loc.name} ${loc.address}');
+    _foldedHaystacks[loc.id] =
+        (name: loc.name, address: loc.address, folded: folded);
+    return folded;
+  }
+
+  /// Field input: the field updates at once; the list bodies after a pause
+  /// (clearing is immediate).
+  void _onSearchChanged(String value) {
+    _searchQuery.value = value;
+    _searchSettleTimer?.cancel();
+    if (value.trim().isEmpty) {
+      _pushListQuery(value);
+      return;
+    }
+    _searchSettleTimer = Timer(_searchSettle, () => _pushListQuery(value));
+  }
+
+  /// Hands [value] to the list bodies unless they would rebuild into the
+  /// very same cards: same matching stops, still searching. An empty match
+  /// set always goes through — the no-match body prints the query.
+  void _pushListQuery(String value) {
+    if (!mounted) return;
+    final ids = <String>{
+      for (final l in ref.read(tripProvider).pinnedLocations)
+        if (_matchesQuery(l, value)) l.id,
+    };
+    final wasSearching = _listQuery.value.trim().isNotEmpty;
+    final searching = value.trim().isNotEmpty;
+    if (ids.isNotEmpty &&
+        searching == wasSearching &&
+        setEquals(ids, _lastListMatchIds)) {
+      return;
+    }
+    _lastListMatchIds = ids;
+    _listQuery.value = value;
   }
 
   /// Snap targets shared between the drag-handle tap and the sticky-region
@@ -557,7 +635,7 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                           // watch inside a nested builder callback subscribes the
                           // wrong element).
                           return ValueListenableBuilder<String>(
-                            valueListenable: _searchQuery,
+                            valueListenable: _listQuery,
                             builder: (context, query, _) {
                               return Consumer(builder: (context, ref, _) {
                                 final onSelectedDateTab = !hasPinnedLocations ||
@@ -2024,6 +2102,7 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
     );
 
     return Padding(
+      key: _searchFieldKey,
       padding: const EdgeInsets.only(top: 10),
       child: ValueListenableBuilder<String>(
         valueListenable: _searchQuery,
@@ -2031,7 +2110,7 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
           return TextField(
             cursorOpacityAnimates: false,
             controller: _searchController,
-            onChanged: (value) => _searchQuery.value = value,
+            onChanged: _onSearchChanged,
             textInputAction: TextInputAction.search,
             onSubmitted: (_) => FocusScope.of(context).unfocus(),
             onTap: () {
@@ -2070,7 +2149,7 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                       icon: const Icon(Icons.close_rounded, size: 18),
                       onPressed: () {
                         _searchController.clear();
-                        _searchQuery.value = '';
+                        _onSearchChanged('');
                         FocusScope.of(context).unfocus();
                       },
                     ),

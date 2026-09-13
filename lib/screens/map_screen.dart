@@ -2250,54 +2250,77 @@ class _MapScreenState extends ConsumerState<MapScreen>
                           ),
                         ],
                       ),
-                      // Goal-gradient progress: free users see how much of the
-                      // free-place allowance (10) is used, live. Hidden for Pro.
-                      const Padding(
-                        padding: EdgeInsets.only(top: 8),
-                        child: FreePlacesProgressChip(),
-                      ),
-                      // Manual refresh — realtime escape hatch. Right-aligned so
-                      // it shares the vertical axis of the FAB column below.
-                      Align(
-                        alignment: Alignment.centerRight,
-                        child: Padding(
-                          padding: const EdgeInsets.only(top: 10),
-                          // Bare icon (owner call): no box, tinted the color
-                          // the box used to be, soft shadow for map legibility.
-                          child: IconButton(
-                            tooltip: 'Refresh data',
-                            onPressed:
-                                _isManualRefreshing ? null : _manualRefresh,
-                            icon: _isManualRefreshing
-                                ? SizedBox(
-                                    width: 22,
-                                    height: 22,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2.4,
-                                      color:
-                                          Theme.of(context).colorScheme.primary,
-                                    ),
-                                  )
-                                : Icon(
-                                    Icons.refresh_rounded,
-                                    size: 28,
-                                    color:
-                                        Theme.of(context).colorScheme.primary,
-                                    shadows: const [
-                                      Shadow(
-                                          color: Colors.black45, blurRadius: 8),
-                                    ],
+                      // Under the search bar: the allowance chip (centred) and
+                      // the refresh icon (right) keep their column; the tag
+                      // legend overlays it on the left. A Stack so the legend
+                      // starts right under the search bar without pushing the
+                      // two down, and stays out of the measured chrome height
+                      // (it has no background, pins may pass behind it).
+                      Stack(
+                        clipBehavior: Clip.none,
+                        children: [
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              // Goal-gradient progress: free users see how much of the
+                              // free-place allowance (10) is used, live. Hidden for Pro.
+                              const Padding(
+                                padding: EdgeInsets.only(top: 8),
+                                child: FreePlacesProgressChip(),
+                              ),
+                              // Manual refresh — realtime escape hatch. Right-aligned so
+                              // it shares the vertical axis of the FAB column below.
+                              Align(
+                                alignment: Alignment.centerRight,
+                                child: Padding(
+                                  padding: const EdgeInsets.only(top: 10),
+                                  // Bare icon (owner call): no box, tinted the color
+                                  // the box used to be, soft shadow for map legibility.
+                                  child: IconButton(
+                                    tooltip: 'Refresh data',
+                                    onPressed: _isManualRefreshing
+                                        ? null
+                                        : _manualRefresh,
+                                    icon: _isManualRefreshing
+                                        ? SizedBox(
+                                            width: 22,
+                                            height: 22,
+                                            child: CircularProgressIndicator(
+                                              strokeWidth: 2.4,
+                                              color: Theme.of(context)
+                                                  .colorScheme
+                                                  .primary,
+                                            ),
+                                          )
+                                        : Icon(
+                                            Icons.refresh_rounded,
+                                            size: 28,
+                                            color: Theme.of(context)
+                                                .colorScheme
+                                                .primary,
+                                            shadows: const [
+                                              Shadow(
+                                                  color: Colors.black45,
+                                                  blurRadius: 8),
+                                            ],
+                                          ),
                                   ),
+                                ),
+                              ),
+                            ],
                           ),
-                        ),
+                          // Colour key for tagged pins: just below the search
+                          // bar, on the left.
+                          const Positioned(
+                            left: 0,
+                            top: 0,
+                            child: TagLegend(),
+                          ),
+                        ],
                       ),
                     ],
                   ),
                 ),
-                // Colour key for tagged pins — under the search column, on
-                // the left; a sibling of the measured chrome so the fit
-                // window keeps its height (pins may pass behind it).
-                const TagLegend(),
               ],
             ),
           ),

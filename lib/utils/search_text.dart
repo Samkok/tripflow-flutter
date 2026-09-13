@@ -63,11 +63,18 @@ String normalizeSearchText(String input) {
 bool matchesSearchQuery(String haystack, String query) {
   final q = normalizeSearchText(query);
   if (q.isEmpty) return true;
-  final h = normalizeSearchText(haystack);
-  if (h.contains(q)) return true;
-  for (final word in q.split(' ')) {
+  return matchesNormalizedQuery(normalizeSearchText(haystack), q);
+}
+
+/// [matchesSearchQuery] for callers that normalise once and match many —
+/// a list filter re-run per keystroke shouldn't fold every name again.
+/// Both arguments must already be [normalizeSearchText] output.
+bool matchesNormalizedQuery(String normalizedHaystack, String normalizedQuery) {
+  if (normalizedQuery.isEmpty) return true;
+  if (normalizedHaystack.contains(normalizedQuery)) return true;
+  for (final word in normalizedQuery.split(' ')) {
     if (word.isEmpty) continue;
-    if (!h.contains(word)) return false;
+    if (!normalizedHaystack.contains(word)) return false;
   }
   return true;
 }

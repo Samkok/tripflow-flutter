@@ -8,6 +8,7 @@ import '../models/saved_location.dart' show SavedLocation, OpeningPeriod;
 import '../services/supabase_service.dart';
 import '../services/anonymous_user_service.dart';
 import '../utils/fingerprint_utils.dart';
+import '../utils/postgrest_errors.dart';
 
 class SyncResult {
   int uploadedCount = 0;
@@ -431,9 +432,7 @@ class LocationRepository {
       final end = i + 100 > toSync.length ? toSync.length : i + 100;
       final chunk = toSync.sublist(i, end);
       try {
-        await _supabase
-            .from('locations')
-            .upsert([for (final l in chunk) l.toJson()]);
+        await _upsertRows([for (final l in chunk) l.toJson()]);
         final now = DateTime.now();
         await _box!.putAll({
           for (final l in chunk)
@@ -443,6 +442,35 @@ class LocationRepository {
       } catch (e) {
         debugPrint('updateLocationsBatch: chunk $i-$end failed ($e) — '
             'rows stay dirty for the next sync pass');
+      }
+    }
+  }
+
+  /// Upserts [rows] into `locations`. When the server rejects a column it
+  /// doesn't have yet (PostgREST PGRST204: this build is ahead of its
+  /// migration), that column is dropped from every row and the write is
+  /// retried, so everything else still syncs. Without this, one missing
+  /// column silently kept EVERY edit and every new place on the device:
+  /// members added stops that never reached the database, and tag changes
+  /// never reached other members. The log line names the column so the
+  /// missing migration is obvious.
+  Future<void> _upsertRows(List<Map<String, dynamic>> rows) async {
+    var pending = rows;
+    for (var attempt = 0; attempt < 8; attempt++) {
+      try {
+        await _supabase.from('locations').upsert(pending);
+        return;
+      } on PostgrestException catch (e) {
+        final column = e.code == postgrestUnknownColumnCode
+            ? unknownColumnFromPostgrestMessage(e.message)
+            : null;
+        if (column == null || !pending.first.containsKey(column)) rethrow;
+        debugPrint('locations upsert: the server has no "$column" column yet; '
+            'retrying without it. The pending migration must be applied, '
+            'until then this field is not saved to the cloud.');
+        pending = [
+          for (final row in pending) {...row}..remove(column),
+        ];
       }
     }
   }
@@ -465,8 +493,7 @@ class LocationRepository {
         : location;
 
     try {
-      debugPrint("Add location should arrive here");
-      await _supabase.from('locations').upsert(locationToSync.toJson());
+      await _upsertRows([locationToSync.toJson()]);
 
       // Update local state to synced
       final syncedLoc = locationToSync.copyWith(
