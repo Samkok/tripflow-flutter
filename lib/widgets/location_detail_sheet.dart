@@ -11,6 +11,7 @@ import 'package:voyza/providers/user_trip_provider.dart';
 import 'package:voyza/services/country_match_service.dart';
 import 'package:voyza/services/timing_simulation.dart' show kNeverCloses;
 import 'package:voyza/providers/location_provider.dart';
+import 'package:voyza/utils/place_tags.dart';
 import 'package:voyza/utils/same_day_place_guard.dart';
 import 'package:voyza/utils/search_text.dart';
 import 'package:voyza/providers/map_ui_state_provider.dart';
@@ -27,6 +28,7 @@ import 'accommodation_prompts.dart';
 import 'add_to_trip_sheet.dart';
 import 'app_toast.dart';
 import 'location_photo_gallery.dart';
+import 'place_tag_sheet.dart';
 
 class LocationDetailSheet extends ConsumerWidget {
   final LocationModel location;
@@ -114,6 +116,10 @@ class LocationDetailSheet extends ConsumerWidget {
                   // or the whole trip (one accommodation per day, DB-enforced).
                   // Sits above the photos so the flag is reachable without
                   // scrolling past the strip.
+                  // Tag — one of the fixed set; the day map paints the pin
+                  // in its colour. Chips right here so it's a one-tap edit.
+                  const Divider(height: 32),
+                  _buildTagSection(context, ref, updatedLocation),
                   const Divider(height: 32),
                   _buildAccommodationSection(context, ref, updatedLocation),
 
@@ -187,6 +193,78 @@ class LocationDetailSheet extends ConsumerWidget {
       }
     }
     return contiguousTripDates(marks);
+  }
+
+  /// Tag chips: the current tag is filled, the Google-type suggestion (for
+  /// an untagged stop) is outlined; tapping the current tag clears it.
+  Widget _buildTagSection(
+      BuildContext context, WidgetRef ref, LocationModel loc) {
+    final theme = Theme.of(context);
+    final hasWriteAccessAsync = tripId != null
+        ? ref.watch(hasWriteAccessProvider(tripId!))
+        : ref.watch(hasActiveTripWriteAccessProvider);
+    final hasWriteAccess =
+        hasWriteAccessAsync.whenOrNull(data: (v) => v) ?? false;
+    final current = placeTagFromKey(loc.tag);
+    final suggested = current == null ? suggestPlaceTag(loc.placeTypes) : null;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(Icons.label_outline_rounded,
+                size: 18, color: theme.colorScheme.primary),
+            const SizedBox(width: 8),
+            Text(
+              'Tag',
+              style: theme.textTheme.titleMedium?.copyWith(
+                color: theme.colorScheme.primary,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            if (suggested != null) ...[
+              const SizedBox(width: 10),
+              Flexible(
+                child: Text(
+                  'Suggested: ${suggested.label}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+        const SizedBox(height: 10),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final t in PlaceTag.values)
+              PlaceTagChip(
+                tag: t,
+                selected: t == current,
+                highlighted: t == suggested,
+                onTap: hasWriteAccess
+                    ? () => _setTag(ref, loc, t == current ? null : t)
+                    : null,
+              ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Future<void> _setTag(WidgetRef ref, LocationModel loc, PlaceTag? tag) async {
+    if (tripId == null) {
+      await ref.read(tripProvider.notifier).updateLocationTag(loc.id, tag?.key);
+      return;
+    }
+    await ref
+        .read(locationRepositoryProvider)
+        .updateLocation(loc.id, {'tag': tag?.key});
   }
 
   Widget _buildAccommodationSection(

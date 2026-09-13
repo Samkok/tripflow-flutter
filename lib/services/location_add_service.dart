@@ -18,11 +18,13 @@ import '../services/anonymous_user_service.dart';
 import '../services/onboarding_service.dart';
 import '../services/places_service.dart';
 import '../services/subscription_limit_service.dart';
+import '../utils/place_tags.dart';
 import '../utils/same_day_place_guard.dart';
 import '../utils/trip_date_validator.dart';
 import '../utils/trip_dates.dart';
 import '../widgets/accommodation_prompts.dart';
 import '../widgets/app_toast.dart';
+import '../widgets/place_tag_sheet.dart';
 
 /// Central service for adding locations.
 ///
@@ -281,6 +283,12 @@ class LocationAddService {
     /// here — otherwise every place past the allowance would pop its own
     /// paywall.
     bool skipLimitCheck = false,
+
+    /// The tag step: every new place gets a tag suggested from its Google
+    /// types and confirmed (changed, or declined) by the user before the
+    /// write. Callers whose own UI already did that — the nearby picker
+    /// shows the chip per row — pass true.
+    bool tagConfirmed = false,
   }) async {
     // Same-day duplicate gate — THE shared rule (a place may repeat across
     // a trip's days, never within one), applied here so every add path
@@ -342,7 +350,12 @@ class LocationAddService {
     // in a loading state momentarily. tripProvider.addLocation reads the
     // active trip via that provider to assign tripId, so reordering keeps
     // the new location correctly tagged with its trip.
-    await _ref.read(tripProvider.notifier).addLocation(location);
+    if (!context.mounted) return false;
+    final toAdd =
+        tagConfirmed ? location : await _withConfirmedTag(context, location);
+    if (!context.mounted) return false;
+
+    await _ref.read(tripProvider.notifier).addLocation(toAdd);
     _scheduleHoursBackfill(
       location.id,
       location.placeId,
@@ -360,6 +373,34 @@ class LocationAddService {
     return true;
   }
 
+  /// The tag step for a map/search add: the sheet opens with the tag
+  /// suggested from the place's Google types; the user confirms it, picks
+  /// another, or adds without one. Dismissing the sheet adds without a tag.
+  Future<LocationModel> _withConfirmedTag(
+      BuildContext context, LocationModel location) async {
+    if (!context.mounted) return location.copyWith(tag: null);
+    final pick = await showPlaceTagSheet(
+      context,
+      placeName: location.name,
+      suggested: suggestPlaceTag(location.placeTypes),
+      current: placeTagFromKey(location.tag),
+    );
+    return location.copyWith(tag: pick?.tag?.key);
+  }
+
+  /// [_withConfirmedTag] for the trip-page add.
+  Future<SavedLocation> _withConfirmedSavedTag(
+      BuildContext context, SavedLocation location) async {
+    if (!context.mounted) return location.copyWith(tag: null);
+    final pick = await showPlaceTagSheet(
+      context,
+      placeName: location.name,
+      suggested: suggestPlaceTag(location.placeTypes ?? const []),
+      current: placeTagFromKey(location.tag),
+    );
+    return location.copyWith(tag: pick?.tag?.key);
+  }
+
   /// Adds a [SavedLocation] directly to the repository (trip-detail flow).
   /// Same gating rules as [addLocation]; see its doc for [locationCountryCode]
   /// semantics.
@@ -367,6 +408,7 @@ class LocationAddService {
     BuildContext context,
     SavedLocation location, {
     String? locationCountryCode,
+    bool tagConfirmed = false,
   }) async {
     // Same-day duplicate gate (see beforeAddingLocation) — scoped to THIS
     // row's trip, since the trip page often isn't the active map trip.
@@ -417,7 +459,12 @@ class LocationAddService {
     // Same ordering rule as [addLocation]: persist the location first so
     // the subsequent userTripsProvider invalidation can't strand it
     // mid-write.
-    await _ref.read(locationRepositoryProvider).addLocation(location);
+    if (!context.mounted) return false;
+    final toAdd = tagConfirmed
+        ? location
+        : await _withConfirmedSavedTag(context, location);
+    if (!context.mounted) return false;
+    await _ref.read(locationRepositoryProvider).addLocation(toAdd);
     _scheduleHoursBackfill(
       location.id,
       location.placeId,

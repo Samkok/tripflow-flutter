@@ -282,6 +282,11 @@ class LocationRepository {
       updatedLocation = updatedLocation.copyWith(
           isAccommodation: updates['is_accommodation'] as bool);
     }
+    if (updates.containsKey('tag')) {
+      // Sentinel-aware in copyWith: null really clears the tag.
+      updatedLocation =
+          updatedLocation.copyWith(tag: updates['tag'] as String?);
+    }
     if (updates.containsKey('scheduled_date')) {
       final dateStr = updates['scheduled_date'];
       final parsedDate =

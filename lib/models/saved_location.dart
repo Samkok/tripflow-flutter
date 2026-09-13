@@ -156,6 +156,16 @@ class SavedLocation extends HiveObject {
   @HiveField(24, defaultValue: false)
   final bool isAccommodation;
 
+  /// Fixed-set place tag key (see PlaceTag in utils/place_tags.dart); the
+  /// single-day map paints the pin in the tag's colour. Null = untagged.
+  @HiveField(25)
+  final String? tag;
+
+  /// Google place types captured when the stop was added, so a tag can be
+  /// suggested again later. Null for rows written before tags existed.
+  @HiveField(26)
+  final List<String>? placeTypes;
+
   SavedLocation({
     required this.id,
     required this.userId,
@@ -182,6 +192,8 @@ class SavedLocation extends HiveObject {
     this.hoursLastRefreshedAt,
     this.scheduledEndDate,
     this.isAccommodation = false,
+    this.tag,
+    this.placeTypes,
   });
 
   /// Effective gallery list: prefers [photoReferences]; falls back to a
@@ -229,6 +241,9 @@ class SavedLocation extends HiveObject {
     DateTime? hoursLastRefreshedAt,
     Object? scheduledEndDate = _unset,
     bool? isAccommodation,
+    // Sentinel-nullable: `copyWith(tag: null)` really CLEARS the tag.
+    Object? tag = _unset,
+    List<String>? placeTypes,
   }) {
     return SavedLocation(
       id: id ?? this.id,
@@ -262,6 +277,8 @@ class SavedLocation extends HiveObject {
           ? this.scheduledEndDate
           : scheduledEndDate as DateTime?,
       isAccommodation: isAccommodation ?? this.isAccommodation,
+      tag: identical(tag, _unset) ? this.tag : tag as String?,
+      placeTypes: placeTypes ?? this.placeTypes,
     );
   }
 
@@ -315,6 +332,9 @@ class SavedLocation extends HiveObject {
           ? DateTime.parse(json['scheduled_end_date'])
           : null,
       isAccommodation: json['is_accommodation'] ?? false,
+      tag: json['tag'] as String?,
+      placeTypes:
+          (json['place_types'] as List?)?.map((e) => e.toString()).toList(),
     );
   }
 
@@ -356,6 +376,8 @@ class SavedLocation extends HiveObject {
                   scheduledEndDate!.day)
               .toIso8601String(),
       'is_accommodation': isAccommodation,
+      'tag': tag,
+      'place_types': placeTypes,
     };
   }
 
@@ -393,6 +415,8 @@ class SavedLocation extends HiveObject {
       userClosingMinuteOverride ?? '',
       hoursLastRefreshedAt?.toUtc().millisecondsSinceEpoch ?? '',
       isAccommodation,
+      tag ?? '',
+      placeTypes?.join('|') ?? '',
     ].join('');
   }
 

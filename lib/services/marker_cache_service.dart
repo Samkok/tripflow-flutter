@@ -136,12 +136,14 @@ class MarkerCacheService {
     // false = an UNORDERED stop (no route yet): a plain pin with a small
     // white dot instead of a sequence number.
     bool showNumber = true,
+    // false = day-coloured pin whatever the status (Entire-trip mode).
+    bool statusColors = true,
   }) async {
     // Trigger background prewarming on first marker access
     prewarmCacheInBackground();
 
     final key =
-        'numbered_${showNumber ? number : 'dot'}_${name}_${backgroundColor.value}_${textColor.value}_${isDarkMode}_${isSkipped}_${isDone}_${isStart}_${warningLine ?? ''}';
+        'numbered_${showNumber ? number : 'dot'}_${name}_${backgroundColor.value}_${textColor.value}_${isDarkMode}_${isSkipped}_${isDone}_${isStart}_${statusColors}_${warningLine ?? ''}';
 
     if (_cache.containsKey(key)) {
       _moveToEnd(key);
@@ -159,6 +161,7 @@ class MarkerCacheService {
       isSkipped: isSkipped,
       isDone: isDone,
       warningLine: warningLine,
+      statusColors: statusColors,
     );
 
     _addToCache(key, result);

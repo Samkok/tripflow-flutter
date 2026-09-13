@@ -56,6 +56,13 @@ class LocationModel {
   /// Mirrors [SavedLocation.isAccommodation]; at most one per trip-day.
   final bool isAccommodation;
 
+  /// Fixed-set place tag key (utils/place_tags.dart); the day map paints
+  /// the pin in the tag's colour. Mirrors [SavedLocation.tag].
+  final String? tag;
+
+  /// Google place types from the add, for tag suggestions.
+  final List<String> placeTypes;
+
   LocationModel({
     required this.id,
     required this.name,
@@ -79,7 +86,10 @@ class LocationModel {
     this.scheduledEndDate,
     this.tripId,
     this.isAccommodation = false,
-  }) : photoReferences = photoReferences ??
+    this.tag,
+    List<String>? placeTypes,
+  })  : placeTypes = placeTypes ?? const [],
+        photoReferences = photoReferences ??
             (photoReference != null && photoReference.isNotEmpty
                 ? [photoReference]
                 : const []);
@@ -109,6 +119,8 @@ class LocationModel {
       'scheduledEndDate': scheduledEndDate?.toIso8601String(),
       'tripId': tripId,
       'isAccommodation': isAccommodation,
+      'tag': tag,
+      'placeTypes': placeTypes,
     };
   }
 
@@ -151,6 +163,9 @@ class LocationModel {
           : null,
       tripId: json['tripId'] as String?,
       isAccommodation: json['isAccommodation'] ?? false,
+      tag: json['tag'] as String?,
+      placeTypes:
+          (json['placeTypes'] as List?)?.map((e) => e.toString()).toList(),
     );
   }
 
@@ -183,6 +198,9 @@ class LocationModel {
     Object? scheduledEndDate = _unset,
     Object? tripId = _unset,
     bool? isAccommodation,
+    // Sentinel-nullable: `copyWith(tag: null)` really CLEARS the tag.
+    Object? tag = _unset,
+    List<String>? placeTypes,
   }) {
     return LocationModel(
       id: id ?? this.id,
@@ -213,6 +231,8 @@ class LocationModel {
           : scheduledEndDate as DateTime?,
       tripId: identical(tripId, _unset) ? this.tripId : tripId as String?,
       isAccommodation: isAccommodation ?? this.isAccommodation,
+      tag: identical(tag, _unset) ? this.tag : tag as String?,
+      placeTypes: placeTypes ?? this.placeTypes,
     );
   }
 

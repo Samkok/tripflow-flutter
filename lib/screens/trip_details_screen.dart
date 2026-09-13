@@ -3328,6 +3328,7 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
         photoAttributions: placeDetails.photoAttributions,
         placeId: placeDetails.placeId,
         originalName: placeDetails.name,
+        placeTypes: placeDetails.types.isEmpty ? null : placeDetails.types,
         googleOpeningHours: placeDetails.openingHours,
         hoursLastRefreshedAt:
             placeDetails.openingHours != null ? DateTime.now() : null,
@@ -3434,6 +3435,7 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
         photoAttributions: placeDetails.photoAttributions,
         placeId: canonicalPlaceId,
         originalName: placeDetails.name,
+        placeTypes: placeDetails.types.isEmpty ? null : placeDetails.types,
         googleOpeningHours: placeDetails.openingHours,
         hoursLastRefreshedAt:
             placeDetails.openingHours != null ? DateTime.now() : null,

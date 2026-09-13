@@ -10,6 +10,7 @@ import '../providers/trip_provider.dart';
 import '../providers/debounced_settings_provider.dart';
 import '../services/marker_cache_service.dart';
 import '../utils/zone_utils.dart';
+import '../utils/place_tags.dart';
 import '../utils/marker_utils.dart'; // Needed for MarkerBitmapResult type
 import '../utils/polyline_simplify.dart';
 import '../utils/external_app_links.dart';
@@ -29,8 +30,9 @@ class CachedMarkersState {
 String _generateLocationsCacheKey(List<LocationModel> locations,
     LatLng? currentLocation, DateTime selectedDate) {
   // Use a combination of IDs and count to ensure the key changes when items are added/removed.
-  final locationIds =
-      locations.map((l) => '${l.id}-${l.isSkipped}-${l.isDone}').join('_');
+  final locationIds = locations
+      .map((l) => '${l.id}-${l.isSkipped}-${l.isDone}-${l.tag ?? ''}')
+      .join('_');
   final currentLocKey = currentLocation != null
       ? '${currentLocation.latitude}_${currentLocation.longitude}'
       : 'none';
@@ -112,8 +114,11 @@ final cachedMarkerBitmapsProvider =
       // The start pin says so in words — the flag alone read as "just
       // another marker" and its numbering confused the map↔list mapping.
       name: spec.isStart ? '${spec.loc.name} (Start here)' : spec.loc.name,
-      backgroundColor:
-          mightBeClosed ? MarkerUtils.warningAmber : AppTheme.accentColor,
+      // Status first (amber caution; done/skipped inside the builder),
+      // then the stop's tag colour, then the coral default.
+      backgroundColor: mightBeClosed
+          ? MarkerUtils.warningAmber
+          : (placeTagColor(spec.loc.tag) ?? AppTheme.accentColor),
       textColor: Colors.white,
       isDarkMode: isDarkMode,
       isSkipped: spec.loc.isSkipped,

@@ -14,6 +14,7 @@ import 'package:voyza/screens/location_search_screen.dart';
 // import 'package:voyza/screens/login_screen.dart'; // DISABLED with first-optimize celebration (2026-08-07)
 import 'package:voyza/widgets/static_glow.dart';
 import 'package:voyza/widgets/route_leg_sheet.dart';
+import 'package:voyza/widgets/tag_legend.dart';
 import 'package:voyza/providers/onboarding_checklist_provider.dart';
 import 'package:voyza/widgets/onboarding_checklist.dart';
 import 'package:voyza/widgets/review_sentiment_dialog.dart';
@@ -28,6 +29,7 @@ import '../utils/trip_dates.dart';
 import '../utils/same_day_place_guard.dart';
 import '../services/time_saved_ledger_service.dart';
 import '../utils/geo_utils.dart';
+import '../utils/marker_utils.dart';
 import '../providers/location_provider.dart';
 import '../providers/optimized_map_overlay_provider.dart';
 import '../providers/trip_provider.dart';
@@ -146,6 +148,9 @@ class _MapScreenState extends ConsumerState<MapScreen>
   // optimize button is passed down into TripBottomSheet.
   final _searchBarKey = GlobalKey();
   final _optimizeButtonKey = GlobalKey();
+  // The whole top overlay (trip banner + pin filter bar + search bar +
+  // allowance chip): measured, not guessed, when framing the map.
+  final _topChromeKey = GlobalKey();
 
   // Checklist guide consumption. Watch-and-compare, NOT ref.listen: this
   // tab is offstage in the IndexedStack when the request is set from home,
@@ -1137,12 +1142,18 @@ class _MapScreenState extends ConsumerState<MapScreen>
         googleOpeningHours: details?.openingHours,
         hoursLastRefreshedAt:
             details?.openingHours != null ? DateTime.now() : null,
+        // The picker showed the tag per row (suggested from Google's
+        // types, editable there) — that was the confirmation.
+        tag: fallback.tag,
+        placeTypes:
+            details?.types.isNotEmpty == true ? details!.types : fallback.types,
       );
       final added = await LocationAddService(ref).beforeAddingLocation(
         context,
         location,
         locationCountryCode: details?.countryCode,
         skipLimitCheck: true, // batch gate ran once above
+        tagConfirmed: true,
       );
       if (!mounted) return;
       if (added) addedLocations.add(location);
@@ -1942,326 +1953,352 @@ class _MapScreenState extends ConsumerState<MapScreen>
             top: 50,
             left: 16,
             right: 16,
-            child: Consumer(
-              builder: (context, ref, child) {
-                final activeTripAsync = ref.watch(realtimeActiveTripProvider);
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Consumer(
+                  key: _topChromeKey,
+                  builder: (context, ref, child) {
+                    final activeTripAsync =
+                        ref.watch(realtimeActiveTripProvider);
 
-                return activeTripAsync.when(
-                  // A reload (manual refresh, day added, collaborator edit)
-                  // re-resolves the SAME trip through an AsyncLoading tick.
-                  // Without this the banner dropped out for those frames and
-                  // the search bar jumped up and back — the refresh button's
-                  // "page reloaded" flash. Keep drawing the previous trip.
-                  skipLoadingOnReload: true,
-                  data: (activeTrip) {
-                    if (activeTrip == null) return child!;
+                    return activeTripAsync.when(
+                      // A reload (manual refresh, day added, collaborator edit)
+                      // re-resolves the SAME trip through an AsyncLoading tick.
+                      // Without this the banner dropped out for those frames and
+                      // the search bar jumped up and back — the refresh button's
+                      // "page reloaded" flash. Keep drawing the previous trip.
+                      skipLoadingOnReload: true,
+                      data: (activeTrip) {
+                        if (activeTrip == null) return child!;
 
-                    return Column(
-                      children: [
-                        // Active Trip Name Banner
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(16),
-                          child: BackdropFilter(
-                            filter:
-                                ImageFilter.blur(sigmaX: 15.0, sigmaY: 15.0),
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 20, vertical: 14),
-                              decoration: BoxDecoration(
-                                gradient: LinearGradient(
-                                  colors: [
-                                    Theme.of(context)
-                                        .colorScheme
-                                        .primary
-                                        .withValues(alpha: 0.95),
-                                    Theme.of(context)
-                                        .colorScheme
-                                        .primary
-                                        .withValues(alpha: 0.85),
-                                  ],
-                                ),
-                                borderRadius: BorderRadius.circular(16),
-                                border: Border.all(
-                                  color: Colors.white.withValues(alpha: 0.3),
-                                  width: 1.5,
-                                ),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: Theme.of(context)
-                                        .colorScheme
-                                        .primary
-                                        .withValues(alpha: 0.3),
-                                    blurRadius: 20,
-                                    offset: const Offset(0, 8),
-                                  ),
-                                  BoxShadow(
-                                    color: Colors.black.withValues(alpha: 0.15),
-                                    blurRadius: 10,
-                                    offset: const Offset(0, 4),
-                                  ),
-                                ],
-                              ),
-                              child: Row(
-                                children: [
-                                  Container(
-                                    padding: const EdgeInsets.all(8),
-                                    decoration: BoxDecoration(
-                                      color:
-                                          Colors.white.withValues(alpha: 0.2),
-                                      borderRadius: BorderRadius.circular(10),
-                                    ),
-                                    child: const Icon(
-                                      Icons.navigation_rounded,
-                                      color: Colors.white,
-                                      size: 22,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 12),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          'Active Trip',
-                                          style: TextStyle(
-                                            color: Colors.white
-                                                .withValues(alpha: 0.9),
-                                            fontSize: 11,
-                                            fontWeight: FontWeight.w500,
-                                            letterSpacing: 0.5,
-                                          ),
-                                        ),
-                                        const SizedBox(height: 2),
-                                        Text(
-                                          activeTrip.name,
-                                          style: const TextStyle(
-                                            color: Colors.white,
-                                            fontSize: 17,
-                                            fontWeight: FontWeight.bold,
-                                            letterSpacing: 0.3,
-                                          ),
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                        ),
-                                        // Date-range + inclusive day count.
-                                        // Rendered as a small subtitle so
-                                        // the badge stays compact; only
-                                        // shows when the trip actually has
-                                        // both endpoints set.
-                                        if (activeTrip.startDate != null &&
-                                            activeTrip.endDate != null)
-                                          Builder(builder: (context) {
-                                            final s = DateTime(
-                                                activeTrip.startDate!.year,
-                                                activeTrip.startDate!.month,
-                                                activeTrip.startDate!.day);
-                                            final e = DateTime(
-                                                activeTrip.endDate!.year,
-                                                activeTrip.endDate!.month,
-                                                activeTrip.endDate!.day);
-                                            final dayCount =
-                                                e.difference(s).inDays + 1;
-                                            final dateText = activeTrip
-                                                        .startDate ==
-                                                    activeTrip.endDate
-                                                ? DateFormat('MMM d, y').format(
-                                                    activeTrip.startDate!)
-                                                : '${DateFormat('MMM d').format(activeTrip.startDate!)} - ${DateFormat('MMM d').format(activeTrip.endDate!)}';
-                                            return Padding(
-                                              padding:
-                                                  const EdgeInsets.only(top: 2),
-                                              child: Text(
-                                                '$dateText  ·  $dayCount day${dayCount == 1 ? '' : 's'}',
-                                                style: TextStyle(
-                                                  color: Colors.white
-                                                      .withValues(alpha: 0.85),
-                                                  fontSize: 11,
-                                                  fontWeight: FontWeight.w500,
-                                                  letterSpacing: 0.2,
-                                                ),
-                                                maxLines: 1,
-                                                overflow: TextOverflow.ellipsis,
-                                              ),
-                                            );
-                                          }),
+                        return Column(
+                          children: [
+                            // Active Trip Name Banner
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(16),
+                              child: BackdropFilter(
+                                filter: ImageFilter.blur(
+                                    sigmaX: 15.0, sigmaY: 15.0),
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 20, vertical: 14),
+                                  decoration: BoxDecoration(
+                                    gradient: LinearGradient(
+                                      colors: [
+                                        Theme.of(context)
+                                            .colorScheme
+                                            .primary
+                                            .withValues(alpha: 0.95),
+                                        Theme.of(context)
+                                            .colorScheme
+                                            .primary
+                                            .withValues(alpha: 0.85),
                                       ],
                                     ),
-                                  ),
-                                  const SizedBox(width: 10),
-                                  // Auto-plan — the whole-trip action,
-                                  // right where the trip is named: cluster
-                                  // places into cities, order them, spread
-                                  // across days. Sits before the day pill.
-                                  const _AutoPlanPill(),
-                                  const SizedBox(width: 6),
-                                  // Day selector — replaces the old owner
-                                  // pill and shows for EVERY trip (owned or
-                                  // shared): selected date + "Day N", tap
-                                  // for the day-picker sheet.
-                                  const _DayPill(),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-                        child!,
-                      ],
-                    );
-                  },
-                  loading: () => child!,
-                  error: (_, __) => child!,
-                );
-              },
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  // Pin status filter (All / Active / Skipped / Done) —
-                  // hides/shows pins in place, no reload. Lives in this
-                  // shared column (not the trip badge) so it's there for
-                  // loose places on a trip-less map too; it hides itself
-                  // when the day has nothing to filter.
-                  _PinFilterBar(onSelected: _zoomToFitTrip),
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // Fake search bar — pushes [LocationSearchScreen]
-                      // instead of focusing an inline TextField. This
-                      // sidesteps every keyboard-driven layout shift that
-                      // an inline TextField caused on this screen (the map
-                      // getting "pulled down" on focus). The chrome
-                      // (rounded, translucent, blurred, with a search icon
-                      // and hint text) is preserved so it still reads as a
-                      // search bar at a glance.
-                      Expanded(
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(30),
-                          child: BackdropFilter(
-                            filter:
-                                ImageFilter.blur(sigmaX: 10.0, sigmaY: 10.0),
-                            child: Material(
-                              color: Colors.transparent,
-                              child: InkWell(
-                                borderRadius: BorderRadius.circular(30),
-                                onTap: () {
-                                  // Zero-duration page transition: the new
-                                  // screen appears instantly instead of
-                                  // sliding in. The standard slide-in left
-                                  // a window (~300ms on iOS) during which
-                                  // the map screen was still visible — any
-                                  // MediaQuery / keyboard event from the
-                                  // mounting screen propagated back to the
-                                  // map and visibly shifted it before the
-                                  // transition finished. With Duration.zero,
-                                  // the new screen fully covers the map
-                                  // before the next frame paints.
-                                  Navigator.of(context).push(
-                                    PageRouteBuilder(
-                                      pageBuilder: (context, _, __) =>
-                                          const LocationSearchScreen(),
-                                      transitionDuration: Duration.zero,
-                                      reverseTransitionDuration: Duration.zero,
-                                      opaque: true,
-                                    ),
-                                  );
-                                },
-                                child: Container(
-                                  key: _searchBarKey, // spotlight-tour anchor
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 16, vertical: 14),
-                                  decoration: BoxDecoration(
-                                    color: Theme.of(context)
-                                        .colorScheme
-                                        .surface
-                                        .withValues(alpha: 0.92),
-                                    borderRadius: BorderRadius.circular(30),
+                                    borderRadius: BorderRadius.circular(16),
                                     border: Border.all(
-                                      color: Theme.of(context)
-                                          .dividerColor
-                                          .withValues(alpha: 0.2),
+                                      color:
+                                          Colors.white.withValues(alpha: 0.3),
                                       width: 1.5,
                                     ),
                                     boxShadow: [
                                       BoxShadow(
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .primary
+                                            .withValues(alpha: 0.3),
+                                        blurRadius: 20,
+                                        offset: const Offset(0, 8),
+                                      ),
+                                      BoxShadow(
                                         color: Colors.black
                                             .withValues(alpha: 0.15),
-                                        blurRadius: 20,
-                                        offset: const Offset(0, 5),
+                                        blurRadius: 10,
+                                        offset: const Offset(0, 4),
                                       ),
                                     ],
                                   ),
                                   child: Row(
                                     children: [
-                                      const Icon(
-                                        Icons.search,
-                                        color: AppTheme.primaryColor,
+                                      Container(
+                                        padding: const EdgeInsets.all(8),
+                                        decoration: BoxDecoration(
+                                          color: Colors.white
+                                              .withValues(alpha: 0.2),
+                                          borderRadius:
+                                              BorderRadius.circular(10),
+                                        ),
+                                        child: const Icon(
+                                          Icons.navigation_rounded,
+                                          color: Colors.white,
+                                          size: 22,
+                                        ),
                                       ),
                                       const SizedBox(width: 12),
                                       Expanded(
-                                        child: Text(
-                                          'Search for places...',
-                                          style: Theme.of(context)
-                                              .textTheme
-                                              .titleMedium
-                                              ?.copyWith(
-                                                color: Theme.of(context)
-                                                    .colorScheme
-                                                    .onSurfaceVariant,
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              'Active Trip',
+                                              style: TextStyle(
+                                                color: Colors.white
+                                                    .withValues(alpha: 0.9),
+                                                fontSize: 11,
+                                                fontWeight: FontWeight.w500,
+                                                letterSpacing: 0.5,
                                               ),
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
+                                            ),
+                                            const SizedBox(height: 2),
+                                            Text(
+                                              activeTrip.name,
+                                              style: const TextStyle(
+                                                color: Colors.white,
+                                                fontSize: 17,
+                                                fontWeight: FontWeight.bold,
+                                                letterSpacing: 0.3,
+                                              ),
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                            // Date-range + inclusive day count.
+                                            // Rendered as a small subtitle so
+                                            // the badge stays compact; only
+                                            // shows when the trip actually has
+                                            // both endpoints set.
+                                            if (activeTrip.startDate != null &&
+                                                activeTrip.endDate != null)
+                                              Builder(builder: (context) {
+                                                final s = DateTime(
+                                                    activeTrip.startDate!.year,
+                                                    activeTrip.startDate!.month,
+                                                    activeTrip.startDate!.day);
+                                                final e = DateTime(
+                                                    activeTrip.endDate!.year,
+                                                    activeTrip.endDate!.month,
+                                                    activeTrip.endDate!.day);
+                                                final dayCount =
+                                                    e.difference(s).inDays + 1;
+                                                final dateText = activeTrip
+                                                            .startDate ==
+                                                        activeTrip.endDate
+                                                    ? DateFormat('MMM d, y')
+                                                        .format(activeTrip
+                                                            .startDate!)
+                                                    : '${DateFormat('MMM d').format(activeTrip.startDate!)} - ${DateFormat('MMM d').format(activeTrip.endDate!)}';
+                                                return Padding(
+                                                  padding:
+                                                      const EdgeInsets.only(
+                                                          top: 2),
+                                                  child: Text(
+                                                    '$dateText  ·  $dayCount day${dayCount == 1 ? '' : 's'}',
+                                                    style: TextStyle(
+                                                      color: Colors.white
+                                                          .withValues(
+                                                              alpha: 0.85),
+                                                      fontSize: 11,
+                                                      fontWeight:
+                                                          FontWeight.w500,
+                                                      letterSpacing: 0.2,
+                                                    ),
+                                                    maxLines: 1,
+                                                    overflow:
+                                                        TextOverflow.ellipsis,
+                                                  ),
+                                                );
+                                              }),
+                                          ],
                                         ),
                                       ),
+                                      const SizedBox(width: 10),
+                                      // Auto-plan — the whole-trip action,
+                                      // right where the trip is named: cluster
+                                      // places into cities, order them, spread
+                                      // across days. Sits before the day pill.
+                                      const _AutoPlanPill(),
+                                      const SizedBox(width: 6),
+                                      // Day selector — replaces the old owner
+                                      // pill and shows for EVERY trip (owned or
+                                      // shared): selected date + "Day N", tap
+                                      // for the day-picker sheet.
+                                      const _DayPill(),
                                     ],
                                   ),
                                 ),
                               ),
                             ),
+                            const SizedBox(height: 12),
+                            child!,
+                          ],
+                        );
+                      },
+                      loading: () => child!,
+                      error: (_, __) => child!,
+                    );
+                  },
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      // Pin status filter (All / Active / Skipped / Done) —
+                      // hides/shows pins in place, no reload. Lives in this
+                      // shared column (not the trip badge) so it's there for
+                      // loose places on a trip-less map too; it hides itself
+                      // when the day has nothing to filter.
+                      _PinFilterBar(onSelected: _zoomToFitTrip),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // Fake search bar — pushes [LocationSearchScreen]
+                          // instead of focusing an inline TextField. This
+                          // sidesteps every keyboard-driven layout shift that
+                          // an inline TextField caused on this screen (the map
+                          // getting "pulled down" on focus). The chrome
+                          // (rounded, translucent, blurred, with a search icon
+                          // and hint text) is preserved so it still reads as a
+                          // search bar at a glance.
+                          Expanded(
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(30),
+                              child: BackdropFilter(
+                                filter: ImageFilter.blur(
+                                    sigmaX: 10.0, sigmaY: 10.0),
+                                child: Material(
+                                  color: Colors.transparent,
+                                  child: InkWell(
+                                    borderRadius: BorderRadius.circular(30),
+                                    onTap: () {
+                                      // Zero-duration page transition: the new
+                                      // screen appears instantly instead of
+                                      // sliding in. The standard slide-in left
+                                      // a window (~300ms on iOS) during which
+                                      // the map screen was still visible — any
+                                      // MediaQuery / keyboard event from the
+                                      // mounting screen propagated back to the
+                                      // map and visibly shifted it before the
+                                      // transition finished. With Duration.zero,
+                                      // the new screen fully covers the map
+                                      // before the next frame paints.
+                                      Navigator.of(context).push(
+                                        PageRouteBuilder(
+                                          pageBuilder: (context, _, __) =>
+                                              const LocationSearchScreen(),
+                                          transitionDuration: Duration.zero,
+                                          reverseTransitionDuration:
+                                              Duration.zero,
+                                          opaque: true,
+                                        ),
+                                      );
+                                    },
+                                    child: Container(
+                                      key:
+                                          _searchBarKey, // spotlight-tour anchor
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 16, vertical: 14),
+                                      decoration: BoxDecoration(
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .surface
+                                            .withValues(alpha: 0.92),
+                                        borderRadius: BorderRadius.circular(30),
+                                        border: Border.all(
+                                          color: Theme.of(context)
+                                              .dividerColor
+                                              .withValues(alpha: 0.2),
+                                          width: 1.5,
+                                        ),
+                                        boxShadow: [
+                                          BoxShadow(
+                                            color: Colors.black
+                                                .withValues(alpha: 0.15),
+                                            blurRadius: 20,
+                                            offset: const Offset(0, 5),
+                                          ),
+                                        ],
+                                      ),
+                                      child: Row(
+                                        children: [
+                                          const Icon(
+                                            Icons.search,
+                                            color: AppTheme.primaryColor,
+                                          ),
+                                          const SizedBox(width: 12),
+                                          Expanded(
+                                            child: Text(
+                                              'Search for places...',
+                                              style: Theme.of(context)
+                                                  .textTheme
+                                                  .titleMedium
+                                                  ?.copyWith(
+                                                    color: Theme.of(context)
+                                                        .colorScheme
+                                                        .onSurfaceVariant,
+                                                  ),
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      // Goal-gradient progress: free users see how much of the
+                      // free-place allowance (10) is used, live. Hidden for Pro.
+                      const Padding(
+                        padding: EdgeInsets.only(top: 8),
+                        child: FreePlacesProgressChip(),
+                      ),
+                      // Manual refresh — realtime escape hatch. Right-aligned so
+                      // it shares the vertical axis of the FAB column below.
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: Padding(
+                          padding: const EdgeInsets.only(top: 10),
+                          // Bare icon (owner call): no box, tinted the color
+                          // the box used to be, soft shadow for map legibility.
+                          child: IconButton(
+                            tooltip: 'Refresh data',
+                            onPressed:
+                                _isManualRefreshing ? null : _manualRefresh,
+                            icon: _isManualRefreshing
+                                ? SizedBox(
+                                    width: 22,
+                                    height: 22,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2.4,
+                                      color:
+                                          Theme.of(context).colorScheme.primary,
+                                    ),
+                                  )
+                                : Icon(
+                                    Icons.refresh_rounded,
+                                    size: 28,
+                                    color:
+                                        Theme.of(context).colorScheme.primary,
+                                    shadows: const [
+                                      Shadow(
+                                          color: Colors.black45, blurRadius: 8),
+                                    ],
+                                  ),
                           ),
                         ),
                       ),
                     ],
                   ),
-                  // Goal-gradient progress: free users see how much of the
-                  // free-place allowance (10) is used, live. Hidden for Pro.
-                  const Padding(
-                    padding: EdgeInsets.only(top: 8),
-                    child: FreePlacesProgressChip(),
-                  ),
-                  // Manual refresh — realtime escape hatch. Right-aligned so
-                  // it shares the vertical axis of the FAB column below.
-                  Align(
-                    alignment: Alignment.centerRight,
-                    child: Padding(
-                      padding: const EdgeInsets.only(top: 10),
-                      // Bare icon (owner call): no box, tinted the color
-                      // the box used to be, soft shadow for map legibility.
-                      child: IconButton(
-                        tooltip: 'Refresh data',
-                        onPressed: _isManualRefreshing ? null : _manualRefresh,
-                        icon: _isManualRefreshing
-                            ? SizedBox(
-                                width: 22,
-                                height: 22,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2.4,
-                                  color: Theme.of(context).colorScheme.primary,
-                                ),
-                              )
-                            : Icon(
-                                Icons.refresh_rounded,
-                                size: 28,
-                                color: Theme.of(context).colorScheme.primary,
-                                shadows: const [
-                                  Shadow(color: Colors.black45, blurRadius: 8),
-                                ],
-                              ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
+                ),
+                // Colour key for tagged pins — under the search column, on
+                // the left; a sibling of the measured chrome so the fit
+                // window keeps its height (pins may pass behind it).
+                const TagLegend(),
+              ],
             ),
           ),
 
@@ -3022,24 +3059,48 @@ class _MapScreenState extends ConsumerState<MapScreen>
   }
 
   /// The on-screen region fitted content should occupy while BROWSING:
-  /// below the search bar (and the active-trip banner when shown), above
-  /// the collapsed trip sheet, clear of the FAB column.
+  /// below the top overlay (trip banner, pin filter bar, search bar and
+  /// allowance chip), above the collapsed trip sheet, clear of the FAB
+  /// column — and inset for the pin BITMAP, not just the coordinate: the
+  /// pin is anchored on its tip, so a point framed exactly on the window's
+  /// top edge would still draw its head under the chrome, and one on the
+  /// bottom edge would hang its name under the sheet.
   Rect _browsingFitWindow() {
     final size = MediaQuery.of(context).size;
-    final topSafePadding = MediaQuery.of(context).padding.top;
-    final hasActiveTrip =
-        ref.read(realtimeActiveTripProvider).valueOrNull != null;
-    const topMargin = 50.0;
-    final bannerH = hasActiveTrip ? 72.0 + 12.0 : 0.0;
-    const searchBarHeight = 60.0;
     const buffer = 20.0;
-    final top = topSafePadding + topMargin + bannerH + searchBarHeight + buffer;
+
+    // Measure the overlay as laid out — its height changes with the trip
+    // banner, the filter bar (hidden when the day is empty) and the Pro
+    // status. The constants are only a pre-layout fallback.
+    double? chromeBottom;
+    final chrome = _topChromeKey.currentContext?.findRenderObject();
+    if (chrome is RenderBox && chrome.hasSize) {
+      chromeBottom = chrome.localToGlobal(Offset.zero).dy + chrome.size.height;
+    }
+    if (chromeBottom == null) {
+      final hasActiveTrip =
+          ref.read(realtimeActiveTripProvider).valueOrNull != null;
+      const topMargin = 50.0;
+      final bannerH = hasActiveTrip ? 72.0 + 12.0 : 0.0;
+      const filterBarH = 46.0;
+      const searchBarHeight = 60.0;
+      const allowanceChipH = 40.0;
+      chromeBottom = MediaQuery.of(context).padding.top +
+          topMargin +
+          bannerH +
+          filterBarH +
+          searchBarHeight +
+          allowanceChipH;
+    }
+    final top = chromeBottom + buffer + MarkerUtils.pinAboveAnchorPx;
     // The sheet's top edge is exactly collapsedSize of the screen up from the
     // bottom — use the sheet's own constant (a stale hardcoded fraction here
     // is why fitted stops used to hide behind it), plus a slightly larger
-    // buffer so pins never kiss the sheet's rounded corner.
+    // buffer so pins never kiss the sheet's rounded corner, plus the room
+    // the pin's name label needs under the point.
     final bottom = size.height -
-        (size.height * TripBottomSheet.collapsedSize + buffer + 8.0);
+        (size.height * TripBottomSheet.collapsedSize + buffer + 8.0) -
+        MarkerUtils.pinBelowAnchorPx;
     const left = 16.0 + buffer;
     final right = size.width - (40.0 + 16.0 + 40.0); // FAB + margin + buffer
     return Rect.fromLTRB(

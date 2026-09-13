@@ -338,6 +338,9 @@ final allDaysMarkersProvider = FutureProvider<Set<Marker>>((ref) async {
       isDarkMode: isDarkMode,
       isSkipped: false,
       isDone: spec.loc.isDone,
+      // Day colour wins over status here: a done stop keeps its day's tint
+      // (with the check glyph) instead of turning green.
+      statusColors: false,
       warningLine:
           mightBeClosed ? 'Might be closed on this date — please check' : null,
     );

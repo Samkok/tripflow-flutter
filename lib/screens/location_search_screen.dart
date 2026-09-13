@@ -257,6 +257,7 @@ class _LocationSearchScreenState extends ConsumerState<LocationSearchScreen> {
         photoAttributions: placeDetails.photoAttributions,
         placeId: canonicalPlaceId,
         originalName: placeDetails.name,
+        placeTypes: placeDetails.types,
         // Hours ride along from the same Place Details call — this path
         // used to drop them, leaving every map-searched place hour-less.
         googleOpeningHours: placeDetails.openingHours,
@@ -392,6 +393,7 @@ class _LocationSearchScreenState extends ConsumerState<LocationSearchScreen> {
         photoAttributions: placeDetails.photoAttributions,
         placeId: placeDetails.placeId,
         originalName: placeDetails.name,
+        placeTypes: placeDetails.types,
         googleOpeningHours: placeDetails.openingHours,
         hoursLastRefreshedAt:
             placeDetails.openingHours != null ? DateTime.now() : null,

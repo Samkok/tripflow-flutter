@@ -69,6 +69,10 @@ class PlaceDetails {
   /// hours (e.g. lightweight Nearby Search results).
   final List<OpeningPeriod>? openingHours;
 
+  /// Google's place types (e.g. "restaurant", "museum") — they feed the
+  /// tag suggestion when the place is added. Empty when not requested.
+  final List<String> types;
+
   PlaceDetails({
     required this.name,
     required this.address,
@@ -81,7 +85,9 @@ class PlaceDetails {
     this.countryCode,
     this.placeId,
     this.openingHours,
-  }) : photoReferences = photoReferences ?? const [];
+    List<String>? types,
+  })  : photoReferences = photoReferences ?? const [],
+        types = types ?? const [];
 
   factory PlaceDetails.fromJson(Map<String, dynamic> json) {
     final geometry = json['geometry']['location'];
@@ -125,6 +131,9 @@ class PlaceDetails {
       photoAttributions: attributions.isEmpty ? null : attributions,
       countryCode: _extractCountryCode(json['address_components']),
       placeId: json['place_id'] as String?,
+      types: [
+        for (final t in (json['types'] as List? ?? const [])) t.toString(),
+      ],
       // Prefer `opening_hours` (regular weekly schedule) and fall back to
       // `current_opening_hours` (this-week's schedule, may include special
       // days). Both are legacy Contact-Data fields with identical shape;
@@ -203,6 +212,13 @@ class NearbyPlace {
   /// for a one-line subtitle alongside the distance.
   final String? primaryType;
 
+  /// All of Google's types for the place — they feed the tag suggestion.
+  final List<String> types;
+
+  /// Tag chosen (or suggested and left as is) in the nearby picker; null =
+  /// no tag. Carried into the add so the picker's choice is what's saved.
+  final String? tag;
+
   /// Haversine distance from the long-press coordinate, in meters.
   final double distanceMeters;
 
@@ -216,7 +232,24 @@ class NearbyPlace {
     this.photoReferences = const [],
     this.photoAttributions,
     this.primaryType,
+    this.types = const [],
+    this.tag,
   });
+
+  /// Same place with [tag] (null = no tag) — the picker's per-row choice.
+  NearbyPlace withTag(String? tag) => NearbyPlace(
+        placeId: placeId,
+        name: name,
+        vicinity: vicinity,
+        coordinates: coordinates,
+        distanceMeters: distanceMeters,
+        photoReference: photoReference,
+        photoReferences: photoReferences,
+        photoAttributions: photoAttributions,
+        primaryType: primaryType,
+        types: types,
+        tag: tag,
+      );
 
   static NearbyPlace? fromJson(
     Map<String, dynamic> json, {
@@ -272,6 +305,11 @@ class NearbyPlace {
       photoReferences: photoRefs,
       photoAttributions: attributions.isEmpty ? null : attributions,
       primaryType: primaryType,
+      types: [
+        if (types is List)
+          for (final t in types)
+            if (t is String) t,
+      ],
     );
   }
 }
@@ -556,7 +594,7 @@ class PlacesService {
       final url = 'https://maps.googleapis.com/maps/api/place/details/json'
           '?place_id=$placeId'
           '&fields=name,formatted_address,geometry,photos,address_components,'
-          'opening_hours,current_opening_hours'
+          'opening_hours,current_opening_hours,types'
           '&key=${ApiService.googlePlacesApiKey}';
 
       final response = await ApiService.dio.get(url);
@@ -637,6 +675,7 @@ class PlacesService {
         photoHeight: enriched?.photoHeight,
         photoAttributions: enriched?.photoAttributions,
         openingHours: enriched?.openingHours,
+        types: enriched?.types,
       );
     } catch (e) {
       debugPrint('Error geocoding address: $e');

@@ -164,6 +164,24 @@ class MarkerUtils {
   /// same amber the Unscheduled bucket and the planner warnings use.
   static const Color warningAmber = Color(0xFFFFB300);
 
+  /// Stop-pin geometry (logical px). Class-level so the map's fit window can
+  /// reserve room for the BITMAP around a fitted coordinate: the pin is
+  /// anchored on its tip, so its head rises [pinAboveAnchorPx] above the
+  /// point and its name hangs [pinBelowAnchorPx] under it.
+  /// Head diameter: 15.4 = 30% below the 22 px the teardrop launched at.
+  static const double defaultPinHeadDiameter = 15.4;
+  static const double pinBorderWidth = 2.0;
+  static const double pinShadowPad = 6.0; // room for the blurred shadow
+  static const double pinLabelGap = 6.0; // tip → first label line
+
+  /// Bitmap top → anchor: shadow pad + outline + head + neck (2.2 r).
+  static double get pinAboveAnchorPx =>
+      pinShadowPad + pinBorderWidth + 3.2 * defaultPinHeadDiameter / 2;
+
+  /// Anchor → bitmap bottom for a two-line name (12 px font ≈ 15 px lines),
+  /// without the optional caution line.
+  static double get pinBelowAnchorPx => pinLabelGap + 30 + pinShadowPad;
+
   static Future<MarkerBitmapResult> getCustomMarkerBitmap({
     required int number,
     required String name,
@@ -171,7 +189,7 @@ class MarkerUtils {
     Color textColor = Colors.white,
     required bool isDarkMode,
     bool isStart = false,
-    double size = 22,
+    double size = defaultPinHeadDiameter,
     bool isSkipped = false,
     bool isDone = false,
     // Optional amber caution line drawn under the name (e.g. "might be
@@ -180,6 +198,11 @@ class MarkerUtils {
     // false = no visit order yet (day not optimized): a small white dot
     // sits in the pin instead of a number.
     bool showNumber = true,
+    // false = the body keeps [backgroundColor] whatever the stop's status —
+    // Entire-trip pins are coloured by DAY, and a done stop must stay its
+    // day's colour. The check / skip glyphs still show; only the green fill
+    // and the skipped greyscale are status colouring.
+    bool statusColors = true,
   }) async {
     final ui.PictureRecorder pictureRecorder = ui.PictureRecorder();
 
@@ -229,7 +252,7 @@ class MarkerUtils {
       contentPainter.text = TextSpan(
         text: number.toString(),
         style: TextStyle(
-          fontSize: size * 0.5,
+          fontSize: size * 0.58,
           fontWeight: FontWeight.w900, // Extra bold for better readability
           color: textColor,
         ),
@@ -325,9 +348,9 @@ class MarkerUtils {
     //   name — and the caution line hang under the tip.
     // The marker's anchor is the tip, so what the pin points at IS the place.
     final double r = size / 2;
-    const double borderWidth = 3.0;
-    const double shadowPad = 6.0; // room for the blurred shadow all round
-    const double labelGap = 6.0; // tip → first label line
+    const double borderWidth = pinBorderWidth;
+    const double shadowPad = pinShadowPad;
+    const double labelGap = pinLabelGap;
     final double pinWidth = size + borderWidth + shadowPad * 2;
     final double textWidth = warningPainter == null
         ? namePainter.width
@@ -350,8 +373,8 @@ class MarkerUtils {
 
     // --- 3. Draw the Elements ---
 
-    // Apply grayscale filter if skipped
-    if (isSkipped) {
+    // Apply grayscale filter if skipped (status colouring only)
+    if (isSkipped && statusColors) {
       const ColorFilter greyscaleFilter = ColorFilter.matrix(<double>[
         0.2126,
         0.7152,
@@ -404,9 +427,11 @@ class MarkerUtils {
     canvas.drawPath(
       pin,
       Paint()
-        ..color = isStart
-            ? Colors.green.shade600
-            : (isDone ? Colors.green.shade500 : backgroundColor)
+        ..color = !statusColors
+            ? backgroundColor
+            : isStart
+                ? Colors.green.shade600
+                : (isDone ? Colors.green.shade500 : backgroundColor)
         ..style = PaintingStyle.fill,
     );
 

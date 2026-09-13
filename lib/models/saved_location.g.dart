@@ -85,13 +85,15 @@ class SavedLocationAdapter extends TypeAdapter<SavedLocation> {
       hoursLastRefreshedAt: fields[22] as DateTime?,
       scheduledEndDate: fields[23] as DateTime?,
       isAccommodation: fields[24] == null ? false : fields[24] as bool,
+      tag: fields[25] as String?,
+      placeTypes: (fields[26] as List?)?.cast<String>(),
     );
   }
 
   @override
   void write(BinaryWriter writer, SavedLocation obj) {
     writer
-      ..writeByte(25)
+      ..writeByte(27)
       ..writeByte(0)
       ..write(obj.id)
       ..writeByte(1)
@@ -141,7 +143,11 @@ class SavedLocationAdapter extends TypeAdapter<SavedLocation> {
       ..writeByte(23)
       ..write(obj.scheduledEndDate)
       ..writeByte(24)
-      ..write(obj.isAccommodation);
+      ..write(obj.isAccommodation)
+      ..writeByte(25)
+      ..write(obj.tag)
+      ..writeByte(26)
+      ..write(obj.placeTypes);
   }
 
   @override

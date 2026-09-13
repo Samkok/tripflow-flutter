@@ -319,6 +319,8 @@ class TripNotifier extends StateNotifier<TripState> {
             isSkipped: saved.isSkipped,
             isDone: saved.isDone,
             isAccommodation: saved.isAccommodation,
+            tag: saved.tag,
+            placeTypes: saved.placeTypes,
             stayDuration: Duration(seconds: saved.stayDuration),
             photoReference: saved.photoReference,
             photoReferences: refs.isEmpty ? null : refs,
@@ -405,6 +407,10 @@ class TripNotifier extends StateNotifier<TripState> {
         isSkipped: locationWithDate.isSkipped,
         isDone: locationWithDate.isDone,
         isAccommodation: locationWithDate.isAccommodation,
+        tag: locationWithDate.tag,
+        placeTypes: locationWithDate.placeTypes.isEmpty
+            ? null
+            : locationWithDate.placeTypes,
         // IMPORTANT: Set tripId if a trip is active, null if no trip is active
         tripId: activeTrip?.id,
         // userId and fingerprint will be handled by repository based on auth state
@@ -798,6 +804,28 @@ class TripNotifier extends StateNotifier<TripState> {
           .updateLocation(locationId, {'name': newName});
     } catch (e) {
       log('Error updating name in repository: $e');
+    }
+  }
+
+  /// Sets (or, with null, clears) the stop's place tag; the day map
+  /// recolours its pin. Optimistic, then persisted through the whitelist.
+  Future<void> updateLocationTag(String locationId, String? tag) async {
+    final hasAccess = await _hasWriteAccess();
+    if (!hasAccess) {
+      debugPrint(
+          'updateLocationTag: Permission denied - user does not have write access');
+      return;
+    }
+    state = state.copyWith(pinnedLocations: [
+      for (final loc in state.pinnedLocations)
+        loc.id == locationId ? loc.copyWith(tag: tag) : loc,
+    ]);
+    try {
+      await _ref
+          .read(locationRepositoryProvider)
+          .updateLocation(locationId, {'tag': tag});
+    } catch (e) {
+      log('Error updating tag in repository: $e');
     }
   }
 
@@ -1239,6 +1267,8 @@ class TripNotifier extends StateNotifier<TripState> {
         isSkipped: clone.isSkipped,
         isDone: clone.isDone,
         isAccommodation: clone.isAccommodation,
+        tag: clone.tag,
+        placeTypes: clone.placeTypes.isEmpty ? null : clone.placeTypes,
         stayDuration: clone.stayDuration.inSeconds,
         scheduledDate: tailStart,
         scheduledEndDate: tailEnd,
@@ -1523,11 +1553,15 @@ class TripNotifier extends StateNotifier<TripState> {
     final activeTrip = activeTripAsync.valueOrNull;
 
     final newLocations = locationsToCopy.map((loc) {
-      // Create a new location with a new ID and the new date.
-      // Reset travel details as they are not applicable to the new date yet.
+      // Create a new location with a new ID and the new date. A copy is a
+      // fresh plan for that day: it starts ACTIVE even when the original is
+      // done or skipped (same rule as copying a whole trip by code), and
+      // travel details don't apply to the new date yet.
       return loc.copyWith(
         id: const Uuid().v4(),
         scheduledDate: newDate,
+        isDone: false,
+        isSkipped: false,
         travelTimeFromPrevious: null,
         distanceFromPrevious: null,
       );
@@ -1548,6 +1582,9 @@ class TripNotifier extends StateNotifier<TripState> {
             isSkipped: loc.isSkipped,
             isDone: loc.isDone,
             isAccommodation: loc.isAccommodation,
+            // A copy keeps its tag (same rule as copying a trip by code).
+            tag: loc.tag,
+            placeTypes: loc.placeTypes.isEmpty ? null : loc.placeTypes,
             stayDuration: loc.stayDuration.inSeconds,
             scheduledDate: loc.scheduledDate,
             createdAt: loc.addedAt,

@@ -5,9 +5,11 @@ import 'package:flutter/material.dart';
 import 'package:voyza/providers/nearby_radius_provider.dart'
     show NearbyRadiusNotifier;
 import 'package:voyza/services/places_service.dart';
+import 'package:voyza/utils/place_tags.dart';
 import 'package:voyza/utils/same_day_place_guard.dart';
 import 'package:voyza/utils/search_text.dart';
 import 'package:voyza/widgets/location_photo_gallery.dart';
+import 'package:voyza/widgets/place_tag_sheet.dart';
 
 /// Bottom sheet shown after a long-press on the map: lists every POI within
 /// the search radius (Google Places Nearby Search), lets the user widen or
@@ -71,6 +73,10 @@ class NearbyPlacesPickerSheet extends StatefulWidget {
 
 class _NearbyPlacesPickerSheetState extends State<NearbyPlacesPickerSheet> {
   final Set<String> _selected = {};
+
+  /// Per-row tag: the user's explicit choice (null = "no tag") once they
+  /// tapped the chip; otherwise the suggestion from Google's types.
+  final Map<String, PlaceTag?> _tagByPlaceId = {};
   final TextEditingController _searchController = TextEditingController();
   String _query = '';
 
@@ -99,6 +105,70 @@ class _NearbyPlacesPickerSheetState extends State<NearbyPlacesPickerSheet> {
       'Couldn\'t load places — check your connection and try again.';
 
   bool get _radiusDirty => _pendingRadius.round() != _appliedRadius;
+
+  PlaceTag? _tagFor(NearbyPlace place) =>
+      _tagByPlaceId.containsKey(place.placeId)
+          ? _tagByPlaceId[place.placeId]
+          : suggestPlaceTag(place.types);
+
+  Future<void> _editTag(BuildContext context, NearbyPlace place) async {
+    final pick = await showPlaceTagSheet(
+      context,
+      placeName: place.name,
+      suggested: suggestPlaceTag(place.types),
+      current: _tagFor(place),
+      confirmLabel: 'Use',
+    );
+    if (pick == null || !mounted) return;
+    setState(() => _tagByPlaceId[place.placeId] = pick.tag);
+  }
+
+  /// The row's tag chip — the suggestion made visible, so adding IS the
+  /// confirmation; tap to change or drop it.
+  Widget _buildRowTag(BuildContext context, NearbyPlace place) {
+    final theme = Theme.of(context);
+    final tag = _tagFor(place);
+    if (tag != null) {
+      return Align(
+        alignment: Alignment.centerLeft,
+        child: PlaceTagChip(
+          tag: tag,
+          selected: true,
+          dense: true,
+          onTap: () => _editTag(context, place),
+        ),
+      );
+    }
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(999),
+        onTap: () => _editTag(context, place),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(999),
+            border:
+                Border.all(color: theme.dividerColor.withValues(alpha: 0.6)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.label_outline_rounded,
+                  size: 12, color: theme.colorScheme.onSurfaceVariant),
+              const SizedBox(width: 4),
+              Text(
+                'Add tag',
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 
   @override
   void dispose() {
@@ -643,6 +713,10 @@ class _NearbyPlacesPickerSheetState extends State<NearbyPlacesPickerSheet> {
                         overflow: TextOverflow.ellipsis,
                       ),
                     ],
+                    if (!alreadyOnDay) ...[
+                      const SizedBox(height: 6),
+                      _buildRowTag(context, place),
+                    ],
                   ],
                 ),
               ),
@@ -762,6 +836,7 @@ class _NearbyPlacesPickerSheetState extends State<NearbyPlacesPickerSheet> {
                     : () {
                         final picked = _allKnown
                             .where((p) => _selected.contains(p.placeId))
+                            .map((p) => p.withTag(_tagFor(p)?.key))
                             .toList();
                         Navigator.of(context).pop(picked);
                       },
