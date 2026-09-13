@@ -221,5 +221,60 @@ void main() {
     h.svc.noteShown(target(placeId: ''));
     await settle();
     expect(h.fetches, isEmpty);
+    expect((await h.svc.refreshNow(target(placeId: null))).outcome,
+        PhotoRefreshOutcome.noPlaceId);
+  });
+
+  group('refreshNow', () {
+    test('asks Google regardless of a recent answer and saves changes',
+        () async {
+      final h = _Harness();
+      h.prefs['${PlacePhotoRefreshService.prefsPrefix}P1'] = PhotoRefreshRecord(
+        at: h.now,
+        signature: PhotoRefreshPolicy.signature(const ['old1', 'old2']),
+      ).encode();
+      h.answers['P1'] = const PlacePhotosResult.ok(fresh);
+
+      final result = await h.svc.refreshNow(target());
+      expect(result.outcome, PhotoRefreshOutcome.updated);
+      expect(result.photoCount, 2);
+      expect(h.fetches, ['P1']);
+      expect(h.saves.single.updates['photo_references'], fresh);
+      expect(h.svc.lastRenewedAt('P1'), h.now);
+    });
+
+    test('reports unchanged, no photos, gone and failed without saving',
+        () async {
+      Future<PhotoRefreshOutcome> outcome(
+          PlacePhotosResult? answer, List<String> rowRefs) async {
+        final h = _Harness();
+        if (answer != null) h.answers['P1'] = answer;
+        final r = await h.svc.refreshNow(target(refs: rowRefs));
+        if (r.outcome != PhotoRefreshOutcome.noPhotos) {
+          expect(h.saves, isEmpty);
+        }
+        return r.outcome;
+      }
+
+      expect(await outcome(const PlacePhotosResult.ok(fresh), fresh),
+          PhotoRefreshOutcome.unchanged);
+      expect(await outcome(const PlacePhotosResult.ok([]), const ['old1']),
+          PhotoRefreshOutcome.noPhotos);
+      expect(await outcome(const PlacePhotosResult.placeGone(), fresh),
+          PhotoRefreshOutcome.placeGone);
+      expect(await outcome(const PlacePhotosResult.denied(), fresh),
+          PhotoRefreshOutcome.failed);
+      expect(await outcome(null, fresh), PhotoRefreshOutcome.failed);
+    });
+
+    test('concurrent taps share one lookup', () async {
+      final h = _Harness();
+      h.answers['P1'] = const PlacePhotosResult.ok(fresh);
+      final results = await Future.wait(
+          [h.svc.refreshNow(target()), h.svc.refreshNow(target())]);
+      expect(h.fetches, ['P1']);
+      expect(results.map((r) => r.outcome),
+          everyElement(PhotoRefreshOutcome.updated));
+    });
   });
 }

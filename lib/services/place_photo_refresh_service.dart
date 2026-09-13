@@ -49,6 +49,38 @@ typedef PhotoSave = Future<void> Function(
   required bool synced,
 });
 
+/// How a user-requested renewal ([PlacePhotoRefreshService.refreshNow])
+/// ended, for the toast.
+enum PhotoRefreshOutcome {
+  /// The row now holds a different photo list.
+  updated,
+
+  /// Google returned the list the row already had.
+  unchanged,
+
+  /// Google lists no photos for the place (the gallery was cleared).
+  noPhotos,
+
+  /// Google no longer knows the place id.
+  placeGone,
+
+  /// Google couldn't be asked or refused — nothing changed.
+  failed,
+
+  /// The stop has no place id to ask about.
+  noPlaceId,
+}
+
+class ManualPhotoRefreshResult {
+  final PhotoRefreshOutcome outcome;
+
+  /// Photos the row holds after the refresh (meaningful for [updated] and
+  /// [unchanged]).
+  final int photoCount;
+
+  const ManualPhotoRefreshResult(this.outcome, {this.photoCount = 0});
+}
+
 /// Keeps a stop's Google photos renderable.
 ///
 /// Google's `photo_reference` tokens are temporary: Google rotates them, and
@@ -61,7 +93,8 @@ typedef PhotoSave = Future<void> Function(
 ///   * [noteLoadFailed] — a tile failed to load: renew now, unless the row
 ///     already holds a recent answer (then it isn't the reference's fault);
 ///   * [noteShown] — photos are on screen: renew when the last answer (or,
-///     never asked on this device, the row itself) is 30 days old.
+///     never asked on this device, the row itself) is 30 days old;
+///   * [refreshNow] — the user asked: renew regardless of age or cooldown.
 ///
 /// Cost guards: one in-flight lookup per place, a per-stop cooldown on the
 /// error path (failing tiles report on every rebuild), one on-show check
@@ -138,6 +171,48 @@ class PlacePhotoRefreshService {
     unawaited(_renew(t, placeId));
   }
 
+  /// User-requested renewal: asks Google now, whatever the age of the last
+  /// answer, and reports what happened. Concurrent taps share one lookup.
+  Future<ManualPhotoRefreshResult> refreshNow(PhotoRefreshTarget t) async {
+    final placeId = t.placeId;
+    if (placeId == null || placeId.isEmpty) {
+      return const ManualPhotoRefreshResult(PhotoRefreshOutcome.noPlaceId);
+    }
+    _shownChecked.add(t.id);
+    _attemptedAt[t.id] = _now();
+    final result = await _lookUp(t, placeId);
+    switch (result.status) {
+      case PlacePhotosStatus.unreached:
+      case PlacePhotosStatus.denied:
+        return const ManualPhotoRefreshResult(PhotoRefreshOutcome.failed);
+      case PlacePhotosStatus.placeGone:
+        return const ManualPhotoRefreshResult(PhotoRefreshOutcome.placeGone);
+      case PlacePhotosStatus.ok:
+        if (listEquals(result.refs, t.refs)) {
+          return ManualPhotoRefreshResult(
+            result.refs.isEmpty
+                ? PhotoRefreshOutcome.noPhotos
+                : PhotoRefreshOutcome.unchanged,
+            photoCount: result.refs.length,
+          );
+        }
+        await _apply(t, result);
+        return ManualPhotoRefreshResult(
+          result.refs.isEmpty
+              ? PhotoRefreshOutcome.noPhotos
+              : PhotoRefreshOutcome.updated,
+          photoCount: result.refs.length,
+        );
+    }
+  }
+
+  /// When this device last got an answer about [placeId], for an
+  /// "Updated … ago" caption. Device-local, like the record it reads.
+  DateTime? lastRenewedAt(String? placeId) {
+    if (placeId == null || placeId.isEmpty) return null;
+    return _record(placeId)?.at;
+  }
+
   /// True when this session already asked Google about the place. If the
   /// answer was a photo list the row doesn't hold yet, it is applied without
   /// another lookup — a sibling copy of the same place, or a server echo
@@ -153,6 +228,16 @@ class PlacePhotoRefreshService {
   }
 
   Future<void> _renew(PhotoRefreshTarget t, String placeId) async {
+    final result = await _lookUp(t, placeId);
+    if (result.status != PlacePhotosStatus.ok) return;
+    if (listEquals(result.refs, t.refs)) return;
+    await _apply(t, result);
+  }
+
+  /// One Google lookup per place at a time; every answer that reached
+  /// Google is memoised for the session and recorded on disk.
+  Future<PlacePhotosResult> _lookUp(
+      PhotoRefreshTarget t, String placeId) async {
     // Block body on purpose: an arrow would return the removed future to
     // whenComplete, which would then wait on it — that is, on itself.
     final result = await (_inFlight[placeId] ??= _fetch(placeId).whenComplete(
@@ -160,7 +245,7 @@ class PlacePhotoRefreshService {
         _inFlight.remove(placeId);
       },
     ));
-    if (result.status == PlacePhotosStatus.unreached) return;
+    if (result.status == PlacePhotosStatus.unreached) return result;
 
     _answers[placeId] = result;
     // A usable answer is remembered by the list the row ends up with; a
@@ -174,10 +259,7 @@ class PlacePhotoRefreshService {
         signature: PhotoRefreshPolicy.signature(kept),
       ),
     );
-
-    if (result.status != PlacePhotosStatus.ok) return;
-    if (listEquals(result.refs, t.refs)) return;
-    await _apply(t, result);
+    return result;
   }
 
   /// Writes Google's current list to the row. An empty list clears the

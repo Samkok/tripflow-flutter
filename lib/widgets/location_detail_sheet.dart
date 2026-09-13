@@ -507,10 +507,15 @@ class LocationDetailSheet extends ConsumerWidget {
       BuildContext context, WidgetRef ref, LocationModel loc) {
     final theme = Theme.of(context);
     // Renew old Google photo references while they're on screen; a tile
-    // that fails to load asks for a renewal right away.
+    // that fails to load asks for a renewal right away. The refresh button
+    // does the same on demand — that is how photos added on Google Maps
+    // arrive before the 30-day background renewal would fetch them.
     final photoRefresh = ref.read(placePhotoRefreshProvider);
     final photoTarget = PhotoRefreshTarget.fromModel(loc);
     photoRefresh.noteShown(photoTarget);
+    final placeId = loc.placeId;
+    final canRefresh = placeId != null && placeId.isNotEmpty;
+    final renewedAt = photoRefresh.lastRenewedAt(placeId);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -534,6 +539,18 @@ class LocationDetailSheet extends ConsumerWidget {
                 fontWeight: FontWeight.w600,
               ),
             ),
+            const Spacer(),
+            // Same control as the Hours section. Not gated on write access:
+            // a read-only member's refresh lands as a device-local update.
+            if (canRefresh)
+              IconButton(
+                visualDensity: VisualDensity.compact,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                tooltip: 'Refresh photos from Google',
+                icon: const Icon(Icons.refresh, size: 20),
+                onPressed: () => _refreshPhotos(context, ref, loc),
+              ),
           ],
         ),
         const SizedBox(height: 12),
@@ -546,8 +563,47 @@ class LocationDetailSheet extends ConsumerWidget {
           tileHeight: 96,
           onLoadFailed: () => photoRefresh.noteLoadFailed(photoTarget),
         ),
+        if (renewedAt != null) ...[
+          const SizedBox(height: 6),
+          Text(
+            'Updated ${_formatRelative(renewedAt)}',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.textTheme.bodyMedium?.color?.withValues(alpha: 0.6),
+            ),
+          ),
+        ],
       ],
     );
+  }
+
+  Future<void> _refreshPhotos(
+    BuildContext context,
+    WidgetRef ref,
+    LocationModel loc,
+  ) async {
+    AppToast.info(
+      context,
+      'Refreshing photos…',
+      duration: const Duration(seconds: 1),
+    );
+    final result = await ref
+        .read(placePhotoRefreshProvider)
+        .refreshNow(PhotoRefreshTarget.fromModel(loc));
+    if (!context.mounted) return;
+    switch (result.outcome) {
+      case PhotoRefreshOutcome.updated:
+        AppToast.success(
+            context, 'Photos updated — ${result.photoCount} from Google');
+      case PhotoRefreshOutcome.unchanged:
+        AppToast.info(context, 'Photos are already up to date');
+      case PhotoRefreshOutcome.noPhotos:
+        AppToast.info(context, 'Google has no photos for this place');
+      case PhotoRefreshOutcome.placeGone:
+        AppToast.error(context, 'Google no longer lists this place');
+      case PhotoRefreshOutcome.failed:
+      case PhotoRefreshOutcome.noPlaceId:
+        AppToast.error(context, 'Could not refresh photos — try again later');
+    }
   }
 
   Widget _buildHeader(BuildContext context, WidgetRef ref,
