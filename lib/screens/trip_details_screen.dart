@@ -34,6 +34,8 @@ import 'package:voyza/providers/trip_listener_provider.dart';
 import 'package:voyza/providers/user_trip_provider.dart';
 import 'package:voyza/utils/date_picker_utils.dart';
 import 'package:voyza/widgets/location_photo_gallery.dart';
+import 'package:voyza/providers/place_photo_refresh_provider.dart';
+import 'package:voyza/services/place_photo_refresh_service.dart';
 import 'package:voyza/providers/local_active_trip_provider.dart';
 import 'package:voyza/providers/trip_provider.dart';
 import 'package:voyza/widgets/accommodation_prompts.dart';
@@ -2415,6 +2417,12 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
     final isSelected = _selectedIds.contains(location.id);
     final photoRefs = location.effectivePhotoReferences;
     final hasPhotos = photoRefs.isNotEmpty;
+    // Renew old Google photo references while the card is on screen; a
+    // tile that fails to load asks for a renewal right away.
+    final photoTarget = PhotoRefreshTarget.fromSaved(location);
+    if (hasPhotos) {
+      ref.read(placePhotoRefreshProvider).noteShown(photoTarget);
+    }
     // Expanded by default — collapse only if the user explicitly
     // hides the gallery (their id ends up in [_photoCollapsedIds]).
     final isExpanded = !_photoCollapsedIds.contains(location.id);
@@ -2639,6 +2647,9 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
                       photoRefs: photoRefs,
                       heroTagPrefix: '${location.id}_trip_detail_photo',
                       title: location.name,
+                      onLoadFailed: () => ref
+                          .read(placePhotoRefreshProvider)
+                          .noteLoadFailed(photoTarget),
                     )
                   : const SizedBox(width: double.infinity, height: 0),
             ),

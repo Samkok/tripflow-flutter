@@ -5,9 +5,11 @@ import 'package:intl/intl.dart';
 import 'package:voyza/models/location_model.dart';
 import 'package:voyza/providers/all_days_route_provider.dart';
 import 'package:voyza/providers/map_ui_state_provider.dart';
+import 'package:voyza/providers/place_photo_refresh_provider.dart';
 import 'package:voyza/providers/trip_listener_provider.dart';
 import 'package:voyza/providers/trip_provider.dart';
 import 'package:voyza/providers/trip_collaborator_provider.dart';
+import 'package:voyza/services/place_photo_refresh_service.dart';
 import 'package:voyza/widgets/accommodation_prompts.dart';
 import 'package:voyza/widgets/location_detail_sheet.dart';
 import 'package:voyza/widgets/location_photo_gallery.dart';
@@ -70,6 +72,12 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
 
     final photoRefs = location.photoReferences;
     final hasPhotos = photoRefs.isNotEmpty;
+    // Photos on screen: renew the Google references when they're old (that
+    // is how photos added on Google Maps arrive) — failed tiles report
+    // through _onPhotoLoadFailed.
+    if (hasPhotos) {
+      ref.read(placePhotoRefreshProvider).noteShown(_photoRefreshTarget);
+    }
 
     final theme = Theme.of(context);
     final primary = theme.colorScheme.primary;
@@ -142,6 +150,7 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
                             heroTagPrefix: '${location.id}_photo',
                             title: location.name,
                             padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                            onLoadFailed: _onPhotoLoadFailed,
                           )
                         : const SizedBox(width: double.infinity, height: 0),
                   ),
@@ -195,6 +204,12 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
     return primary;
   }
 
+  PhotoRefreshTarget get _photoRefreshTarget =>
+      PhotoRefreshTarget.fromModel(location);
+
+  void _onPhotoLoadFailed() =>
+      ref.read(placePhotoRefreshProvider).noteLoadFailed(_photoRefreshTarget);
+
   Widget _buildHeaderRow(
     BuildContext context, {
     required bool hasPhotos,
@@ -211,6 +226,7 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
             photoRef: photoRefs.first,
             size: 108,
             extraCount: photoRefs.length > 1 ? photoRefs.length - 1 : null,
+            onLoadFailed: _onPhotoLoadFailed,
             // The image IS the photos affordance: tapping it opens the
             // full-screen carousel. The rest of the card still opens the
             // location detail modal (selection mode keeps its toggle).

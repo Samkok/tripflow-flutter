@@ -1,3 +1,4 @@
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -7,6 +8,7 @@ import '../providers/auth_provider.dart';
 import '../providers/user_trip_provider.dart';
 import '../repositories/trip_repository.dart';
 import '../services/photo_service.dart';
+import '../services/place_photo_cache.dart';
 import '../services/supabase_service.dart';
 import '../providers/subscription_provider.dart';
 import '../widgets/app_toast.dart';
@@ -450,12 +452,14 @@ class _CopyTripWizardState extends ConsumerState<CopyTripWizard> {
                         size: 22,
                         color: theme.colorScheme.primary),
                   )
-                : Image.network(
-                    PhotoService.getPhotoUrl(photoReference: photoRef),
+                : CachedNetworkImage(
+                    imageUrl:
+                        PhotoService.getPhotoUrl(photoReference: photoRef),
+                    cacheManager: PlacePhotoCacheManager(),
                     width: 44,
                     height: 44,
                     fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) => Container(
+                    errorWidget: (_, __, ___) => Container(
                       width: 44,
                       height: 44,
                       color: theme.colorScheme.primary.withValues(alpha: 0.12),

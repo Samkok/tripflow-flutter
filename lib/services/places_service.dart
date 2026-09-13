@@ -91,31 +91,7 @@ class PlaceDetails {
 
   factory PlaceDetails.fromJson(Map<String, dynamic> json) {
     final geometry = json['geometry']['location'];
-    final photos = json['photos'] as List?;
-
-    final photoRefs = <String>[];
-    final attributions = <String>[];
-    int? photoWidth;
-    int? photoHeight;
-
-    if (photos != null) {
-      for (final photo in photos) {
-        if (photo is! Map) continue;
-        final ref = photo['photo_reference'];
-        if (ref is! String || ref.isEmpty) continue;
-        photoRefs.add(ref);
-        if (photoWidth == null) {
-          photoWidth = photo['width'] as int?;
-          photoHeight = photo['height'] as int?;
-        }
-        final attrs = photo['html_attributions'] as List?;
-        if (attrs != null) {
-          for (final a in attrs) {
-            attributions.add(a.toString());
-          }
-        }
-      }
-    }
+    final photos = parsePlacePhotos(json['photos']);
 
     return PlaceDetails(
       name: json['name'] ?? '',
@@ -124,11 +100,11 @@ class PlaceDetails {
         geometry['lat'].toDouble(),
         geometry['lng'].toDouble(),
       ),
-      photoReference: photoRefs.isNotEmpty ? photoRefs.first : null,
-      photoReferences: photoRefs,
-      photoWidth: photoWidth,
-      photoHeight: photoHeight,
-      photoAttributions: attributions.isEmpty ? null : attributions,
+      photoReference: photos.coverReference,
+      photoReferences: photos.references,
+      photoWidth: photos.width,
+      photoHeight: photos.height,
+      photoAttributions: photos.attributionsOrNull,
       countryCode: _extractCountryCode(json['address_components']),
       placeId: json['place_id'] as String?,
       types: [
@@ -143,6 +119,106 @@ class PlaceDetails {
       ),
     );
   }
+}
+
+/// The `photos` array of a Places response, reduced to what VoyZa keeps.
+class ParsedPlacePhotos {
+  /// Photo references in Google's order (most prominent first).
+  final List<String> references;
+
+  /// HTML attributions across the kept photos — Google requires them to be
+  /// shown alongside the photos.
+  final List<String> attributions;
+
+  /// Pixel size of the first kept photo, when Google reported it.
+  final int? width;
+  final int? height;
+
+  const ParsedPlacePhotos({
+    required this.references,
+    required this.attributions,
+    this.width,
+    this.height,
+  });
+
+  static const empty = ParsedPlacePhotos(references: [], attributions: []);
+
+  String? get coverReference => references.isEmpty ? null : references.first;
+  List<String>? get attributionsOrNull =>
+      attributions.isEmpty ? null : attributions;
+}
+
+/// Parses a Places `photos` array (Place Details, Nearby/Text Search).
+/// Entries without a usable `photo_reference` are dropped together with
+/// their attributions. Tolerates a missing or malformed array.
+ParsedPlacePhotos parsePlacePhotos(dynamic photos) {
+  if (photos is! List) return ParsedPlacePhotos.empty;
+  final refs = <String>[];
+  final attributions = <String>[];
+  int? width;
+  int? height;
+  for (final photo in photos) {
+    if (photo is! Map) continue;
+    final ref = photo['photo_reference'];
+    if (ref is! String || ref.isEmpty) continue;
+    refs.add(ref);
+    width ??= (photo['width'] as num?)?.toInt();
+    height ??= (photo['height'] as num?)?.toInt();
+    final attrs = photo['html_attributions'];
+    if (attrs is List) {
+      for (final a in attrs) {
+        attributions.add(a.toString());
+      }
+    }
+  }
+  return ParsedPlacePhotos(
+    references: refs,
+    attributions: attributions,
+    width: width,
+    height: height,
+  );
+}
+
+/// How a photos-only Place Details lookup ended.
+enum PlacePhotosStatus {
+  /// Google answered with the place's current photos (possibly none).
+  ok,
+
+  /// Google no longer knows the place id.
+  placeGone,
+
+  /// Google refused the request (bad id, key restriction) — retrying soon
+  /// won't help.
+  denied,
+
+  /// Google couldn't be asked (offline, timeout, quota) — nothing learned.
+  unreached,
+}
+
+/// Outcome of [PlacesService.fetchPlacePhotos]. [refs] is only meaningful
+/// for [PlacePhotosStatus.ok].
+class PlacePhotosResult {
+  final PlacePhotosStatus status;
+  final List<String> refs;
+  final List<String>? attributions;
+
+  const PlacePhotosResult.ok(this.refs, {this.attributions})
+      : status = PlacePhotosStatus.ok;
+
+  const PlacePhotosResult.placeGone()
+      : status = PlacePhotosStatus.placeGone,
+        refs = const [],
+        attributions = null;
+
+  const PlacePhotosResult.denied()
+      : status = PlacePhotosStatus.denied,
+        refs = const [],
+        attributions = null;
+
+  const PlacePhotosResult.unreached()
+      : status = PlacePhotosStatus.unreached,
+        refs = const [],
+        attributions = null;
 }
 
 /// Parses Google's `opening_hours.periods` array into our [OpeningPeriod]
@@ -264,22 +340,7 @@ class NearbyPlace {
     final lng = (loc['lng'] as num?)?.toDouble();
     if (lat == null || lng == null) return null;
 
-    final photoRefs = <String>[];
-    final attributions = <String>[];
-    final photos = json['photos'];
-    if (photos is List) {
-      for (final p in photos) {
-        if (p is! Map) continue;
-        final ref = p['photo_reference'];
-        if (ref is String && ref.isNotEmpty) photoRefs.add(ref);
-        final attrs = p['html_attributions'];
-        if (attrs is List) {
-          for (final a in attrs) {
-            attributions.add(a.toString());
-          }
-        }
-      }
-    }
+    final photos = parsePlacePhotos(json['photos']);
 
     String? primaryType;
     final types = json['types'];
@@ -301,9 +362,9 @@ class NearbyPlace {
       vicinity: (json['vicinity'] as String?) ?? '',
       coordinates: LatLng(lat, lng),
       distanceMeters: _haversineMeters(origin, LatLng(lat, lng)),
-      photoReference: photoRefs.isNotEmpty ? photoRefs.first : null,
-      photoReferences: photoRefs,
-      photoAttributions: attributions.isEmpty ? null : attributions,
+      photoReference: photos.coverReference,
+      photoReferences: photos.references,
+      photoAttributions: photos.attributionsOrNull,
       primaryType: primaryType,
       types: [
         if (types is List)
@@ -625,6 +686,54 @@ class PlacesService {
     } catch (e) {
       debugPrint('Error getting place details: $e');
       return null;
+    }
+  }
+
+  /// Photos-only Place Details lookup used to renew a stop's photo
+  /// references (Google's are temporary — see PlacePhotoRefreshService).
+  /// Requests just the `photos` field, so it bills as Basic data rather
+  /// than the Contact-tier lookup [getPlaceDetails] does for hours.
+  ///
+  /// Never throws: the result's status says whether Google answered,
+  /// refused, lost the place, or couldn't be reached at all — callers must
+  /// not read "unreached" as "no photos".
+  static Future<PlacePhotosResult> fetchPlacePhotos(String placeId) async {
+    try {
+      final url = 'https://maps.googleapis.com/maps/api/place/details/json'
+          '?place_id=$placeId'
+          '&fields=photos'
+          '&key=${ApiService.googlePlacesApiKey}';
+      final response = await ApiService.dio.get(url);
+      final data = response.data;
+      if (data is! Map) return const PlacePhotosResult.unreached();
+
+      final status = data['status'];
+      switch (status) {
+        case 'OK':
+          final result = data['result'];
+          final photos =
+              parsePlacePhotos(result is Map ? result['photos'] : null);
+          return PlacePhotosResult.ok(
+            photos.references,
+            attributions: photos.attributionsOrNull,
+          );
+        case 'NOT_FOUND':
+        case 'ZERO_RESULTS':
+          return const PlacePhotosResult.placeGone();
+        case 'INVALID_REQUEST':
+        case 'REQUEST_DENIED':
+          debugPrint('fetchPlacePhotos($placeId): status=$status, '
+              'error=${data['error_message']}');
+          return const PlacePhotosResult.denied();
+        default:
+          // OVER_QUERY_LIMIT, UNKNOWN_ERROR — transient.
+          debugPrint('fetchPlacePhotos($placeId): status=$status, '
+              'error=${data['error_message']}');
+          return const PlacePhotosResult.unreached();
+      }
+    } catch (e) {
+      debugPrint('fetchPlacePhotos($placeId): $e');
+      return const PlacePhotosResult.unreached();
     }
   }
 

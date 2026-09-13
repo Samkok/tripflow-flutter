@@ -257,6 +257,18 @@ class LocationRepository {
     }
   }
 
+  /// Applies [updates] to the local row only — the dirty flag is left as it
+  /// is and nothing is uploaded. For rows the user cannot write on the
+  /// server (a read-only collaborator) where a renewed photo list should
+  /// still render on this device; the next server echo may overwrite it.
+  Future<void> patchLocationLocally(
+      String id, Map<String, dynamic> updates) async {
+    await _ensureInitialized();
+    final localLocation = _box!.get(id);
+    if (localLocation == null) return;
+    await _box!.put(id, _applyWhitelisted(localLocation, updates));
+  }
+
   /// Applies a whitelisted update map to [localLocation] via type-safe
   /// copyWith calls (no JSON round-trip). Shared by [updateLocation] and
   /// [updateLocationsBatch] so single and bulk writes can never drift.
@@ -286,6 +298,30 @@ class LocationRepository {
       // Sentinel-aware in copyWith: null really clears the tag.
       updatedLocation =
           updatedLocation.copyWith(tag: updates['tag'] as String?);
+    }
+    if (updates.containsKey('photo_references')) {
+      // Photo renewals (PlacePhotoRefreshService) replace the whole gallery
+      // list with Google's current one; an empty list clears it.
+      final raw = updates['photo_references'];
+      if (raw is List) {
+        updatedLocation = updatedLocation
+            .copyWith(photoReferences: [for (final r in raw) r.toString()]);
+      }
+    }
+    if (updates.containsKey('photo_reference')) {
+      // Cover photo; '' clears it (copyWith has no sentinel for this field,
+      // and effectivePhotoReferences already treats '' as absent).
+      final raw = updates['photo_reference'];
+      if (raw is String) {
+        updatedLocation = updatedLocation.copyWith(photoReference: raw);
+      }
+    }
+    if (updates.containsKey('photo_attributions')) {
+      final raw = updates['photo_attributions'];
+      if (raw is List) {
+        updatedLocation = updatedLocation
+            .copyWith(photoAttributions: [for (final a in raw) a.toString()]);
+      }
     }
     if (updates.containsKey('scheduled_date')) {
       final dateStr = updates['scheduled_date'];

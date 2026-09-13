@@ -1,6 +1,7 @@
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:voyza/services/photo_service.dart';
+import 'package:voyza/services/place_photo_cache.dart';
 import 'package:voyza/widgets/photo_gallery_viewer.dart';
 
 /// Stable, fetchable URL for a Google Places photo reference.
@@ -20,8 +21,15 @@ import 'package:voyza/widgets/photo_gallery_viewer.dart';
 ///      process-wide map, so that photo never retried for the rest of the
 ///      app session — it only came back after a restart.
 /// Returning the stable endpoint removes both, plus a network round-trip per
-/// photo. Byte caching/expiry is now handled entirely by CachedNetworkImage's
-/// own cache manager.
+/// photo. Bytes are cached by [PlacePhotoCacheManager] (30 days from last
+/// use, sized for photo-heavy trips).
+///
+/// The reference itself is the remaining moving part: Google's
+/// `photo_reference` tokens expire, so a list saved months ago eventually
+/// 400s at this endpoint. The widgets below report load failures through
+/// `onLoadFailed`, and PlacePhotoRefreshService renews the row's references
+/// from Place Details — which is also how photos added on Google Maps since
+/// the add reach the stop.
 String resolveLocationPhotoUrl(String photoReference) {
   return PhotoService.getPhotoUrl(photoReference: photoReference);
 }
@@ -36,6 +44,10 @@ class LocationPhotoGallery extends StatelessWidget {
   final double tileWidth;
   final double tileHeight;
 
+  /// Called when a tile's photo fails to load (typically an expired Google
+  /// photo reference) so the owner can have the references renewed.
+  final VoidCallback? onLoadFailed;
+
   const LocationPhotoGallery({
     super.key,
     required this.photoRefs,
@@ -44,6 +56,7 @@ class LocationPhotoGallery extends StatelessWidget {
     this.padding = const EdgeInsets.fromLTRB(16, 0, 16, 12),
     this.tileWidth = 140,
     this.tileHeight = 100,
+    this.onLoadFailed,
   });
 
   @override
@@ -66,11 +79,14 @@ class LocationPhotoGallery extends StatelessWidget {
                   tag: '${heroTagPrefix}_$index',
                   child: CachedNetworkImage(
                     imageUrl: url,
+                    cacheManager: PlacePhotoCacheManager(),
                     width: tileWidth,
                     height: tileHeight,
                     fit: BoxFit.cover,
                     memCacheWidth: (tileWidth * 2).round(),
                     memCacheHeight: (tileHeight * 2).round(),
+                    errorListener:
+                        onLoadFailed == null ? null : (_) => onLoadFailed!(),
                     placeholder: (_, __) => _placeholder(
                       context,
                       width: tileWidth,
@@ -115,6 +131,9 @@ class LocationPhotoThumbnail extends StatelessWidget {
   final int? extraCount;
   final VoidCallback? onTap;
 
+  /// See [LocationPhotoGallery.onLoadFailed].
+  final VoidCallback? onLoadFailed;
+
   const LocationPhotoThumbnail({
     super.key,
     required this.photoRef,
@@ -122,6 +141,7 @@ class LocationPhotoThumbnail extends StatelessWidget {
     this.borderRadius,
     this.extraCount,
     this.onTap,
+    this.onLoadFailed,
   });
 
   @override
@@ -132,11 +152,13 @@ class LocationPhotoThumbnail extends StatelessWidget {
       borderRadius: radius,
       child: CachedNetworkImage(
         imageUrl: resolveLocationPhotoUrl(photoRef),
+        cacheManager: PlacePhotoCacheManager(),
         width: size,
         height: size,
         fit: BoxFit.cover,
         memCacheWidth: (size * 2).round(),
         memCacheHeight: (size * 2).round(),
+        errorListener: onLoadFailed == null ? null : (_) => onLoadFailed!(),
         placeholder: (_, __) =>
             _placeholder(context, width: size, height: size, radius: radius),
         errorWidget: (_, __, ___) =>

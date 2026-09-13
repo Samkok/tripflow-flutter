@@ -1,5 +1,6 @@
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import 'package:voyza/services/place_photo_cache.dart';
 
 /// Opens a black-backdropped full-screen viewer over [photoUrls]. Swipes
 /// horizontally between photos and pinch-zooms within each. Closes via the
@@ -244,6 +245,7 @@ class _PhotoGalleryViewerState extends State<PhotoGalleryViewer>
                     final url = widget.photoUrls[index];
                     final image = CachedNetworkImage(
                       imageUrl: url,
+                      cacheManager: PlacePhotoCacheManager(),
                       fit: BoxFit.contain,
                       placeholder: (_, __) => const Center(
                         child: CircularProgressIndicator(

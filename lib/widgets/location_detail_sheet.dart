@@ -9,12 +9,14 @@ import 'package:voyza/models/saved_location.dart'
 import 'package:voyza/models/trip.dart';
 import 'package:voyza/providers/user_trip_provider.dart';
 import 'package:voyza/services/country_match_service.dart';
+import 'package:voyza/services/place_photo_refresh_service.dart';
 import 'package:voyza/services/timing_simulation.dart' show kNeverCloses;
 import 'package:voyza/providers/location_provider.dart';
 import 'package:voyza/utils/place_tags.dart';
 import 'package:voyza/utils/same_day_place_guard.dart';
 import 'package:voyza/utils/search_text.dart';
 import 'package:voyza/providers/map_ui_state_provider.dart';
+import 'package:voyza/providers/place_photo_refresh_provider.dart';
 import 'package:voyza/providers/trip_listener_provider.dart';
 import 'package:voyza/providers/trip_provider.dart';
 import 'package:voyza/providers/trip_collaborator_provider.dart';
@@ -130,7 +132,7 @@ class LocationDetailSheet extends ConsumerWidget {
                   // full-screen swipe-to-dismiss gallery viewer.
                   if (updatedLocation.photoReferences.isNotEmpty) ...[
                     const Divider(height: 32),
-                    _buildPhotosSection(context, updatedLocation),
+                    _buildPhotosSection(context, ref, updatedLocation),
                   ],
 
                   // Hours section — Google's hours for the planned day + user override
@@ -501,8 +503,14 @@ class LocationDetailSheet extends ConsumerWidget {
   /// [LocationPhotoGallery] as the expanded trip cards; the hero prefix is
   /// namespaced to this sheet so it can't collide with a card gallery for
   /// the same location still visible behind the modal.
-  Widget _buildPhotosSection(BuildContext context, LocationModel loc) {
+  Widget _buildPhotosSection(
+      BuildContext context, WidgetRef ref, LocationModel loc) {
     final theme = Theme.of(context);
+    // Renew old Google photo references while they're on screen; a tile
+    // that fails to load asks for a renewal right away.
+    final photoRefresh = ref.read(placePhotoRefreshProvider);
+    final photoTarget = PhotoRefreshTarget.fromModel(loc);
+    photoRefresh.noteShown(photoTarget);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -536,6 +544,7 @@ class LocationDetailSheet extends ConsumerWidget {
           padding: EdgeInsets.zero,
           tileWidth: 132,
           tileHeight: 96,
+          onLoadFailed: () => photoRefresh.noteLoadFailed(photoTarget),
         ),
       ],
     );
