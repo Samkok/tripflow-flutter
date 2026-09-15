@@ -371,16 +371,7 @@ class _SearchWidgetState extends ConsumerState<SearchWidget> {
         }
         return;
       }
-
       final selectedDate = ref.read(selectedDateProvider);
-      final now = DateTime.now();
-      final today = DateTime(now.year, now.month, now.day);
-      if (selectedDate.isBefore(today)) {
-        if (mounted) {
-          AppToast.warning(context, 'Cannot add locations to a past date.');
-        }
-        return;
-      }
 
       final location = LocationModel(
         id: const Uuid().v4(),
@@ -435,21 +426,12 @@ class _SearchWidgetState extends ConsumerState<SearchWidget> {
       return;
     }
 
-    // Check if trying to add to a past date
-    final selectedDate = ref.read(selectedDateProvider);
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    if (selectedDate.isBefore(today)) {
-      if (!mounted) return;
-      AppToast.warning(context, 'Cannot add locations to a past date.');
-      return;
-    }
-
     final placeDetails =
         await PlacesService.getPlaceDetails(prediction.placeId);
 
     if (placeDetails != null) {
       if (!mounted) return;
+      final selectedDate = ref.read(selectedDateProvider);
 
       final location = LocationModel(
         id: const Uuid().v4(),

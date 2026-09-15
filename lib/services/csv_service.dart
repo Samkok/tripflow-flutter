@@ -4,6 +4,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import '../models/location_model.dart';
 import 'package:intl/intl.dart';
+import '../utils/trip_day_labels.dart';
 
 class CsvService {
   /// Exports one day's plan. The file is named after the trip and the day
@@ -13,6 +14,8 @@ class CsvService {
     List<LocationModel> locations, {
     String? tripName,
     DateTime? date,
+    // "Day N" instead of a calendar date on a trip without dates yet.
+    DayLabeler dayLabeler = DayLabeler.dated,
   }) async {
     if (locations.isEmpty) return;
 
@@ -32,9 +35,12 @@ class CsvService {
     for (int i = 0; i < locations.length; i++) {
       final loc = locations[i];
 
-      String scheduledDate = loc.scheduledDate != null
-          ? DateFormat('yyyy-MM-dd').format(loc.scheduledDate!)
-          : '';
+      final sd = loc.scheduledDate;
+      final String scheduledDate = sd == null
+          ? ''
+          : dayLabeler.tbd
+              ? dayLabeler(sd)
+              : DateFormat('yyyy-MM-dd').format(sd);
 
       rows.add([
         i + 1,
@@ -52,9 +58,15 @@ class CsvService {
         .replaceAll(RegExp(r'[\\/:*?"<>|]'), '')
         .replaceAll(RegExp(r'\s+'), ' ')
         .trim();
-    final dayPart = date == null ? '' : DateFormat('yyyy-MM-dd').format(date);
-    final base = [if (safeName.isNotEmpty) safeName, if (dayPart.isNotEmpty) dayPart]
-        .join(' ');
+    final dayPart = date == null
+        ? ''
+        : dayLabeler.tbd
+            ? dayLabeler(date)
+            : DateFormat('yyyy-MM-dd').format(date);
+    final base = [
+      if (safeName.isNotEmpty) safeName,
+      if (dayPart.isNotEmpty) dayPart
+    ].join(' ');
     final fileName = '${base.isEmpty ? 'VoyZa trip plan' : base}.csv';
 
     final directory = await getTemporaryDirectory();

@@ -24,6 +24,8 @@ import 'package:voyza/utils/date_picker_utils.dart';
 import 'package:voyza/utils/external_app_links.dart';
 import 'package:voyza/utils/trip_date_validator.dart';
 import 'package:voyza/utils/trip_dates.dart';
+import 'package:voyza/utils/trip_day_labels.dart';
+import 'package:voyza/widgets/trip_day_picker.dart';
 
 import '../core/theme.dart';
 import 'accommodation_prompts.dart';
@@ -283,11 +285,12 @@ class LocationDetailSheet extends ConsumerWidget {
       final start = loc.scheduledDate;
       final end = loc.scheduledEndDate ?? start;
       if (start != null && end != null) {
+        final lab = _labelerOf(ref);
         rangeLabel = start.year == end.year &&
                 start.month == end.month &&
                 start.day == end.day
-            ? DateFormat('MMM d').format(start)
-            : '${DateFormat('MMM d').format(start)} – ${DateFormat('MMM d').format(end)}';
+            ? lab(start)
+            : lab.range(start, end);
       }
     }
 
@@ -381,6 +384,7 @@ class LocationDetailSheet extends ConsumerWidget {
   Future<void> _showAccommodationScopeDialog(
       BuildContext context, WidgetRef ref, LocationModel loc) async {
     final trip = _scopedTrip(ref);
+    final lab = DayLabeler.forTrip(trip);
     final day = _sheetDayKey(ref, loc);
     // "Entire trip" spans the EFFECTIVE range — the declared dates and/or
     // the days locations are scheduled on (scheduling places IS the range).
@@ -402,7 +406,7 @@ class LocationDetailSheet extends ConsumerWidget {
               leading: const Icon(Icons.luggage_outlined),
               title: const Text('Entire trip'),
               subtitle: Text(hasRange
-                  ? '${DateFormat('MMM d').format(tripStart!)} – ${DateFormat('MMM d').format(tripEnd!)}, every night'
+                  ? '${lab.range(tripStart!, tripEnd!)}, every night'
                   : 'Add trip dates or schedule some places first'),
               enabled: hasRange,
               onTap: hasRange ? () => Navigator.of(ctx).pop('trip') : null,
@@ -411,7 +415,8 @@ class LocationDetailSheet extends ConsumerWidget {
               contentPadding: EdgeInsets.zero,
               leading: const Icon(Icons.today_outlined),
               title: const Text('Just this day'),
-              subtitle: Text(DateFormat('EEE, MMM d').format(day)),
+              subtitle: Text(
+                  lab.tbd ? lab(day) : DateFormat('EEE, MMM d').format(day)),
               onTap: () => Navigator.of(ctx).pop('day'),
             ),
           ],
@@ -851,14 +856,35 @@ class LocationDetailSheet extends ConsumerWidget {
                         final datesWithLocations =
                             ref.read(datesWithLocationsProvider);
                         final now = DateTime.now();
-                        final newDate =
-                            await DatePickerUtils.showCustomDatePicker(
-                          context: context,
-                          initialDate: updatedLocation.scheduledDate ?? now,
-                          firstDate: DateTime(now.year, now.month, now.day),
-                          lastDate: DateTime(now.year + 5),
-                          highlightedDates: datesWithLocations,
-                        );
+                        final today = DateTime(now.year, now.month, now.day);
+                        final pickerTrip = _scopedTrip(ref);
+                        final lab = DayLabeler.forTrip(pickerTrip);
+                        // Past days of the trip stay pickable (logging
+                        // where you actually went).
+                        final tripStart = pickerTrip?.startDate;
+                        final firstPickable = tripStart != null &&
+                                tripStart.isBefore(today)
+                            ? DateTime(
+                                tripStart.year, tripStart.month, tripStart.day)
+                            : today;
+                        final DateTime? newDate;
+                        if (lab.tbd) {
+                          newDate = await showTripDayPicker(
+                            context,
+                            days: _effectiveTripDays(ref, pickerTrip),
+                            labeler: lab,
+                            selected: updatedLocation.scheduledDate,
+                            marked: datesWithLocations,
+                          );
+                        } else {
+                          newDate = await DatePickerUtils.showCustomDatePicker(
+                            context: context,
+                            initialDate: updatedLocation.scheduledDate ?? now,
+                            firstDate: firstPickable,
+                            lastDate: DateTime(now.year + 5),
+                            highlightedDates: datesWithLocations,
+                          );
+                        }
                         if (newDate == null) return;
                         final normalized =
                             DateTime(newDate.year, newDate.month, newDate.day);
@@ -907,7 +933,7 @@ class LocationDetailSheet extends ConsumerWidget {
                         );
                         if (dup.allowedIds.isEmpty) {
                           AppToast.warning(context,
-                              '"${updatedLocation.name}" is already on ${DateFormat('MMM d').format(normalized)}');
+                              '"${updatedLocation.name}" is already on ${_labelerOf(ref)(normalized)}');
                           return;
                         }
                         final dayWasEmpty = !ref
@@ -1354,14 +1380,18 @@ class LocationDetailSheet extends ConsumerWidget {
 
     final selectedDate = ref.watch(selectedDateProvider);
     final googleDay = _googleDayFor(selectedDate);
-    final dayLabel = _weekdayNames[googleDay];
+    // No dates yet → no weekday to look up.
+    final undated = _labelerOf(ref).tbd;
+    final dayLabel = undated ? 'Hours' : _weekdayNames[googleDay];
 
     final googleHours = loc.googleOpeningHours;
     final overrideMin = loc.userClosingMinuteOverride;
     final placeId = loc.placeId;
     final canRefresh = placeId != null && placeId.isNotEmpty;
 
-    final googleSummary = _formatGoogleHoursForDay(googleHours, googleDay);
+    final googleSummary = undated
+        ? 'set trip dates to see this day\'s hours'
+        : _formatGoogleHoursForDay(googleHours, googleDay);
     final defaultClose = _defaultClosingForDay(googleHours, googleDay);
 
     return Column(
@@ -1610,13 +1640,14 @@ class LocationDetailSheet extends ConsumerWidget {
     final tripEnd = effectiveDays.isNotEmpty ? effectiveDays.last : null;
     final tripHasRange = tripStart != null && tripEnd != null;
 
+    final lab = DayLabeler.forTrip(scopedTrip);
     String statusLabel;
     if (isMultiDay && start != null && end != null) {
-      final df = DateFormat('MMM d');
-      statusLabel = '${df.format(start)} – ${df.format(end)}'
-          ' · ${_daysBetween(start, end)} days';
+      statusLabel =
+          '${lab.range(start, end)} · ${_daysBetween(start, end)} days';
     } else if (start != null) {
-      statusLabel = 'Single day · ${DateFormat('MMM d, y').format(start)}';
+      statusLabel = 'Single day · '
+          '${lab.tbd ? lab(start) : DateFormat('MMM d, y').format(start)}';
     } else {
       statusLabel = 'Not scheduled';
     }
@@ -1723,6 +1754,10 @@ class LocationDetailSheet extends ConsumerWidget {
   /// Resolves the trip whose date range frames the picker. Mirrors the
   /// logic in [_buildMultiDaySection] so the picker bounds and the section
   /// agree on which trip is in scope.
+  /// Day labels for the trip this sheet is scoped to ("Day N" while it
+  /// has no dates yet).
+  DayLabeler _labelerOf(WidgetRef ref) => DayLabeler.forTrip(_scopedTrip(ref));
+
   Trip? _scopedTrip(WidgetRef ref) {
     if (tripId != null) {
       final all = ref.read(userTripsProvider).asData?.value ?? const <Trip>[];
@@ -1785,8 +1820,8 @@ class LocationDetailSheet extends ConsumerWidget {
           filterSameDayDuplicates(moving: [movingKey], occupantsOnDay: keys);
       if (dup.allowedIds.isEmpty) {
         if (context.mounted) {
-          AppToast.warning(context,
-              '"${loc.name}" is already on ${DateFormat('MMM d').format(d)}');
+          AppToast.warning(
+              context, '"${loc.name}" is already on ${_labelerOf(ref)(d)}');
         }
         return false;
       }
@@ -1838,14 +1873,25 @@ class LocationDetailSheet extends ConsumerWidget {
     final firstDate = firstCandidates.reduce((a, b) => a.isBefore(b) ? a : b);
     final lastDate = lastCandidates.reduce((a, b) => a.isAfter(b) ? a : b);
 
-    final picked = await showDateRangePicker(
-      context: context,
-      firstDate: firstDate,
-      lastDate: lastDate,
-      initialDateRange: DateTimeRange(start: initialStart, end: initialEnd),
-      helpText: 'Stay range',
-      saveText: 'Set',
-    );
+    final lab = DayLabeler.forTrip(scopedTrip);
+    final DateTimeRange? picked;
+    if (lab.tbd) {
+      picked = await showTripDayRangePicker(
+        context,
+        days: _effectiveTripDays(ref, scopedTrip),
+        labeler: lab,
+        initial: DateTimeRange(start: initialStart, end: initialEnd),
+      );
+    } else {
+      picked = await showDateRangePicker(
+        context: context,
+        firstDate: firstDate,
+        lastDate: lastDate,
+        initialDateRange: DateTimeRange(start: initialStart, end: initialEnd),
+        helpText: 'Stay range',
+        saveText: 'Set',
+      );
+    }
     if (picked == null) return;
     try {
       await _writeDateRange(context, ref, loc, picked.start, picked.end);
@@ -1865,10 +1911,9 @@ class LocationDetailSheet extends ConsumerWidget {
     try {
       final ok = await _writeDateRange(context, ref, loc, tripStart, tripEnd);
       if (!ok || !context.mounted) return;
-      final df = DateFormat('MMM d');
       AppToast.success(
         context,
-        'Set to entire trip · ${df.format(tripStart)} – ${df.format(tripEnd)}',
+        'Set to entire trip · ${_labelerOf(ref).range(tripStart, tripEnd)}',
       );
     } catch (e) {
       if (!context.mounted) return;
@@ -2121,7 +2166,7 @@ class LocationDetailSheet extends ConsumerWidget {
           title: Text(spansHere ? 'Remove Location' : 'Delete Location'),
           content: Text(spansHere
               ? '"${location.name}" spans '
-                  '${DateFormat('MMM d').format(start)} – ${DateFormat('MMM d').format(end)}. '
+                  '${_labelerOf(ref).range(start, end)}. '
                   'Remove it from this day only, or delete it from every day?'
               : 'Are you sure you want to delete "${location.name}"? This action cannot be undone.'),
           // Three actions don't fit across an AlertDialog's default
@@ -2188,7 +2233,7 @@ class LocationDetailSheet extends ConsumerWidget {
                             .removeLocationFromDay(location.id, day);
                         if (context.mounted) {
                           AppToast.success(context,
-                              '${location.name} removed from ${DateFormat('MMM d').format(day)}');
+                              '${location.name} removed from ${_labelerOf(ref)(day)}');
                         }
                       },
                       child: const Text(

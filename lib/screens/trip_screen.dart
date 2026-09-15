@@ -18,7 +18,9 @@ import 'package:voyza/providers/onboarding_provider.dart';
 import 'package:voyza/screens/trip_details_screen.dart';
 import 'package:voyza/services/analytics_service.dart';
 import 'package:voyza/services/anonymous_user_service.dart';
+import 'package:voyza/services/subscription_limit_service.dart';
 import 'package:voyza/services/time_saved_ledger_service.dart';
+import 'package:voyza/services/trip_dates_service.dart';
 import 'package:voyza/widgets/celebration_dialogs.dart';
 import 'package:voyza/utils/countries.dart';
 import 'package:voyza/utils/trip_date_validator.dart';
@@ -44,12 +46,14 @@ import 'package:voyza/widgets/trip_collaborators_row.dart';
 import 'package:voyza/widgets/trip_skeleton.dart';
 import 'package:voyza/utils/search_text.dart';
 
-/// Home-list filter. "Gone" = the trip's last day is already past.
+/// Home-list filter. "Gone" = the trip's last day is already past;
+/// "No Date" = trips planned without dates yet (numbered days).
 enum _TripFilter {
   all('All'),
   active('Active'),
   ongoing('On Going'),
-  gone('Gone');
+  gone('Gone'),
+  noDate('No Date');
 
   const _TripFilter(this.label);
   final String label;
@@ -262,6 +266,14 @@ class _TripScreenState extends ConsumerState<TripScreen> {
   }
 
   /// Dates straight off a shared row's embedded trip map — no Trip parse.
+  /// A shared-trip row planned without dates (see Trip.datesTbd).
+  static bool _rowTbd(Map<String, dynamic> row) {
+    final t = row['trips'] as Map<String, dynamic>;
+    if (t['dates_tbd'] == true) return true;
+    final start = DateTime.tryParse(t['start_date'] as String? ?? '');
+    return start != null && isOnTbdAnchor(start);
+  }
+
   static (DateTime?, DateTime?) _rowDates(Map<String, dynamic> row) {
     final t = row['trips'] as Map<String, dynamic>;
     final s = t['start_date'] as String?;
@@ -425,6 +437,11 @@ class _TripScreenState extends ConsumerState<TripScreen> {
       await ref.read(localActiveTripIdProvider.notifier).setActiveTrip(trip.id);
 
       if (mounted) {
+        // The list follows the tap: the Active chip shows the trip that was
+        // just activated (and nothing else), with the section at the top.
+        if (_tripFilter != _TripFilter.active) {
+          setState(() => _tripFilter = _TripFilter.active);
+        }
         AppToast.success(context, '${trip.name} is now active');
         // Checklist: first-ever activation completes step 3 and chains the
         // "Go to map" spotlight on the just-revealed active card.
@@ -824,16 +841,26 @@ class _TripScreenState extends ConsumerState<TripScreen> {
       for (final d in ongoingShared)
         (d['trips'] as Map<String, dynamic>)['id'] as String,
     };
+    // Trips planned without dates get their own section (All filter only);
+    // on the far-future anchor they never read as ongoing or gone.
+    final tbdOwn = ownedMatches.where((t) => t.isUndated).toList();
+    final tbdShared = sharedMatches.where(_rowTbd).toList();
+    final tbdIds = {
+      for (final t in tbdOwn) t.id,
+      for (final d in tbdShared)
+        (d['trips'] as Map<String, dynamic>)['id'] as String,
+    };
     final List<Trip> listOwn;
     final List<Map<String, dynamic>> listShared;
     switch (filter) {
       case _TripFilter.all:
-        listOwn =
-            ownedMatches.where((t) => !ongoingIds.contains(t.id)).toList();
-        listShared = sharedMatches
-            .where((d) => !ongoingIds
-                .contains((d['trips'] as Map<String, dynamic>)['id']))
+        listOwn = ownedMatches
+            .where((t) => !ongoingIds.contains(t.id) && !tbdIds.contains(t.id))
             .toList();
+        listShared = sharedMatches.where((d) {
+          final id = (d['trips'] as Map<String, dynamic>)['id'];
+          return !ongoingIds.contains(id) && !tbdIds.contains(id);
+        }).toList();
       case _TripFilter.gone:
         listOwn = ownedMatches
             .where((t) => _isGone(t.startDate, t.endDate, today))
@@ -844,6 +871,7 @@ class _TripScreenState extends ConsumerState<TripScreen> {
         }).toList();
       case _TripFilter.active:
       case _TripFilter.ongoing:
+      case _TripFilter.noDate:
         listOwn = const [];
         listShared = const [];
     }
@@ -853,6 +881,9 @@ class _TripScreenState extends ConsumerState<TripScreen> {
     final showOngoingSection =
         (filter == _TripFilter.all || filter == _TripFilter.ongoing) &&
             (ongoingOwn.isNotEmpty || ongoingShared.isNotEmpty);
+    final showTbdSection =
+        (filter == _TripFilter.all || filter == _TripFilter.noDate) &&
+            (tbdOwn.isNotEmpty || tbdShared.isNotEmpty);
     final showLists = filter == _TripFilter.all || filter == _TripFilter.gone;
 
     // The activate-trip coach spotlights ONE Activate button. Trips whose
@@ -1226,17 +1257,20 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                     ),
                   ),
 
-                // Filter chips: All · Active · On Going · Gone. Single-select;
-                // primary-tinted like every other chip row in the app.
+                // Filter chips: All · Active · On Going · Gone · No Date.
+                // Single-select, primary-tinted like every other chip row in
+                // the app — ONE row that scrolls sideways on narrow phones
+                // rather than wrapping onto a second line.
                 if (tripsAsync.valueOrNull?.isNotEmpty ?? false)
                   SliverToBoxAdapter(
-                    child: Padding(
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
                       padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
-                      child: Wrap(
-                        spacing: 8,
-                        runSpacing: 6,
+                      child: Row(
                         children: [
-                          for (final f in _TripFilter.values)
+                          for (final f in _TripFilter.values) ...[
+                            if (f != _TripFilter.values.first)
+                              const SizedBox(width: 8),
                             ChoiceChip(
                               label: Text(f.label),
                               selected: _tripFilter == f,
@@ -1262,6 +1296,7 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                               shape: RoundedRectangleBorder(
                                   borderRadius: BorderRadius.circular(9)),
                             ),
+                          ],
                         ],
                       ),
                     ),
@@ -1381,10 +1416,69 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                     ],
                   ),
 
+                // No dates yet — trips planned by day number. Own and
+                // shared rows, like On Going; "Set dates" lives in each
+                // card's menu.
+                if (showTbdSection)
+                  SliverMainAxisGroup(
+                    slivers: [
+                      SliverToBoxAdapter(
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+                          child: Row(
+                            children: [
+                              Icon(
+                                Icons.event_note_rounded,
+                                size: 20,
+                                color: Theme.of(context).colorScheme.primary,
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                'No dates yet',
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .titleLarge
+                                    ?.copyWith(fontWeight: FontWeight.w600),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      SliverList(
+                        delegate: SliverChildBuilderDelegate(
+                          (context, index) {
+                            final Widget card;
+                            if (index < tbdOwn.length) {
+                              final t = tbdOwn[index];
+                              card = _buildTripCard(context, t,
+                                  spotlightActivate:
+                                      t.id == spotlightActivateTripId);
+                            } else {
+                              final data = tbdShared[index - tbdOwn.length];
+                              final tripData =
+                                  data['trips'] as Map<String, dynamic>;
+                              final permission = data['permission'] as String;
+                              card = _buildSharedTripCard(
+                                  context, Trip.fromJson(tripData), permission);
+                            }
+                            return Padding(
+                              padding: const EdgeInsets.only(
+                                  left: 16, right: 16, bottom: 12),
+                              child: card,
+                            );
+                          },
+                          childCount: tbdOwn.length + tbdShared.length,
+                        ),
+                      ),
+                      const SliverPadding(padding: EdgeInsets.only(bottom: 8)),
+                    ],
+                  ),
+
                 // Filter empty states — the chip picked something that has
                 // no trips right now. One line, never a bare heading.
                 if ((filter == _TripFilter.active && activeTrip == null) ||
                     (filter == _TripFilter.ongoing && !showOngoingSection) ||
+                    (filter == _TripFilter.noDate && !showTbdSection) ||
                     (filter == _TripFilter.gone &&
                         listOwn.isEmpty &&
                         listShared.isEmpty &&
@@ -1399,6 +1493,10 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                             _TripFilter.ongoing =>
                               'No trip is happening today.',
                             _TripFilter.gone => 'No past trips yet.',
+                            _TripFilter.noDate =>
+                              'No trips without dates — create one from '
+                                  'the wizard with "I don\'t know the dates '
+                                  'yet".',
                             _TripFilter.all => '',
                           },
                           style: Theme.of(context)
@@ -1850,9 +1948,12 @@ class _TripScreenState extends ConsumerState<TripScreen> {
       final st = DateTime(startDate.year, startDate.month, startDate.day);
       final en = DateTime(endDate.year, endDate.month, endDate.day);
       final dayCount = daySpanDays(st, en) + 1;
-      final dateText = st == en
-          ? DateFormat('MMM d, y').format(st)
-          : '${DateFormat('MMM d').format(st)} – ${DateFormat('MMM d, y').format(en)}';
+      // Shared trips planned without dates sit on the anchor: numbered days.
+      final dateText = trip.isUndated
+          ? 'No dates yet'
+          : st == en
+              ? DateFormat('MMM d, y').format(st)
+              : '${DateFormat('MMM d').format(st)} – ${DateFormat('MMM d, y').format(en)}';
       metaSpans
         ..add(TextSpan(text: dateText))
         ..add(TextSpan(
@@ -2296,9 +2397,13 @@ class _TripScreenState extends ConsumerState<TripScreen> {
       final st = DateTime(startDate.year, startDate.month, startDate.day);
       final en = DateTime(endDate.year, endDate.month, endDate.day);
       final dayCount = daySpanDays(st, en) + 1;
-      dateText = st == en
-          ? DateFormat('MMM d, y').format(st)
-          : '${DateFormat('MMM d').format(st)} – ${DateFormat('MMM d, y').format(en)}';
+      // A trip planned without dates sits on the anchor: its days are
+      // numbered, so only the count is meaningful.
+      if (!trip.isUndated) {
+        dateText = st == en
+            ? DateFormat('MMM d, y').format(st)
+            : '${DateFormat('MMM d').format(st)} – ${DateFormat('MMM d, y').format(en)}';
+      }
       factsSpans.add(TextSpan(
         text: '$dayCount day${dayCount == 1 ? '' : 's'}',
         style: TextStyle(color: primary, fontWeight: FontWeight.w700),
@@ -2427,14 +2532,54 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                                 ],
                               ),
                             ),
+                            // Undated trip → "Set dates" (Day 1 lands on the
+                            // picked day). Ended trip → no rescheduling at
+                            // all: what happened, happened.
+                            if (trip.isUndated)
+                              PopupMenuItem<String>(
+                                value: 'setdates',
+                                child: Row(
+                                  children: [
+                                    Icon(Icons.event_available_rounded,
+                                        size: 18, color: primary),
+                                    const SizedBox(width: 12),
+                                    const Text('Set dates'),
+                                  ],
+                                ),
+                              )
+                            else if (!_isGone(
+                                trip.startDate, trip.endDate, _todayKey())) ...[
+                              PopupMenuItem<String>(
+                                value: 'reschedule',
+                                child: Row(
+                                  children: [
+                                    Icon(Icons.event_repeat_rounded,
+                                        size: 18, color: primary),
+                                    const SizedBox(width: 12),
+                                    const Text('Reschedule'),
+                                  ],
+                                ),
+                              ),
+                              PopupMenuItem<String>(
+                                value: 'nodate',
+                                child: Row(
+                                  children: [
+                                    Icon(Icons.event_busy_rounded,
+                                        size: 18, color: primary),
+                                    const SizedBox(width: 12),
+                                    const Text('Switch to No Date'),
+                                  ],
+                                ),
+                              ),
+                            ],
                             PopupMenuItem<String>(
-                              value: 'reschedule',
+                              value: 'duplicate',
                               child: Row(
                                 children: [
-                                  Icon(Icons.event_repeat_rounded,
+                                  Icon(Icons.copy_rounded,
                                       size: 18, color: primary),
                                   const SizedBox(width: 12),
-                                  const Text('Reschedule'),
+                                  const Text('Duplicate'),
                                 ],
                               ),
                             ),
@@ -2457,6 +2602,12 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                               _showEditTripDialog(context, trip);
                             } else if (value == 'reschedule') {
                               _rescheduleTripFromCard(trip);
+                            } else if (value == 'setdates') {
+                              _setTripDatesFromCard(trip);
+                            } else if (value == 'nodate') {
+                              _clearTripDatesFromCard(trip);
+                            } else if (value == 'duplicate') {
+                              _duplicateTripFromCard(trip);
                             } else if (value == 'delete') {
                               _showDeleteConfirmation(context, trip);
                             }
@@ -2856,6 +3007,7 @@ class _TripScreenState extends ConsumerState<TripScreen> {
       context: context,
       builder: (context) => _EditTripDialog(
         trip: trip,
+        datesLocked: _isGone(trip.startDate, trip.endDate, _todayKey()),
         onSave: ({
           required String newName,
           required String newDescription,
@@ -2881,6 +3033,192 @@ class _TripScreenState extends ConsumerState<TripScreen> {
   }
 
   /// Card action: move the whole trip to a new start date. The duration is
+  /// "Set dates" on a trip planned without them: Day 1 lands on the picked
+  /// day and every stop keeps its day number (TripDatesService.setStartDate,
+  /// one atomic shift server-side).
+  Future<void> _setTripDatesFromCard(Trip trip) async {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: today,
+      firstDate: today,
+      lastDate: DateTime(today.year + 5),
+      helpText: 'First day of the trip',
+    );
+    if (picked == null || !mounted) return;
+    try {
+      final updated = await TripDatesService.setStartDate(ref, trip, picked);
+      if (!mounted) return;
+      final fmt = DateFormat('MMM d');
+      AppToast.success(
+          context,
+          'Dates set — ${fmt.format(updated.startDate!)} to '
+          '${fmt.format(updated.endDate!)}');
+    } catch (e) {
+      debugPrint('_setTripDatesFromCard: $e');
+      if (mounted) {
+        AppToast.error(context, 'Couldn\'t set the dates — try again.');
+      }
+    }
+  }
+
+  /// "Switch to No Date": takes the dates off a trip. Its days survive as
+  /// Day 1 … Day N with every place in place; new dates can be set later.
+  Future<void> _clearTripDatesFromCard(Trip trip) async {
+    final ok = await _confirmClearDates(trip);
+    if (!ok || !mounted) return;
+    try {
+      await TripDatesService.clearDates(ref, trip);
+      if (!mounted) return;
+      if (_tripFilter != _TripFilter.all && _tripFilter != _TripFilter.noDate) {
+        setState(() => _tripFilter = _TripFilter.noDate);
+      }
+      AppToast.success(context, '"${trip.name}" has no dates now');
+    } catch (e) {
+      debugPrint('_clearTripDatesFromCard: $e');
+      if (mounted) {
+        AppToast.error(context, 'Couldn\'t remove the dates — try again.');
+      }
+    }
+  }
+
+  Future<bool> _confirmClearDates(Trip trip) async {
+    final start = trip.startDate;
+    final end = trip.endDate ?? start;
+    final days = start == null || end == null
+        ? null
+        : daySpanDays(dayKey(start), dayKey(end)) + 1;
+    final proceed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Switch to No Date?'),
+        content: Text(
+          'The dates come off "${trip.name}". '
+          '${days == null ? 'Its days' : 'Its $days ${days == 1 ? 'day stays' : 'days stay'}'} '
+          'as Day 1${days == null || days == 1 ? '' : ' – Day $days'} with '
+          'every place where it is, and you can set new dates any time.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Switch'),
+          ),
+        ],
+      ),
+    );
+    return proceed == true;
+  }
+
+  /// "Duplicate": a new trip in the same country with the same places (its
+  /// days keep the original's layout). The user picks whether the copy
+  /// starts on a date or stays undated for now. The copies count against
+  /// the free-place allowance like any other add.
+  Future<void> _duplicateTripFromCard(Trip trip) async {
+    final all = ref.read(savedLocationsProvider).valueOrNull;
+    if (all == null) {
+      AppToast.info(context, 'Still loading your places — try again.');
+      return;
+    }
+    final tripLocs = all.where((l) => l.tripId == trip.id).toList();
+
+    // Dates for the copy: a start date now, or "no dates yet".
+    final choice = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text('Duplicate "${trip.name}"'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.event_available_rounded),
+              title: const Text('Pick a start date'),
+              subtitle: const Text(
+                  'Every day keeps its plan, starting on the day you pick.'),
+              onTap: () => Navigator.of(ctx).pop('date'),
+            ),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.event_note_rounded),
+              title: const Text('No dates yet'),
+              subtitle:
+                  const Text('Plan by day number and set the dates later.'),
+              onTap: () => Navigator.of(ctx).pop('tbd'),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancel'),
+          ),
+        ],
+      ),
+    );
+    if (choice == null || !mounted) return;
+    DateTime? startDate;
+    if (choice == 'date') {
+      final now = DateTime.now();
+      final today = DateTime(now.year, now.month, now.day);
+      startDate = await showDatePicker(
+        context: context,
+        initialDate: today,
+        firstDate: today,
+        lastDate: DateTime(today.year + 5),
+        helpText: 'First day of the new trip',
+      );
+      if (startDate == null || !mounted) return;
+    }
+
+    final allowed = await SubscriptionLimitService(ref)
+        .canAddPlaces(context, tripLocs.length);
+    if (!mounted) return;
+    if (allowed < tripLocs.length) {
+      AppToast.info(
+          context,
+          'Duplicating needs ${tripLocs.length} free '
+          '${tripLocs.length == 1 ? 'place' : 'places'} — '
+          'you have $allowed left.');
+      return;
+    }
+    final names = ref.read(userTripsProvider).valueOrNull?.map((t) => t.name) ??
+        const <String>[];
+    final newName = TripDatesService.copyName(trip.name, names);
+    try {
+      final copy = await TripDatesService.duplicateTrip(
+        ref,
+        trip,
+        tripLocs,
+        newName: newName,
+        startDate: startDate,
+      );
+      if (!mounted) return;
+      final fmt = DateFormat('MMM d');
+      AppToast.success(
+          context,
+          copy.isUndated
+              ? 'Duplicated as "$newName" — set its dates whenever you\'re '
+                  'ready.'
+              : 'Duplicated as "$newName" — ${fmt.format(copy.startDate!)} '
+                  'to ${fmt.format(copy.endDate!)}');
+      Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => TripDetailsScreen(trip: copy)),
+      );
+    } catch (e) {
+      debugPrint('_duplicateTripFromCard: $e');
+      if (mounted) {
+        AppToast.error(context, 'Couldn\'t duplicate the trip — try again.');
+      }
+    }
+  }
+
   /// preserved, the start can't be in the past, and every planned place
   /// shifts with it — same day-by-day grouping, same order.
   Future<void> _rescheduleTripFromCard(Trip trip) async {
@@ -3280,8 +3618,12 @@ class _TripScreenState extends ConsumerState<TripScreen> {
         clearCountryCode: clearCountry,
         startDate: clearDates ? null : newStartDate,
         endDate: clearDates ? null : newEndDate,
-        clearDates: clearDates,
       );
+      // "Clear dates" = switch the trip to No Date: the plan keeps its
+      // days as Day 1 … N (never a trip with a hole where its dates were).
+      if (clearDates && !trip.isUndated) {
+        await TripDatesService.clearDates(ref, trip);
+      }
 
       ref.invalidate(userTripsProvider);
 
@@ -3513,7 +3855,15 @@ class _EditTripDialog extends StatefulWidget {
   final Trip trip;
   final _EditTripSaveCallback onSave;
 
-  const _EditTripDialog({required this.trip, required this.onSave});
+  /// True once the trip has ended: its dates are history and can't be
+  /// changed here (places can still be added to those days).
+  final bool datesLocked;
+
+  const _EditTripDialog({
+    required this.trip,
+    required this.onSave,
+    this.datesLocked = false,
+  });
 
   @override
   State<_EditTripDialog> createState() => _EditTripDialogState();
@@ -3566,6 +3916,7 @@ class _EditTripDialogState extends State<_EditTripDialog> {
   }
 
   Future<void> _pickDateRange() async {
+    if (widget.datesLocked || widget.trip.isUndated) return;
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
     final initialRange = (_startDate != null && _endDate != null)
@@ -3701,37 +4052,52 @@ class _EditTripDialogState extends State<_EditTripDialog> {
   Widget _buildDateRangeField(ThemeData theme) {
     final hasRange = _startDate != null && _endDate != null;
     final fmt = DateFormat('MMM d, y');
+    final locked = widget.datesLocked;
+    final undated = widget.trip.isUndated;
+    final String text;
+    if (undated) {
+      text = 'No dates yet — use "Set dates" in the trip menu';
+    } else if (_clearedDates) {
+      text = 'No dates — the days become Day 1, Day 2, …';
+    } else if (hasRange) {
+      text = '${fmt.format(_startDate!)} - ${fmt.format(_endDate!)}';
+    } else {
+      text = 'Add a date range';
+    }
     return InkWell(
-      onTap: _pickDateRange,
+      onTap: locked || undated ? null : _pickDateRange,
       borderRadius: BorderRadius.circular(8),
       child: InputDecorator(
         decoration: InputDecoration(
           labelText: 'Trip Dates',
           hintText: 'Optional — pick start and end dates',
+          helperText: locked
+              ? 'This trip has ended — its dates can\'t be changed.'
+              : null,
           border: OutlineInputBorder(
             borderRadius: BorderRadius.circular(8),
           ),
-          suffixIcon: !hasRange
-              ? const Icon(Icons.calendar_today_outlined)
-              : IconButton(
-                  icon: const Icon(Icons.clear, size: 20),
-                  tooltip: 'Clear dates',
-                  onPressed: () => setState(() {
-                    _startDate = null;
-                    _endDate = null;
-                    _clearedDates = true;
-                  }),
-                ),
+          suffixIcon: locked
+              ? const Icon(Icons.lock_outline_rounded)
+              : !hasRange || undated
+                  ? const Icon(Icons.calendar_today_outlined)
+                  : IconButton(
+                      icon: const Icon(Icons.clear, size: 20),
+                      tooltip: 'Switch to No Date',
+                      onPressed: () => setState(() {
+                        _startDate = null;
+                        _endDate = null;
+                        _clearedDates = true;
+                      }),
+                    ),
         ),
         child: Row(
           children: [
             Expanded(
               child: Text(
-                hasRange
-                    ? '${fmt.format(_startDate!)} - ${fmt.format(_endDate!)}'
-                    : 'Add a date range',
+                text,
                 style: theme.textTheme.bodyLarge?.copyWith(
-                  color: hasRange ? null : theme.hintColor,
+                  color: hasRange && !undated ? null : theme.hintColor,
                 ),
                 overflow: TextOverflow.ellipsis,
               ),

@@ -54,6 +54,12 @@ class _CreateTripWizardState extends ConsumerState<CreateTripWizard> {
   String? _countryCode;
   String? _countryName;
   DateTimeRange? _dates;
+
+  /// "I don't know the dates yet": the trip is created on the day anchor
+  /// with [_tbdDays] numbered days; real dates come later from the trip
+  /// menu (see Trip.datesTbd).
+  bool _datesTbd = false;
+  int _tbdDays = 3;
   final _nameController = TextEditingController();
   final _buddyController = TextEditingController();
 
@@ -95,7 +101,7 @@ class _CreateTripWizardState extends ConsumerState<CreateTripWizard> {
   bool get _nextEnabled {
     switch (_step) {
       case 1:
-        return _dates != null;
+        return _dates != null || _datesTbd;
       case 2:
         return _nameController.text.trim().isNotEmpty;
       default:
@@ -141,7 +147,10 @@ class _CreateTripWizardState extends ConsumerState<CreateTripWizard> {
       lastDate: DateTime(today.year + 5),
     );
     if (picked == null) return;
-    setState(() => _dates = picked);
+    setState(() {
+      _dates = picked;
+      _datesTbd = false;
+    });
   }
 
   Future<void> _addBuddy() async {
@@ -196,7 +205,7 @@ class _CreateTripWizardState extends ConsumerState<CreateTripWizard> {
     if (_creating) return;
     final name = _nameController.text.trim();
     final dates = _dates;
-    if (name.isEmpty || dates == null) return;
+    if (name.isEmpty || (dates == null && !_datesTbd)) return;
     // Guests get the device's stable anonymous id — same convention as
     // SavedLocation rows, re-stamped with the real uid at sync time.
     final userId =
@@ -229,8 +238,11 @@ class _CreateTripWizardState extends ConsumerState<CreateTripWizard> {
             name: name,
             description: null,
             countryCode: _countryCode,
-            startDate: dates.start,
-            endDate: dates.end,
+            startDate: _datesTbd ? tripDatesTbdAnchor : dates!.start,
+            endDate: _datesTbd
+                ? shiftTripDay(tripDatesTbdAnchor, _tbdDays - 1)
+                : dates!.end,
+            datesTbd: _datesTbd,
           );
       ref.invalidate(userTripsProvider);
       AnalyticsService.instance.tripCreated();
@@ -578,11 +590,13 @@ class _CreateTripWizardState extends ConsumerState<CreateTripWizard> {
 
   Widget _buildDatesStep(ThemeData theme) {
     final dates = _dates;
-    final label = dates == null
-        ? 'Select your dates'
-        : '${DateFormat('MMM d').format(dates.start)} – '
-            '${DateFormat('MMM d, yyyy').format(dates.end)} '
-            '(${daySpanDays(dates.start, dates.end) + 1} days)';
+    final label = _datesTbd
+        ? 'No dates yet · $_tbdDays ${_tbdDays == 1 ? 'day' : 'days'}'
+        : dates == null
+            ? 'Select your dates'
+            : '${DateFormat('MMM d').format(dates.start)} – '
+                '${DateFormat('MMM d, yyyy').format(dates.end)} '
+                '(${daySpanDays(dates.start, dates.end) + 1} days)';
     return _stepScaffold(
       theme,
       header: _buildStepHeader(
@@ -591,17 +605,93 @@ class _CreateTripWizardState extends ConsumerState<CreateTripWizard> {
         label: 'When is the trip?',
         caption: 'Choose your travel dates — every day gets its own plan.',
       ),
-      control: _pickerTile(
-        theme,
-        icon: Icons.date_range_rounded,
-        text: label,
-        filled: dates != null,
-        onTap: _pickDates,
+      control: Column(
+        children: [
+          _pickerTile(
+            theme,
+            icon: Icons.date_range_rounded,
+            text: label,
+            filled: dates != null || _datesTbd,
+            onTap: _pickDates,
+          ),
+          const SizedBox(height: 12),
+          _buildNoDatesToggle(theme),
+        ],
       ),
       footnote: Text(
-        'Don\'t worry — you can change the dates later.',
+        _datesTbd
+            ? 'Plan by day number now; set the dates later from the trip '
+                'menu and every day keeps its plan.'
+            : 'Don\'t worry — you can change the dates later.',
         style: theme.textTheme.bodySmall
             ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+      ),
+    );
+  }
+
+  /// "I don't know the dates yet" — the trip gets numbered days (Day 1,
+  /// Day 2, …) and a day-count stepper instead of a date range.
+  Widget _buildNoDatesToggle(ThemeData theme) {
+    final primary = theme.colorScheme.primary;
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color:
+              _datesTbd ? primary : theme.dividerColor.withValues(alpha: 0.5),
+          width: _datesTbd ? 1.4 : 1,
+        ),
+      ),
+      child: Column(
+        children: [
+          SwitchListTile.adaptive(
+            value: _datesTbd,
+            onChanged: (v) => setState(() => _datesTbd = v),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            title: Text(
+              'I don\'t know the dates yet',
+              style: theme.textTheme.bodyLarge
+                  ?.copyWith(fontWeight: FontWeight.w600),
+            ),
+            subtitle: Text(
+              'Plan by day number and set the dates later.',
+              style: theme.textTheme.bodySmall
+                  ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+            ),
+          ),
+          if (_datesTbd)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 8, 8),
+              child: Row(
+                children: [
+                  Text('How many days?', style: theme.textTheme.bodyMedium),
+                  const Spacer(),
+                  IconButton(
+                    tooltip: 'One day fewer',
+                    onPressed:
+                        _tbdDays > 1 ? () => setState(() => _tbdDays--) : null,
+                    icon: const Icon(Icons.remove_circle_outline_rounded),
+                  ),
+                  SizedBox(
+                    width: 28,
+                    child: Text(
+                      '$_tbdDays',
+                      textAlign: TextAlign.center,
+                      style: theme.textTheme.titleMedium
+                          ?.copyWith(fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: 'One day more',
+                    onPressed:
+                        _tbdDays < 60 ? () => setState(() => _tbdDays++) : null,
+                    icon: const Icon(Icons.add_circle_outline_rounded),
+                  ),
+                ],
+              ),
+            ),
+        ],
       ),
     );
   }

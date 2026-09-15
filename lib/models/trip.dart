@@ -1,3 +1,5 @@
+import '../utils/trip_dates.dart';
+
 class Trip {
   final String id;
   final String userId;
@@ -26,6 +28,21 @@ class Trip {
   /// owner's app. See TripRolloverService. Off by default.
   final bool autoRollUnvisited;
 
+  /// True while the trip has no real dates yet. Its days are "Day 1, Day 2,
+  /// …": [startDate] sits on [tripDatesTbdAnchor] (2100-01-01), [endDate]
+  /// on anchor + days - 1, and every stop's scheduled day on anchor + N - 1,
+  /// so all the date-keyed machinery works unchanged. Surfaces print day
+  /// numbers instead of dates and hide weekday-dependent hints. Setting the
+  /// real start date shifts the whole plan (set_trip_dates on the server)
+  /// and clears this.
+  final bool datesTbd;
+
+  /// The undated test every surface uses: the flag, OR a start on the
+  /// reserved anchor year — so a trip saved while the server lacked the
+  /// `dates_tbd` column still reads "Day 1, Day 2…" instead of 2100.
+  bool get isUndated =>
+      datesTbd || (startDate != null && isOnTbdAnchor(startDate!));
+
   final DateTime createdAt;
   final DateTime updatedAt;
 
@@ -45,6 +62,7 @@ class Trip {
     this.shareCode,
     this.copyCount = 0,
     this.autoRollUnvisited = false,
+    this.datesTbd = false,
     required this.createdAt,
     required this.updatedAt,
   });
@@ -70,6 +88,7 @@ class Trip {
       shareCode: json['share_code'] as String?,
       copyCount: json['copy_count'] as int? ?? 0,
       autoRollUnvisited: json['auto_roll_unvisited'] as bool? ?? false,
+      datesTbd: json['dates_tbd'] as bool? ?? false,
       createdAt: DateTime.parse(json['created_at'] as String),
       updatedAt: DateTime.parse(json['updated_at'] as String),
     );
@@ -92,6 +111,7 @@ class Trip {
       'share_code': shareCode,
       'copy_count': copyCount,
       'auto_roll_unvisited': autoRollUnvisited,
+      'dates_tbd': datesTbd,
       'created_at': createdAt.toIso8601String(),
       'updated_at': updatedAt.toIso8601String(),
     };
@@ -105,6 +125,7 @@ class Trip {
     DateTime? startDate,
     DateTime? endDate,
     String? countryCode,
+    bool datesTbd = false,
   }) {
     final now = DateTime.now();
     return Trip(
@@ -119,6 +140,7 @@ class Trip {
       totalDistance: 0,
       totalDurationMinutes: 0,
       countryCode: countryCode,
+      datesTbd: datesTbd,
       createdAt: now,
       updatedAt: now,
     );
@@ -141,6 +163,7 @@ class Trip {
     String? shareCode,
     int? copyCount,
     bool? autoRollUnvisited,
+    bool? datesTbd,
     DateTime? createdAt,
     DateTime? updatedAt,
   }) {
@@ -160,6 +183,7 @@ class Trip {
       shareCode: shareCode ?? this.shareCode,
       copyCount: copyCount ?? this.copyCount,
       autoRollUnvisited: autoRollUnvisited ?? this.autoRollUnvisited,
+      datesTbd: datesTbd ?? this.datesTbd,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
     );

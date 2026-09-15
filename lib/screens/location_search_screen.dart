@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:google_maps_url_extractor/google_maps_url_extractor.dart';
-import 'package:intl/intl.dart';
 import 'package:uuid/uuid.dart';
 import 'package:voyza/core/theme.dart';
 import 'package:voyza/models/location_model.dart';
@@ -21,6 +20,7 @@ import 'package:voyza/widgets/app_toast.dart';
 import 'package:voyza/widgets/google_maps_url_dialog.dart';
 import 'package:voyza/widgets/rotating_globe_background.dart';
 import 'package:voyza/widgets/search_widget.dart' show searchQueryProvider;
+import '../providers/trip_day_labeler_provider.dart';
 
 /// Full-screen replacement for the inline search-bar focus flow. Pushed
 /// from the map screen via [Navigator.push] when the user taps the fake
@@ -86,7 +86,7 @@ class _LocationSearchScreenState extends ConsumerState<LocationSearchScreen> {
   }
 
   String _selectedDayLabel() =>
-      DateFormat('MMM d').format(ref.read(selectedDateProvider));
+      ref.read(activeTripDayLabelerProvider)(ref.read(selectedDateProvider));
 
   /// Reset the screen back to its "ready for the next search" state after
   /// a successful add or a duplicate hit. The user stays on the screen
@@ -200,12 +200,6 @@ class _LocationSearchScreenState extends ConsumerState<LocationSearchScreen> {
     }
 
     final selectedDate = ref.read(selectedDateProvider);
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    if (selectedDate.isBefore(today)) {
-      AppToast.warning(context, 'Cannot add locations to a past date.');
-      return;
-    }
 
     // Cheap duplicate check using the prediction's place_id — saves the
     // round-trip cost of Place Details when the pick is already on the
@@ -353,14 +347,6 @@ class _LocationSearchScreenState extends ConsumerState<LocationSearchScreen> {
       }
 
       final selectedDate = ref.read(selectedDateProvider);
-      final now = DateTime.now();
-      final today = DateTime(now.year, now.month, now.day);
-      if (selectedDate.isBefore(today)) {
-        if (mounted) {
-          AppToast.warning(context, 'Cannot add locations to a past date.');
-        }
-        return;
-      }
 
       // Reject the paste if the decoded place is already on the selected
       // day — mirrors the tap-to-add path so both entry points behave the

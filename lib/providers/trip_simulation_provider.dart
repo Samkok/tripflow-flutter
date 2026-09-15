@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../services/timing_simulation.dart';
 import 'map_ui_state_provider.dart';
 import 'trip_provider.dart';
+import 'trip_day_labeler_provider.dart';
 
 /// User-supplied "Start at" time for the optimized plan. `null` means
 /// "use the computed default for the selected date" — see
@@ -58,6 +59,9 @@ final tripSimulationProvider = Provider<TimingSimulationResult?>((ref) {
   final selectedDay =
       DateTime(selectedDate.year, selectedDate.month, selectedDate.day);
   if (selectedDay.isBefore(today)) return null;
+
+  // No dates yet → no weekday → opening-hours warnings would be guesses.
+  if (ref.watch(activeTripDayLabelerProvider).tbd) return null;
 
   // Point-to-point previews ("route from A to B") aren't a plan for the
   // day — timing warnings there are noise, so no simulation runs at all.

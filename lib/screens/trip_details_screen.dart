@@ -42,6 +42,9 @@ import 'package:voyza/widgets/accommodation_prompts.dart';
 import 'package:voyza/utils/same_day_place_guard.dart';
 import 'package:voyza/utils/search_text.dart';
 import 'package:voyza/utils/trip_dates.dart';
+import 'package:voyza/utils/trip_day_labels.dart';
+import 'package:voyza/widgets/trip_day_picker.dart';
+import 'package:voyza/services/trip_dates_service.dart';
 import 'package:voyza/services/trip_day_service.dart';
 import 'package:voyza/services/trip_rollover_service.dart';
 import 'package:voyza/widgets/static_glow.dart';
@@ -807,12 +810,99 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
   /// the same calendar day compare equal.
   DateTime _dayKey(DateTime d) => DateTime(d.year, d.month, d.day);
 
-  /// True when [day] is a calendar day strictly before today. Used to lock
-  /// out the per-date "add a place" affordances for dates that have already
-  /// passed (mirrors the search screen's guard and the detail sheet's
-  /// past-date edit lockout).
+  /// True when [day] is a calendar day strictly before today. Drives the
+  /// past tense of folded day summaries only — places CAN be added to past
+  /// days (logging where you actually went), so this no longer gates the
+  /// add affordances.
   bool _isPastDay(DateTime day) =>
       _dayKey(day).isBefore(_dayKey(DateTime.now()));
+
+  /// Day labels for this trip: "Day N" while it has no dates yet.
+  DayLabeler get _labeler => DayLabeler.forTrip(_trip);
+
+  /// True once the trip's last day has passed. An ended trip keeps its
+  /// dates: no rescheduling, no adding or removing days — but places can
+  /// still be added to the days it had.
+  bool get _tripEnded {
+    final last = _trip.endDate ?? _trip.startDate;
+    return last != null && _dayKey(last).isBefore(_dayKey(DateTime.now()));
+  }
+
+  /// "No Date" on a dated trip (owner): the dates come off, the days stay
+  /// as Day 1 … N with every place in place.
+  Future<void> _clearTripDates() async {
+    final trip = _trip;
+    final start = trip.startDate;
+    final end = trip.endDate ?? start;
+    final days = start == null || end == null
+        ? null
+        : daySpanDays(dayKey(start), dayKey(end)) + 1;
+    final proceed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Switch to No Date?'),
+        content: Text(
+          'The dates come off "${trip.name}". '
+          '${days == null ? 'Its days' : 'Its $days ${days == 1 ? 'day stays' : 'days stay'}'} '
+          'as Day 1${days == null || days == 1 ? '' : ' – Day $days'} with '
+          'every place where it is, and you can set new dates any time.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Switch'),
+          ),
+        ],
+      ),
+    );
+    if (proceed != true || !mounted) return;
+    try {
+      final updated = await TripDatesService.clearDates(ref, trip);
+      if (!mounted) return;
+      setState(() => _tripOverride = updated);
+      AppToast.success(context, '"${trip.name}" has no dates now');
+    } catch (e) {
+      debugPrint('_clearTripDates: $e');
+      if (mounted) {
+        AppToast.error(context, 'Couldn\'t remove the dates — try again.');
+      }
+    }
+  }
+
+  /// "Set dates" on a trip planned without them (owner): Day 1 lands on
+  /// the picked day and every place keeps its day number.
+  Future<void> _setTripDates() async {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: today,
+      firstDate: today,
+      lastDate: DateTime(today.year + 5),
+      helpText: 'First day of the trip',
+    );
+    if (picked == null || !mounted) return;
+    try {
+      final updated = await TripDatesService.setStartDate(ref, _trip, picked);
+      if (!mounted) return;
+      setState(() => _tripOverride = updated);
+      final fmt = DateFormat('MMM d');
+      AppToast.success(
+          context,
+          'Dates set — ${fmt.format(updated.startDate!)} to '
+          '${fmt.format(updated.endDate!)}');
+    } catch (e) {
+      debugPrint('_setTripDates: $e');
+      if (mounted) {
+        AppToast.error(context, 'Couldn\'t set the dates — try again.');
+      }
+    }
+  }
 
   bool _busyRollover = false;
 
@@ -1001,7 +1091,9 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
                   : section;
             },
             childCount: allDates.length +
-                ((hasWriteAccess && _searchQuery.isEmpty) ? 1 : 0),
+                ((hasWriteAccess && _searchQuery.isEmpty && !_tripEnded)
+                    ? 1
+                    : 0),
           ),
         ),
         // Bottom padding sized to clear the two stacked extended FABs
@@ -1244,17 +1336,26 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
             ),
             if (_trip.startDate != null && _trip.endDate != null) ...[
               const SizedBox(height: 10),
-              Builder(builder: (context) {
+              Consumer(builder: (context, ref, _) {
                 final s = dayKey(_trip.startDate!);
                 final e = dayKey(_trip.endDate!);
                 final dayCount = daySpanDays(s, e) + 1;
-                final dateText = s == e
-                    ? DateFormat('MMM d, y').format(s)
-                    : '${DateFormat('MMM d').format(s)} - ${DateFormat('MMM d, y').format(e)}';
+                final undated = _trip.isUndated;
+                final dateText = undated
+                    ? 'No dates yet'
+                    : s == e
+                        ? DateFormat('MMM d, y').format(s)
+                        : '${DateFormat('MMM d').format(s)} - ${DateFormat('MMM d, y').format(e)}';
+                final isOwner = ref
+                        .watch(isTripOwnerProvider(widget.trip.id))
+                        .valueOrNull ??
+                    false;
                 return Row(
                   children: [
                     Icon(
-                      Icons.calendar_today_rounded,
+                      undated
+                          ? Icons.event_note_rounded
+                          : Icons.calendar_today_rounded,
                       size: 14,
                       color: Theme.of(context).colorScheme.primary,
                     ),
@@ -1270,12 +1371,43 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
                         overflow: TextOverflow.ellipsis,
                       ),
                     ),
+                    // Owner: give an undated trip dates (Day 1 lands on the
+                    // picked day), or take a dated trip's dates off (its
+                    // days stay as Day 1 … N). An ended trip keeps its
+                    // dates.
+                    if (isOwner && undated)
+                      TextButton.icon(
+                        onPressed: _setTripDates,
+                        style: TextButton.styleFrom(
+                          visualDensity: VisualDensity.compact,
+                          padding: const EdgeInsets.symmetric(horizontal: 8),
+                          minimumSize: const Size(0, 30),
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        ),
+                        icon:
+                            const Icon(Icons.event_available_rounded, size: 16),
+                        label: const Text('Set dates'),
+                      )
+                    else if (isOwner && !_tripEnded)
+                      TextButton.icon(
+                        onPressed: _clearTripDates,
+                        style: TextButton.styleFrom(
+                          visualDensity: VisualDensity.compact,
+                          padding: const EdgeInsets.symmetric(horizontal: 8),
+                          minimumSize: const Size(0, 30),
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        ),
+                        icon: const Icon(Icons.event_busy_rounded, size: 16),
+                        label: const Text('No Date'),
+                      ),
                   ],
                 );
               }),
             ],
             // ── Carry unvisited places forward (owner, dated trips only) ──
-            if (_trip.startDate != null && _trip.endDate != null)
+            if (_trip.startDate != null &&
+                _trip.endDate != null &&
+                !_trip.isUndated)
               Consumer(builder: (context, ref, _) {
                 final isOwner = ref
                         .watch(isTripOwnerProvider(widget.trip.id))
@@ -1504,7 +1636,9 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
                       Icon(Icons.add_rounded, size: 20, color: primary),
                       const SizedBox(width: 8),
                       Text(
-                        'Add a day (${DateFormat('MMM d').format(newDay)})',
+                        _labeler.tbd
+                            ? 'Add ${_labeler(newDay)}'
+                            : 'Add a day (${DateFormat('MMM d').format(newDay)})',
                         style: theme.textTheme.labelLarge?.copyWith(
                           color: primary,
                           fontWeight: FontWeight.w700,
@@ -1757,15 +1891,30 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
       for (final l in tripRows)
         if (l.scheduledDate != null) _dayKey(l.scheduledDate!)
     };
-    final picked = await DatePickerUtils.showCustomDatePicker(
-      context: context,
-      initialDate: _trip.startDate != null && !_trip.startDate!.isBefore(today)
-          ? _trip.startDate!
-          : today,
-      firstDate: today,
-      lastDate: DateTime(now.year + 5),
-      highlightedDates: highlighted,
-    );
+    final DateTime? picked;
+    if (_labeler.tbd) {
+      picked = await showTripDayPicker(
+        context,
+        days: _buildAllDates(tripRows.toList()),
+        labeler: _labeler,
+        marked: highlighted,
+        title: 'Schedule on which day?',
+      );
+    } else {
+      // Past days of the trip are pickable too (logging where you went).
+      final tripStart = _trip.startDate;
+      final earliest = tripStart != null && tripStart.isBefore(today)
+          ? _dayKey(tripStart)
+          : today;
+      picked = await DatePickerUtils.showCustomDatePicker(
+        context: context,
+        initialDate:
+            tripStart != null && !tripStart.isBefore(today) ? tripStart : today,
+        firstDate: earliest,
+        lastDate: DateTime(now.year + 5),
+        highlightedDates: highlighted,
+      );
+    }
     if (picked == null || !mounted) return;
     final day = _dayKey(picked);
 
@@ -1780,8 +1929,8 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
     );
     final allowed = rows.where((r) => dup.allowedIds.contains(r.id)).toList();
     if (allowed.isEmpty) {
-      AppToast.warning(context,
-          'All of these are already on ${DateFormat('MMM d').format(day)}.');
+      AppToast.warning(
+          context, 'All of these are already on ${_labeler(day)}.');
       return;
     }
     try {
@@ -1797,7 +1946,7 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
       AppToast.success(
         context,
         '${allowed.length} ${allowed.length == 1 ? 'place' : 'places'} '
-        'scheduled on ${DateFormat('MMM d').format(day)}'
+        'scheduled on ${_labeler(day)}'
         '${skipped > 0 ? ' · $skipped already there, skipped' : ''}.',
         duration: const Duration(seconds: 4),
       );
@@ -1840,11 +1989,13 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
     required bool hasWriteAccess,
     bool tripOngoing = false,
   }) {
-    final dateLabel = DateFormat('MMMM dd, yyyy').format(day);
+    final labeler = _labeler;
+    final dateLabel =
+        labeler.tbd ? labeler(day) : DateFormat('MMMM dd, yyyy').format(day);
     final theme = Theme.of(context);
-    // A place can only be added to today or a future day. Past days stay
-    // read-only for adding (existing cards can still be dragged around).
-    final canAddHere = hasWriteAccess && !_isPastDay(day);
+    // Adding is allowed on any day, past ones included — the folded
+    // summary just switches to the past tense.
+    final canAddHere = hasWriteAccess;
 
     // Every day folds from its header (chevron on the date chip). On an
     // ONGOING trip every day but today starts folded, so the page opens on
@@ -1852,7 +2003,7 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
     // search shows everything — a hit inside a folded day would otherwise
     // look like a miss.
     final isPast = _isPastDay(day);
-    final isToday = _dayKey(day) == _dayKey(DateTime.now());
+    final isToday = labeler.isToday(day);
     final foldable = _searchQuery.isEmpty;
     final foldedByDefault = tripOngoing && !isToday;
     // Today's header is green; every other day keeps the primary tint.
@@ -2058,8 +2209,7 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
                           ),
                         // Per-day quick-add: adds a place already scheduled
                         // to THIS day, so empty gap days can be filled
-                        // directly. Hidden on past days — you can't
-                        // schedule into the past.
+                        // directly (past days too).
                         if (canAddHere)
                           IconButton(
                             onPressed: () => _showAddLocationForDate(day),
@@ -2366,8 +2516,8 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
             .map(placeKeyOfSaved),
       );
       if (dup.allowedIds.isEmpty) {
-        AppToast.warning(context,
-            '"${location.name}" is already on ${DateFormat('MMM d').format(dayKey)}');
+        AppToast.warning(
+            context, '"${location.name}" is already on ${_labeler(dayKey)}');
         return;
       }
       final dayWasEmpty = !ref
@@ -2392,7 +2542,7 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
       if (!mounted) return;
       AppToast.success(
         context,
-        'Moved ${location.name} to ${DateFormat('MMM d').format(newDay)}',
+        'Moved ${location.name} to ${_labeler(newDay)}',
       );
       if (dayWasEmpty && mounted) {
         await maybePromptAccommodationForNewDays(
@@ -2525,8 +2675,8 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
                           Padding(
                             padding: const EdgeInsets.only(bottom: 2),
                             child: Text(
-                              '${DateFormat('MMM d').format(location.scheduledDate!)} → '
-                              '${DateFormat('MMM d').format(location.scheduledEndDate!)}',
+                              '${_labeler(location.scheduledDate!)} → '
+                              '${_labeler(location.scheduledEndDate!)}',
                               style: Theme.of(context)
                                   .textTheme
                                   .labelSmall
@@ -3192,24 +3342,6 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
 
   /// Backstop for the per-date add flow. The sheet can carry a preselected
   /// [scheduledDate] (from a day slot's add button); refuse to schedule a new
-  /// place onto a day before today — covering the edge where the day was
-  /// valid at render time but has since rolled into the past, or any future
-  /// code path that reaches these add methods without the UI gate. Mirrors
-  /// the search screen's guard. Returns true (and warns) when the add must
-  /// be refused.
-  bool _blockIfScheduledDateInPast() {
-    final d = widget.scheduledDate;
-    if (d == null) return false;
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    if (DateTime(d.year, d.month, d.day).isBefore(today)) {
-      if (mounted) {
-        AppToast.warning(context, 'Cannot add locations to a past date.');
-      }
-      return true;
-    }
-    return false;
-  }
 
   /// The day a place added through this sheet lands on.
   ///
@@ -3225,6 +3357,10 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
     if (explicit != null) return explicit;
     final now = DateTime.now();
     final start = widget.trip.startDate;
+    // No dates yet: "today" means nothing on a numbered trip — Day 1.
+    if (widget.trip.isUndated && start != null) {
+      return DateTime(start.year, start.month, start.day);
+    }
     if (start != null) {
       final today = DateTime(now.year, now.month, now.day);
       final startDay = DateTime(start.year, start.month, start.day);
@@ -3235,7 +3371,6 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
 
   Future<void> _processGoogleMapsUrl(String text) async {
     if (_isPastingUrl || _isAddingPlace) return;
-    if (_blockIfScheduledDateInPast()) return;
 
     if (!GoogleMapsUrlExtractor.isValidGoogleMapsUrl(text)) {
       if (mounted) {
@@ -3370,7 +3505,6 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
     // Defensive — overlay should block a second tap, but guard the
     // race during its mount frame.
     if (_isAddingPlace || _isPastingUrl) return;
-    if (_blockIfScheduledDateInPast()) return;
 
     // Permission check at function level
     final hasWriteAccess =

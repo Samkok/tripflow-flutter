@@ -13,6 +13,7 @@ import '../services/marker_cache_service.dart';
 import '../utils/marker_utils.dart';
 import '../utils/polyline_simplify.dart';
 import '../utils/trip_dates.dart';
+import 'trip_day_labeler_provider.dart';
 
 /// "All days" mode for the map: instead of showing the selected date's route,
 /// the map overlays every day of the active trip at once — one route per day,
@@ -302,11 +303,14 @@ final allDaysMarkersProvider = FutureProvider<Set<Marker>>((ref) async {
     Color color,
     String dayLabel,
   })>[];
+  final undated = ref.watch(activeTripDayLabelerProvider).tbd;
   for (final entry in stopsByDay.entries) {
     final day = entry.key;
     final color = colors[day] ?? kDayRouteColors.first;
     final dayIndex = axis.indexOf(day) + 1;
-    final dayLabel = 'Day $dayIndex · ${DateFormat('MMM d').format(day)}';
+    final dayLabel = undated
+        ? 'Day $dayIndex'
+        : 'Day $dayIndex · ${DateFormat('MMM d').format(day)}';
     // Done stops render with the done treatment (marker number -2, matching
     // the single-day map) and don't consume a sequence number, so the
     // remaining stops still read 1..n.
@@ -327,7 +331,7 @@ final allDaysMarkersProvider = FutureProvider<Set<Marker>>((ref) async {
     // Amber + caution line when Google lists no hours for that weekday —
     // a "might", never a verdict (Places hours are often stale).
     final mightBeClosed =
-        !spec.loc.isDone && spec.loc.mightBeClosedOn(spec.day);
+        !undated && !spec.loc.isDone && spec.loc.mightBeClosedOn(spec.day);
     return markerCache.getNumberedMarker(
       isStart: false,
       number: spec.number,

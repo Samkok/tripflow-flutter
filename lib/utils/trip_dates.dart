@@ -72,3 +72,49 @@ DateTime? shiftedSpanEnd({
   final ns = dayKey(newStart);
   return DateTime(ns.year, ns.month, ns.day + span);
 }
+
+// ── Trips without dates yet ─────────────────────────────────────────────
+//
+// A trip can be planned before its dates are known. Nothing date-keyed
+// changes for that: the trip just sits on a far-future anchor — Day 1 is
+// [tripDatesTbdAnchor], Day N is anchor + (N - 1) — and `Trip.datesTbd`
+// tells every surface to print "Day N" instead of a calendar date and to
+// hide weekday-dependent hints. Setting the real start date is one shift
+// of the whole plan (server: set_trip_dates(); guests: [shiftTripDay]).
+// The anchor is far in the future so no undated plan is ever "past" or
+// due (rollover, past-trip locks).
+
+/// Day 1 of every trip whose dates are still to be decided.
+final DateTime tripDatesTbdAnchor = DateTime(2100, 1, 1);
+
+/// True once [last] (a trip's last day) is a calendar day before today —
+/// the trip has ended. An ended trip keeps its dates: no rescheduling, no
+/// adding or removing days, no extending it to fit a new place; places
+/// can still be added to the days it had.
+bool tripHasEnded(DateTime? last, {DateTime? today}) {
+  if (last == null) return false;
+  final t = dayKey(today ?? DateTime.now());
+  return dayKey(last).isBefore(t);
+}
+
+/// True when [day] sits on the undated-trip anchor year — for surfaces
+/// that only have a date in hand (auto-plan cards, the copy preview) and
+/// no trip flag. The anchor year is reserved for numbered days.
+bool isOnTbdAnchor(DateTime day) => day.year >= tripDatesTbdAnchor.year;
+
+/// 1-based day number of [date] within a trip whose Day 1 is [start]
+/// (both taken as calendar days; DST-safe).
+int tripDayNumber(DateTime start, DateTime date) =>
+    daySpanDays(dayKey(start), dayKey(date)) + 1;
+
+/// "Day 3" — the label undated trips use where dated ones show a date.
+String tripDayLabel(DateTime start, DateTime date) =>
+    'Day ${tripDayNumber(start, date)}';
+
+/// Calendar day [days] after [day], landing on local midnight regardless
+/// of DST (a fixed 24h Duration would drift across a transition). Negative
+/// [days] moves earlier.
+DateTime shiftTripDay(DateTime day, int days) {
+  final k = dayKey(day);
+  return DateTime(k.year, k.month, k.day + days);
+}

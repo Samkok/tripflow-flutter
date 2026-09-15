@@ -9,6 +9,7 @@ import '../services/supabase_service.dart';
 import '../services/anonymous_user_service.dart';
 import '../utils/fingerprint_utils.dart';
 import '../utils/postgrest_errors.dart';
+import '../utils/trip_dates.dart';
 
 class SyncResult {
   int uploadedCount = 0;
@@ -220,6 +221,74 @@ class LocationRepository {
     if (user != null) {
       await syncLocation(newLocation);
     }
+  }
+
+  /// Adds many rows at once (trip duplication): the same owner/fingerprint
+  /// stamping as [addLocation], ONE Hive putAll, then chunked upserts when
+  /// signed in. A chunk that fails stays dirty for the next sync pass.
+  Future<void> addLocationsBatch(List<SavedLocation> locations) async {
+    if (locations.isEmpty) return;
+    await _ensureInitialized();
+    final user = _supabase.auth.currentUser;
+    final userId = user?.id ?? await AnonymousUserService.id;
+    final source = user != null ? 'synced' : 'local';
+
+    final rows = <String, SavedLocation>{
+      for (final l in locations)
+        l.id: l.copyWith(
+          userId: userId,
+          source: source,
+          isSynced: false,
+          fingerprint: l.fingerprint.isNotEmpty
+              ? l.fingerprint
+              : FingerprintUtils.generateFingerprint(
+                  name: l.name, lat: l.lat, lng: l.lng),
+        ),
+    };
+    await _box!.putAll(rows);
+    if (user == null) return;
+
+    final list = rows.values.toList();
+    for (var i = 0; i < list.length; i += 100) {
+      final end = i + 100 > list.length ? list.length : i + 100;
+      final chunk = list.sublist(i, end);
+      try {
+        await _upsertRows([for (final l in chunk) l.toJson()]);
+        final now = DateTime.now();
+        await _box!.putAll({
+          for (final l in chunk)
+            l.id: l.copyWith(isSynced: true, lastSyncedAt: now),
+        });
+      } catch (e) {
+        debugPrint('addLocationsBatch: chunk $i-$end failed ($e) — '
+            'rows stay dirty for the next sync pass');
+      }
+    }
+  }
+
+  /// Guest-only: moves every dated row of [tripId] by [days] in the local
+  /// store — a trip planned without dates getting its real ones. Signed-in
+  /// accounts use the set_trip_dates server function instead, which does
+  /// the same shift atomically under the accommodation constraint. Returns
+  /// how many rows moved.
+  Future<int> shiftTripDaysLocally(String tripId, int days) async {
+    await _ensureInitialized();
+    if (days == 0) return 0;
+    final shifted = <String, SavedLocation>{};
+    for (final l in _box!.values) {
+      if (l.tripId != tripId) continue;
+      final start = l.scheduledDate;
+      if (start == null) continue;
+      final end = l.scheduledEndDate;
+      shifted[l.id] = end == null
+          ? l.copyWith(scheduledDate: shiftTripDay(start, days))
+          : l.copyWith(
+              scheduledDate: shiftTripDay(start, days),
+              scheduledEndDate: shiftTripDay(end, days),
+            );
+    }
+    if (shifted.isNotEmpty) await _box!.putAll(shifted);
+    return shifted.length;
   }
 
   Future<void> deleteLocation(String id) async {

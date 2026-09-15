@@ -6,6 +6,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:uuid/uuid.dart';
 import '../models/trip.dart';
 import '../services/supabase_service.dart';
+import '../utils/postgrest_errors.dart';
+import '../utils/trip_dates.dart';
 
 class TripRepository {
   final SupabaseClient _supabase = SupabaseService.instance.client;
@@ -97,7 +99,8 @@ class TripRepository {
     await prefs.remove(_localTripsKey);
   }
 
-  /// Create a new trip
+  /// Create a new trip. [datesTbd] = planned without dates yet: pass the
+  /// anchor-based range (see tripDatesTbdAnchor) as start/end.
   Future<Trip> createTrip({
     required String userId,
     required String name,
@@ -105,6 +108,7 @@ class TripRepository {
     DateTime? startDate,
     DateTime? endDate,
     String? countryCode,
+    bool datesTbd = false,
   }) async {
     try {
       final data = <String, dynamic>{
@@ -114,6 +118,7 @@ class TripRepository {
         if (startDate != null) 'start_date': startDate.toIso8601String(),
         if (endDate != null) 'end_date': endDate.toIso8601String(),
         if (countryCode != null) 'country_code': countryCode.toUpperCase(),
+        'dates_tbd': datesTbd,
         'status': 'planning',
         'is_active': false,
       };
@@ -130,13 +135,63 @@ class TripRepository {
         return trip;
       }
 
-      final response =
-          await _supabase.from(_tableName).insert(data).select().single();
-
-      return Trip.fromJson(response);
+      return Trip.fromJson(await _insertTolerant(data));
     } catch (e) {
       rethrow;
     }
+  }
+
+  /// INSERT/UPDATE that survive a column the server doesn't know yet
+  /// (PostgREST PGRST204: this build is ahead of its migration). The column
+  /// is dropped and the write retried, so the trip is still created or
+  /// updated — that one field just isn't saved until the migration runs.
+  /// The log line names the column. Same guard as LocationRepository's
+  /// upserts; a missing column once kept every save on the device.
+  Future<Map<String, dynamic>> _insertTolerant(
+      Map<String, dynamic> data) async {
+    final pending = Map<String, dynamic>.of(data);
+    for (var attempt = 0; attempt < 6; attempt++) {
+      try {
+        return await _supabase
+            .from(_tableName)
+            .insert(pending)
+            .select()
+            .single();
+      } on PostgrestException catch (e) {
+        pending.remove(_unknownColumnOrRethrow(e, pending));
+      }
+    }
+    throw StateError('trips insert: too many unknown columns');
+  }
+
+  Future<Map<String, dynamic>> _updateTolerant(
+      String tripId, Map<String, dynamic> updates) async {
+    final pending = Map<String, dynamic>.of(updates);
+    for (var attempt = 0; attempt < 6; attempt++) {
+      try {
+        return await _supabase
+            .from(_tableName)
+            .update(pending)
+            .eq('id', tripId)
+            .select()
+            .single();
+      } on PostgrestException catch (e) {
+        pending.remove(_unknownColumnOrRethrow(e, pending));
+      }
+    }
+    throw StateError('trips update: too many unknown columns');
+  }
+
+  String _unknownColumnOrRethrow(
+      PostgrestException e, Map<String, dynamic> pending) {
+    final column = e.code == postgrestUnknownColumnCode
+        ? unknownColumnFromPostgrestMessage(e.message)
+        : null;
+    if (column == null || !pending.containsKey(column)) throw e;
+    debugPrint('trips write: the server has no "$column" column yet; '
+        'retrying without it. The pending migration must be applied, '
+        'until then this field is not saved to the cloud.');
+    return column;
   }
 
   /// Get all trips for a user
@@ -328,6 +383,7 @@ class TripRepository {
     bool clearCountryCode = false,
     bool clearDates = false,
     bool? autoRollUnvisited,
+    bool? datesTbd,
   }) async {
     try {
       final updates = <String, dynamic>{
@@ -349,6 +405,7 @@ class TripRepository {
         else if (countryCode != null)
           'country_code': countryCode.toUpperCase(),
         if (autoRollUnvisited != null) 'auto_roll_unvisited': autoRollUnvisited,
+        if (datesTbd != null) 'dates_tbd': datesTbd,
         'updated_at': DateTime.now().toIso8601String(),
       };
 
@@ -370,17 +427,33 @@ class TripRepository {
         return changed!;
       }
 
-      final response = await _supabase
-          .from(_tableName)
-          .update(updates)
-          .eq('id', tripId)
-          .select()
-          .single();
-
-      return Trip.fromJson(response);
+      return Trip.fromJson(await _updateTolerant(tripId, updates));
     } catch (e) {
       rethrow;
     }
+  }
+
+  /// Signed-in owners: moves the trip and every one of its stops so that
+  /// Day 1 lands on [start] — one atomic server call (set_trip_dates) that
+  /// also clears dates_tbd. This is how a trip planned without dates gets
+  /// them; guests are shifted locally by TripDatesService instead.
+  Future<void> setTripDatesRemote(String tripId, DateTime start) async {
+    final d = dayKey(start);
+    final ymd = '${d.year.toString().padLeft(4, '0')}-'
+        '${d.month.toString().padLeft(2, '0')}-'
+        '${d.day.toString().padLeft(2, '0')}';
+    await _supabase.rpc('set_trip_dates', params: {
+      'p_trip_id': tripId,
+      'p_start_date': ymd,
+    });
+  }
+
+  /// Signed-in owners: takes the dates OFF a trip — Day 1 moves onto the
+  /// undated anchor, every stop keeps its day offset, dates_tbd is set
+  /// (server function clear_trip_dates). Guests are handled locally by
+  /// TripDatesService.
+  Future<void> clearTripDatesRemote(String tripId) async {
+    await _supabase.rpc('clear_trip_dates', params: {'p_trip_id': tripId});
   }
 
   /// Publish/unpublish a trip for copy-by-code sharing. Returns the share

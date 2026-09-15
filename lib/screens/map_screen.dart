@@ -25,6 +25,7 @@ import '../models/trip.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/route_share_card_service.dart';
 import '../services/trip_day_service.dart';
+import '../providers/trip_day_labeler_provider.dart';
 import '../utils/trip_dates.dart';
 import '../utils/same_day_place_guard.dart';
 import '../services/time_saved_ledger_service.dart';
@@ -1016,14 +1017,6 @@ class _MapScreenState extends ConsumerState<MapScreen>
       return;
     }
 
-    // Prevent adding locations to past dates
-    final selectedDate = ref.read(selectedDateProvider);
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    if (selectedDate.isBefore(today)) {
-      AppToast.warning(context, 'Cannot add locations to a past date.');
-      return;
-    }
     try {
       final radius = ref.read(nearbyRadiusProvider).round();
 
@@ -1048,6 +1041,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
       }
       if (!mounted) return;
       AppToast.dismiss();
+      final selectedDate = ref.read(selectedDateProvider);
 
       // Places already on the selected day can't be added again (same-day
       // rule, enforced in LocationAddService) — hand the picker the day's
@@ -2083,12 +2077,14 @@ class _MapScreenState extends ConsumerState<MapScreen>
                                                 final dayCount =
                                                     e.difference(s).inDays + 1;
                                                 final dateText = activeTrip
-                                                            .startDate ==
-                                                        activeTrip.endDate
-                                                    ? DateFormat('MMM d, y')
-                                                        .format(activeTrip
-                                                            .startDate!)
-                                                    : '${DateFormat('MMM d').format(activeTrip.startDate!)} - ${DateFormat('MMM d').format(activeTrip.endDate!)}';
+                                                        .isUndated
+                                                    ? 'No dates yet'
+                                                    : activeTrip.startDate ==
+                                                            activeTrip.endDate
+                                                        ? DateFormat('MMM d, y')
+                                                            .format(activeTrip
+                                                                .startDate!)
+                                                        : '${DateFormat('MMM d').format(activeTrip.startDate!)} - ${DateFormat('MMM d').format(activeTrip.endDate!)}';
                                                 return Padding(
                                                   padding:
                                                       const EdgeInsets.only(
@@ -3694,6 +3690,10 @@ class _DayPill extends ConsumerWidget {
       bottomLine = days.isEmpty
           ? null
           : '${days.length} day${days.length == 1 ? '' : 's'}';
+    } else if (ref.watch(activeTripDayLabelerProvider).tbd) {
+      // No dates yet: the day number IS the identity of the day.
+      topLine = dayIndex >= 0 ? 'Day ${dayIndex + 1}' : 'Off plan';
+      bottomLine = 'No dates yet';
     } else {
       topLine = DateFormat('MMM d').format(selected);
       // Off-plan dates (picked outside the trip's day span) have no index —
@@ -3876,6 +3876,9 @@ class _DayPickerSheetState extends ConsumerState<_DayPickerSheet> {
     final dayColors = ref.watch(tripDayColorsProvider);
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
+    // An ended trip keeps its days: no adding or removing them.
+    final tripLast = trip?.endDate ?? trip?.startDate;
+    final tripEnded = tripLast != null && dayKey(tripLast).isBefore(today);
 
     final canEdit = trip != null &&
         (ref.watch(hasActiveTripWriteAccessProvider).valueOrNull ?? false);
@@ -3994,7 +3997,8 @@ class _DayPickerSheetState extends ConsumerState<_DayPickerSheet> {
                       children: [
                         Expanded(
                           child: OutlinedButton.icon(
-                            onPressed: () => _addDay(trip, days),
+                            onPressed:
+                                tripEnded ? null : () => _addDay(trip, days),
                             icon: const Icon(Icons.add_rounded, size: 18),
                             label: const Text('Add day'),
                             style: OutlinedButton.styleFrom(
@@ -4018,7 +4022,9 @@ class _DayPickerSheetState extends ConsumerState<_DayPickerSheet> {
                           const SizedBox(width: 10),
                           Expanded(
                             child: OutlinedButton.icon(
-                              onPressed: () => _removeDay(trip, days),
+                              onPressed: tripEnded
+                                  ? null
+                                  : () => _removeDay(trip, days),
                               icon: const Icon(Icons.remove_rounded, size: 18),
                               label: const Text('Remove day'),
                               style: OutlinedButton.styleFrom(
@@ -4103,7 +4109,9 @@ class _DayPickerSheetState extends ConsumerState<_DayPickerSheet> {
       ),
       title: 'Day ${index + 1}',
       titleBadge: isToday,
-      subtitle: DateFormat('EEE, MMM d, y').format(day),
+      subtitle: ref.watch(activeTripDayLabelerProvider).tbd
+          ? null
+          : DateFormat('EEE, MMM d, y').format(day),
       trailing: stops > 0
           ? Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),

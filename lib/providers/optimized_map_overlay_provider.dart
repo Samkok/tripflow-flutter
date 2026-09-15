@@ -15,6 +15,7 @@ import '../utils/marker_utils.dart'; // Needed for MarkerBitmapResult type
 import '../utils/polyline_simplify.dart';
 import '../utils/external_app_links.dart';
 import '../core/theme.dart';
+import 'trip_day_labeler_provider.dart';
 
 class CachedMarkersState {
   // This will now hold the generated bitmaps AND anchors
@@ -98,11 +99,15 @@ final cachedMarkerBitmapsProvider =
     specs.add((loc: location, number: markerNumber, isStart: isStartLocation));
   }
 
+  // A trip without dates has no weekday: the "might be closed" hint would
+  // be noise, so it stays off until dates are set.
+  final undated = ref.watch(activeTripDayLabelerProvider).tbd;
   final results = await Future.wait(specs.map((spec) {
     // "Might be closed": Google lists no opening period for this weekday.
     // Amber pin + caution line — phrased as a maybe, because Places hours
     // are often stale. Done/skipped pins keep their own treatment.
-    final mightBeClosed = !spec.loc.isDone &&
+    final mightBeClosed = !undated &&
+        !spec.loc.isDone &&
         !spec.loc.isSkipped &&
         spec.loc.mightBeClosedOn(selectedDate);
     return markerCache.getNumberedMarker(

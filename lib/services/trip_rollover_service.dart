@@ -123,6 +123,8 @@ class TripRolloverService {
   /// makes sense (nothing to move before day one; nowhere to move after
   /// the last day).
   static bool isOngoing(Trip trip, DateTime today) {
+    // A trip without dates has no "yesterday" — nothing to carry forward.
+    if (trip.isUndated) return false;
     final s = trip.startDate;
     final e = trip.endDate;
     if (s == null || e == null) return false;

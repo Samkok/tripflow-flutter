@@ -25,6 +25,7 @@ import '../utils/trip_dates.dart';
 import '../widgets/accommodation_prompts.dart';
 import '../widgets/app_toast.dart';
 import '../widgets/place_tag_sheet.dart';
+import '../utils/trip_day_labels.dart';
 
 /// Central service for adding locations.
 ///
@@ -101,6 +102,13 @@ class LocationAddService {
     } catch (_) {
       // Feedback is cosmetic; never break the add flow over it.
     }
+  }
+
+  /// "Sep 14" — or "Day 3" when the row's trip has no dates yet.
+  String _dayLabelFor(DateTime day, String? tripId) {
+    final trip = _findTripById(tripId) ??
+        _ref.read(realtimeActiveTripProvider).valueOrNull;
+    return DayLabeler.forTrip(trip)(day);
   }
 
   Future<void> _persistTripDateExtension(
@@ -302,7 +310,7 @@ class LocationAddService {
             dayKey(location.scheduledDate ?? _ref.read(selectedDateProvider));
         AppToast.warning(
           context,
-          '"${location.name}" is already planned for ${DateFormat('MMM d').format(day)}',
+          '"${location.name}" is already planned for ${_dayLabelFor(day, location.tripId)}',
         );
       }
       return false;
@@ -328,7 +336,9 @@ class LocationAddService {
       context,
       activeTrip,
       location.scheduledDate,
-      allowExtension: true,
+      // An ended trip keeps its dates — no stretching it for a new place.
+      allowExtension:
+          !tripHasEnded(activeTrip?.endDate ?? activeTrip?.startDate),
     );
     if (!result.proceed) return false;
 
@@ -416,7 +426,7 @@ class LocationAddService {
       if (context.mounted) {
         AppToast.warning(
           context,
-          '"${location.name}" is already planned for ${DateFormat('MMM d').format(dayKey(location.scheduledDate!))}',
+          '"${location.name}" is already planned for ${_dayLabelFor(dayKey(location.scheduledDate!), location.tripId)}',
         );
       }
       return false;
@@ -440,7 +450,8 @@ class LocationAddService {
       context,
       trip,
       location.scheduledDate,
-      allowExtension: true,
+      // An ended trip keeps its dates — no stretching it for a new place.
+      allowExtension: !tripHasEnded(trip?.endDate ?? trip?.startDate),
     );
     if (!result.proceed) return false;
 
@@ -599,6 +610,15 @@ class LocationAddService {
     }
 
     if (outsideCount == 0) return TripDateConfirmResult.allowed;
+
+    // An ended trip keeps its dates: the picks go in as they are.
+    if (tripHasEnded(tripEnd ?? tripStart)) {
+      if (context.mounted) {
+        AppToast.info(context,
+            '"${trip.name}" has ended — added without changing its dates.');
+      }
+      return TripDateConfirmResult.allowed;
+    }
 
     // Compute the proposed extended range.
     final newStart = (tripStart == null || earliestOutside!.isBefore(tripStart))

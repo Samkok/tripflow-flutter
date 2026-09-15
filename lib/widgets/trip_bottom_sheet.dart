@@ -10,6 +10,8 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:voyza/models/location_model.dart';
 import 'package:voyza/providers/all_days_route_provider.dart';
 import 'package:voyza/providers/map_ui_state_provider.dart';
+import 'package:voyza/providers/trip_day_labeler_provider.dart';
+import 'package:voyza/widgets/trip_day_picker.dart';
 import '../providers/trip_listener_provider.dart';
 import '../providers/trip_provider.dart';
 import '../providers/trip_collaborator_provider.dart';
@@ -1298,15 +1300,27 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                 final initialDateForPicker =
                     selectedDate.isBefore(firstDate) ? firstDate : selectedDate;
 
-                final newDate = await DatePickerUtils.showCustomDatePicker(
-                  context: context,
-                  initialDate: initialDateForPicker,
-                  firstDate: firstDate,
-                  lastDate: DateTime.now().add(
-                      const Duration(days: 365 * 5)), // 5 years in the future
-                  highlightedDates: highlightedDates,
-                  highlightRange: activeTripDateRange(ref),
-                );
+                final labeler = ref.read(activeTripDayLabelerProvider);
+                final DateTime? newDate;
+                if (labeler.tbd) {
+                  newDate = await showTripDayPicker(
+                    context,
+                    days: ref.read(activeTripDayAxisProvider),
+                    labeler: labeler,
+                    selected: selectedDate,
+                    marked: highlightedDates,
+                  );
+                } else {
+                  newDate = await DatePickerUtils.showCustomDatePicker(
+                    context: context,
+                    initialDate: initialDateForPicker,
+                    firstDate: firstDate,
+                    lastDate: DateTime.now()
+                        .add(const Duration(days: 365 * 5)), // 5 years ahead
+                    highlightedDates: highlightedDates,
+                    highlightRange: activeTripDateRange(ref),
+                  );
+                }
 
                 if (newDate != null) {
                   ref.read(selectedDateProvider.notifier).state = newDate;
@@ -1314,7 +1328,11 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
               },
               icon: const Icon(Icons.calendar_today_outlined),
               label: Text(
-                isToday ? 'Today' : DateFormat.yMMMd().format(selectedDate),
+                ref.watch(activeTripDayLabelerProvider).tbd
+                    ? ref.watch(activeTripDayLabelerProvider)(selectedDate)
+                    : isToday
+                        ? 'Today'
+                        : DateFormat.yMMMd().format(selectedDate),
                 textAlign: TextAlign.center,
               ),
               style: TextButton.styleFrom(
@@ -2400,8 +2418,11 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
     final isToday = date == today;
     final isPast = date.isBefore(today);
 
+    final labeler = ref.read(activeTripDayLabelerProvider);
     String label;
-    if (isToday) {
+    if (labeler.tbd) {
+      label = labeler(date);
+    } else if (isToday) {
       label = 'Today · ${DateFormat.MMMd().format(date)}';
     } else if (date == today.add(const Duration(days: 1))) {
       label = 'Tomorrow · ${DateFormat.MMMd().format(date)}';
@@ -2635,6 +2656,7 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                           .valueOrNull
                           ?.name,
                       date: ref.read(selectedDateProvider),
+                      dayLabeler: ref.read(activeTripDayLabelerProvider),
                     );
                   } on MissingPluginException {
                     if (context.mounted) {
@@ -2788,8 +2810,10 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
     );
     if (dup.allowedIds.isEmpty) {
       if (context.mounted) {
-        AppToast.warning(context,
-            'Already on ${DateFormat('MMM d').format(dayKey)} — nothing to $verb.');
+        AppToast.warning(
+            context,
+            'Already on ${ref.read(activeTripDayLabelerProvider)(dayKey)} — '
+            'nothing to $verb.');
       }
       return null;
     }
@@ -2800,13 +2824,25 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
     return dup.allowedIds;
   }
 
-  void _showCopyLocationsDialog(BuildContext context, WidgetRef ref) async {
-    final highlightedDates = ref.read(datesWithLocationsProvider);
-    final earliestDate = highlightedDates.isNotEmpty
-        ? highlightedDates.reduce((a, b) => a.isBefore(b) ? a : b)
-        : DateTime.now();
-
-    final newDate = await DatePickerUtils.showCustomDatePicker(
+  /// Day picker for move/copy: the calendar on a dated trip, the numbered
+  /// day list on a trip without dates yet.
+  Future<DateTime?> _pickPlanDay(
+    BuildContext context,
+    WidgetRef ref, {
+    required Set<DateTime> highlightedDates,
+    required DateTime earliestDate,
+  }) {
+    final labeler = ref.read(activeTripDayLabelerProvider);
+    if (labeler.tbd) {
+      return showTripDayPicker(
+        context,
+        days: ref.read(activeTripDayAxisProvider),
+        labeler: labeler,
+        selected: ref.read(selectedDateProvider),
+        marked: highlightedDates,
+      );
+    }
+    return DatePickerUtils.showCustomDatePicker(
       context: context,
       initialDate: ref.read(selectedDateProvider),
       firstDate: earliestDate,
@@ -2814,6 +2850,16 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
       highlightedDates: highlightedDates,
       highlightRange: activeTripDateRange(ref),
     );
+  }
+
+  void _showCopyLocationsDialog(BuildContext context, WidgetRef ref) async {
+    final highlightedDates = ref.read(datesWithLocationsProvider);
+    final earliestDate = highlightedDates.isNotEmpty
+        ? highlightedDates.reduce((a, b) => a.isBefore(b) ? a : b)
+        : DateTime.now();
+
+    final newDate = await _pickPlanDay(context, ref,
+        highlightedDates: highlightedDates, earliestDate: earliestDate);
 
     if (newDate != null) {
       final activeTrip = ref.read(realtimeActiveTripProvider).valueOrNull;
@@ -2868,14 +2914,8 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
         ? highlightedDates.reduce((a, b) => a.isBefore(b) ? a : b)
         : DateTime.now();
 
-    final newDate = await DatePickerUtils.showCustomDatePicker(
-      context: context,
-      initialDate: ref.read(selectedDateProvider),
-      firstDate: earliestDate,
-      lastDate: DateTime.now().add(const Duration(days: 365 * 5)),
-      highlightedDates: highlightedDates,
-      highlightRange: activeTripDateRange(ref),
-    );
+    final newDate = await _pickPlanDay(context, ref,
+        highlightedDates: highlightedDates, earliestDate: earliestDate);
 
     if (newDate != null) {
       final activeTrip = ref.read(realtimeActiveTripProvider).valueOrNull;

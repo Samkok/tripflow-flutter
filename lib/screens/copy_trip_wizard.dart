@@ -9,6 +9,7 @@ import '../providers/user_trip_provider.dart';
 import '../repositories/trip_repository.dart';
 import '../services/photo_service.dart';
 import '../services/place_photo_cache.dart';
+import '../utils/trip_dates.dart';
 import '../services/supabase_service.dart';
 import '../providers/subscription_provider.dart';
 import '../widgets/app_toast.dart';
@@ -363,7 +364,9 @@ class _CopyTripWizardState extends ConsumerState<CopyTripWizard> {
                 Padding(
                   padding: const EdgeInsets.only(top: 10, bottom: 6),
                   child: Text(
-                    'Day ${i + 1} · ${DateFormat('EEE, MMM d').format(dayKeys[i])}',
+                    isOnTbdAnchor(dayKeys[i])
+                        ? 'Day ${i + 1}'
+                        : 'Day ${i + 1} · ${DateFormat('EEE, MMM d').format(dayKeys[i])}',
                     style: theme.textTheme.labelLarge?.copyWith(
                         color: theme.colorScheme.primary,
                         fontWeight: FontWeight.w700),

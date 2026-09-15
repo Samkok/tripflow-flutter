@@ -8,6 +8,7 @@ import '../providers/location_provider.dart';
 import '../providers/user_trip_provider.dart';
 import '../utils/same_day_place_guard.dart';
 import '../utils/trip_dates.dart';
+import '../utils/trip_day_labels.dart';
 import '../widgets/accommodation_prompts.dart';
 import '../widgets/app_toast.dart';
 
@@ -86,8 +87,12 @@ class TripDayService {
           );
       ref.invalidate(userTripsProvider);
       if (context.mounted) {
+        final label = DayLabeler.forTrip(trip);
         AppToast.success(
-            context, 'Day added — ${DateFormat('MMM d').format(newDay)}');
+            context,
+            label.tbd
+                ? '${tripDayLabel(dayKey(trip.startDate!), newDay)} added'
+                : 'Day added — ${DateFormat('MMM d').format(newDay)}');
         // A new empty trip day just materialized — same question every
         // other materializing path asks (self-skips for non-active trips).
         await maybePromptAccommodationForNewDays(
@@ -139,7 +144,9 @@ class TripDayService {
     final last = dayKey(days.last);
     final newLast = dayKey(days[days.length - 2]);
     final first = _startPin(trip, tripLocations, newLast);
-    final fmt = DateFormat('MMM d');
+    // Numbered days on a trip without dates, calendar days otherwise.
+    final label = DayLabeler.forTrip(trip);
+    String fmtDay(DateTime d) => label(d);
 
     // Scheduled rows only — see doc comment.
     final onLast = tripLocations
@@ -162,10 +169,10 @@ class TripDayService {
           return AlertDialog(
             shape:
                 RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-            title: Text('Remove ${fmt.format(last)}?'),
+            title: Text('Remove ${fmtDay(last)}?'),
             content: Text(
               '$n ${n == 1 ? 'place is' : 'places are'} planned on this '
-              'day. Move ${n == 1 ? 'it' : 'them'} to ${fmt.format(newLast)}, '
+              'day. Move ${n == 1 ? 'it' : 'them'} to ${fmtDay(newLast)}, '
               'or delete ${n == 1 ? 'it' : 'them'} with the day?',
               style: theme.textTheme.bodyMedium,
             ),
@@ -285,7 +292,7 @@ class TripDayService {
 
       if (context.mounted) {
         final parts = <String>[
-          if (moved > 0) '$moved moved to ${fmt.format(newLast)}',
+          if (moved > 0) '$moved moved to ${fmtDay(newLast)}',
           if (merged > 0) '$merged merged',
           if (deleted > 0) '$deleted deleted',
           if (unmarked > 0) '$unmarked accommodation unmarked',
@@ -293,7 +300,10 @@ class TripDayService {
         AppToast.success(
             context,
             parts.isEmpty
-                ? 'Day removed — trip now ends ${fmt.format(newLast)}'
+                ? (label.tbd
+                    ? 'Day removed — trip now has '
+                        '${tripDayNumber(dayKey(trip.startDate!), newLast)} days'
+                    : 'Day removed — trip now ends ${fmtDay(newLast)}')
                 : 'Day removed · ${parts.join(' · ')}');
       }
       return (start: first, end: newLast, changedDay: last);

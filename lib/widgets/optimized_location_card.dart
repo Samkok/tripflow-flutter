@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
-import 'package:intl/intl.dart';
 import 'package:voyza/models/location_model.dart';
+import 'package:voyza/models/saved_location.dart' show OpeningPeriod;
 import 'package:voyza/providers/all_days_route_provider.dart';
 import 'package:voyza/providers/map_ui_state_provider.dart';
+import 'package:voyza/providers/trip_day_labeler_provider.dart';
+import 'package:voyza/widgets/trip_day_picker.dart';
+import 'package:voyza/utils/trip_day_labels.dart';
 import 'package:voyza/providers/place_photo_refresh_provider.dart';
 import 'package:voyza/providers/trip_listener_provider.dart';
 import 'package:voyza/providers/trip_provider.dart';
@@ -174,6 +177,10 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
     final hours = location.googleOpeningHours;
     if (hours == null || hours.isEmpty) return notFound;
     if (hours.length == 1 && hours.first.isAlwaysOpen) return 'Open 24 hours';
+
+    // A trip without dates has no weekday to look up: show the hours when
+    // they're the same every day, otherwise say they vary.
+    if (_labeler.tbd) return _undatedHoursSubtitle(hours);
 
     // Google's weekday numbering: Sunday = 0 … Saturday = 6 (Dart's
     // DateTime.weekday is Monday = 1 … Sunday = 7).
@@ -480,13 +487,37 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
     );
   }
 
+  /// Day labels for the active trip ("Day N" while it has no dates).
+  DayLabeler get _labeler => ref.read(activeTripDayLabelerProvider);
+
+  /// Hours line when the trip has no weekday to look up: one line when
+  /// every weekday shares the same periods, otherwise a nudge to set dates.
+  String _undatedHoursSubtitle(List<OpeningPeriod> hours) {
+    String? common;
+    for (var day = 0; day < 7; day++) {
+      final periods = hours.where((p) => p.openDay == day).map((p) {
+        final open = _formatClockMinutes(p.openMinutes);
+        final close = p.closeMinutes;
+        return close == null
+            ? 'Opens $open'
+            : '$open – ${_formatClockMinutes(close)}';
+      }).join(', ');
+      if (periods.isEmpty) return 'Hours vary by day — set trip dates to check';
+      if (common == null) {
+        common = periods;
+      } else if (common != periods) {
+        return 'Hours vary by day — set trip dates to check';
+      }
+    }
+    return common ?? 'Opening and closing time not found';
+  }
+
   /// Compact hotel chip surfaced next to the title when this location is a
   /// multi-day stay. Reads `scheduledDate`/`scheduledEndDate` directly —
   /// guarded by [LocationModel.isMultiDay] at the call site, so both are
   /// non-null here.
   Widget _buildStayChip(BuildContext context) {
     final theme = Theme.of(context);
-    final df = DateFormat('MMM d');
     final start = location.scheduledDate!;
     final end = location.scheduledEndDate!;
     return Container(
@@ -504,7 +535,7 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
           Icon(Icons.hotel_rounded, size: 12, color: theme.colorScheme.primary),
           const SizedBox(width: 4),
           Text(
-            '${df.format(start)} – ${df.format(end)}',
+            _labeler.range(start, end),
             style: theme.textTheme.labelSmall?.copyWith(
               color: theme.colorScheme.primary,
               fontWeight: FontWeight.w600,
@@ -772,14 +803,26 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
         ? highlightedDates.reduce((a, b) => a.isBefore(b) ? a : b)
         : DateTime.now();
 
-    final newDate = await DatePickerUtils.showCustomDatePicker(
-      context: context,
-      initialDate: ref.read(selectedDateProvider),
-      firstDate: earliestDate,
-      lastDate: DateTime.now().add(const Duration(days: 365 * 5)),
-      highlightedDates: highlightedDates,
-      highlightRange: activeTripDateRange(ref),
-    );
+    final labeler = ref.read(activeTripDayLabelerProvider);
+    final DateTime? newDate;
+    if (labeler.tbd) {
+      newDate = await showTripDayPicker(
+        context,
+        days: ref.read(activeTripDayAxisProvider),
+        labeler: labeler,
+        selected: ref.read(selectedDateProvider),
+        marked: highlightedDates,
+      );
+    } else {
+      newDate = await DatePickerUtils.showCustomDatePicker(
+        context: context,
+        initialDate: ref.read(selectedDateProvider),
+        firstDate: earliestDate,
+        lastDate: DateTime.now().add(const Duration(days: 365 * 5)),
+        highlightedDates: highlightedDates,
+        highlightRange: activeTripDateRange(ref),
+      );
+    }
 
     if (newDate != null) {
       final activeTrip = ref.read(realtimeActiveTripProvider).valueOrNull;
@@ -820,8 +863,8 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
       );
       if (dup.allowedIds.isEmpty) {
         if (context.mounted) {
-          AppToast.warning(context,
-              '"${location.name}" is already on ${DateFormat('MMM d').format(dayKey)}');
+          AppToast.warning(
+              context, '"${location.name}" is already on ${_labeler(dayKey)}');
         }
         return;
       }
@@ -881,7 +924,7 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
           title: Text(spansHere ? 'Remove Location' : 'Delete Location'),
           content: Text(spansHere
               ? '"${location.name}" spans '
-                  '${DateFormat('MMM d').format(start)} – ${DateFormat('MMM d').format(end)}. '
+                  '${_labeler.range(start, end)}. '
                   'Remove it from this day only, or delete it from every day?'
               : 'Are you sure you want to delete "${location.name}"? This action cannot be undone.'),
           actions: [
@@ -909,7 +952,7 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
                       .read(tripProvider.notifier)
                       .removeLocationFromDay(location.id, day);
                   AppToast.success(context,
-                      '${location.name} removed from ${DateFormat('MMM d').format(day)}');
+                      '${location.name} removed from ${_labeler(day)}');
                 },
                 child: const Text('Remove from this day'),
               ),

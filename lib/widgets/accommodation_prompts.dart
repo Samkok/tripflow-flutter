@@ -8,6 +8,7 @@ import '../providers/trip_listener_provider.dart';
 import '../providers/trip_provider.dart';
 import '../screens/location_search_screen.dart';
 import 'app_toast.dart';
+import '../utils/trip_day_labels.dart';
 
 /// Asks where the user is staying on newly materialized trip day(s) — days
 /// that just received their FIRST location (via add, move, or copy — however
@@ -55,9 +56,12 @@ Future<void> maybePromptAccommodationForNewDays(
   if (!context.mounted) return;
   final firstNewDay = uncovered.first;
   final lastNewDay = uncovered.last;
+  final labeler = DayLabeler.forTrip(trip);
   final newDaysLabel = uncovered.length == 1
-      ? DateFormat('EEE, MMM d').format(firstNewDay)
-      : '${DateFormat('MMM d').format(firstNewDay)} – ${DateFormat('MMM d').format(lastNewDay)}';
+      ? (labeler.tbd
+          ? labeler(firstNewDay)
+          : DateFormat('EEE, MMM d').format(firstNewDay))
+      : labeler.range(firstNewDay, lastNewDay);
 
   final choice = await showDialog<String>(
     context: context,
@@ -78,9 +82,8 @@ Future<void> maybePromptAccommodationForNewDays(
             ...accommodations.map((acc) {
               final s = acc.scheduledDate;
               final e = acc.scheduledEndDate ?? s;
-              final range = (s != null && e != null)
-                  ? '${DateFormat('MMM d').format(s)} – ${DateFormat('MMM d').format(e)}'
-                  : null;
+              final range =
+                  (s != null && e != null) ? labeler.range(s, e) : null;
               return ListTile(
                 contentPadding: EdgeInsets.zero,
                 leading: Icon(Icons.hotel_outlined,

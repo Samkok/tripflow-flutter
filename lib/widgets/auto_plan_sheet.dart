@@ -15,6 +15,7 @@ import '../services/leg_mode_prefs.dart';
 import '../services/trip_day_service.dart';
 import '../screens/paywall_screen.dart';
 import 'app_toast.dart';
+import '../utils/trip_dates.dart';
 
 /// Opens the Auto-plan sheet: cluster the active trip's places into cities,
 /// propose a visit order and per-day assignment, and (Pro) apply it as one
@@ -55,7 +56,8 @@ class _AutoPlanSheetState extends ConsumerState<AutoPlanSheet> {
     final capAtOpen = ref.read(autoPlanMaxStopsProvider);
     LegModePrefs.autoPlanMaxStops().then((saved) {
       if (!mounted) return;
-      if (ref.read(autoPlanMaxStopsProvider) == capAtOpen && saved != capAtOpen) {
+      if (ref.read(autoPlanMaxStopsProvider) == capAtOpen &&
+          saved != capAtOpen) {
         ref.read(autoPlanMaxStopsProvider.notifier).state = saved;
       }
     });
@@ -119,14 +121,12 @@ class _AutoPlanSheetState extends ConsumerState<AutoPlanSheet> {
             ),
             Expanded(
               child: planAsync.when(
-                loading: () =>
-                    const Center(child: CircularProgressIndicator()),
+                loading: () => const Center(child: CircularProgressIndicator()),
                 error: (e, _) => const _Message(
                   icon: Icons.error_outline_rounded,
                   text: "Couldn't compute a plan. Try again.",
                 ),
-                data: (plan) =>
-                    _buildForPlan(context, plan, scrollController),
+                data: (plan) => _buildForPlan(context, plan, scrollController),
               ),
             ),
           ],
@@ -252,8 +252,8 @@ class _AutoPlanSheetState extends ConsumerState<AutoPlanSheet> {
                           '— nothing to apply. Change the limit or fill '
                           'style, or turn off "Keep current days" for a '
                           'fresh arrangement.',
-                          style: theme.textTheme.bodySmall?.copyWith(
-                              color: theme.colorScheme.onSurface),
+                          style: theme.textTheme.bodySmall
+                              ?.copyWith(color: theme.colorScheme.onSurface),
                         ),
                       ),
                     ],
@@ -296,7 +296,8 @@ class _AutoPlanSheetState extends ConsumerState<AutoPlanSheet> {
                           // Plan against the NEW range immediately — the
                           // trip provider reloads asynchronously and the
                           // recompute used to race it (new day ignored).
-                          ref.read(autoPlanRangeOverrideProvider.notifier)
+                          ref
+                              .read(autoPlanRangeOverrideProvider.notifier)
                               .state = (start: range.start, end: range.end);
                         },
                 ),
@@ -366,14 +367,12 @@ class _AutoPlanSheetState extends ConsumerState<AutoPlanSheet> {
                     final isPro = ref.watch(isProProvider);
                     final noOp = plan.isNoOp;
                     return FilledButton.icon(
-                      onPressed:
-                          _applying || noOp ? null : () => _apply(plan),
+                      onPressed: _applying || noOp ? null : () => _apply(plan),
                       icon: _applying
                           ? const SizedBox(
                               width: 16,
                               height: 16,
-                              child:
-                                  CircularProgressIndicator(strokeWidth: 2),
+                              child: CircularProgressIndicator(strokeWidth: 2),
                             )
                           : Icon(noOp
                               ? Icons.check_circle_outline_rounded
@@ -417,8 +416,8 @@ class _AutoPlanSheetState extends ConsumerState<AutoPlanSheet> {
           AppToast.info(context, 'Trip changed — updated the preview.');
           ref.invalidate(autoPlanProvider);
         case ApplyDistributionStatus.applied:
-          AnalyticsService.instance.autoPlanApplied(
-              moved: result.moved, toBucket: result.toBucket);
+          AnalyticsService.instance
+              .autoPlanApplied(moved: result.moved, toBucket: result.toBucket);
           final notifier = ref.read(tripProvider.notifier);
           final buckets = result.toBucket;
           // Outlives this sheet: the root navigator's context stays valid
@@ -471,8 +470,7 @@ class _Message extends StatelessWidget {
                 color: theme.colorScheme.primary.withValues(alpha: 0.5)),
             const SizedBox(height: 14),
             Text(text,
-                textAlign: TextAlign.center,
-                style: theme.textTheme.bodyMedium),
+                textAlign: TextAlign.center, style: theme.textTheme.bodyMedium),
           ],
         ),
       ),
@@ -550,8 +548,8 @@ class _CityOrderStrip extends ConsumerWidget {
               padding: const EdgeInsets.symmetric(horizontal: 6),
               child: Icon(Icons.arrow_forward_rounded,
                   size: 15,
-                  color:
-                      theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.6)),
+                  color: theme.colorScheme.onSurfaceVariant
+                      .withValues(alpha: 0.6)),
             ),
           Consumer(builder: (context, ref, _) {
             final label = ref.watch(clusterLabelProvider((
@@ -560,8 +558,7 @@ class _CityOrderStrip extends ConsumerWidget {
             )));
             final text = label.valueOrNull ?? _fallbackLabel(clusters[i]);
             return Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
               decoration: BoxDecoration(
                 color: theme.colorScheme.primary.withValues(alpha: 0.12),
                 borderRadius: BorderRadius.circular(9),
@@ -611,8 +608,8 @@ class _DayCard extends StatelessWidget {
     final dayNumber = tripStart == null
         ? null
         : planned.day
-                .difference(DateTime(
-                    tripStart!.year, tripStart!.month, tripStart!.day))
+                .difference(
+                    DateTime(tripStart!.year, tripStart!.month, tripStart!.day))
                 .inDays +
             1;
     final hours = (planned.usedMinutes / 60).toStringAsFixed(1);
@@ -628,8 +625,7 @@ class _DayCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: theme.cardColor.withValues(alpha: 0.6),
         borderRadius: BorderRadius.circular(14),
-        border:
-            Border.all(color: theme.dividerColor.withValues(alpha: 0.4)),
+        border: Border.all(color: theme.dividerColor.withValues(alpha: 0.4)),
       ),
       child: Theme(
         data: theme.copyWith(dividerColor: Colors.transparent),
@@ -642,8 +638,10 @@ class _DayCard extends StatelessWidget {
             decoration: BoxDecoration(color: color, shape: BoxShape.circle),
           ),
           title: Text(
-            '${dayNumber != null ? 'Day $dayNumber · ' : ''}'
-            '${DateFormat('EEE, MMM d').format(planned.day)}',
+            isOnTbdAnchor(planned.day)
+                ? 'Day ${dayNumber ?? '?'}'
+                : '${dayNumber != null ? 'Day $dayNumber · ' : ''}'
+                    '${DateFormat('EEE, MMM d').format(planned.day)}',
             style: theme.textTheme.titleSmall
                 ?.copyWith(fontWeight: FontWeight.w700),
           ),
@@ -679,14 +677,17 @@ class _DayCard extends StatelessWidget {
                         padding: const EdgeInsets.symmetric(
                             horizontal: 6, vertical: 2),
                         decoration: BoxDecoration(
-                          color: theme.colorScheme.primary
-                              .withValues(alpha: 0.1),
+                          color:
+                              theme.colorScheme.primary.withValues(alpha: 0.1),
                           borderRadius: BorderRadius.circular(6),
                         ),
                         child: Text(
                           oldDayById[id] == null
                               ? 'was Unscheduled'
-                              : 'was ${DateFormat('MMM d').format(oldDayById[id]!)}',
+                              : isOnTbdAnchor(oldDayById[id]!) &&
+                                      tripStart != null
+                                  ? 'was ${tripDayLabel(tripStart!, oldDayById[id]!)}'
+                                  : 'was ${DateFormat('MMM d').format(oldDayById[id]!)}',
                           style: theme.textTheme.labelSmall?.copyWith(
                               color: theme.colorScheme.primary,
                               fontWeight: FontWeight.w600),
@@ -922,8 +923,8 @@ class _FreeDayCard extends StatelessWidget {
     final dayNumber = tripStart == null
         ? null
         : day
-                .difference(DateTime(
-                    tripStart!.year, tripStart!.month, tripStart!.day))
+                .difference(
+                    DateTime(tripStart!.year, tripStart!.month, tripStart!.day))
                 .inDays +
             1;
     return Container(
@@ -941,8 +942,10 @@ class _FreeDayCard extends StatelessWidget {
           const SizedBox(width: 10),
           Expanded(
             child: Text(
-              '${dayNumber != null ? 'Day $dayNumber · ' : ''}'
-              '${DateFormat('EEE, MMM d').format(day)} — free day',
+              isOnTbdAnchor(day)
+                  ? 'Day ${dayNumber ?? '?'} — free day'
+                  : '${dayNumber != null ? 'Day $dayNumber · ' : ''}'
+                      '${DateFormat('EEE, MMM d').format(day)} — free day',
               style: theme.textTheme.bodyMedium
                   ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
             ),
