@@ -6,6 +6,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../providers/app_update_provider.dart';
 import '../providers/onboarding_checklist_provider.dart';
+import '../utils/store_links.dart';
 
 /// Floating "Update" pill for the home page's top-right corner.
 ///
@@ -23,10 +24,9 @@ import '../providers/onboarding_checklist_provider.dart';
 class AppUpdateBadge extends ConsumerWidget {
   const AppUpdateBadge({super.key});
 
-  static const _appStoreUrl = 'https://apps.apple.com/app/id6758559163';
+  static const _appStoreUrl = voyzaAppStoreUrl;
   static const _playMarketUrl = 'market://details?id=com.superiordev.voyza';
-  static const _playWebUrl =
-      'https://play.google.com/store/apps/details?id=com.superiordev.voyza';
+  static const _playWebUrl = voyzaPlayStoreUrl;
 
   Future<void> _openStore() async {
     if (Platform.isAndroid) {

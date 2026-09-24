@@ -117,6 +117,7 @@ class _NearbyPlacesPickerSheetState extends State<NearbyPlacesPickerSheet> {
       placeName: place.name,
       suggested: suggestPlaceTag(place.types),
       current: _tagFor(place),
+      placeTypes: place.types,
       confirmLabel: 'Use',
     );
     if (pick == null || !mounted) return;
@@ -135,6 +136,7 @@ class _NearbyPlacesPickerSheetState extends State<NearbyPlacesPickerSheet> {
           tag: tag,
           selected: true,
           dense: true,
+          placeTypes: place.types,
           onTap: () => _editTag(context, place),
         ),
       );

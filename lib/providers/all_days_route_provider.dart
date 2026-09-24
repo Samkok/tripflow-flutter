@@ -10,6 +10,7 @@ import '../providers/trip_listener_provider.dart';
 import '../providers/trip_provider.dart';
 import '../services/google_maps_service.dart';
 import '../services/marker_cache_service.dart';
+import '../utils/day_visibility.dart';
 import '../utils/marker_utils.dart';
 import '../utils/polyline_simplify.dart';
 import '../utils/trip_dates.dart';
@@ -103,6 +104,81 @@ final allDayStopsProvider = Provider<Map<DateTime, List<LocationModel>>>((ref) {
     if (stops.isNotEmpty) byDay[day] = stops;
   }
   return byDay;
+});
+
+/// Days the Entire-trip overlay is NOT drawing — toggled from the map's day
+/// legend. Empty = every day. Rebuilt (→ empty) whenever All-days mode flips,
+/// so the overview always opens complete and leaving it forgets the
+/// selection. Read it through [effectiveHiddenDays]: the map never goes
+/// blank.
+final hiddenTripDaysProvider = StateProvider<Set<DateTime>>((ref) {
+  ref.watch(allDaysModeProvider);
+  return const <DateTime>{};
+});
+
+/// One row of the map's day legend: a day that has stops, its colour, its
+/// label and whether the overlay currently draws it.
+class DayLegendEntry {
+  final DateTime day;
+
+  /// 1-based position in the trip.
+  final int number;
+  final Color color;
+
+  /// "Oct 6: 4 places". A trip without dates has nothing but the day
+  /// number to tell its days apart, so there it reads "Day 2: 4 places".
+  final String label;
+  final int stops;
+  final bool visible;
+
+  const DayLegendEntry({
+    required this.day,
+    required this.number,
+    required this.color,
+    required this.label,
+    required this.stops,
+    required this.visible,
+  });
+}
+
+/// The map's day legend, in trip order. Only days that have stops appear —
+/// an empty day draws nothing, so there is nothing to toggle.
+final tripDayLegendProvider = Provider<List<DayLegendEntry>>((ref) {
+  final axis = ref.watch(activeTripDayAxisProvider);
+  final stopsByDay = ref.watch(allDayStopsProvider);
+  final colors = ref.watch(tripDayColorsProvider);
+  final undated = ref.watch(activeTripDayLabelerProvider).tbd;
+  final hidden =
+      effectiveHiddenDays(ref.watch(hiddenTripDaysProvider), stopsByDay.keys);
+  return [
+    for (var i = 0; i < axis.length; i++)
+      if (stopsByDay[axis[i]] case final stops?)
+        DayLegendEntry(
+          day: axis[i],
+          number: i + 1,
+          color: colors[axis[i]] ?? kDayRouteColors[i % kDayRouteColors.length],
+          label: [
+            undated ? 'Day ${i + 1}' : DateFormat('MMM d').format(axis[i]),
+            '${stops.length} ${stops.length == 1 ? 'place' : 'places'}',
+          ].join(': '),
+          stops: stops.length,
+          visible: !hidden.contains(axis[i]),
+        ),
+  ];
+});
+
+/// [allDayStopsProvider] minus the legend-hidden days — what the map, the
+/// fit and the share capture actually work with.
+final visibleAllDayStopsProvider =
+    Provider<Map<DateTime, List<LocationModel>>>((ref) {
+  final all = ref.watch(allDayStopsProvider);
+  final hidden =
+      effectiveHiddenDays(ref.watch(hiddenTripDaysProvider), all.keys);
+  if (hidden.isEmpty) return all;
+  return {
+    for (final e in all.entries)
+      if (!hidden.contains(e.key)) e.key: e.value,
+  };
 });
 
 /// Process-lifetime cache of fetched day-route geometry, keyed by the day's
@@ -221,9 +297,13 @@ final allDaysPolylinesProvider = Provider<Set<Polyline>>((ref) {
   final routes = ref.watch(allDayRoutesProvider).valueOrNull ?? const {};
   final colors = ref.watch(tripDayColorsProvider);
   final axis = ref.watch(activeTripDayAxisProvider);
+  // Legend-hidden days keep their fetched geometry in the cache; they are
+  // simply not drawn, so re-showing one costs nothing.
+  final shown = ref.watch(visibleAllDayStopsProvider);
 
   final polylines = <Polyline>{};
   for (final day in axis) {
+    if (!shown.containsKey(day)) continue;
     final points = routes[day];
     if (points == null || points.isEmpty) continue;
     final color = colors[day] ?? kDayRouteColors.first;
@@ -269,6 +349,13 @@ String? locationIdFromAllDaysMarker(String markerId) {
   if (!markerId.startsWith(kAllDaysMarkerIdPrefix)) return null;
   final parts = markerId.split('|');
   return parts.length == 3 ? parts[2] : null;
+}
+
+/// The day (as the ISO string the id was built with) of an all-days marker.
+String? dayIsoFromAllDaysMarker(String markerId) {
+  if (!markerId.startsWith(kAllDaysMarkerIdPrefix)) return null;
+  final parts = markerId.split('|');
+  return parts.length == 3 ? parts[1] : null;
 }
 
 /// Markers for All-days mode: the same numbered, name-labeled marker style as
@@ -364,4 +451,24 @@ final allDaysMarkersProvider = FutureProvider<Set<Marker>>((ref) async {
     ));
   }
   return markers;
+});
+
+/// The All-days markers for the days the legend shows. Bitmaps are built for
+/// every day once ([allDaysMarkersProvider]); hiding a day only filters
+/// here, so a toggle is instant and never re-rasterises a pin.
+final visibleAllDaysMarkersProvider = Provider<Set<Marker>>((ref) {
+  final markers =
+      ref.watch(allDaysMarkersProvider).valueOrNull ?? const <Marker>{};
+  final all = ref.watch(allDayStopsProvider);
+  final hidden =
+      effectiveHiddenDays(ref.watch(hiddenTripDaysProvider), all.keys);
+  if (hidden.isEmpty) return markers;
+  final hiddenIso = {for (final d in hidden) d.toIso8601String()};
+  final shown = <Marker>{};
+  for (final m in markers) {
+    final iso = dayIsoFromAllDaysMarker(m.markerId.value);
+    if (iso != null && hiddenIso.contains(iso)) continue;
+    shown.add(m);
+  }
+  return shown;
 });

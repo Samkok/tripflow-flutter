@@ -48,6 +48,49 @@ unfurlers follow it to the function's OG tags:
 | **nginx** | `location ~ ^/t/(.+)$ { return 302 https://dkbibfjszsohtixjxlle.supabase.co/functions/v1/public-trip?t=$1; }` |
 | **Apache** | `.htaccess`: `RedirectMatch 302 ^/t/(.+)$ https://dkbibfjszsohtixjxlle.supabase.co/functions/v1/public-trip?t=$1` |
 
+## "Powered by VoyZa" in exported itineraries (`/?ref=itinerary#download`) — optional
+
+Every exported itinerary PDF links its "Powered by VoyZa" label to
+
+```
+https://voyza.xtremon.com/?ref=itinerary#download
+```
+
+(`voyzaGetAppUrl` in [lib/utils/store_links.dart](../lib/utils/store_links.dart)).
+A PDF is read on any phone or laptop and a link inside it is one fixed address,
+so it can't pick a store for its reader — the site has to. **Nothing needs
+deploying for the link to work:** it is the home page, opened at its download
+section, which shows both stores. Keep `id="download"` on that section and keep
+both store buttons in it.
+
+To send phones **straight into their own store** instead, add these to the
+site's `vercel.json` `redirects` (desktop readers, and iPads — which identify as
+Macs — still get the download section):
+
+```json
+{
+  "source": "/",
+  "has": [
+    { "type": "query", "key": "ref", "value": "itinerary" },
+    { "type": "header", "key": "user-agent", "value": ".*Android.*" }
+  ],
+  "destination": "https://play.google.com/store/apps/details?id=com.superiordev.voyza",
+  "permanent": false
+},
+{
+  "source": "/",
+  "has": [
+    { "type": "query", "key": "ref", "value": "itinerary" },
+    { "type": "header", "key": "user-agent", "value": ".*(iPhone|iPod).*" }
+  ],
+  "destination": "https://apps.apple.com/app/id6758559163",
+  "permanent": false
+}
+```
+
+Keep them temporary (302/307): PDFs already out there carry this address for
+good, and a cached permanent redirect could never be taken back.
+
 ## Done when
 
 - `https://voyza.xtremon.com/r/VOYZA-TEST12` renders with the code `VOYZA-TEST12`
@@ -55,3 +98,6 @@ unfurlers follow it to the function's OG tags:
 - Both store buttons resolve (App Store link is live; Play link once the app is published)
 - `https://voyza.xtremon.com/t/anything` 302s to the public-trip function URL
   (test with `curl -sI` and check the `location:` header)
+- `https://voyza.xtremon.com/?ref=itinerary#download` opens the home page at its
+  download section — or, with the optional rule, the right store on a phone
+  (test with `curl -sI -A Android 'https://voyza.xtremon.com/?ref=itinerary'`)

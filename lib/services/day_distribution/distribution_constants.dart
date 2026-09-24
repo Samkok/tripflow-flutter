@@ -70,3 +70,16 @@ const double kAccommodationHomeMaxMeters = 60000;
 /// overshoots the time budget by more than this (small overruns are the
 /// user's call).
 const int kOverBudgetToleranceMinutes = 60;
+
+/// Seating a place on a weekday it is closed costs this much extra distance
+/// while another day of the same city is open and has room — a strong push
+/// to the right day, never a refusal (an open day may simply not exist).
+const double kClosedDayPenaltyMeters = 30000;
+
+/// A swap or move between two days must bring the stops involved at least
+/// this much closer to their day centres to be taken — filters jitter.
+const double kSwapMinGainMeters = 50;
+
+/// Improvement passes over a city block's days. Each pass is O(n²) in the
+/// block's stops; real trips converge in two or three.
+const int kMaxSwapPasses = 25;

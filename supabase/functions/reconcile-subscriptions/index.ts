@@ -1,14 +1,24 @@
 // Supabase Edge Function: Subscription Reconciliation
 // Safety net for the revenuecat-webhook. Periodically (via pg_cron) re-checks
-// every `active` row in user_subscriptions against the RevenueCat REST API and:
-//   - expires rows RevenueCat no longer grants the entitlement for, and
-//   - heals rows whose product/expiry drifted from RevenueCat (e.g. TRANSFER
-//     rows left with NULL expires_at).
+// user_subscriptions rows against the RevenueCat REST API and:
+//   - expires `active` rows RevenueCat no longer grants the entitlement for,
+//   - heals `active` rows whose product/expiry drifted from RevenueCat (e.g.
+//     TRANSFER rows left with NULL expires_at), and
+//   - revives `expired` rows RevenueCat says are active again. That is what a
+//     dead webhook leaves behind: from 2026-08-24 to 09-22 no purchase or
+//     renewal reached the table, every row drifted to `expired`, and nothing
+//     could bring one back because only `active` rows were ever re-checked.
 //
-// This closes the gap where lifecycle events (CANCELLATION/EXPIRATION) keep
-// arriving under an original/anonymous RC id the webhook can't map back to the
-// account, leaving it stuck 'active' = free access. RevenueCat is the source of
-// truth; we reconcile against it instead of relying on every event being routable.
+// Which rows: every `active` row, plus `expired` rows updated in the last
+// RECHECK_EXPIRED_DAYS (an outage shows up as rows that went quiet).
+// POST {"scope":"all"} re-checks every expired row regardless of age — a
+// manual, capped backfill after a long outage.
+//
+// A row that does not exist cannot be reconciled: someone whose very first
+// purchase was lost has no row until the webhook delivers their next event.
+//
+// RevenueCat is the source of truth; we reconcile against it instead of relying
+// on every event being routable. Unknown (API error) = change nothing.
 //
 // Auth: verify_jwt = true AND an in-function role=service_role claim check
 // (verify_jwt alone also accepts the PUBLIC anon key). The pg_cron caller sends
@@ -25,6 +35,14 @@ const supabase = createClient(supabaseUrl, supabaseServiceRoleKey);
 
 const ENTITLEMENT = "premium";
 
+// Expired rows younger than this are re-checked every run (one RC call each);
+// older ones only on a manual scope=all run.
+const RECHECK_EXPIRED_DAYS = 90;
+// Per-run caps keep a run well inside the function's wall-clock budget
+// (roughly 0.3 s per RevenueCat call).
+const MAX_RECENT_EXPIRED = 150;
+const MAX_ALL_EXPIRED = 500;
+
 interface RcEntitlementState {
   isActive: boolean;
   productIdentifier: string | null;
@@ -32,6 +50,17 @@ interface RcEntitlementState {
   periodType: string | null;
   store: string | null;
   willRenew: boolean;
+  purchaseDate: string | null; // ISO 8601: latest purchase/renewal of that product
+  unsubscribeDetectedAt: string | null;
+  billingIssuesDetectedAt: string | null;
+}
+
+interface SubscriptionRow {
+  user_id: string;
+  revenuecat_app_user_id: string | null;
+  status: string;
+  product_identifier: string | null;
+  expires_at: string | null;
 }
 
 /**
@@ -80,17 +109,66 @@ async function fetchRcEntitlementState(
     const isActive = !!ent &&
       (expiresDate === null || new Date(expiresDate).getTime() > now);
 
+    // The v1 subscriber object carries no will_renew, so derive it: a dated,
+    // active subscription renews unless RevenueCat has seen auto-renew
+    // switched off; a lifetime unlock has nothing to renew.
+    const unsubscribeDetectedAt: string | null =
+      sub?.unsubscribe_detected_at ?? null;
+    const willRenew =
+      isActive && expiresDate !== null && unsubscribeDetectedAt === null;
+
     return {
       isActive,
       productIdentifier: productId,
       expiresAt: expiresDate,
       periodType: sub?.period_type ?? null,
       store: sub?.store ? String(sub.store).toUpperCase() : null,
-      willRenew: sub?.will_renew ?? false,
+      willRenew,
+      purchaseDate: sub?.purchase_date ?? ent?.purchase_date ?? null,
+      unsubscribeDetectedAt,
+      billingIssuesDetectedAt: sub?.billing_issues_detected_at ?? null,
     };
   } catch (e) {
     console.error(`Failed to fetch RC state for ${appUserId} (skipping):`, e);
     return null;
+  }
+}
+
+/**
+ * Write RevenueCat's view of a row. With `state` null the row is expired and
+ * its product/expiry details are left as they were (the RPC keeps existing
+ * values for null inputs). Every write is audited as a RECONCILE event.
+ */
+async function writeRow(
+  row: SubscriptionRow,
+  status: "active" | "expired",
+  state: RcEntitlementState | null,
+) {
+  const { error } = await supabase.rpc("upsert_subscription_status", {
+    p_user_id: row.user_id,
+    p_revenuecat_app_user_id: row.revenuecat_app_user_id ?? row.user_id,
+    p_status: status,
+    p_entitlement: ENTITLEMENT,
+    p_product_identifier: state?.productIdentifier ?? null,
+    p_store: state?.store ?? null,
+    p_expires_at: state?.expiresAt ?? null,
+    p_period_type: state?.periodType ?? null,
+    p_purchase_date: state?.purchaseDate ?? null,
+    p_will_renew: state?.willRenew ?? false,
+    p_billing_issues_detected_at: state?.billingIssuesDetectedAt ?? null,
+    p_unsubscribe_detected_at: state?.unsubscribeDetectedAt ?? null,
+    p_event_type: "RECONCILE",
+  });
+  return error;
+}
+
+/** `{"scope":"all"}` widens the expired-row pass; anything else is the default. */
+async function readScope(req: Request): Promise<"recent" | "all"> {
+  try {
+    const body = await req.json();
+    return body?.scope === "all" ? "all" : "recent";
+  } catch {
+    return "recent";
   }
 }
 
@@ -126,9 +204,15 @@ serve(async (req) => {
     });
   }
 
+  const scope = await readScope(req);
+
   const summary = {
+    scope,
     checked: 0,
+    active_rows: 0,
+    expired_rows: 0,
     expired: 0,
+    revived: 0,
     healed: 0,
     skipped_unknown: 0,
     unchanged: 0,
@@ -136,20 +220,50 @@ serve(async (req) => {
   };
 
   try {
-    const { data: rows, error } = await supabase
-      .from("user_subscriptions")
-      .select("user_id, revenuecat_app_user_id, status, product_identifier, expires_at")
-      .eq("status", "active");
+    const columns =
+      "user_id, revenuecat_app_user_id, status, product_identifier, expires_at";
 
-    if (error) {
-      console.error("Failed to load active subscriptions:", error);
+    const { data: activeRows, error: activeErr } = await supabase
+      .from("user_subscriptions")
+      .select(columns)
+      .eq("status", "active");
+    if (activeErr) {
+      console.error("Failed to load active subscriptions:", activeErr);
       return new Response(
         JSON.stringify({ error: "DB read failed" }),
         { status: 500, headers: { "Content-Type": "application/json" } },
       );
     }
 
-    for (const row of rows ?? []) {
+    // Most recently touched first, so a capped run still covers the rows most
+    // likely to have changed.
+    const expiredQuery = supabase
+      .from("user_subscriptions")
+      .select(columns)
+      .eq("status", "expired")
+      .order("updated_at", { ascending: false });
+    const since = new Date(
+      Date.now() - RECHECK_EXPIRED_DAYS * 86_400_000,
+    ).toISOString();
+    const { data: expiredRows, error: expiredErr } = scope === "all"
+      ? await expiredQuery.limit(MAX_ALL_EXPIRED)
+      : await expiredQuery.gte("updated_at", since).limit(MAX_RECENT_EXPIRED);
+    if (expiredErr) {
+      console.error("Failed to load expired subscriptions:", expiredErr);
+      return new Response(
+        JSON.stringify({ error: "DB read failed" }),
+        { status: 500, headers: { "Content-Type": "application/json" } },
+      );
+    }
+
+    const rows: SubscriptionRow[] = [
+      ...((activeRows ?? []) as SubscriptionRow[]),
+      ...((expiredRows ?? []) as SubscriptionRow[]),
+    ];
+    summary.active_rows = activeRows?.length ?? 0;
+    summary.expired_rows = expiredRows?.length ?? 0;
+
+    for (const row of rows) {
       summary.checked++;
 
       // Reconcile against the id RevenueCat actually keys this subscriber by.
@@ -162,25 +276,30 @@ serve(async (req) => {
         continue;
       }
 
+      if (row.status !== "active") {
+        // An expired row: only RevenueCat saying "active" changes anything.
+        if (!state.isActive) {
+          summary.unchanged++;
+          continue;
+        }
+        const err = await writeRow(row, "active", state);
+        if (err) {
+          console.error(`Failed to revive ${row.user_id}:`, err);
+          summary.errors++;
+        } else {
+          console.log(
+            `Revived ${row.user_id} (RC: active ${ENTITLEMENT}, expires ${state.expiresAt ?? "never"})`,
+          );
+          summary.revived++;
+        }
+        continue;
+      }
+
       if (!state.isActive) {
         // RevenueCat no longer grants the entitlement → expire the stuck row.
-        const { error: rpcErr } = await supabase.rpc("upsert_subscription_status", {
-          p_user_id: row.user_id,
-          p_revenuecat_app_user_id: row.revenuecat_app_user_id ?? row.user_id,
-          p_status: "expired",
-          p_entitlement: ENTITLEMENT,
-          p_product_identifier: null,
-          p_store: null,
-          p_expires_at: null,
-          p_period_type: null,
-          p_purchase_date: null,
-          p_will_renew: false,
-          p_billing_issues_detected_at: null,
-          p_unsubscribe_detected_at: null,
-          p_event_type: "RECONCILE",
-        });
-        if (rpcErr) {
-          console.error(`Failed to expire ${row.user_id}:`, rpcErr);
+        const err = await writeRow(row, "expired", null);
+        if (err) {
+          console.error(`Failed to expire ${row.user_id}:`, err);
           summary.errors++;
         } else {
           console.log(`Expired ${row.user_id} (RC: no active ${ENTITLEMENT})`);
@@ -200,23 +319,9 @@ serve(async (req) => {
         state.productIdentifier !== null;
 
       if (expiryDrift || productDrift) {
-        const { error: rpcErr } = await supabase.rpc("upsert_subscription_status", {
-          p_user_id: row.user_id,
-          p_revenuecat_app_user_id: row.revenuecat_app_user_id ?? row.user_id,
-          p_status: "active",
-          p_entitlement: ENTITLEMENT,
-          p_product_identifier: state.productIdentifier,
-          p_store: state.store,
-          p_expires_at: state.expiresAt,
-          p_period_type: state.periodType,
-          p_purchase_date: null,
-          p_will_renew: state.willRenew,
-          p_billing_issues_detected_at: null,
-          p_unsubscribe_detected_at: null,
-          p_event_type: "RECONCILE",
-        });
-        if (rpcErr) {
-          console.error(`Failed to heal ${row.user_id}:`, rpcErr);
+        const err = await writeRow(row, "active", state);
+        if (err) {
+          console.error(`Failed to heal ${row.user_id}:`, err);
           summary.errors++;
         } else {
           console.log(`Healed ${row.user_id} (backfilled product/expiry from RC)`);

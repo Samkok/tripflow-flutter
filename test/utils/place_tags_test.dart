@@ -68,4 +68,71 @@ void main() {
       }
     });
   });
+
+  group('transport modes', () {
+    test('the mode comes from the place types, most specific first', () {
+      expect(transportModeFor(['airport', 'bus_station', 'establishment']),
+          TransportMode.air);
+      expect(transportModeFor(['ferry_terminal', 'transit_station']),
+          TransportMode.ferry);
+      expect(transportModeFor(['train_station', 'bus_station']),
+          TransportMode.rail);
+      expect(transportModeFor(['subway_station']), TransportMode.rail);
+      expect(transportModeFor(['bus_stop']), TransportMode.bus);
+      expect(transportModeFor(['car_rental']), TransportMode.road);
+      expect(transportModeFor(['transit_station']), TransportMode.other,
+          reason: 'a bare transit_station says nothing about the mode');
+      expect(transportModeFor(null), TransportMode.other);
+      expect(transportModeFor(const []), TransportMode.other);
+      expect(transportModeFor([' AIRPORT ']), TransportMode.air);
+    });
+
+    test('a Transport place shows its mode; other tags are unchanged', () {
+      const airport = ['airport', 'point_of_interest'];
+      expect(placeTagLabel(PlaceTag.transport, airport), 'Airport');
+      expect(placeTagIcon(PlaceTag.transport, airport), Icons.flight_rounded);
+      expect(placeTagLabel(PlaceTag.transport, ['train_station']), 'Train');
+      expect(
+          placeTagLabel(PlaceTag.transport, ['transit_station']), 'Transport');
+      expect(placeTagLabel(PlaceTag.transport, null), 'Transport');
+      expect(placeTagIcon(PlaceTag.transport, null),
+          Icons.directions_transit_rounded);
+      // A museum next to a station is still Culture.
+      expect(placeTagLabel(PlaceTag.culture, ['train_station']), 'Culture');
+      expect(placeTagIcon(PlaceTag.culture, ['train_station']),
+          PlaceTag.culture.icon);
+    });
+
+    test('a hand-picked mode wins over Google and can be handed back', () {
+      const google = ['transit_station', 'point_of_interest'];
+      // Google says nothing useful → the traveller picks Train.
+      final picked = placeTypesWithModeOverride(google, TransportMode.rail);
+      expect(picked, [...google, 'voyza:mode:rail']);
+      expect(transportModeFor(picked), TransportMode.rail);
+      expect(transportModeOverride(picked), TransportMode.rail);
+      expect(placeTagLabel(PlaceTag.transport, picked), 'Train');
+      // Google's own suggestion is untouched by the marker.
+      expect(suggestPlaceTag(picked), PlaceTag.transport);
+      // Picking again replaces, not stacks.
+      final repicked = placeTypesWithModeOverride(picked, TransportMode.bus);
+      expect(repicked.where((t) => t.startsWith('voyza:mode:')).length, 1);
+      expect(transportModeFor(repicked), TransportMode.bus);
+      // The choice beats a Google type that disagrees.
+      expect(transportModeFor(['airport', 'voyza:mode:ferry']),
+          TransportMode.ferry);
+      // Handing back: Google decides again; a pin with no types is plain.
+      expect(transportModeFor(placeTypesWithModeOverride(repicked, null)),
+          TransportMode.other);
+      expect(placeTypesWithModeOverride(null, TransportMode.air),
+          ['voyza:mode:air']);
+      expect(transportModeFor(['voyza:mode:other']), TransportMode.other);
+    });
+
+    test('every mode has its own label and icon', () {
+      final labels = {for (final m in TransportMode.values) m.label};
+      final icons = {for (final m in TransportMode.values) m.icon};
+      expect(labels.length, TransportMode.values.length);
+      expect(icons.length, TransportMode.values.length);
+    });
+  });
 }

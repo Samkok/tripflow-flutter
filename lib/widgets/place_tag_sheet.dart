@@ -6,12 +6,17 @@ import '../utils/place_tags.dart';
 /// A tag as a small pill: colour dot + label. Selected = tinted with the
 /// tag's colour; [highlighted] draws the suggestion outline on an
 /// unselected chip; [onTap] null = read-only.
+///
+/// With the place's Google [placeTypes], the Transport chip shows the
+/// place's mode instead of the generic dot and word: a plane and "Airport",
+/// a train and "Train" — same tag, same colour, one glance more specific.
 class PlaceTagChip extends StatelessWidget {
   final PlaceTag tag;
   final bool selected;
   final bool highlighted;
   final bool dense;
   final VoidCallback? onTap;
+  final Iterable<String>? placeTypes;
 
   const PlaceTagChip({
     super.key,
@@ -20,6 +25,7 @@ class PlaceTagChip extends StatelessWidget {
     this.highlighted = false,
     this.dense = false,
     this.onTap,
+    this.placeTypes,
   });
 
   @override
@@ -27,6 +33,11 @@ class PlaceTagChip extends StatelessWidget {
     final theme = Theme.of(context);
     final color = tag.color;
     final fg = selected ? color : theme.colorScheme.onSurface;
+    final label = placeTagLabel(tag, placeTypes);
+    final modeIcon = tag == PlaceTag.transport &&
+            transportModeFor(placeTypes) != TransportMode.other
+        ? placeTagIcon(tag, placeTypes)
+        : null;
     final border = selected
         ? color
         : highlighted
@@ -50,22 +61,84 @@ class PlaceTagChip extends StatelessWidget {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Container(
-                width: dense ? 8 : 10,
-                height: dense ? 8 : 10,
-                decoration: BoxDecoration(
-                  color: color,
-                  shape: BoxShape.circle,
-                  border: Border.all(color: Colors.white, width: 1),
+              // The coloured mark: the tag's dot, or — on Transport with a
+              // known mode — the mode's icon in the tag colour.
+              if (modeIcon != null)
+                Icon(modeIcon, size: dense ? 13 : 15, color: color)
+              else
+                Container(
+                  width: dense ? 8 : 10,
+                  height: dense ? 8 : 10,
+                  decoration: BoxDecoration(
+                    color: color,
+                    shape: BoxShape.circle,
+                    border: Border.all(color: Colors.white, width: 1),
+                  ),
                 ),
-              ),
               SizedBox(width: dense ? 5 : 7),
               Text(
-                tag.label,
+                label,
                 style: (dense
                         ? theme.textTheme.labelSmall
                         : theme.textTheme.labelMedium)
                     ?.copyWith(
+                  color: fg,
+                  fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// One kind of transport as a small pill — mode icon + label in the
+/// Transport colour when [selected], quiet otherwise. Sits under the tag
+/// chips of a Transport-tagged place so the traveller can say what it is
+/// when Google didn't, or got it wrong.
+class TransportModeChip extends StatelessWidget {
+  final TransportMode mode;
+  final bool selected;
+  final VoidCallback? onTap;
+
+  const TransportModeChip({
+    super.key,
+    required this.mode,
+    required this.selected,
+    this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final color = PlaceTag.transport.color;
+    final fg = selected ? color : theme.colorScheme.onSurface;
+    return Material(
+      color: selected ? color.withValues(alpha: 0.16) : Colors.transparent,
+      borderRadius: BorderRadius.circular(999),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(999),
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(
+              color:
+                  selected ? color : theme.dividerColor.withValues(alpha: 0.6),
+              width: selected ? 1.4 : 1,
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(mode.icon, size: 14, color: fg),
+              const SizedBox(width: 5),
+              Text(
+                mode.label,
+                style: theme.textTheme.labelSmall?.copyWith(
                   color: fg,
                   fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
                 ),
@@ -90,11 +163,14 @@ class PlaceTagPick {
 /// [suggested] tag (from Google's place types) starts selected — tapping
 /// Confirm keeps it, tapping another chip swaps it, "No tag" drops it.
 /// [current] wins over the suggestion when editing an already-tagged stop.
+/// [placeTypes] lets the Transport chip name the place's mode (Airport,
+/// Train, …).
 Future<PlaceTagPick?> showPlaceTagSheet(
   BuildContext context, {
   required String placeName,
   PlaceTag? suggested,
   PlaceTag? current,
+  Iterable<String>? placeTypes,
   String confirmLabel = 'Confirm',
 }) {
   return showModalBottomSheet<PlaceTagPick>(
@@ -106,6 +182,7 @@ Future<PlaceTagPick?> showPlaceTagSheet(
       placeName: placeName,
       suggested: suggested,
       initial: current ?? suggested,
+      placeTypes: placeTypes,
       confirmLabel: confirmLabel,
     ),
   );
@@ -115,12 +192,14 @@ class _PlaceTagSheet extends StatefulWidget {
   final String placeName;
   final PlaceTag? suggested;
   final PlaceTag? initial;
+  final Iterable<String>? placeTypes;
   final String confirmLabel;
 
   const _PlaceTagSheet({
     required this.placeName,
     required this.suggested,
     required this.initial,
+    required this.placeTypes,
     required this.confirmLabel,
   });
 
@@ -194,6 +273,7 @@ class _PlaceTagSheetState extends State<_PlaceTagSheet> {
                     tag: t,
                     selected: t == _selected,
                     highlighted: t == suggested,
+                    placeTypes: widget.placeTypes,
                     onTap: () =>
                         setState(() => _selected = (_selected == t) ? null : t),
                   ),
@@ -216,12 +296,15 @@ class _PlaceTagSheetState extends State<_PlaceTagSheet> {
                     onPressed: () =>
                         Navigator.of(context).pop(PlaceTagPick(_selected)),
                     icon: Icon(
-                      _selected?.icon ?? Icons.label_off_outlined,
+                      _selected == null
+                          ? Icons.label_off_outlined
+                          : placeTagIcon(_selected!, widget.placeTypes),
                       size: 18,
                     ),
                     label: Text(_selected == null
                         ? 'Add without a tag'
-                        : '${widget.confirmLabel}: ${_selected!.label}'),
+                        : '${widget.confirmLabel}: '
+                            '${placeTagLabel(_selected!, widget.placeTypes)}'),
                   ),
                 ),
               ],

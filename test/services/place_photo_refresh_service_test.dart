@@ -39,6 +39,7 @@ PhotoRefreshTarget target({
   List<String> refs = const ['old1', 'old2'],
   DateTime? createdAt,
   String? tripId = 'trip1',
+  bool hasPlaceTypes = false,
 }) =>
     PhotoRefreshTarget(
       id: id,
@@ -46,6 +47,7 @@ PhotoRefreshTarget target({
       refs: refs,
       createdAt: createdAt ?? DateTime(2026, 9, 1),
       tripId: tripId,
+      hasPlaceTypes: hasPlaceTypes,
     );
 
 /// Lets the fire-and-forget renewals run to completion.
@@ -77,6 +79,33 @@ void main() {
     final record = PhotoRefreshRecord.decode(h.record('P1'));
     expect(record?.at, h.now);
     expect(record?.signature, PhotoRefreshPolicy.signature(fresh));
+  });
+
+  test('a row without place types takes Google\'s, photos unchanged or not',
+      () async {
+    final h = _Harness();
+    const types = ['airport', 'point_of_interest'];
+    // Same photos as the row holds — only the types are news.
+    h.answers['P1'] =
+        const PlacePhotosResult.ok(['old1', 'old2'], types: types);
+    final r = await h.svc.refreshNow(target());
+    expect(r.outcome, PhotoRefreshOutcome.unchanged,
+        reason: 'the photos are what the user asked about');
+    expect(h.saves, hasLength(1));
+    expect(h.saves.single.updates['place_types'], types);
+
+    // A row that already has types keeps them (a hand-picked mode may live
+    // there): the session answer is not applied to it.
+    h.saves.clear();
+    h.svc.noteLoadFailed(target(id: 'loc2', hasPlaceTypes: true));
+    await settle();
+    expect(h.saves, isEmpty);
+
+    // An answer with no types never writes an empty list.
+    h.answers['P2'] = const PlacePhotosResult.ok(['old1', 'old2']);
+    expect((await h.svc.refreshNow(target(id: 'loc3', placeId: 'P2'))).outcome,
+        PhotoRefreshOutcome.unchanged);
+    expect(h.saves, isEmpty);
   });
 
   test('a sibling copy of the place is updated from the session answer',

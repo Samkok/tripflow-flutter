@@ -504,15 +504,16 @@ class AuthService {
     }
   }
 
-  /// Permanently delete the current user's account and all associated data
-  /// This includes:
-  /// - All locations created by the user
-  /// - All trips owned by the user
-  /// - Trip collaborations
-  /// - User profile
-  /// - Subscription records (via CASCADE)
-  /// - Local cache and storage
-  /// - Supabase auth account
+  /// Permanently deletes the current user's account. The server does it in
+  /// one transaction (`delete_user_account`):
+  /// - places the user added to OTHER people's trips are handed over to
+  ///   those trip owners — a member's deletion never empties someone
+  ///   else's plan;
+  /// - the user's own places, trips and profile are deleted (places other
+  ///   members added to those trips fall back to their authors);
+  /// - the login itself, with subscriptions, collaborations, tokens and the
+  ///   rest cascading.
+  /// Then the local cache, the RevenueCat identity and the local session go.
   Future<void> deleteAccount() async {
     final user = _supabase.auth.currentUser;
     if (user == null) {
@@ -522,28 +523,21 @@ class AuthService {
     try {
       debugPrint('AuthService: Starting account deletion for user ${user.id}');
 
-      // Step 1: Delete all user's locations
-      debugPrint('AuthService: Deleting user locations...');
-      await _supabase.from('locations').delete().eq('user_id', user.id);
-      debugPrint('AuthService: User locations deleted');
+      // Step 1: everything server-side, in ONE transaction
+      // (delete_user_account): the places this user added to other people's
+      // trips are handed to those trip owners, the user's own places, trips
+      // and profile are deleted, then the login itself. All or nothing — a
+      // failure leaves the account fully intact. The app used to delete
+      // table by table first: that removed the user's places from OTHER
+      // people's trips, and a late failure left a half-deleted account.
+      await _supabase.rpc('delete_user_account');
+      debugPrint('AuthService: Server-side deletion done');
 
-      // Step 2: Delete all trips owned by user
-      debugPrint('AuthService: Deleting user trips...');
-      await _supabase.from('trips').delete().eq('user_id', user.id);
-      debugPrint('AuthService: User trips deleted');
-
-      // Step 3: Delete user profile (this will CASCADE delete subscriptions and collaborations)
-      debugPrint('AuthService: Deleting user profile...');
-      await _userProfileRepository.deleteUserProfile(user.id);
-      debugPrint('AuthService: User profile deleted');
-
-      // Step 4: Clear local storage
-      debugPrint('AuthService: Clearing local storage...');
+      // Step 2: Clear local storage
       await _clearLocalStorage();
       debugPrint('AuthService: Local storage cleared');
 
-      // Step 5: Logout from RevenueCat (creates new anonymous user)
-      debugPrint('AuthService: Logging out from RevenueCat...');
+      // Step 3: Logout from RevenueCat (creates new anonymous user)
       try {
         await RevenueCatService.waitForInitialization();
         final revenueCatService = RevenueCatService();
@@ -551,16 +545,15 @@ class AuthService {
         debugPrint('AuthService: RevenueCat logout successful');
       } catch (e) {
         debugPrint('AuthService: RevenueCat logout failed (non-critical): $e');
-        // Continue with deletion even if RevenueCat logout fails
       }
 
-      // Step 6: Delete Supabase auth account (this signs the user out)
-      debugPrint('AuthService: Deleting Supabase auth account...');
-
-      // Use admin API to delete user account
-      // Note: This requires RLS policies to allow users to delete their own account
-      // or using a Supabase Edge Function with service role key
-      await _supabase.rpc('delete_user_account');
+      // Step 4: Drop the local session. The login no longer exists, so
+      // this is what fires `signedOut` for the navigator listener.
+      try {
+        await _supabase.auth.signOut(scope: SignOutScope.local);
+      } catch (e) {
+        debugPrint('AuthService: local sign-out after deletion failed: $e');
+      }
 
       debugPrint('AuthService: Account deletion completed successfully');
     } catch (e) {

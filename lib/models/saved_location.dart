@@ -166,6 +166,14 @@ class SavedLocation extends HiveObject {
   @HiveField(26)
   final List<String>? placeTypes;
 
+  /// True when this place was HANDED OVER to the trip owner: a member who
+  /// added it left the trip, was removed, or deleted their account (server
+  /// column `handed_over_from`, set by the hand-over functions only). The
+  /// owner keeps the place, and it does not count against their free-place
+  /// allowance — they never added it. Read-only here: never sent back.
+  @HiveField(27, defaultValue: false)
+  final bool handedOver;
+
   SavedLocation({
     required this.id,
     required this.userId,
@@ -194,6 +202,7 @@ class SavedLocation extends HiveObject {
     this.isAccommodation = false,
     this.tag,
     this.placeTypes,
+    this.handedOver = false,
   });
 
   /// Effective gallery list: prefers [photoReferences]; falls back to a
@@ -244,6 +253,7 @@ class SavedLocation extends HiveObject {
     // Sentinel-nullable: `copyWith(tag: null)` really CLEARS the tag.
     Object? tag = _unset,
     List<String>? placeTypes,
+    bool? handedOver,
   }) {
     return SavedLocation(
       id: id ?? this.id,
@@ -279,6 +289,7 @@ class SavedLocation extends HiveObject {
       isAccommodation: isAccommodation ?? this.isAccommodation,
       tag: identical(tag, _unset) ? this.tag : tag as String?,
       placeTypes: placeTypes ?? this.placeTypes,
+      handedOver: handedOver ?? this.handedOver,
     );
   }
 
@@ -333,6 +344,7 @@ class SavedLocation extends HiveObject {
           : null,
       isAccommodation: json['is_accommodation'] ?? false,
       tag: json['tag'] as String?,
+      handedOver: json['handed_over_from'] != null,
       placeTypes:
           (json['place_types'] as List?)?.map((e) => e.toString()).toList(),
     );

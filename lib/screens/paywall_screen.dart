@@ -1394,7 +1394,6 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
           await repo.logTrialStart(
             userId: user.id,
             deviceId: deviceId,
-            productIdentifier: productId,
           );
           debugPrint('PaywallScreen: ✅ Trial logged to trial_devices table');
 

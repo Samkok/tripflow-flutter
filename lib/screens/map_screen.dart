@@ -14,6 +14,7 @@ import 'package:voyza/screens/location_search_screen.dart';
 // import 'package:voyza/screens/login_screen.dart'; // DISABLED with first-optimize celebration (2026-08-07)
 import 'package:voyza/widgets/static_glow.dart';
 import 'package:voyza/widgets/route_leg_sheet.dart';
+import 'package:voyza/widgets/day_legend.dart';
 import 'package:voyza/widgets/tag_legend.dart';
 import 'package:voyza/providers/onboarding_checklist_provider.dart';
 import 'package:voyza/widgets/onboarding_checklist.dart';
@@ -729,9 +730,10 @@ class _MapScreenState extends ConsumerState<MapScreen>
     final allDaysMode = ref.read(allDaysModeProvider);
     if (allDaysMode) {
       // All-days share: needs the whole-trip overlays, not the selected-date
-      // optimized route.
+      // optimized route — at least one route among the days the legend shows.
+      final shownDays = ref.read(visibleAllDayStopsProvider);
       final routes = ref.read(allDayRoutesProvider).valueOrNull ?? const {};
-      if (routes.isEmpty) {
+      if (!routes.keys.any(shownDays.containsKey)) {
         if (mounted) {
           AppToast.info(
               context, 'Your day routes are still loading — try again.');
@@ -791,11 +793,30 @@ class _MapScreenState extends ConsumerState<MapScreen>
       // whole-trip numbers (every location, every day) — not the selected
       // day's optimized-route count (which is 0 unless that day was just
       // optimized).
+      // With days hidden in the legend, the card describes what it shows:
+      // the shown days and the distinct places on them. Otherwise the
+      // whole trip: every day in the range, every place.
       final int? shareDaysCount;
       final int? shareTotalPlaces;
+      List<ShareDayLegendEntry>? shareDayLegend;
       if (allDaysMode) {
-        shareDaysCount = ref.read(activeTripDayAxisProvider).length;
-        shareTotalPlaces = ref.read(tripProvider).pinnedLocations.length;
+        final legend = ref.read(tripDayLegendProvider);
+        final shown = legend.where((e) => e.visible).toList();
+        shareDayLegend = [
+          for (final e in shown)
+            ShareDayLegendEntry(color: e.color, label: e.label),
+        ];
+        if (shown.length == legend.length) {
+          shareDaysCount = ref.read(activeTripDayAxisProvider).length;
+          shareTotalPlaces = ref.read(tripProvider).pinnedLocations.length;
+        } else {
+          final shownStops = ref.read(visibleAllDayStopsProvider);
+          shareDaysCount = shown.length;
+          shareTotalPlaces = {
+            for (final stops in shownStops.values)
+              for (final l in stops) l.id,
+          }.length;
+        }
       } else {
         shareDaysCount = null;
         shareTotalPlaces = null;
@@ -833,6 +854,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
           roastLine: roastLine,
           daysCount: shareDaysCount,
           dayLabel: shareDayLabel,
+          dayLegend: shareDayLegend,
           format: format,
         );
       }
@@ -1840,6 +1862,20 @@ class _MapScreenState extends ConsumerState<MapScreen>
       });
     });
 
+    // Showing or hiding a day from the legend changes what is on the map —
+    // re-frame to the days now shown. (The provider is rebuilt empty when
+    // the mode flips; that transition is handled by the listener above.)
+    ref.listen<Set<DateTime>>(hiddenTripDaysProvider, (previous, next) {
+      if (previous == null ||
+          (previous.length == next.length && previous.containsAll(next))) {
+        return;
+      }
+      if (!ref.read(allDaysModeProvider)) return;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _zoomToFitAllDays();
+      });
+    });
+
     // Trip activation / switch / deactivation. The locations list refreshes
     // asynchronously via _initSyncListener, so we mark a pending camera
     // move here and execute it once pinnedLocations next emits below —
@@ -2260,9 +2296,20 @@ class _MapScreenState extends ConsumerState<MapScreen>
                             children: [
                               // Goal-gradient progress: free users see how much of the
                               // free-place allowance (10) is used, live. Hidden for Pro.
-                              const Padding(
-                                padding: EdgeInsets.only(top: 8),
-                                child: FreePlacesProgressChip(),
+                              // In Entire-trip mode it moves to the right, out from
+                              // under the day legend's rows ("Day 1: Oct 5: 3 places"
+                              // reaches well past the centre of a phone).
+                              Consumer(
+                                builder: (context, ref, child) => Align(
+                                  alignment: ref.watch(allDaysModeProvider)
+                                      ? Alignment.centerRight
+                                      : Alignment.center,
+                                  child: child,
+                                ),
+                                child: const Padding(
+                                  padding: EdgeInsets.only(top: 8),
+                                  child: FreePlacesProgressChip(),
+                                ),
                               ),
                               // Manual refresh — realtime escape hatch. Right-aligned so
                               // it shares the vertical axis of the FAB column below.
@@ -2312,6 +2359,16 @@ class _MapScreenState extends ConsumerState<MapScreen>
                             top: 0,
                             child: TagLegend(),
                           ),
+                          // Entire-trip mode: the day colour key takes the
+                          // same slot (each legend hides in the other's
+                          // mode) and doubles as the per-day show/hide.
+                          // NOT Positioned: a Positioned child paints past
+                          // its parent but can't be tapped there, which left
+                          // every row below the chip/refresh column dead.
+                          // In flow, the Stack — and the measured chrome —
+                          // grow to contain it, so the day fit also keeps
+                          // pins from hiding behind an interactive legend.
+                          const DayLegend(),
                         ],
                       ),
                     ],
@@ -2924,8 +2981,14 @@ class _MapScreenState extends ConsumerState<MapScreen>
   void _zoomToFitAllDays() {
     if (_mapController == null) return;
 
-    final stopsByDay = ref.read(allDayStopsProvider);
-    final routes = ref.read(allDayRoutesProvider).valueOrNull ?? const {};
+    // Only the days the legend shows — a hidden day must not stretch the
+    // frame (its route geometry stays cached, just not framed).
+    final stopsByDay = ref.read(visibleAllDayStopsProvider);
+    final allRoutes = ref.read(allDayRoutesProvider).valueOrNull ?? const {};
+    final routes = {
+      for (final e in allRoutes.entries)
+        if (stopsByDay.containsKey(e.key)) e.key: e.value,
+    };
 
     // Same rule as the day fit: frame what the pin filter shows. Route
     // geometry rides along only under All — a filtered view's routes still
@@ -2979,8 +3042,13 @@ class _MapScreenState extends ConsumerState<MapScreen>
     final List<LatLng> stops;
     final List<LatLng> points;
     if (ref.read(allDaysModeProvider)) {
-      final stopsByDay = ref.read(allDayStopsProvider);
-      final routes = ref.read(allDayRoutesProvider).valueOrNull ?? const {};
+      // Frame what the legend shows — the card carries the same legend.
+      final stopsByDay = ref.read(visibleAllDayStopsProvider);
+      final allRoutes = ref.read(allDayRoutesProvider).valueOrNull ?? const {};
+      final routes = {
+        for (final e in allRoutes.entries)
+          if (stopsByDay.containsKey(e.key)) e.key: e.value,
+      };
       stops = <LatLng>[
         for (final dayStops in stopsByDay.values)
           for (final loc in dayStops) loc.coordinates,
@@ -3498,7 +3566,7 @@ class _PinFilterBar extends ConsumerWidget {
     final allDays = ref.watch(allDaysModeProvider);
     final List<LocationModel> scope = allDays
         ? ref
-            .watch(allDayStopsProvider)
+            .watch(visibleAllDayStopsProvider)
             .values
             .expand((stops) => stops)
             .toList()

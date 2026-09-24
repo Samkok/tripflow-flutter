@@ -195,30 +195,36 @@ enum PlacePhotosStatus {
   unreached,
 }
 
-/// Outcome of [PlacesService.fetchPlacePhotos]. [refs] is only meaningful
-/// for [PlacePhotosStatus.ok].
+/// Outcome of [PlacesService.fetchPlacePhotos]. [refs] and [types] are
+/// only meaningful for [PlacePhotosStatus.ok]; [types] is Google's place
+/// type list, carried along so rows saved before types were stored can be
+/// filled in by the same lookup.
 class PlacePhotosResult {
   final PlacePhotosStatus status;
   final List<String> refs;
   final List<String>? attributions;
+  final List<String>? types;
 
-  const PlacePhotosResult.ok(this.refs, {this.attributions})
+  const PlacePhotosResult.ok(this.refs, {this.attributions, this.types})
       : status = PlacePhotosStatus.ok;
 
   const PlacePhotosResult.placeGone()
       : status = PlacePhotosStatus.placeGone,
         refs = const [],
-        attributions = null;
+        attributions = null,
+        types = null;
 
   const PlacePhotosResult.denied()
       : status = PlacePhotosStatus.denied,
         refs = const [],
-        attributions = null;
+        attributions = null,
+        types = null;
 
   const PlacePhotosResult.unreached()
       : status = PlacePhotosStatus.unreached,
         refs = const [],
-        attributions = null;
+        attributions = null,
+        types = null;
 }
 
 /// Parses Google's `opening_hours.periods` array into our [OpeningPeriod]
@@ -699,9 +705,12 @@ class PlacesService {
   /// not read "unreached" as "no photos".
   static Future<PlacePhotosResult> fetchPlacePhotos(String placeId) async {
     try {
+      // `types` rides along with the photos: both are Basic fields, so the
+      // request costs the same, and rows saved before place types were
+      // stored get theirs on their next photo renewal.
       final url = 'https://maps.googleapis.com/maps/api/place/details/json'
           '?place_id=$placeId'
-          '&fields=photos'
+          '&fields=photos,types'
           '&key=${ApiService.googlePlacesApiKey}';
       final response = await ApiService.dio.get(url);
       final data = response.data;
@@ -713,9 +722,13 @@ class PlacesService {
           final result = data['result'];
           final photos =
               parsePlacePhotos(result is Map ? result['photos'] : null);
+          final rawTypes = result is Map ? result['types'] : null;
           return PlacePhotosResult.ok(
             photos.references,
             attributions: photos.attributionsOrNull,
+            types: rawTypes is List
+                ? [for (final t in rawTypes) t.toString()]
+                : null,
           );
         case 'NOT_FOUND':
         case 'ZERO_RESULTS':

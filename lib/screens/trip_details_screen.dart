@@ -45,6 +45,7 @@ import 'package:voyza/utils/trip_dates.dart';
 import 'package:voyza/utils/trip_day_labels.dart';
 import 'package:voyza/widgets/trip_day_picker.dart';
 import 'package:voyza/services/trip_dates_service.dart';
+import 'package:voyza/services/itinerary_pdf_service.dart';
 import 'package:voyza/services/trip_day_service.dart';
 import 'package:voyza/services/trip_rollover_service.dart';
 import 'package:voyza/widgets/static_glow.dart';
@@ -80,6 +81,49 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
   /// without reopening the screen.
   Trip? _tripOverride;
   Trip get _trip => _tripOverride ?? widget.trip;
+
+  /// Itinerary PDF export: busy flag for the app-bar button, and its key so
+  /// the share sheet can anchor to it on iPad.
+  bool _exportingItinerary = false;
+  final GlobalKey _exportButtonKey = GlobalKey();
+
+  /// Builds the whole trip's itinerary (every day, where you stay, each
+  /// place with its tag, planned time and hours) as a PDF and opens the
+  /// share sheet. Always the full plan — a search filter on this page
+  /// doesn't narrow it.
+  Future<void> _exportItinerary() async {
+    final all = ref.read(savedLocationsProvider).valueOrNull;
+    if (all == null) {
+      AppToast.info(context, 'Still loading your places — try again.');
+      return;
+    }
+    final places = all.where((l) => l.tripId == widget.trip.id).toList();
+    if (places.isEmpty) {
+      AppToast.info(context, 'Add a few places first — then export the plan.');
+      return;
+    }
+    final box =
+        _exportButtonKey.currentContext?.findRenderObject() as RenderBox?;
+    final origin = box == null || !box.hasSize
+        ? null
+        : box.localToGlobal(Offset.zero) & box.size;
+
+    setState(() => _exportingItinerary = true);
+    try {
+      await ItineraryPdfService.exportAndShare(
+        trip: _trip,
+        locations: places,
+        shareOrigin: origin,
+      );
+    } catch (e) {
+      debugPrint('_exportItinerary: $e');
+      if (mounted) {
+        AppToast.error(context, 'Couldn\'t create the itinerary — try again.');
+      }
+    } finally {
+      if (mounted) setState(() => _exportingItinerary = false);
+    }
+  }
 
   final TextEditingController _searchController = TextEditingController();
   String _searchQuery = '';
@@ -495,6 +539,21 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
                     overflow: TextOverflow.ellipsis,
                   ),
                   actions: [
+                    // Export the whole itinerary as a PDF (every member can;
+                    // it only reads the plan).
+                    IconButton(
+                      key: _exportButtonKey,
+                      tooltip: 'Export itinerary (PDF)',
+                      onPressed: _exportingItinerary ? null : _exportItinerary,
+                      icon: _exportingItinerary
+                          ? const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child:
+                                  CircularProgressIndicator(strokeWidth: 2.2),
+                            )
+                          : const Icon(Icons.picture_as_pdf_outlined),
+                    ),
                     // Auto-plan: cluster → order cities → spread across
                     // days. Operates on the ACTIVE trip's state, so it only
                     // shows when THIS trip is the active one, with 2+

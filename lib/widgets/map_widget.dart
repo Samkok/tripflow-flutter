@@ -76,8 +76,9 @@ class MapWidget extends ConsumerWidget {
     final allDaysMode = ref.watch(allDaysModeProvider);
     final pinFilter = ref.watch(mapPinFilterProvider);
     final allDaysPolylines = ref.watch(allDaysPolylinesProvider);
-    final allDaysMarkers =
-        ref.watch(allDaysMarkersProvider).valueOrNull ?? const <Marker>{};
+    // Days hidden from the day legend are already filtered out here; every
+    // day's bitmaps stay cached, so a legend toggle never re-rasterises.
+    final allDaysMarkers = ref.watch(visibleAllDaysMarkersProvider);
     final pinnedLocations = allDaysMode
         ? ref.watch(tripProvider.select((s) => s.pinnedLocations))
         : const <LocationModel>[];

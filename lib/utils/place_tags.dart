@@ -57,6 +57,112 @@ extension PlaceTagX on PlaceTag {
       };
 }
 
+/// What kind of transport hub a Transport-tagged place is, read from its
+/// Google types when it is shown. One tag — one colour on the map — but the
+/// airport reads "Airport" with a plane, the station "Train" with a train.
+/// Nothing new is stored, so existing rows and older app builds are
+/// unaffected.
+enum TransportMode { air, rail, bus, ferry, road, other }
+
+extension TransportModeX on TransportMode {
+  String get label => switch (this) {
+        TransportMode.air => 'Airport',
+        TransportMode.rail => 'Train',
+        TransportMode.bus => 'Bus',
+        TransportMode.ferry => 'Ferry',
+        TransportMode.road => 'Taxi & car',
+        TransportMode.other => 'Transport',
+      };
+
+  IconData get icon => switch (this) {
+        TransportMode.air => Icons.flight_rounded,
+        TransportMode.rail => Icons.train_rounded,
+        TransportMode.bus => Icons.directions_bus_rounded,
+        TransportMode.ferry => Icons.directions_boat_rounded,
+        TransportMode.road => Icons.local_taxi_rounded,
+        TransportMode.other => Icons.directions_transit_rounded,
+      };
+}
+
+/// Most specific first: an airport with a bus stop is an airport, a ferry
+/// pier that is also a "transit_station" is a ferry, an interchange with
+/// trains and buses is a train station. A bare `transit_station` says
+/// nothing about the mode.
+const _modeRules = <(TransportMode, Set<String>)>[
+  (
+    TransportMode.air,
+    {'airport', 'international_airport', 'heliport', 'airstrip'}
+  ),
+  (TransportMode.ferry, {'ferry_terminal'}),
+  (
+    TransportMode.rail,
+    {'train_station', 'subway_station', 'light_rail_station'}
+  ),
+  (TransportMode.bus, {'bus_station', 'bus_stop'}),
+  (TransportMode.road, {'taxi_stand', 'car_rental', 'park_and_ride'}),
+];
+
+/// A mode the traveller chose by hand is kept in the place's type list as
+/// `voyza:mode:<name>`: it syncs and copies with the place like any type,
+/// wins over Google's types, and older builds — which only ever look up
+/// Google's names — simply ignore it. Needed for pins Google never
+/// classified and for the odd interchange Google gets wrong.
+const _modeOverridePrefix = 'voyza:mode:';
+
+String transportModeOverrideToken(TransportMode mode) =>
+    '$_modeOverridePrefix${mode.name}';
+
+/// The hand-picked mode in [googleTypes], or null when the traveller has
+/// not chosen one.
+TransportMode? transportModeOverride(Iterable<String>? googleTypes) {
+  if (googleTypes == null) return null;
+  for (final t in googleTypes) {
+    if (!t.startsWith(_modeOverridePrefix)) continue;
+    final name = t.substring(_modeOverridePrefix.length);
+    for (final m in TransportMode.values) {
+      if (m.name == name && m != TransportMode.other) return m;
+    }
+  }
+  return null;
+}
+
+/// [googleTypes] with the hand-picked mode set to [mode]; null removes any
+/// previous choice so Google's own types decide again.
+List<String> placeTypesWithModeOverride(
+        Iterable<String>? googleTypes, TransportMode? mode) =>
+    [
+      for (final t in googleTypes ?? const <String>[])
+        if (!t.startsWith(_modeOverridePrefix)) t,
+      if (mode != null && mode != TransportMode.other)
+        transportModeOverrideToken(mode),
+    ];
+
+/// The transport mode of a place: the traveller's own choice when there is
+/// one, else what its Google types describe, else [TransportMode.other].
+TransportMode transportModeFor(Iterable<String>? googleTypes) {
+  if (googleTypes == null) return TransportMode.other;
+  final chosen = transportModeOverride(googleTypes);
+  if (chosen != null) return chosen;
+  final types = {for (final t in googleTypes) t.trim().toLowerCase()};
+  for (final (mode, members) in _modeRules) {
+    if (types.any(members.contains)) return mode;
+  }
+  return TransportMode.other;
+}
+
+/// The icon to show for a place tagged [tag]: the transport mode's icon on
+/// Transport, the tag's own icon otherwise.
+IconData placeTagIcon(PlaceTag tag, Iterable<String>? googleTypes) =>
+    tag == PlaceTag.transport ? transportModeFor(googleTypes).icon : tag.icon;
+
+/// The label to show for a place tagged [tag]: "Airport", "Train", … on
+/// Transport when the mode is known, the tag's label otherwise.
+String placeTagLabel(PlaceTag tag, Iterable<String>? googleTypes) {
+  if (tag != PlaceTag.transport) return tag.label;
+  final mode = transportModeFor(googleTypes);
+  return mode == TransportMode.other ? tag.label : mode.label;
+}
+
 /// The tag stored under [key], or null for an unknown / missing key.
 PlaceTag? placeTagFromKey(String? key) {
   if (key == null) return null;

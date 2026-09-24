@@ -164,25 +164,29 @@ class UserProfileRepository {
     }
   }
 
-  /// Log a trial start event and update the trial_start_at field
+  /// Record a trial start: stamps user_profiles.trial_started_at and logs
+  /// the device to trial_devices.
+  ///
+  /// Both writes named columns that don't exist until 2026-09-22
+  /// (`trial_start_at` on the profile, `product_identifier` on
+  /// trial_devices), so PostgREST rejected them and no trial start was
+  /// recorded after 2026-05-02. The product is already carried by the
+  /// `trial_started` analytics event.
   Future<void> logTrialStart({
     required String userId,
     required String deviceId,
-    required String productIdentifier,
   }) async {
     try {
-      // Update user_profile with trial_start_at
+      final now = DateTime.now().toIso8601String();
       await _supabase.from(_tableName).update({
-        'trial_start_at': DateTime.now().toIso8601String(),
-        'updated_at': DateTime.now().toIso8601String(),
+        'trial_started_at': now,
+        'updated_at': now,
       }).eq('user_id', userId);
 
-      // Log to trial_devices table
       await _supabase.from('trial_devices').insert({
         'user_id': userId,
         'device_id': deviceId,
-        'product_identifier': productIdentifier,
-        'trial_started_at': DateTime.now().toIso8601String(),
+        'trial_started_at': now,
       });
     } catch (e) {
       rethrow;

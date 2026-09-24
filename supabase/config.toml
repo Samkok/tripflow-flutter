@@ -41,3 +41,18 @@ otp_length = 6
 [auth.email.template.recovery]
 subject = "Reset your VoyZa password"
 content_path = "./supabase/email-templates/reset_password.html"
+
+# ── Edge functions ─────────────────────────────────────────────────────
+# Third-party webhooks authenticate with their own shared secret (checked
+# inside the function), NOT a Supabase JWT. With the CLI default
+# (verify_jwt = true) the API gateway rejects every delivery with
+# "Invalid JWT" before the function runs. That silently cut the RevenueCat
+# feed from the 2026-08-24 deploy (made without --no-verify-jwt) until it
+# was noticed on 2026-09-22: no purchase, renewal or expiration reached
+# user_subscriptions for four weeks. Pinned here so a plain
+# `supabase functions deploy <name>` can never switch it back on.
+[functions.revenuecat-webhook]
+verify_jwt = false
+
+[functions.appstore-webhook]
+verify_jwt = false

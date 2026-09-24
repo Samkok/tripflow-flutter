@@ -1198,26 +1198,27 @@ serve(async (req) => {
       expiresAt,
     });
 
-    // 8. Update trial_start_at in user_profile.
+    // 8. Update trial_started_at in user_profile.
     // userId is always a real Supabase UUID here — either an authenticated
     // app_user_id, or the authenticated owner resolved from an anonymous-keyed
     // event. Unlinked anonymous subscribers already returned above. trial_devices
     // logging happens in the app (paywall_screen.dart), not here, because only the
     // app knows the device ID. The webhook just records the server-verified date.
+    // (The column is trial_started_at; this wrote trial_start_at until
+    // 2026-09-22, so no trial start was ever recorded here.)
     if (periodType === 'TRIAL' && event.type === 'INITIAL_PURCHASE') {
       console.log('Recording trial start date for user:', userId);
 
       const { error: profileError } = await supabase
         .from('user_profiles')
         .update({
-          trial_start_at: purchaseDate,
+          trial_started_at: purchaseDate,
           updated_at: new Date().toISOString(),
         })
-        .eq('user_id', userId)
-        .single();
+        .eq('user_id', userId);
 
       if (profileError) {
-        console.error('Error updating user profile trial_start_at:', profileError);
+        console.error('Error updating user profile trial_started_at:', profileError);
         // Non-fatal — continue processing
       } else {
         console.log('✅ Trial start date recorded in user_profiles');

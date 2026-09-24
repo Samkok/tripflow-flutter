@@ -12,6 +12,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../models/location_model.dart';
+import '../utils/store_links.dart';
 import 'analytics_service.dart';
 import 'referral_service.dart';
 import 'supabase_service.dart';
@@ -22,6 +23,14 @@ import 'time_saved_ledger_service.dart';
 /// serve both surfaces — the share flow renders per destination instead
 /// (the Strava pattern: per-surface assets, never one image cropped by the
 /// platform).
+/// One row of the day colour key drawn on an Entire-trip map card — the
+/// same rows the map's day legend shows for the days being shared.
+class ShareDayLegendEntry {
+  final Color color;
+  final String label;
+  const ShareDayLegendEntry({required this.color, required this.label});
+}
+
 enum ShareCardFormat {
   /// 9:16 full-bleed — Stories / Reels / WhatsApp status.
   story(1080, 1920, 140),
@@ -526,6 +535,9 @@ class RouteShareCardService {
     // Single-day shares: "Day 1 of the trip" — drawn as the small kicker
     // above the trip name, so a story viewer knows which day they're seeing.
     String? dayLabel,
+    // All-days mode: the day colour key, so the coloured routes in the
+    // picture stay readable off-device. Only the days being shared.
+    List<ShareDayLegendEntry>? dayLegend,
     ShareCardFormat format = ShareCardFormat.story,
   }) async {
     try {
@@ -548,6 +560,10 @@ class RouteShareCardService {
       _drawImageCover(canvas, map, Rect.fromLTWH(0, 0, pw, ph),
           blurSigma: _mapBlurSigma);
       canvas.drawRect(Rect.fromLTWH(0, 0, pw, ph), Paint()..color = _mapVeil);
+
+      if (dayLegend != null && dayLegend.isNotEmpty) {
+        _drawDayLegend(canvas, dayLegend, format);
+      }
 
       // The text block is BOTTOM-ANCHORED: its last line always ends exactly
       // at ph - bottomReserve, whichever optional lines exist. For the story
@@ -668,6 +684,76 @@ class RouteShareCardService {
     } catch (e) {
       debugPrint('RouteShareCardService.renderMapCard: $e');
       return null;
+    }
+  }
+
+  /// The day colour key of an Entire-trip card: a translucent navy panel at
+  /// the top-left with one "● Day 2 · Oct 6" row per shown day, mirroring
+  /// the legend on the map screen. Kept below the story format's top band
+  /// (profile header + progress bar) and on the caption's left margin.
+  void _drawDayLegend(
+      Canvas canvas, List<ShareDayLegendEntry> rows, ShareCardFormat format) {
+    const fontSize = 24.0;
+    const lineH = fontSize * 1.1;
+    const rowH = 40.0;
+    const pad = 22.0;
+    const dot = 9.0;
+    const left = 60.0;
+    final top = format == ShareCardFormat.story ? 250.0 : 70.0;
+
+    final painters = <TextPainter>[];
+    var widest = 0.0;
+    for (final row in rows) {
+      final painter = TextPainter(
+        text: TextSpan(
+          text: row.label,
+          style: const TextStyle(
+            color: _text,
+            fontSize: fontSize,
+            fontWeight: FontWeight.w700,
+            height: 1.1,
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+        maxLines: 1,
+        ellipsis: '…',
+      )..layout(maxWidth: 520);
+      painters.add(painter);
+      if (painter.width > widest) widest = painter.width;
+    }
+
+    final panel = RRect.fromRectAndRadius(
+      Rect.fromLTWH(
+        left,
+        top,
+        pad * 2 + dot * 2 + 14 + widest,
+        pad * 2 + rowH * (rows.length - 1) + lineH,
+      ),
+      const Radius.circular(22),
+    );
+    canvas.drawRRect(panel, Paint()..color = const Color(0xB30E1726));
+    canvas.drawRRect(
+      panel,
+      Paint()
+        ..color = const Color(0x33FFFFFF)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.5,
+    );
+
+    var y = top + pad;
+    for (var i = 0; i < rows.length; i++) {
+      final centre = Offset(left + pad + dot, y + lineH / 2);
+      canvas.drawCircle(centre, dot, Paint()..color = rows[i].color);
+      canvas.drawCircle(
+        centre,
+        dot,
+        Paint()
+          ..color = Colors.white
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2,
+      );
+      painters[i].paint(canvas, Offset(left + pad + dot * 2 + 14, y));
+      y += rowH;
     }
   }
 
@@ -983,9 +1069,8 @@ class RouteShareCardService {
   /// phishing.
   static const String? _brandedPublicTripBase = 'https://voyza.xtremon.com/t/';
 
-  static String get _storeLink => Platform.isAndroid
-      ? 'https://play.google.com/store/apps/details?id=com.superiordev.voyza'
-      : 'https://apps.apple.com/app/id6758559163';
+  static String get _storeLink =>
+      Platform.isAndroid ? voyzaPlayStoreUrl : voyzaAppStoreUrl;
 
   // ── drawing helpers ────────────────────────────────────────────────────
 

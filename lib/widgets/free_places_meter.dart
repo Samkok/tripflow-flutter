@@ -100,7 +100,10 @@ class FreePlacesProgressChip extends ConsumerWidget {
         (ref.watch(referralBonusPlacesProvider).valueOrNull ?? 0);
     final used = (userId == null
             ? all.length
-            : all.where((l) => l.userId == userId).length)
+            : all
+                .where(
+                    (l) => SubscriptionLimitService.countsAsOwnPlace(l, userId))
+                .length)
         .clamp(0, totalAllowance);
     final total = totalAllowance;
     final atLimit = used >= total;

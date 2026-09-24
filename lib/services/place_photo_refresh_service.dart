@@ -17,12 +17,18 @@ class PhotoRefreshTarget {
   final DateTime createdAt;
   final String? tripId;
 
+  /// Whether the row already holds Google's place types. Rows saved before
+  /// types were stored (mid-September 2026) have none; the lookup fills
+  /// them in.
+  final bool hasPlaceTypes;
+
   const PhotoRefreshTarget({
     required this.id,
     required this.placeId,
     required this.refs,
     required this.createdAt,
     required this.tripId,
+    this.hasPlaceTypes = false,
   });
 
   factory PhotoRefreshTarget.fromModel(LocationModel m) => PhotoRefreshTarget(
@@ -31,6 +37,7 @@ class PhotoRefreshTarget {
         refs: m.photoReferences,
         createdAt: m.addedAt,
         tripId: m.tripId,
+        hasPlaceTypes: m.placeTypes.isNotEmpty,
       );
 
   factory PhotoRefreshTarget.fromSaved(SavedLocation s) => PhotoRefreshTarget(
@@ -39,6 +46,7 @@ class PhotoRefreshTarget {
         refs: s.effectivePhotoReferences,
         createdAt: s.createdAt,
         tripId: s.tripId,
+        hasPlaceTypes: s.placeTypes?.isNotEmpty ?? false,
       );
 }
 
@@ -188,23 +196,27 @@ class PlacePhotoRefreshService {
       case PlacePhotosStatus.placeGone:
         return const ManualPhotoRefreshResult(PhotoRefreshOutcome.placeGone);
       case PlacePhotosStatus.ok:
-        if (listEquals(result.refs, t.refs)) {
-          return ManualPhotoRefreshResult(
-            result.refs.isEmpty
-                ? PhotoRefreshOutcome.noPhotos
-                : PhotoRefreshOutcome.unchanged,
-            photoCount: result.refs.length,
-          );
-        }
-        await _apply(t, result);
+        final photosChanged = !listEquals(result.refs, t.refs);
+        if (photosChanged || _needsTypes(t, result)) await _apply(t, result);
         return ManualPhotoRefreshResult(
           result.refs.isEmpty
               ? PhotoRefreshOutcome.noPhotos
-              : PhotoRefreshOutcome.updated,
+              : photosChanged
+                  ? PhotoRefreshOutcome.updated
+                  : PhotoRefreshOutcome.unchanged,
           photoCount: result.refs.length,
         );
     }
   }
+
+  /// The row has no place types yet and Google just supplied some.
+  bool _needsTypes(PhotoRefreshTarget t, PlacePhotosResult r) =>
+      !t.hasPlaceTypes && (r.types?.isNotEmpty ?? false);
+
+  /// Whether applying [r] would change the row: a different photo list, or
+  /// place types the row is missing.
+  bool _changes(PhotoRefreshTarget t, PlacePhotosResult r) =>
+      !listEquals(r.refs, t.refs) || _needsTypes(t, r);
 
   /// When this device last got an answer about [placeId], for an
   /// "Updated … ago" caption. Device-local, like the record it reads.
@@ -220,8 +232,7 @@ class PlacePhotoRefreshService {
   bool _applyKnownAnswer(PhotoRefreshTarget t, String placeId) {
     final answer = _answers[placeId];
     if (answer == null) return false;
-    if (answer.status == PlacePhotosStatus.ok &&
-        !listEquals(answer.refs, t.refs)) {
+    if (answer.status == PlacePhotosStatus.ok && _changes(t, answer)) {
       unawaited(_apply(t, answer));
     }
     return true;
@@ -230,7 +241,7 @@ class PlacePhotoRefreshService {
   Future<void> _renew(PhotoRefreshTarget t, String placeId) async {
     final result = await _lookUp(t, placeId);
     if (result.status != PlacePhotosStatus.ok) return;
-    if (listEquals(result.refs, t.refs)) return;
+    if (!_changes(t, result)) return;
     await _apply(t, result);
   }
 
@@ -264,13 +275,16 @@ class PlacePhotoRefreshService {
 
   /// Writes Google's current list to the row. An empty list clears the
   /// gallery: the place has no photos any more, and a dead reference would
-  /// only render as a blank tile.
+  /// only render as a blank tile. A row without place types takes Google's
+  /// from the same answer (never overwriting types it already has — a mode
+  /// the traveller picked by hand lives there too).
   Future<void> _apply(PhotoRefreshTarget t, PlacePhotosResult fresh) async {
     final refs = fresh.refs;
     final updates = <String, dynamic>{
       'photo_reference': refs.isEmpty ? '' : refs.first,
       'photo_references': List<String>.of(refs),
       if (fresh.attributions != null) 'photo_attributions': fresh.attributions,
+      if (_needsTypes(t, fresh)) 'place_types': List<String>.of(fresh.types!),
     };
     try {
       await _save(t.id, updates, synced: await _canWrite(t.tripId));

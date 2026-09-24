@@ -829,6 +829,29 @@ class TripNotifier extends StateNotifier<TripState> {
     }
   }
 
+  /// Replaces a location's place-type list — used for the hand-picked
+  /// transport mode, which lives in that list (see place_tags.dart).
+  Future<void> updateLocationPlaceTypes(
+      String locationId, List<String> placeTypes) async {
+    final hasAccess = await _hasWriteAccess();
+    if (!hasAccess) {
+      debugPrint('updateLocationPlaceTypes: Permission denied - user does not '
+          'have write access');
+      return;
+    }
+    state = state.copyWith(pinnedLocations: [
+      for (final loc in state.pinnedLocations)
+        loc.id == locationId ? loc.copyWith(placeTypes: placeTypes) : loc,
+    ]);
+    try {
+      await _ref
+          .read(locationRepositoryProvider)
+          .updateLocation(locationId, {'place_types': placeTypes});
+    } catch (e) {
+      log('Error updating place types in repository: $e');
+    }
+  }
+
   Future<void> updateLocationStayDuration(
       String locationId, Duration newDuration) async {
     // Permission check at function level

@@ -74,7 +74,36 @@ void main() {
     await expect9x16(png);
   });
 
-  test('renderMapCard draws the Plan Card identity layer (plan mode)', () async {
+  test('renderMapCard draws the day colour key (entire-trip mode)', () async {
+    const legend = [
+      ShareDayLegendEntry(color: Color(0xFF2E5BD0), label: 'Oct 5: 3 places'),
+      ShareDayLegendEntry(color: Color(0xFFE53935), label: 'Oct 6: 4 places'),
+      ShareDayLegendEntry(color: Color(0xFF1EA672), label: 'Oct 7: 1 place'),
+      ShareDayLegendEntry(color: Color(0xFFF5793B), label: 'Oct 8: 2 places'),
+    ];
+    for (final format in ShareCardFormat.values) {
+      final png = await RouteShareCardService.instance.renderMapCard(
+        mapBytes: await fakeMap(),
+        tripName: 'Hong Kong',
+        stops: 10,
+        timeSaved: Duration.zero,
+        daysCount: 4,
+        dayLegend: legend,
+        format: format,
+      );
+      expect(png, isNotNull, reason: '${format.name} card with a day legend');
+      Directory('build/qa_shots').createSync(recursive: true);
+      File('build/qa_shots/all_days_map_card_${format.name}.png')
+          .writeAsBytesSync(png!);
+      final decoded = await ui.instantiateImageCodec(png);
+      final frame = await decoded.getNextFrame();
+      expect(frame.image.width, format.width.toInt());
+      expect(frame.image.height, format.height.toInt());
+    }
+  });
+
+  test('renderMapCard draws the Plan Card identity layer (plan mode)',
+      () async {
     // archetype -> headline, trip name -> kicker, roast -> under the stats.
     final png = await RouteShareCardService.instance.renderMapCard(
       mapBytes: await fakeMap(),

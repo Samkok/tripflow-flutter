@@ -393,6 +393,16 @@ class LocationRepository {
             .copyWith(photoAttributions: [for (final a in raw) a.toString()]);
       }
     }
+    if (updates.containsKey('place_types')) {
+      // Google's type list — backfilled by the photo renewal for rows saved
+      // before it was stored, and carrying the hand-picked transport mode
+      // (see place_tags.dart). Replaced whole; an empty list clears it.
+      final raw = updates['place_types'];
+      if (raw is List) {
+        updatedLocation = updatedLocation
+            .copyWith(placeTypes: [for (final t in raw) t.toString()]);
+      }
+    }
     if (updates.containsKey('scheduled_date')) {
       final dateStr = updates['scheduled_date'];
       final parsedDate =

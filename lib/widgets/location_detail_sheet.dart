@@ -230,7 +230,7 @@ class LocationDetailSheet extends ConsumerWidget {
               const SizedBox(width: 10),
               Flexible(
                 child: Text(
-                  'Suggested: ${suggested.label}',
+                  'Suggested: ${placeTagLabel(suggested, loc.placeTypes)}',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: theme.textTheme.bodySmall?.copyWith(
@@ -251,14 +251,79 @@ class LocationDetailSheet extends ConsumerWidget {
                 tag: t,
                 selected: t == current,
                 highlighted: t == suggested,
+                placeTypes: loc.placeTypes,
                 onTap: hasWriteAccess
                     ? () => _setTag(ref, loc, t == current ? null : t)
                     : null,
               ),
           ],
         ),
+        if (current == PlaceTag.transport)
+          _buildTransportModeRow(context, ref, loc, hasWriteAccess),
       ],
     );
+  }
+
+  /// Under a Transport tag: what kind of transport this is. Google's place
+  /// type decides on its own; tapping a chip overrides it (kept with the
+  /// place, so it syncs), and tapping the chosen chip again hands the
+  /// decision back to Google.
+  Widget _buildTransportModeRow(BuildContext context, WidgetRef ref,
+      LocationModel loc, bool hasWriteAccess) {
+    final theme = Theme.of(context);
+    final shown = transportModeFor(loc.placeTypes);
+    final chosen = transportModeOverride(loc.placeTypes);
+    final String hint;
+    if (chosen != null) {
+      hint = 'Set by you — tap it again to use Google\'s type.';
+    } else if (shown != TransportMode.other) {
+      hint = 'From Google\'s place type — tap another to correct it.';
+    } else {
+      hint = 'Google didn\'t say what kind of transport this is — pick one.';
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 10),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final m in TransportMode.values)
+              if (m != TransportMode.other)
+                TransportModeChip(
+                  mode: m,
+                  selected: m == shown,
+                  onTap: hasWriteAccess
+                      ? () =>
+                          _setTransportMode(ref, loc, m == chosen ? null : m)
+                      : null,
+                ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        Text(
+          hint,
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _setTransportMode(
+      WidgetRef ref, LocationModel loc, TransportMode? mode) async {
+    final types = placeTypesWithModeOverride(loc.placeTypes, mode);
+    if (tripId == null) {
+      await ref
+          .read(tripProvider.notifier)
+          .updateLocationPlaceTypes(loc.id, types);
+      return;
+    }
+    await ref
+        .read(locationRepositoryProvider)
+        .updateLocation(loc.id, {'place_types': types});
   }
 
   Future<void> _setTag(WidgetRef ref, LocationModel loc, PlaceTag? tag) async {

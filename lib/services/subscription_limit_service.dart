@@ -7,6 +7,7 @@ import '../providers/subscription_provider.dart';
 import '../providers/referral_provider.dart';
 import '../screens/paywall_screen.dart';
 import 'analytics_service.dart';
+import '../models/saved_location.dart';
 
 /// Gate that enforces the free-tier saved-place allowance. With store-managed
 /// introductory offers, "Pro" includes the trial period (RevenueCat marks the
@@ -85,13 +86,20 @@ class SubscriptionLimitService {
 
   /// Live count of places the current user created themselves. Anonymous
   /// users have no collaborator rows, so the raw count is already correct;
-  /// authenticated rows are stamped with the creator's id on write.
+  /// authenticated rows are stamped with the creator's id on write. Places
+  /// HANDED OVER from a member who left (see SavedLocation.handedOver) are
+  /// the owner's now but were never added by them — a buddy leaving must
+  /// not push a free owner into the paywall.
   static int ownPlaceCount(WidgetRef ref) {
     final all = ref.read(savedLocationsProvider).asData?.value ?? const [];
     final userId = ref.read(currentUserIdProvider);
     if (userId == null) return all.length;
-    return all.where((l) => l.userId == userId).length;
+    return all.where((l) => countsAsOwnPlace(l, userId)).length;
   }
+
+  /// The allowance rule for one row — shared with the progress chip.
+  static bool countsAsOwnPlace(SavedLocation l, String userId) =>
+      l.userId == userId && !l.handedOver;
 }
 
 final subscriptionLimitServiceProvider =

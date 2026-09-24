@@ -394,6 +394,7 @@ class LocationAddService {
       placeName: location.name,
       suggested: suggestPlaceTag(location.placeTypes),
       current: placeTagFromKey(location.tag),
+      placeTypes: location.placeTypes,
     );
     return location.copyWith(tag: pick?.tag?.key);
   }
@@ -407,6 +408,7 @@ class LocationAddService {
       placeName: location.name,
       suggested: suggestPlaceTag(location.placeTypes ?? const []),
       current: placeTagFromKey(location.tag),
+      placeTypes: location.placeTypes,
     );
     return location.copyWith(tag: pick?.tag?.key);
   }

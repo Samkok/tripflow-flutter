@@ -58,8 +58,8 @@ class UserProfile {
       createdAt: DateTime.parse(json['created_at'] as String),
       updatedAt: DateTime.parse(json['updated_at'] as String),
       locationsAddedCount: json['locations_added_count'] as int? ?? 0,
-      trialStartAt: json['trial_start_at'] != null
-          ? DateTime.parse(json['trial_start_at'] as String)
+      trialStartAt: json['trial_started_at'] != null
+          ? DateTime.parse(json['trial_started_at'] as String)
           : null,
     );
   }
@@ -83,7 +83,7 @@ class UserProfile {
       'created_at': createdAt.toIso8601String(),
       'updated_at': updatedAt.toIso8601String(),
       'locations_added_count': locationsAddedCount,
-      'trial_start_at': trialStartAt?.toIso8601String(),
+      'trial_started_at': trialStartAt?.toIso8601String(),
     };
   }
 
