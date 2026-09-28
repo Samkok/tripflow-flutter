@@ -8,6 +8,8 @@ import 'package:voyza/screens/reset_password_screen.dart';
 import 'package:voyza/screens/login_screen.dart';
 import 'package:voyza/screens/trip_details_screen.dart';
 import 'package:voyza/repositories/trip_repository.dart';
+import 'package:voyza/screens/copy_trip_wizard.dart';
+import 'package:voyza/widgets/sign_up_required_sheet.dart';
 import 'screens/main_screen.dart';
 
 import 'core/theme.dart';
@@ -25,6 +27,7 @@ import 'services/supabase_service.dart';
 import 'services/revenuecat_service.dart';
 import 'services/auth_service.dart';
 import 'services/notification_service.dart';
+import 'services/trip_link_service.dart';
 import 'services/referral_service.dart';
 import 'services/review_prompt_service.dart';
 import 'services/analytics_consent_service.dart';
@@ -308,6 +311,42 @@ class _MyAppState extends ConsumerState<MyApp> with WidgetsBindingObserver {
     }
   }
 
+  /// The code whose sign-in prompt is already on screen (or was dismissed):
+  /// the prompt shows once per link, not on every retry.
+  String? _signInPromptedForCode;
+
+  /// Trip link → the copy wizard with the code filled in. Copying needs an
+  /// account, so a signed-out tap gets the sign-in prompt and the code is
+  /// kept (returns false) until somebody is signed in.
+  bool _openCopyTripFromLink(String shareCode) {
+    final navigator = navigatorKey.currentState;
+    final overlayContext = navigator?.overlay?.context;
+    if (navigator == null || overlayContext == null) return false;
+
+    if (SupabaseService.instance.client.auth.currentSession == null) {
+      if (_signInPromptedForCode != shareCode) {
+        _signInPromptedForCode = shareCode;
+        showSignUpRequiredSheet(
+          overlayContext,
+          icon: Icons.content_paste_go_rounded,
+          title: 'Sign in to copy this trip',
+          message: 'Someone shared a trip with you. Sign in (or create a '
+              'free account) and it opens right away — every day and place '
+              'becomes yours to reshape.',
+        );
+      }
+      return false;
+    }
+
+    _signInPromptedForCode = null;
+    navigator.push(
+      MaterialPageRoute(
+        builder: (_) => CopyTripWizard(initialCode: shareCode),
+      ),
+    );
+    return true;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -398,6 +437,10 @@ class _MyAppState extends ConsumerState<MyApp> with WidgetsBindingObserver {
       // tap that launched the app from the terminated state.
       NotificationService.onOpenTripRequest = _openTripFromNotification;
       NotificationService.consumePendingOpenTrip();
+
+      // Trip links (voyza.xtremon.com/c/<code>, voyza://copy/<code>): the
+      // service holds a code until the home screen is up, then asks here.
+      TripLinkService.instance.start(onCopyTrip: _openCopyTripFromLink);
 
       // Listen for auth state changes (password recovery deep links + forced sign-outs)
       _authSubscription =

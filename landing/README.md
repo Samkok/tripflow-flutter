@@ -48,6 +48,34 @@ unfurlers follow it to the function's OG tags:
 | **nginx** | `location ~ ^/t/(.+)$ { return 302 https://dkbibfjszsohtixjxlle.supabase.co/functions/v1/public-trip?t=$1; }` |
 | **Apache** | `.htaccess`: `RedirectMatch 302 ^/t/(.+)$ https://dkbibfjszsohtixjxlle.supabase.co/functions/v1/public-trip?t=$1` |
 
+## Shared trip links (`/c/*`) — REQUIRED before shipping the trip page's Share button
+
+The trip page's Share button sends `https://voyza.xtremon.com/c/<CODE>`
+(`lib/utils/trip_share_link.dart`), where `<CODE>` is the trip's six-character
+share code. The page behind it lives in the website repo
+(`voyza_landing/public/c/index.html`, rewrite `/c/:code → /c` in its
+`vercel.json`): it shows the code and an **Open in VoyZa** button that hands
+the code to the app as `voyza://copy/<CODE>`. The app then opens the
+copy-a-trip wizard with the code filled in.
+
+Until that page is deployed the link is a 404 for everyone who taps it.
+
+### Opening the app straight from the link
+
+- **iOS:** the site serves `/.well-known/apple-app-site-association` (written,
+  in the website repo) and the app's `ios/Runner/Runner.entitlements` lists
+  `applinks:voyza.xtremon.com`. **The App ID must have the Associated Domains
+  capability enabled in the Apple Developer portal before the next tagged
+  build** — without it Codemagic's provisioning profile lacks the entitlement
+  and the iOS build fails at signing.
+- **Android:** the manifest declares `https://voyza.xtremon.com/c/` with
+  `autoVerify`, and the site serves `/.well-known/assetlinks.json` (in the
+  website repo) with the SHA-256 fingerprint of the Play App Signing key.
+  Only builds delivered by Google Play carry that key; a locally built
+  release is signed with the upload key and keeps opening the page. Check
+  the live file with
+  `https://digitalassetlinks.googleapis.com/v1/statements:list?source.web.site=https://voyza.xtremon.com&relation=delegate_permission/common.handle_all_urls`.
+
 ## "Powered by VoyZa" in exported itineraries (`/?ref=itinerary#download`) — optional
 
 Every exported itinerary PDF links its "Powered by VoyZa" label to
@@ -97,6 +125,8 @@ good, and a cached permanent redirect could never be taken back.
 - "Copy code" works on iOS Safari and Android Chrome
 - Both store buttons resolve (App Store link is live; Play link once the app is published)
 - `https://voyza.xtremon.com/t/anything` 302s to the public-trip function URL
+- `https://voyza.xtremon.com/c/AB12CD` renders with the code `TRIP-AB12CD` and,
+  on a phone, an **Open in VoyZa** button
   (test with `curl -sI` and check the `location:` header)
 - `https://voyza.xtremon.com/?ref=itinerary#download` opens the home page at its
   download section — or, with the optional rule, the right store on a phone

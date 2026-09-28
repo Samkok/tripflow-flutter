@@ -12,9 +12,8 @@ import 'package:voyza/providers/auth_provider.dart';
 import 'package:voyza/providers/location_provider.dart';
 import 'package:voyza/providers/trip_collaborator_provider.dart';
 import 'package:voyza/providers/local_active_trip_provider.dart';
-import 'package:voyza/providers/map_ui_state_provider.dart';
-import 'package:voyza/providers/all_days_route_provider.dart';
 import 'package:voyza/providers/onboarding_provider.dart';
+import 'package:voyza/utils/open_trip_on_map.dart';
 import 'package:voyza/screens/trip_details_screen.dart';
 import 'package:voyza/services/analytics_service.dart';
 import 'package:voyza/services/anonymous_user_service.dart';
@@ -474,25 +473,7 @@ class _TripScreenState extends ConsumerState<TripScreen> {
   /// open on, then jump tabs. An ONGOING trip (today inside its date range)
   /// lands on today — the day the traveller is actually living — while a
   /// trip that hasn't started yet (or has no end date) lands on day one.
-  void _goToMapForTrip(Trip trip) {
-    final start = trip.startDate;
-    if (start != null) {
-      final startDay = DateTime(start.year, start.month, start.day);
-      final end = trip.endDate;
-      final now = DateTime.now();
-      final today = DateTime(now.year, now.month, now.day);
-      final ongoing = end != null &&
-          !today.isBefore(startDay) &&
-          !today.isAfter(DateTime(end.year, end.month, end.day));
-      ref.read(allDaysModeProvider.notifier).state = false;
-      ref.read(selectedDateProvider.notifier).state =
-          ongoing ? today : startDay;
-      // Nudge the trip sheet onto the "Selected Day" toggle so the landing
-      // actually shows day one (the toggle otherwise keeps its last state).
-      ref.read(mapDayFocusRequestProvider.notifier).state++;
-    }
-    ref.read(mainTabRequestProvider.notifier).state = 1; // Map tab
-  }
+  void _goToMapForTrip(Trip trip) => requestMapForTrip(ref, trip);
 
   /// Activation lever: drops the user into a pre-built, editable sample trip
   /// (Lisbon, 5 stops) so they can tap Optimize and reach the route "aha" in

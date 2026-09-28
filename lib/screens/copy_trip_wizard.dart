@@ -10,6 +10,7 @@ import '../repositories/trip_repository.dart';
 import '../services/photo_service.dart';
 import '../services/place_photo_cache.dart';
 import '../utils/trip_dates.dart';
+import '../utils/trip_share_link.dart';
 import '../services/supabase_service.dart';
 import '../providers/subscription_provider.dart';
 import '../widgets/app_toast.dart';
@@ -39,7 +40,13 @@ final tripCopiesUsedProvider = FutureProvider<int>((ref) async {
 /// private). Mirrors the create-trip wizard's structure: PageView steps,
 /// progress dots, ambient globe.
 class CopyTripWizard extends ConsumerStatefulWidget {
-  const CopyTripWizard({super.key});
+  const CopyTripWizard({super.key, this.initialCode});
+
+  /// A code that arrived through a trip link. It is filled in and looked up
+  /// straight away, so the wizard opens on the trip's preview instead of an
+  /// empty field; a code that turns out to be inactive leaves the field
+  /// filled for correcting.
+  final String? initialCode;
 
   @override
   ConsumerState<CopyTripWizard> createState() => _CopyTripWizardState();
@@ -56,6 +63,18 @@ class _CopyTripWizardState extends ConsumerState<CopyTripWizard> {
   DateTime? _startDate;
 
   static const _stepCount = 3;
+
+  @override
+  void initState() {
+    super.initState();
+    final code = normalizeTripShareCode(widget.initialCode);
+    if (code != null) {
+      _codeController.text = 'TRIP-$code';
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _fetchPreview();
+      });
+    }
+  }
 
   @override
   void dispose() {
@@ -276,7 +295,9 @@ class _CopyTripWizardState extends ConsumerState<CopyTripWizard> {
           TextField(
             cursorOpacityAnimates: false,
             controller: _codeController,
-            autofocus: true,
+            // A code from a link is already being looked up — no keyboard
+            // over the preview that is about to slide in.
+            autofocus: widget.initialCode == null,
             textCapitalization: TextCapitalization.characters,
             style: theme.textTheme.titleMedium?.copyWith(
                 fontFamily: 'monospace',

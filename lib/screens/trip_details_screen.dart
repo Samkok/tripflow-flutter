@@ -9,6 +9,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:google_maps_url_extractor/google_maps_url_extractor.dart';
 import 'package:intl/intl.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:uuid/uuid.dart';
 import 'package:voyza/models/trip.dart';
 import 'package:voyza/providers/location_provider.dart';
@@ -39,10 +40,13 @@ import 'package:voyza/services/place_photo_refresh_service.dart';
 import 'package:voyza/providers/local_active_trip_provider.dart';
 import 'package:voyza/providers/trip_provider.dart';
 import 'package:voyza/widgets/accommodation_prompts.dart';
+import 'package:voyza/utils/location_order.dart';
+import 'package:voyza/utils/open_trip_on_map.dart';
 import 'package:voyza/utils/same_day_place_guard.dart';
 import 'package:voyza/utils/search_text.dart';
 import 'package:voyza/utils/trip_dates.dart';
 import 'package:voyza/utils/trip_day_labels.dart';
+import 'package:voyza/utils/trip_share_link.dart';
 import 'package:voyza/widgets/trip_day_picker.dart';
 import 'package:voyza/services/trip_dates_service.dart';
 import 'package:voyza/services/itinerary_pdf_service.dart';
@@ -86,6 +90,14 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
   /// the share sheet can anchor to it on iPad.
   bool _exportingItinerary = false;
   final GlobalKey _exportButtonKey = GlobalKey();
+
+  /// Share button: busy while the trip is published and the share sheet
+  /// opens, and its key so the sheet can anchor to it on iPad.
+  bool _sharingLink = false;
+  final GlobalKey _shareButtonKey = GlobalKey();
+
+  /// Map button: busy while the trip is made the active one.
+  bool _openingMap = false;
 
   /// Builds the whole trip's itinerary (every day, where you stay, each
   /// place with its tag, planned time and hours) as a PDF and opens the
@@ -160,12 +172,13 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
   // change needed to show photos out of the box.)
   final Set<String> _photoCollapsedIds = {};
 
-  /// Per-day sort state for the header's sort toggle, keyed by the day's
-  /// normalized midnight. Absent = the list's natural (drag) order;
-  /// `true` = oldest added first; `false` = newest added first.
-  /// Session-only view state, deliberately not persisted — like the photo
-  /// collapse set — and it never writes to the locations themselves.
-  final Map<DateTime, bool> _sortByAddedDays = {};
+  /// Days the user flipped to OLDEST added first with the header's sort
+  /// toggle, keyed by the day's normalized midnight. Every other day shows
+  /// the newest added place first, so what was just added is the first card
+  /// under the header. Session-only view state, deliberately not persisted
+  /// — like the photo collapse set — and it never writes to the locations
+  /// themselves.
+  final Set<DateTime> _oldestFirstDays = {};
 
   /// Per-day fold state the user set by tapping a header (true = folded).
   /// Days without an entry use the default: folded when the day is already
@@ -439,6 +452,101 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
       if (mounted) {
         AppToast.error(context, 'Could not deactivate trip. Please try again.');
       }
+    }
+  }
+
+  /// The map button: this trip on the Map tab, on the day that matters —
+  /// today while the trip is underway, day one otherwise. The map draws the
+  /// ACTIVE trip, so a trip that isn't active yet is made active first.
+  Future<void> _openOnMap() async {
+    if (_openingMap) return;
+    final trip = _trip;
+    setState(() => _openingMap = true);
+    try {
+      if (ref.read(localActiveTripIdProvider) != trip.id) {
+        ref.read(tripProvider.notifier).clearTrip();
+        await ref
+            .read(localActiveTripIdProvider.notifier)
+            .setActiveTrip(trip.id);
+        // Same as the Activate button: any activation path completes the
+        // checklist step.
+        await ref
+            .read(checklistProvider.notifier)
+            .mark(ChecklistStep.activateTrip, silent: true);
+        if (!mounted) return;
+        // Said out loud: another trip may just have stopped being the
+        // active one. The toast lives on the root overlay, so it is still
+        // there on the map.
+        AppToast.success(context, '${trip.name} is now active');
+      }
+      if (!mounted) return;
+      requestMapForTrip(ref, trip);
+      // Back to the home screen, which is switching to its Map tab.
+      Navigator.of(context).popUntil((route) => route.isFirst);
+    } catch (e) {
+      debugPrint('_openOnMap: $e');
+      if (mounted) {
+        AppToast.error(context, 'Could not open the map. Please try again.');
+      }
+    } finally {
+      if (mounted) setState(() => _openingMap = false);
+    }
+  }
+
+  /// The share button: sends a link that opens this trip's copy flow — the
+  /// share code without the typing. A link only works while the trip is
+  /// public, so an owner whose trip is still private gets the same question
+  /// as the Publish button first.
+  Future<void> _shareTripLink() async {
+    if (_sharingLink) return;
+    if (ref.read(currentUserIdProvider) == null) {
+      showSignUpRequiredSheet(
+        context,
+        icon: Icons.ios_share_rounded,
+        title: 'Sign up to share this trip',
+        message: 'A shared trip travels as a link: whoever opens it gets '
+            'their own copy of your plan. Links belong to an account — '
+            'this trip stays on your device and comes with you when you '
+            'sign up.',
+      );
+      return;
+    }
+    // Where the share sheet points on iPad — read before any await.
+    final box =
+        _shareButtonKey.currentContext?.findRenderObject() as RenderBox?;
+    final origin = box == null || !box.hasSize
+        ? null
+        : box.localToGlobal(Offset.zero) & box.size;
+
+    setState(() => _sharingLink = true);
+    try {
+      if (!(_trip.isPublic && _trip.shareCode != null)) {
+        final isOwner =
+            ref.read(isTripOwnerProvider(widget.trip.id)).valueOrNull ?? false;
+        if (!isOwner) {
+          AppToast.info(context, 'Only the trip owner can turn on sharing.');
+          return;
+        }
+        final published = await _setTripPublished(true, announce: false);
+        if (!published || !mounted) return;
+      }
+      final code = _trip.shareCode;
+      if (tripShareLink(code) == null) {
+        AppToast.error(context, 'Could not create the link. Please try again.');
+        return;
+      }
+      await SharePlus.instance.share(ShareParams(
+        text: tripShareMessage(tripName: _trip.name, shareCode: code!),
+        subject: 'A trip for you on VoyZa: ${_trip.name}',
+        sharePositionOrigin: origin,
+      ));
+    } catch (e) {
+      debugPrint('_shareTripLink: $e');
+      if (mounted) {
+        AppToast.error(context, 'Could not share the trip. Please try again.');
+      }
+    } finally {
+      if (mounted) setState(() => _sharingLink = false);
     }
   }
 
@@ -728,54 +836,146 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
     );
   }
 
+  /// The fixed row above the list: search, then the page's two ways out —
+  /// to the map, and to someone else. Fixed, not in the scrolling card, so
+  /// both stay in reach however far down the plan the page is (an ongoing
+  /// trip opens scrolled to today).
   Widget _buildSearchBar() {
+    final isOwner =
+        ref.watch(isTripOwnerProvider(widget.trip.id)).valueOrNull ?? false;
+    // Owners can always share (publishing first if needed); anyone else
+    // only once the trip is public.
+    final canShare = isOwner || (_trip.isPublic && _trip.shareCode != null);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      child: TextField(
-        cursorOpacityAnimates: false,
-        controller: _searchController,
-        decoration: InputDecoration(
-          hintText: 'Search locations...',
-          prefixIcon: const Icon(Icons.search),
-          suffixIcon: _searchQuery.isNotEmpty
-              ? IconButton(
-                  icon: const Icon(Icons.clear),
-                  onPressed: () {
-                    _searchController.clear();
-                    setState(() => _searchQuery = '');
-                  },
-                )
-              : null,
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(12),
-            borderSide: BorderSide(
-              color: Theme.of(context).dividerColor,
-            ),
+      child: Row(
+        children: [
+          Expanded(child: _buildSearchField()),
+          const SizedBox(width: 8),
+          _buildPageAction(
+            icon: Icons.map_rounded,
+            tooltip: 'Open on map',
+            emphasized: true,
+            busy: _openingMap,
+            onPressed: _openOnMap,
           ),
-          enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(12),
-            borderSide: BorderSide(
-              color: Theme.of(context).dividerColor.withValues(alpha: 0.3),
+          if (canShare) ...[
+            const SizedBox(width: 8),
+            _buildPageAction(
+              key: _shareButtonKey,
+              icon: Icons.ios_share_rounded,
+              tooltip: 'Share this trip',
+              busy: _sharingLink,
+              onPressed: _shareTripLink,
             ),
-          ),
-          focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(12),
-            borderSide: BorderSide(
-              color: Theme.of(context).colorScheme.primary,
-              width: 2,
-            ),
-          ),
-          filled: true,
-          fillColor: Theme.of(context).cardColor,
-          contentPadding: const EdgeInsets.symmetric(
-            horizontal: 16,
-            vertical: 12,
+          ],
+        ],
+      ),
+    );
+  }
+
+  /// One square button of the search row, as tall as the search field.
+  /// [emphasized] tints it with the primary colour (the map is the page's
+  /// main way onward).
+  Widget _buildPageAction({
+    Key? key,
+    required IconData icon,
+    required String tooltip,
+    required VoidCallback onPressed,
+    bool emphasized = false,
+    bool busy = false,
+  }) {
+    final theme = Theme.of(context);
+    final primary = theme.colorScheme.primary;
+    final radius = BorderRadius.circular(12);
+    return Tooltip(
+      message: tooltip,
+      child: Material(
+        key: key,
+        color: emphasized ? primary.withValues(alpha: 0.16) : theme.cardColor,
+        shape: RoundedRectangleBorder(
+          borderRadius: radius,
+          side: BorderSide(
+            color: emphasized
+                ? primary.withValues(alpha: 0.5)
+                : theme.dividerColor.withValues(alpha: 0.3),
           ),
         ),
-        onChanged: (value) {
-          setState(() => _searchQuery = value.toLowerCase());
-        },
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: busy ? null : onPressed,
+          child: Semantics(
+            button: true,
+            label: tooltip,
+            child: SizedBox(
+              width: 48,
+              height: 48,
+              child: Center(
+                child: busy
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2.2),
+                      )
+                    : Icon(
+                        icon,
+                        size: 22,
+                        color:
+                            emphasized ? primary : theme.colorScheme.onSurface,
+                      ),
+              ),
+            ),
+          ),
+        ),
       ),
+    );
+  }
+
+  Widget _buildSearchField() {
+    return TextField(
+      cursorOpacityAnimates: false,
+      controller: _searchController,
+      decoration: InputDecoration(
+        hintText: 'Search locations...',
+        prefixIcon: const Icon(Icons.search),
+        suffixIcon: _searchQuery.isNotEmpty
+            ? IconButton(
+                icon: const Icon(Icons.clear),
+                onPressed: () {
+                  _searchController.clear();
+                  setState(() => _searchQuery = '');
+                },
+              )
+            : null,
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(
+            color: Theme.of(context).dividerColor,
+          ),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(
+            color: Theme.of(context).dividerColor.withValues(alpha: 0.3),
+          ),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(
+            color: Theme.of(context).colorScheme.primary,
+            width: 2,
+          ),
+        ),
+        filled: true,
+        fillColor: Theme.of(context).cardColor,
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 16,
+          vertical: 12,
+        ),
+      ),
+      onChanged: (value) {
+        setState(() => _searchQuery = value.toLowerCase());
+      },
     );
   }
 
@@ -1084,6 +1284,14 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
       }
     }
 
+    // Newest added first in every list on the page: what was just added is
+    // the first card under its header. A day's header can flip that day to
+    // oldest first.
+    unscheduled.sort(newestAddedFirst);
+    for (final group in groupedByDay.values) {
+      group.sort(newestAddedFirst);
+    }
+
     final allDates = _buildAllDates(locations);
 
     // Ongoing trip = it has started and today is on or before its last day.
@@ -1252,7 +1460,10 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
   /// Publish / unpublish from the trip page. Confirms first (publishing is
   /// privacy-affecting; unpublishing revokes every code holder). The server
   /// mints the code on first publish and keeps it across re-publishes.
-  Future<void> _setTripPublished(bool goPublic) async {
+  ///
+  /// Returns whether the change was made. [announce] false skips the toast
+  /// (the share button opens the share sheet instead).
+  Future<bool> _setTripPublished(bool goPublic, {bool announce = true}) async {
     final trip = _trip;
     final confirm = await showDialog<bool>(
       context: context,
@@ -1261,12 +1472,13 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
         title: Text(goPublic ? 'Make this trip public?' : 'Make it private?'),
         content: Text(
           goPublic
-              ? 'You\'ll get a share code. Anyone with it can copy '
-                  '"${trip.name}" as their own trip — they never see your '
+              ? 'You\'ll get a share link and code. Anyone with either '
+                  'can copy "${trip.name}" as their own trip — they never see your '
                   'name, your edits, or your progress, and you can turn '
                   'this off any time.'
-              : 'People who have your code will no longer be able to copy '
-                  'this trip. Making it public again restores the same code.',
+              : 'People who have your link or code will no longer be able '
+                  'to copy this trip. Making it public again restores the '
+                  'same link and code.',
         ),
         actions: [
           TextButton(
@@ -1280,30 +1492,34 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
         ],
       ),
     );
-    if (confirm != true || !mounted) return;
+    if (confirm != true || !mounted) return false;
     try {
       final code = await ref
           .read(tripRepositoryProvider)
           .setTripPublic(trip.id, goPublic);
       ref.invalidate(userTripsProvider);
-      if (!mounted) return;
+      if (!mounted) return false;
       setState(() {
         _tripOverride = trip.copyWith(
           isPublic: goPublic,
           shareCode: goPublic ? (code ?? trip.shareCode) : trip.shareCode,
         );
       });
-      AppToast.success(
-          context,
-          goPublic
-              ? 'Trip published — tap the code to copy it'
-              : 'Trip is private again');
+      if (announce) {
+        AppToast.success(
+            context,
+            goPublic
+                ? 'Trip published — tap the code to copy it'
+                : 'Trip is private again');
+      }
+      return true;
     } catch (e) {
       debugPrint('setTripPublic failed: $e');
       if (mounted) {
         AppToast.error(
             context, 'Could not update sharing. Check your connection.');
       }
+      return false;
     }
   }
 
@@ -1532,8 +1748,8 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
                     children: [
                       Expanded(
                         child: Text(
-                          'Publish to get a share code others can copy '
-                          'this trip with.',
+                          'Publish to get a share link and code others '
+                          'can copy this trip with.',
                           style: theme.textTheme.bodySmall?.copyWith(
                               color: theme.colorScheme.onSurfaceVariant,
                               height: 1.3),
@@ -2070,17 +2286,13 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
     final folded = foldable && (_dayFoldOverrides[day] ?? foldedByDefault);
     void toggleFold() => setState(() => _dayFoldOverrides[day] = !folded);
 
-    // Header sort toggle. null = natural order; true = oldest added first;
-    // false = newest added first. Sorts on createdAt — the exact value the
-    // card prints as "Added …", so the order is verifiable on screen.
-    // View-only: nothing is written, and the natural order comes back.
-    final bool? sortAscending = _sortByAddedDays[day];
-    final displayLocations = sortAscending == null
-        ? locations
-        : (List<SavedLocation>.from(locations)
-          ..sort((a, b) => sortAscending
-              ? a.createdAt.compareTo(b.createdAt)
-              : b.createdAt.compareTo(a.createdAt)));
+    // [locations] arrives newest added first (see _buildLocationsList); the
+    // header's toggle flips this day to oldest first and back. Both orders
+    // read createdAt — the exact value the card prints as "Added …", so the
+    // order is verifiable on screen. View-only: nothing is written.
+    final oldestFirst = _oldestFirstDays.contains(day);
+    final displayLocations =
+        oldestFirst ? locations.reversed.toList() : locations;
 
     return Padding(
       padding: const EdgeInsets.only(top: 16, left: 16, right: 16),
@@ -2227,44 +2439,35 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
                     Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        // Sort this day's cards by when they were ADDED.
-                        // Three states, cycled by tapping: off (the natural
-                        // order, which is also the drag order) → oldest
-                        // first (arrow up) → newest first (arrow down).
-                        // The arrow always points the way the dates run.
+                        // Order of this day's cards by when they were
+                        // ADDED: newest first (the default — a place just
+                        // added is the first card) or oldest first. The
+                        // arrow points the way the dates run; it lights up
+                        // when the day is off the default.
                         if (locations.length > 1 && !folded)
                           IconButton(
                             onPressed: () => setState(() {
-                              final current = _sortByAddedDays[day];
-                              if (current == null) {
-                                _sortByAddedDays[day] = true; // oldest first
-                              } else if (current) {
-                                _sortByAddedDays[day] = false; // newest first
-                              } else {
-                                _sortByAddedDays.remove(day); // natural
+                              if (!_oldestFirstDays.remove(day)) {
+                                _oldestFirstDays.add(day);
                               }
                             }),
                             icon: Icon(
-                              sortAscending == null
-                                  ? Icons.swap_vert_rounded
-                                  : sortAscending
-                                      ? Icons.arrow_upward_rounded
-                                      : Icons.arrow_downward_rounded,
-                              color: sortAscending == null
-                                  ? theme.textTheme.bodyMedium?.color
-                                      ?.withValues(alpha: 0.45)
-                                  : theme.colorScheme.primary,
+                              oldestFirst
+                                  ? Icons.arrow_upward_rounded
+                                  : Icons.arrow_downward_rounded,
+                              color: oldestFirst
+                                  ? theme.colorScheme.primary
+                                  : theme.textTheme.bodyMedium?.color
+                                      ?.withValues(alpha: 0.45),
                             ),
                             iconSize: 22,
                             visualDensity: VisualDensity.compact,
                             padding: EdgeInsets.zero,
                             constraints: const BoxConstraints(
                                 minWidth: 40, minHeight: 32),
-                            tooltip: sortAscending == null
-                                ? 'Sort by date added'
-                                : sortAscending
-                                    ? 'Oldest added first — tap for newest'
-                                    : 'Newest added first — tap to reset',
+                            tooltip: oldestFirst
+                                ? 'Oldest added first — tap for newest first'
+                                : 'Newest added first — tap for oldest first',
                           ),
                         // Per-day quick-add: adds a place already scheduled
                         // to THIS day, so empty gap days can be filled

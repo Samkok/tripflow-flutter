@@ -78,6 +78,35 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="voyza" android:host="reset-password" />
             </intent-filter>
+            <!-- Trip links. voyza://copy/<CODE> is what the web page behind a
+                 shared link hands to the app; the copy wizard opens with the
+                 code filled in (lib/services/trip_link_service.dart). -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="voyza" android:host="copy" />
+            </intent-filter>
+            <!-- The shared address itself, https://voyza.xtremon.com/c/<CODE>.
+                 Android opens it in the app directly once the site serves
+                 /.well-known/assetlinks.json with this app's signing
+                 fingerprints; until then the link opens the web page, whose
+                 button uses the voyza:// form above. -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https"
+                      android:host="voyza.xtremon.com"
+                      android:pathPrefix="/c/" />
+            </intent-filter>
+            <!-- Links are read by app_links (supabase_flutter's sign-in
+                 callbacks and the trip links above). Flutter's own handler
+                 would ALSO push each link onto the navigator as a route
+                 name, and this app has no such routes. -->
+            <meta-data
+                android:name="flutter_deeplinking_enabled"
+                android:value="false" />
         </activity>
         
         <!-- FCM default notification channel (Android 8+) -->

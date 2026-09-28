@@ -72,6 +72,8 @@
 			</array>
 		</dict>
 	</array>
+	<key>FlutterDeepLinkingEnabled</key>
+	<false/>
 	<key>LSApplicationQueriesSchemes</key>
 	<array>
 		<string>grab</string>

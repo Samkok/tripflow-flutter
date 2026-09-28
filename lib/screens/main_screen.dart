@@ -7,6 +7,7 @@ import 'package:voyza/core/theme.dart';
 import 'package:voyza/providers/auth_provider.dart';
 import 'package:voyza/providers/location_provider.dart';
 import 'package:voyza/providers/onboarding_provider.dart';
+import 'package:voyza/services/trip_link_service.dart';
 import 'package:voyza/services/trip_rollover_service.dart';
 import 'package:voyza/widgets/app_toast.dart';
 import 'dart:ui';
@@ -45,6 +46,12 @@ class _MainScreenState extends ConsumerState<MainScreen> {
       // not be mutated during build/init.
       ref.read(selectedTabIndexProvider.notifier).state = _selectedIndex;
 
+      // A trip link that launched the app has been waiting for a screen it
+      // can open over (the splash replaces itself). First thing, so the
+      // tap is answered before the sync below.
+      _registeredWithTripLinks = true;
+      TripLinkService.instance.homeScreenMounted();
+
       // A carry-forward that ran before this screen existed (resume hook
       // while onboarding/auth was up) still gets its one toast.
       final pendingRollover = ref.read(rolloverNoticeProvider);
@@ -72,8 +79,10 @@ class _MainScreenState extends ConsumerState<MainScreen> {
       }
       // One-time first-run onboarding for fresh users with zero trips
       // (no-op for everyone else). Sequenced AFTER consent so the two
-      // full-screen surfaces never stack.
-      if (mounted) {
+      // full-screen surfaces never stack. Skipped for someone who arrived
+      // through a trip link: the copy wizard is already up, and the trip
+      // they were sent is their first screen.
+      if (mounted && !TripLinkService.instance.linkSeen) {
         await maybeShowOnboarding(context, ref);
       }
       // Onboarding resolved (shown, skipped, or not needed) — let the map
@@ -83,6 +92,34 @@ class _MainScreenState extends ConsumerState<MainScreen> {
         ref.read(mapTutorialRecheckProvider.notifier).state++;
       }
     });
+  }
+
+  /// Whether this screen has told the trip-link service it is mounted, so
+  /// dispose only takes back what was given.
+  bool _registeredWithTripLinks = false;
+
+  @override
+  void dispose() {
+    if (_registeredWithTripLinks) {
+      TripLinkService.instance.homeScreenDisposed();
+    }
+    super.dispose();
+  }
+
+  /// A trip link tapped while signed out waits for a sign-in. The sign-in
+  /// happens on a screen ABOVE this one, which then closes — so wait until
+  /// this screen is the visible one before opening the copy wizard, or the
+  /// closing screen would take the wizard with it.
+  Future<void> _openWaitingTripLinkWhenVisible() async {
+    if (TripLinkService.instance.pendingCode == null) return;
+    for (var i = 0; i < 40; i++) {
+      if (!mounted) return;
+      if (ModalRoute.of(context)?.isCurrent ?? false) {
+        TripLinkService.instance.retryPending();
+        return;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+    }
   }
 
   /// The single in-app alert for an automatic carry-forward run — same
@@ -163,13 +200,16 @@ class _MainScreenState extends ConsumerState<MainScreen> {
           ref.read(initialSyncCompleteProvider.notifier).state = true;
         }
         // A user who signed up mid-session (anonymous → account) gets the
-        // one-time onboarding too, once their sync has settled.
-        if (mounted && context.mounted) {
+        // one-time onboarding too, once their sync has settled — unless
+        // they signed up to copy a trip someone sent them.
+        if (mounted && context.mounted && !TripLinkService.instance.linkSeen) {
           await maybeShowOnboarding(context, ref);
         }
         if (mounted) {
           ref.read(mapTutorialRecheckProvider.notifier).state++;
         }
+        // A trip link tapped before signing in opens now.
+        if (mounted) unawaited(_openWaitingTripLinkWhenVisible());
       }
     });
 
