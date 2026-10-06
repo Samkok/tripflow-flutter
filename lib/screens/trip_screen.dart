@@ -2262,7 +2262,8 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                   'name, your edits, or your progress, and you can turn '
                   'this off any time.'
               : 'People who have your code will no longer be able to copy '
-                  'this trip. Making it public again restores the same code.',
+                  'this trip, and itinerary links sent with route cards stop '
+                  'working. Making it public again restores the same code.',
         ),
         actions: [
           TextButton(

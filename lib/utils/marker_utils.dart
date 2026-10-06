@@ -4,6 +4,8 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 
+import 'line_badge_colors.dart';
+
 class MarkerBitmapResult {
   final BitmapDescriptor bitmap;
   final Offset anchor;
@@ -608,6 +610,9 @@ class MarkerUtils {
     String? vehicleType,
     String? badgeText,
     Color? badgeColor,
+    // The line's own text colour from the feed, if any — see
+    // [lineBadgeTextColor] for when it is used.
+    Color? badgeTextColor,
     // Endpoint names — when provided, a second smaller line "A → B" renders
     // under the stats row so the chip says WHERE the leg goes, not just how
     // far. Long names are trimmed per side so both ends always survive.
@@ -643,13 +648,15 @@ class MarkerUtils {
     // Transit line badge — the "[2]" in Google's itinerary rows, drawn in
     // the line's official color right after the vehicle glyph.
     final bool hasBadge = badgeText != null && badgeText.isNotEmpty;
+    final Color badgeFill = badgeColor ?? const Color(0xFFE53935);
     final TextPainter? badgePainter = !hasBadge
         ? null
         : (TextPainter(
             text: TextSpan(
               text: badgeText,
-              style: const TextStyle(
-                  color: Colors.white,
+              style: TextStyle(
+                  color:
+                      lineBadgeTextColor(badgeFill, preferred: badgeTextColor),
                   fontSize: 12,
                   fontWeight: FontWeight.w800),
             ),
@@ -771,8 +778,7 @@ class MarkerUtils {
         Rect.fromLTWH(x, rowMid - badgeHeight / 2, badgeWidth, badgeHeight),
         const Radius.circular(5),
       );
-      canvas.drawRRect(
-          badgeRect, Paint()..color = badgeColor ?? const Color(0xFFE53935));
+      canvas.drawRRect(badgeRect, Paint()..color = badgeFill);
       badgePainter.paint(
           canvas, Offset(x + badgeHPad, rowMid - badgePainter.height / 2));
       x += badgeWidth + gap;

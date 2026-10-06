@@ -1,6 +1,3 @@
-import 'dart:io';
-
-import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -8,6 +5,7 @@ import 'package:supabase_flutter/supabase_flutter.dart' show FunctionException;
 
 import 'analytics_service.dart';
 import 'supabase_service.dart';
+import 'abuse_check_device_id.dart';
 
 /// Outcome of a referral-code redemption attempt, shaped for UI decisions.
 enum RedeemResult {
@@ -222,19 +220,7 @@ class ReferralService {
     }
   }
 
-  /// Same device-id derivation as the trial-abuse logging in
-  /// paywall_screen.dart, so the server's fraud check joins real data.
-  Future<String?> _deviceId() async {
-    try {
-      final deviceInfo = DeviceInfoPlugin();
-      if (Platform.isAndroid) {
-        return (await deviceInfo.androidInfo).id;
-      } else if (Platform.isIOS) {
-        return (await deviceInfo.iosInfo).identifierForVendor;
-      }
-      return null;
-    } catch (_) {
-      return null;
-    }
-  }
+  /// Same identifier as the trial-abuse logging in paywall_screen.dart, so
+  /// the server's same-device check joins real data.
+  Future<String?> _deviceId() => abuseCheckDeviceId();
 }

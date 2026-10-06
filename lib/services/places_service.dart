@@ -431,7 +431,7 @@ class PlacesService {
 
     try {
       // Get current location to bias results and calculate distances
-      final currentLocation = await LocationService.getCurrentLocation();
+      final currentLocation = await LocationService.getApproximateLocation();
       // A trip-tagged country (override) takes precedence over the device
       // country so users planning a trip ahead of time see the destination
       // country first.
@@ -526,7 +526,7 @@ class PlacesService {
 
     try {
       // Get current location and country for filtering
-      final currentLocation = await LocationService.getCurrentLocation();
+      final currentLocation = await LocationService.getApproximateLocation();
       // A trip-tagged country (override) takes precedence over the device
       // country so users planning a trip ahead of time see the destination
       // country first.

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Meta (Facebook) app identifiers for ads measurement. Both are public
+         values that ship inside every build; Meta's App Secret is never used
+         in the app. They have to be string resources: a bare number in the
+         manifest is read as a number, and the SDK rejects that. -->
+    <string name="facebook_app_id" translatable="false">2785293015222172</string>
+    <string name="facebook_client_token" translatable="false">b78776087b73afd594279b0e66062f75</string>
+</resources>

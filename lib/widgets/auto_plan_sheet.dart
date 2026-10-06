@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 import '../models/location_model.dart';
 import '../providers/day_distribution_provider.dart';
 import '../providers/subscription_provider.dart';
+import '../providers/trip_collaborator_provider.dart';
 import '../providers/trip_listener_provider.dart';
 import '../providers/trip_provider.dart';
 import '../providers/user_trip_provider.dart';
@@ -15,7 +16,9 @@ import '../services/leg_mode_prefs.dart';
 import '../services/trip_day_service.dart';
 import '../screens/paywall_screen.dart';
 import 'app_toast.dart';
+import 'trip_times_sheet.dart';
 import '../utils/trip_dates.dart';
+import '../utils/trip_times.dart';
 
 /// Opens the Auto-plan sheet: cluster the active trip's places into cities,
 /// propose a visit order and per-day assignment, and (Pro) apply it as one
@@ -48,6 +51,7 @@ class _AutoPlanSheetState extends ConsumerState<AutoPlanSheet> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       ref.read(autoPlanRangeOverrideProvider.notifier).state = null;
+      ref.read(autoPlanTimesOverrideProvider.notifier).state = null;
       ref.read(autoPlanKeepCurrentProvider.notifier).state = true;
     });
     // Seed the live cap + fill style from the saved preferences. If the
@@ -151,6 +155,8 @@ class _AutoPlanSheetState extends ConsumerState<AutoPlanSheet> {
           text: 'Nothing to rearrange: every place is completed, pinned, '
               'or an accommodation.',
         );
+      case DistributionGate.noTimeToPlan:
+        return const _NoTimeToPlan();
       case DistributionGate.ok:
         if (!_previewLogged) {
           _previewLogged = true;
@@ -200,6 +206,10 @@ class _AutoPlanSheetState extends ConsumerState<AutoPlanSheet> {
     final oldDayById = {for (final c in plan.changes) c.id: c.oldDay};
     final trip = ref.read(realtimeActiveTripProvider).valueOrNull;
     final tripStart = trip?.startDate;
+    // A day with no time on it is the first day (the arrival's doing) or
+    // the last (the departure's).
+    bool isFirstDay(DateTime day) =>
+        tripStart != null && dayKey(day) == dayKey(tripStart);
     final dayColors = ref.watch(tripDayColorsProvider);
 
     final closedCount = plan.warnings
@@ -226,6 +236,7 @@ class _AutoPlanSheetState extends ConsumerState<AutoPlanSheet> {
             controller: scrollController,
             padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
             children: [
+              const _TripTimesTile(),
               const _MaxStopsSelector(),
               const SizedBox(height: 8),
               const _KeepCurrentSwitch(),
@@ -263,6 +274,11 @@ class _AutoPlanSheetState extends ConsumerState<AutoPlanSheet> {
                 _CityOrderStrip(clusters: plan.clusterOrder),
                 const SizedBox(height: 12),
               ],
+              // A first day the arrival leaves no time on comes first, as
+              // on the calendar; a last day the departure empties, last.
+              for (final day in plan.noTimeDays)
+                if (isFirstDay(day))
+                  _NoTimeDayCard(day: day, tripStart: tripStart, arrival: true),
               for (final day in plan.perDay)
                 _DayCard(
                   planned: day,
@@ -278,6 +294,10 @@ class _AutoPlanSheetState extends ConsumerState<AutoPlanSheet> {
                 ),
               for (final day in plan.freeDays)
                 _FreeDayCard(day: day, tripStart: tripStart),
+              for (final day in plan.noTimeDays)
+                if (!isFirstDay(day))
+                  _NoTimeDayCard(
+                      day: day, tripStart: tripStart, arrival: false),
               if (plan.unscheduledIds.isNotEmpty)
                 _OverflowSection(
                   ids: plan.unscheduledIds,
@@ -285,6 +305,7 @@ class _AutoPlanSheetState extends ConsumerState<AutoPlanSheet> {
                   maxStops: ref.watch(autoPlanMaxStopsProvider),
                   deficitMinutes:
                       overflow.isEmpty ? null : overflow.first.amount,
+                  tripTimes: plan.shapedByTripTimes,
                   onAddDay: trip == null
                       ? null
                       : () async {
@@ -648,6 +669,9 @@ class _DayCard extends StatelessWidget {
           subtitle: Text(
             '${planned.stopIds.length} '
             '${planned.stopIds.length == 1 ? 'place' : 'places'} · ~${hours}h'
+            // Shortened by the trip's arrival or departure time.
+            '${planned.fromMinute != null ? ' · from ${formatMinuteOfDay(context, planned.fromMinute!)}' : ''}'
+            '${planned.untilMinute != null ? ' · until ${formatMinuteOfDay(context, planned.untilMinute!)}' : ''}'
             '${planned.hopMinutes > 0 ? ' · travel morning' : ''}'
             '${planned.accommodationId != null ? '\n🏨 ${byId[planned.accommodationId]?.name ?? 'Your stay'}' : ''}',
             style: theme.textTheme.bodySmall
@@ -708,6 +732,9 @@ class _OverflowSection extends StatelessWidget {
   final Map<String, LocationModel> byId;
   final int? maxStops;
   final int? deficitMinutes;
+
+  /// The trip's arrival or departure time shortened a day of this plan.
+  final bool tripTimes;
   final Future<void> Function()? onAddDay;
 
   const _OverflowSection({
@@ -715,6 +742,7 @@ class _OverflowSection extends StatelessWidget {
     required this.byId,
     required this.maxStops,
     required this.deficitMinutes,
+    required this.tripTimes,
     required this.onAddDay,
   });
 
@@ -754,12 +782,16 @@ class _OverflowSection extends StatelessWidget {
             padding: const EdgeInsets.only(top: 4),
             child: Text(
               maxStops != null
-                  ? 'With a limit of $maxStops places a day, these are '
-                      'left over — add days or raise the limit.'
-                  : deficitH != null
-                      ? 'Fitting everything needs roughly $deficitH more '
-                          '${deficitH == 1 ? 'hour' : 'hours'} of trip time.'
-                      : 'Add a day to fit them.',
+                  ? 'With a limit of $maxStops places a day'
+                      '${tripTimes ? ' and your arrival and departure times' : ''}'
+                      ', these are left over — add days or raise the limit.'
+                  : tripTimes
+                      ? "They don't fit around your arrival and departure "
+                          'times. Add a day, or change the times.'
+                      : deficitH != null
+                          ? 'Fitting everything needs roughly $deficitH more '
+                              '${deficitH == 1 ? 'hour' : 'hours'} of trip time.'
+                          : 'Add a day to fit them.',
               style: theme.textTheme.bodySmall
                   ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
             ),
@@ -990,6 +1022,206 @@ class _KeepCurrentSwitch extends ConsumerWidget {
               ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
         ),
         activeTrackColor: theme.colorScheme.primary,
+      ),
+    );
+  }
+}
+
+/// The trip's arrival and departure times, at the top of the plan they
+/// shape. The owner changes them from here and the plan follows at once;
+/// everyone else sees them once they are set.
+class _TripTimesTile extends ConsumerWidget {
+  const _TripTimesTile();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final trip = ref.watch(realtimeActiveTripProvider).valueOrNull;
+    if (trip == null || trip.startDate == null || trip.endDate == null) {
+      return const SizedBox.shrink();
+    }
+    // Times changed in this sheet a moment ago win over the trip's reload.
+    final changed = ref.watch(autoPlanTimesOverrideProvider);
+    final shown = changed == null
+        ? trip
+        : trip.copyWith(
+            arrivalMinute: changed.arrival,
+            departureMinute: changed.departure,
+          );
+    final isOwner =
+        ref.watch(isTripOwnerProvider(trip.id)).valueOrNull ?? false;
+    final canEdit = isOwner && !tripHasEnded(trip.endDate);
+    final summary =
+        tripTimesSummary(shown, (m) => formatMinuteOfDay(context, m));
+    if (summary == null && !canEdit) return const SizedBox.shrink();
+
+    final theme = Theme.of(context);
+    final primary = theme.colorScheme.primary;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Material(
+        color: theme.cardColor.withValues(alpha: 0.5),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: BorderSide(color: theme.dividerColor.withValues(alpha: 0.4)),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          key: const Key('auto-plan-trip-times'),
+          onTap: !canEdit
+              ? null
+              : () {
+                  // The plan recomputes after every change and this tile is
+                  // rebuilt with it — so the new times are written through
+                  // the container, which outlives the tile, not through a
+                  // ref that may be gone by the second change.
+                  final container =
+                      ProviderScope.containerOf(context, listen: false);
+                  showTripTimesSheet(
+                    context,
+                    trip: shown,
+                    onChanged: (t) => container
+                        .read(autoPlanTimesOverrideProvider.notifier)
+                        .state = (
+                      arrival: t.arrivalMinute,
+                      departure: t.departureMinute,
+                    ),
+                  );
+                },
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            child: Row(
+              children: [
+                Icon(Icons.schedule_rounded, size: 20, color: primary),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Arrival and departure',
+                        style: theme.textTheme.bodyMedium
+                            ?.copyWith(fontWeight: FontWeight.w600),
+                      ),
+                      Text(
+                        summary ??
+                            'Add them and your first and last day only get '
+                                'what you have time for.',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: summary == null
+                              ? theme.colorScheme.onSurfaceVariant
+                              : primary,
+                          fontWeight: summary == null
+                              ? FontWeight.w400
+                              : FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                if (canEdit) ...[
+                  const SizedBox(width: 8),
+                  Text(
+                    summary == null ? 'Add' : 'Edit',
+                    style: theme.textTheme.labelLarge?.copyWith(
+                      color: primary,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  Icon(Icons.chevron_right_rounded, size: 20, color: primary),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// A day the trip's arrival or departure time leaves no time on: nothing
+/// is planned there.
+class _NoTimeDayCard extends StatelessWidget {
+  final DateTime day;
+  final DateTime? tripStart;
+
+  /// The arrival is the reason (the first day); otherwise the departure.
+  final bool arrival;
+
+  const _NoTimeDayCard({
+    required this.day,
+    required this.tripStart,
+    required this.arrival,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final dayNumber = tripStart == null ? null : tripDayNumber(tripStart!, day);
+    final label = isOnTbdAnchor(day)
+        ? 'Day ${dayNumber ?? '?'}'
+        : '${dayNumber != null ? 'Day $dayNumber · ' : ''}'
+            '${DateFormat('EEE, MMM d').format(day)}';
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+            color: theme.dividerColor.withValues(alpha: 0.5), width: 1.2),
+      ),
+      child: Row(
+        children: [
+          Icon(
+              arrival
+                  ? Icons.flight_land_rounded
+                  : Icons.flight_takeoff_rounded,
+              size: 18,
+              color: theme.colorScheme.onSurfaceVariant),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              arrival
+                  ? '$label: you arrive too late for visits'
+                  : '$label: you leave too early for visits',
+              style: theme.textTheme.bodyMedium
+                  ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Shown instead of a plan when the arrival and departure times leave no
+/// visiting time on any day that is left.
+class _NoTimeToPlan extends StatelessWidget {
+  const _NoTimeToPlan();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Center(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.schedule_rounded,
+                size: 44,
+                color: theme.colorScheme.primary.withValues(alpha: 0.6)),
+            const SizedBox(height: 14),
+            Text(
+              'Your arrival and departure times leave no time for visits '
+              'on the days that are left. Change the times, or add a day '
+              'to the trip.',
+              textAlign: TextAlign.center,
+              style: theme.textTheme.bodyMedium,
+            ),
+            const SizedBox(height: 16),
+            const _TripTimesTile(),
+          ],
+        ),
       ),
     );
   }

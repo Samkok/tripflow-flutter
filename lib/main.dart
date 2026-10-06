@@ -30,7 +30,11 @@ import 'services/notification_service.dart';
 import 'services/trip_link_service.dart';
 import 'services/referral_service.dart';
 import 'services/review_prompt_service.dart';
+import 'core/measurement_config.dart';
 import 'services/analytics_consent_service.dart';
+import 'services/measurement_consent_service.dart';
+import 'services/meta_ads_bridge.dart';
+import 'services/tracking_permission.dart';
 import 'repositories/location_repository.dart';
 import 'providers/location_provider.dart';
 import 'services/trip_rollover_service.dart';
@@ -201,8 +205,25 @@ Future<void> _bootstrap() async {
         debugPrint('Main: Initializing Firebase core (post-frame idle)...');
         await Firebase.initializeApp();
         debugPrint('Main: Firebase core initialized');
-        // Apply analytics consent state (EU/UK/CH default OFF until opt-in).
-        await AnalyticsConsentService.instance.applyAtStartup();
+        // Analytics and Performance are declared OFF in Info.plist and the
+        // Android manifest; the consent services below switch them on, so
+        // nothing is collected before the person's choice is applied.
+        // Apply the measurement choices (EEA/UK/CH: off until opt-in).
+        // Builds with ads measurement use the two-purpose service, which
+        // also checks the country the connection comes from.
+        if (MeasurementConfig.adsMeasurement) {
+          // Meta's SDK and Apple's tracking prompt hang off the consent
+          // service. Registering them starts nothing: the SDK is first
+          // initialised when ads measurement is allowed, and never for
+          // someone who does not allow it.
+          trackingPermission = const AppleTrackingPermission();
+          MeasurementConsentService.instance
+            ..lookupDeviceRegion = deviceRegionFromPlatform
+            ..addSink(MetaAdsSink());
+          await MeasurementConsentService.instance.applyAtStartup();
+        } else {
+          await AnalyticsConsentService.instance.applyAtStartup();
+        }
         // Link Firebase App Instance ID → RevenueCat so the RC↔Firebase
         // integration attributes server events to the same GA user.
         unawaited(RevenueCatService().linkFirebaseAppInstanceId());

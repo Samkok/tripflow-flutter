@@ -82,7 +82,7 @@ class TripRepository {
           // Server-owned counter — an upsert must never reset it.
           ..remove('copy_count')
           ..['status'] = trip.status == 'active' ? 'planning' : trip.status;
-        await _supabase.from(_tableName).upsert(json);
+        await _upsertTolerant(json);
         synced++;
       } catch (e) {
         debugPrint('TripRepository: failed to sync trip ${trip.id}: $e');
@@ -180,6 +180,22 @@ class TripRepository {
       }
     }
     throw StateError('trips update: too many unknown columns');
+  }
+
+  /// The guest-trip upload on sign-in, with the same guard: a trip must
+  /// still reach the account when this build knows a column the server
+  /// does not have yet.
+  Future<void> _upsertTolerant(Map<String, dynamic> data) async {
+    final pending = Map<String, dynamic>.of(data);
+    for (var attempt = 0; attempt < 6; attempt++) {
+      try {
+        await _supabase.from(_tableName).upsert(pending);
+        return;
+      } on PostgrestException catch (e) {
+        pending.remove(_unknownColumnOrRethrow(e, pending));
+      }
+    }
+    throw StateError('trips upsert: too many unknown columns');
   }
 
   String _unknownColumnOrRethrow(
@@ -371,6 +387,10 @@ class TripRepository {
   /// Pass [clearDates] = true to explicitly clear start_date and end_date back
   /// to NULL — distinct from passing null for [startDate]/[endDate], which
   /// leaves the existing values untouched.
+  /// Pass [arrivalMinute] / [departureMinute] (minutes after midnight,
+  /// 0–1439) to set the first day's arrival time and the last day's
+  /// departure time; [clearArrivalMinute] / [clearDepartureMinute] = true
+  /// take one off again.
   Future<Trip> updateTrip(
     String tripId, {
     String? name,
@@ -384,6 +404,10 @@ class TripRepository {
     bool clearDates = false,
     bool? autoRollUnvisited,
     bool? datesTbd,
+    int? arrivalMinute,
+    bool clearArrivalMinute = false,
+    int? departureMinute,
+    bool clearDepartureMinute = false,
   }) async {
     try {
       final updates = <String, dynamic>{
@@ -406,6 +430,14 @@ class TripRepository {
           'country_code': countryCode.toUpperCase(),
         if (autoRollUnvisited != null) 'auto_roll_unvisited': autoRollUnvisited,
         if (datesTbd != null) 'dates_tbd': datesTbd,
+        if (clearArrivalMinute)
+          'arrival_minute': null
+        else if (arrivalMinute != null)
+          'arrival_minute': arrivalMinute.clamp(0, 1439),
+        if (clearDepartureMinute)
+          'departure_minute': null
+        else if (departureMinute != null)
+          'departure_minute': departureMinute.clamp(0, 1439),
         'updated_at': DateTime.now().toIso8601String(),
       };
 
@@ -464,7 +496,24 @@ class TripRepository {
       'p_trip_id': tripId,
       'p_public': public,
     });
+    if (!public) await _revokeItineraryLinks(tripId);
     return result as String?;
+  }
+
+  /// Going private also ends the no-login itinerary links (trip_shares
+  /// tokens) that went out with route cards, so "private" means private.
+  /// RLS limits this to the owner's own rows; a failure never blocks the
+  /// toggle itself.
+  Future<void> _revokeItineraryLinks(String tripId) async {
+    try {
+      await _supabase
+          .from('trip_shares')
+          .update({'revoked_at': DateTime.now().toUtc().toIso8601String()})
+          .eq('trip_id', tripId)
+          .isFilter('revoked_at', null);
+    } catch (e) {
+      debugPrint('TripRepository.setTripPublic: revoking links: $e');
+    }
   }
 
   /// Whitelisted snapshot of a public trip by its share code, or null when

@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../providers/optimized_map_overlay_provider.dart';
 import '../models/location_model.dart';
+import '../utils/line_badge_colors.dart';
 import '../utils/marker_utils.dart';
 
 /// The travel segment BETWEEN two stop cards in the trip plan list — the
@@ -126,8 +127,9 @@ class LegRail extends ConsumerWidget {
                   label,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                      color: Colors.white,
+                  style: TextStyle(
+                      color: lineBadgeTextColor(color,
+                          preferred: _lineColor(s['lineTextColor'] as String?)),
                       fontSize: 11,
                       fontWeight: FontWeight.w800),
                 ),

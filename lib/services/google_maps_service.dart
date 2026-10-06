@@ -221,8 +221,8 @@ class GoogleMapsService {
             (leg['polyline'] as Map?)?['encodedPolyline'] as String?;
         legPolylines
             .add(encoded == null ? <LatLng>[] : _decodePolyline(encoded));
-        legTransit.add(isTransit ? _extractTransitSegments(leg) : null);
-        legSteps.add(isTransit ? _extractStepGeometry(leg) : null);
+        legTransit.add(isTransit ? extractTransitSegments(leg) : null);
+        legSteps.add(isTransit ? extractStepGeometry(leg) : null);
       }
 
       final fullRoutePoints =
@@ -247,8 +247,8 @@ class GoogleMapsService {
             'duration': _parseDuration(rLeg['duration']),
             'distance': ((rLeg['distanceMeters'] as num?) ?? 0).toDouble(),
             'points': pointsR,
-            'transit': isTransit ? _extractTransitSegments(rLeg) : null,
-            'steps': isTransit ? _extractStepGeometry(rLeg) : null,
+            'transit': isTransit ? extractTransitSegments(rLeg) : null,
+            'steps': isTransit ? extractStepGeometry(rLeg) : null,
             'description': r['description'],
             'labels': (r['routeLabels'] as List?)?.cast<String>(),
           });
@@ -310,7 +310,8 @@ class GoogleMapsService {
   /// color), board/alight stops, scheduled times, headsign and stop count.
   /// Walking portions between rides are implicit (the sheet shows them as
   /// part of the leg, Google-style).
-  static List<Map<String, dynamic>> _extractTransitSegments(
+  @visibleForTesting
+  static List<Map<String, dynamic>> extractTransitSegments(
       Map<String, dynamic> leg) {
     final segments = <Map<String, dynamic>>[];
     for (final stepRaw in (leg['steps'] as List?) ?? const []) {
@@ -340,10 +341,12 @@ class GoogleMapsService {
 
   /// Per-step DRAWABLE geometry for a transit leg, with consecutive
   /// same-mode steps merged into runs: [{mode: 'WALK'|'TRANSIT', points,
-  /// durationSeconds, lineColor?, lineShort?, vehicleType?}]. The map
-  /// styles each run (dotted walking approach, line-colored ride) and the
-  /// plan-sheet rail renders the run chain — walk 4 min › [87] 30 min › …
-  static List<Map<String, dynamic>> _extractStepGeometry(
+  /// durationSeconds, lineColor?, lineTextColor?, lineShort?,
+  /// vehicleType?}]. The map styles each run (dotted walking approach,
+  /// line-colored ride) and the plan-sheet rail renders the run chain —
+  /// walk 4 min › [87] 30 min › …
+  @visibleForTesting
+  static List<Map<String, dynamic>> extractStepGeometry(
       Map<String, dynamic> leg) {
     final runs = <Map<String, dynamic>>[];
     for (final stepRaw in (leg['steps'] as List?) ?? const []) {
@@ -355,12 +358,14 @@ class GoogleMapsService {
       final isRide = step['transitDetails'] != null ||
           (step['travelMode'] as String?) == 'TRANSIT';
       String? color;
+      String? textColor;
       String? lineShort;
       String? vehicleType;
       if (isRide) {
         final td = step['transitDetails'] as Map?;
         final line = td == null ? null : td['transitLine'] as Map?;
         color = line == null ? null : line['color'] as String?;
+        textColor = line == null ? null : line['textColor'] as String?;
         lineShort = line == null
             ? null
             : (line['nameShort'] ?? line['name']) as String?;
@@ -370,7 +375,7 @@ class GoogleMapsService {
       final stepSeconds = _parseDuration(step['staticDuration']).inSeconds;
       final mode = isRide ? 'TRANSIT' : 'WALK';
       // Merge consecutive WALK steps only. TRANSIT runs must stay 1:1 with
-      // the ride cards from [_extractTransitSegments]: two back-to-back
+      // the ride cards from [extractTransitSegments]: two back-to-back
       // rides on same-colored lines (641 → 600, both Rapid KL blue, same
       // platform so no walk step between) used to merge here, which broke
       // the run↔ride pairing everywhere it's assumed — the leg sheet fell
@@ -386,6 +391,7 @@ class GoogleMapsService {
           'points': List<LatLng>.from(points),
           'durationSeconds': stepSeconds,
           if (color != null) 'lineColor': color,
+          if (textColor != null) 'lineTextColor': textColor,
           if (lineShort != null) 'lineShort': lineShort,
           if (vehicleType != null) 'vehicleType': vehicleType,
         });

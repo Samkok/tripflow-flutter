@@ -26,6 +26,7 @@ import '../widgets/accommodation_prompts.dart';
 import '../widgets/app_toast.dart';
 import '../widgets/place_tag_sheet.dart';
 import '../utils/trip_day_labels.dart';
+import 'analytics_service.dart';
 
 /// Central service for adding locations.
 ///
@@ -478,6 +479,9 @@ class LocationAddService {
         : await _withConfirmedSavedTag(context, location);
     if (!context.mounted) return false;
     await _ref.read(locationRepositoryProvider).addLocation(toAdd);
+    // Funnel analytics, as in TripNotifier.addLocation for the map flow:
+    // places added from the trip page never reported this before.
+    AnalyticsService.instance.placeAdded(usedAfter);
     _scheduleHoursBackfill(
       location.id,
       location.placeId,

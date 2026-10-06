@@ -83,3 +83,37 @@ const double kSwapMinGainMeters = 50;
 /// Improvement passes over a city block's days. Each pass is O(n²) in the
 /// block's stops; real trips converge in two or three.
 const int kMaxSwapPasses = 25;
+
+// ── Arrival and departure days ─────────────────────────────────────────
+// A trip's first day can start late (an afternoon landing) and its last can
+// end early (a midday flight). Those two are the only days the engine
+// reasons about by the clock; every other day stays a full day.
+
+/// A sightseeing day starts here…
+const int kDayStartMinute = 9 * 60;
+
+/// …and its visits are counted up to here (an arrival evening runs late).
+const int kDayEndMinute = 21 * 60;
+
+/// Clock length of the ordinary day behind [kDayBudgetMinutes]: the visits
+/// plus about an hour of meals. A shortened day keeps the same proportion.
+const int kStandardDayClockMinutes = kDayBudgetMinutes + 60;
+
+/// Kept free after the arrival time: getting into town, dropping the bags.
+const int kArrivalBufferMinutes = 60;
+
+/// Kept free before the departure time: reaching the airport or station
+/// and getting through it.
+const int kDepartureBufferMinutes = 180;
+
+/// A shortened day with less visiting time than this takes no places.
+const int kMinUsableDayMinutes = 45;
+
+/// A shortened day under half a day's budget gets no city of its own: an
+/// arrival evening or a departure morning has no time for a change of
+/// base, so it belongs to the city of the day beside it.
+const int kShortDayMinutes = kDayBudgetMinutes ~/ 2;
+
+/// The visiting order inside a shortened day is solved exactly (subset DP,
+/// 2^n·n²) up to this many stops; a longer list is checked in route order.
+const int kExactScheduleMaxStops = 12;

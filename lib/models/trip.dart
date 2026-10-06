@@ -43,6 +43,18 @@ class Trip {
   bool get isUndated =>
       datesTbd || (startDate != null && isOnTbdAnchor(startDate!));
 
+  /// When the traveller arrives on the trip's FIRST day, in minutes after
+  /// midnight (0–1439); null = not set, the first day is a full day. A time
+  /// of day only — it belongs to Day 1 wherever the dates move, and works
+  /// the same on a trip with no dates yet. Auto-plan starts the first day
+  /// after it (see day_distribution/day_window.dart).
+  final int? arrivalMinute;
+
+  /// When the traveller leaves on the trip's LAST day, same unit; null =
+  /// not set, the last day is a full day. Auto-plan ends the last day well
+  /// before it.
+  final int? departureMinute;
+
   final DateTime createdAt;
   final DateTime updatedAt;
 
@@ -63,6 +75,8 @@ class Trip {
     this.copyCount = 0,
     this.autoRollUnvisited = false,
     this.datesTbd = false,
+    this.arrivalMinute,
+    this.departureMinute,
     required this.createdAt,
     required this.updatedAt,
   });
@@ -89,9 +103,20 @@ class Trip {
       copyCount: json['copy_count'] as int? ?? 0,
       autoRollUnvisited: json['auto_roll_unvisited'] as bool? ?? false,
       datesTbd: json['dates_tbd'] as bool? ?? false,
+      arrivalMinute: _minuteOfDay(json['arrival_minute']),
+      departureMinute: _minuteOfDay(json['departure_minute']),
       createdAt: DateTime.parse(json['created_at'] as String),
       updatedAt: DateTime.parse(json['updated_at'] as String),
     );
+  }
+
+  /// A stored time of day, or null for anything that is not one (missing,
+  /// out of range) — a bad value must read as "not set", never crash a
+  /// trip list.
+  static int? _minuteOfDay(Object? raw) {
+    if (raw is! num) return null;
+    final m = raw.toInt();
+    return m >= 0 && m < 1440 ? m : null;
   }
 
   Map<String, dynamic> toJson() {
@@ -112,6 +137,8 @@ class Trip {
       'copy_count': copyCount,
       'auto_roll_unvisited': autoRollUnvisited,
       'dates_tbd': datesTbd,
+      'arrival_minute': arrivalMinute,
+      'departure_minute': departureMinute,
       'created_at': createdAt.toIso8601String(),
       'updated_at': updatedAt.toIso8601String(),
     };
@@ -146,7 +173,12 @@ class Trip {
     );
   }
 
-  /// Create a copy with modified fields
+  // Tells "left out" from "passed null" for the fields a copy can CLEAR.
+  static const _unset = Object();
+
+  /// Create a copy with modified fields. [arrivalMinute] and
+  /// [departureMinute] can be cleared: passing null removes the time,
+  /// leaving the argument out keeps it.
   Trip copyWith({
     String? id,
     String? userId,
@@ -164,6 +196,8 @@ class Trip {
     int? copyCount,
     bool? autoRollUnvisited,
     bool? datesTbd,
+    Object? arrivalMinute = _unset,
+    Object? departureMinute = _unset,
     DateTime? createdAt,
     DateTime? updatedAt,
   }) {
@@ -184,6 +218,12 @@ class Trip {
       copyCount: copyCount ?? this.copyCount,
       autoRollUnvisited: autoRollUnvisited ?? this.autoRollUnvisited,
       datesTbd: datesTbd ?? this.datesTbd,
+      arrivalMinute: identical(arrivalMinute, _unset)
+          ? this.arrivalMinute
+          : arrivalMinute as int?,
+      departureMinute: identical(departureMinute, _unset)
+          ? this.departureMinute
+          : departureMinute as int?,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
     );

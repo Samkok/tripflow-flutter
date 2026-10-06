@@ -869,9 +869,17 @@ class TripNotifier extends StateNotifier<TripState> {
       return loc;
     }).toList();
 
-    // Recalculate total travel time
-    final newTotalTravelTime =
-        _calculateTotalTime(updatedLocations, state.legDetails);
+    // Recalculate the route total from the stops actually on the route (in
+    // route order, with this edit applied). Passing every pinned location
+    // added the stays of all the other days on a multi-day trip.
+    final newTotalTravelTime = _calculateTotalTime(
+      [
+        for (final loc in state.optimizedLocationsForSelectedDate)
+          loc.id == locationId ? loc.copyWith(stayDuration: newDuration) : loc,
+      ],
+      state.legDetails,
+      isPreview: state.isRoutePreview,
+    );
 
     state = state.copyWith(
       pinnedLocations: updatedLocations,
@@ -2145,14 +2153,23 @@ class TripNotifier extends StateNotifier<TripState> {
     }
   }
 
+  /// The headline duration of the route on the map. ONE definition for every
+  /// writer of [TripState.totalTravelTime], because the summary derives
+  /// "ETA = now + total" from it:
+  ///   - a planned day: every leg's travel time plus the stay at each stop
+  ///     except the last ([locations] = the day's stops in route order);
+  ///   - a point-to-point preview ([isPreview]): travel only, matching what
+  ///     [_previewLeg] sets, since it answers "how long to get there".
   Duration _calculateTotalTime(
-      List<LocationModel> locations, List<Map<String, dynamic>> legDetails) {
+      List<LocationModel> locations, List<Map<String, dynamic>> legDetails,
+      {bool isPreview = false}) {
     Duration totalTime = Duration.zero;
 
     // Sum travel time from all legs
     for (final detail in legDetails) {
       totalTime += detail['duration'] as Duration;
     }
+    if (isPreview) return totalTime;
 
     // Sum stay duration for all but the last location
     for (int i = 0; i < locations.length - 1; i++) {
@@ -2280,17 +2297,22 @@ class TripNotifier extends StateNotifier<TripState> {
                 : l
         ];
 
+    final routeStops = patch(state.optimizedLocationsForSelectedDate);
+
     state = state.copyWith(
       legDetails: legs,
       legPolylines: polys,
       optimizedRoute: polys.expand((p) => p).toList(growable: false),
-      totalTravelTime: legs.fold<Duration>(Duration.zero,
-          (sum, l) => sum + ((l['duration'] as Duration?) ?? Duration.zero)),
+      // Same definition as the optimize that produced this route, so swapping
+      // one leg moves the total by that leg's difference only. Summing the
+      // legs alone here dropped every stay: the day's total and the ETA
+      // derived from it collapsed (10h 10m became 2h 18m on a 17-stop day).
+      totalTravelTime: _calculateTotalTime(routeStops, legs,
+          isPreview: state.isRoutePreview),
       totalDistance: legs.fold<double>(
           0, (sum, l) => sum + (((l['distance'] as num?) ?? 0).toDouble())),
       pinnedLocations: patch(state.pinnedLocations),
-      optimizedLocationsForSelectedDate:
-          patch(state.optimizedLocationsForSelectedDate),
+      optimizedLocationsForSelectedDate: routeStops,
     );
 
     // Persist so the ladder honors this leg's mode on every re-optimize.

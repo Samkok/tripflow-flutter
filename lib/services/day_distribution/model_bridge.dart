@@ -5,6 +5,8 @@
 library;
 
 import '../../models/location_model.dart';
+import '../../models/saved_location.dart' show OpeningPeriod;
+import '../timing_simulation.dart' show kNeverCloses;
 import 'distribution_models.dart';
 
 /// PLACE-identity string for the engine's same-day duplicate pre-check.
@@ -59,5 +61,55 @@ EnginePlace toEnginePlace(LocationModel l) {
     isSkipped: l.isSkipped,
     isAccommodation: l.isAccommodation,
     openWeekdays: openWeekdays,
+    openSpans: engineOpenSpans(
+      l.googleOpeningHours,
+      closingOverride: l.userClosingMinuteOverride,
+    ),
   );
+}
+
+/// A place's opening hours WITH times, for the days Auto-plan plans by the
+/// clock (arrival and departure). Same reading of the data as the day
+/// timing simulation (timing_simulation.dart), so the two never disagree:
+///  • the traveller's own closing time wins: open from the day's first
+///    Google opening (midnight when there is none) until that time, or
+///    past midnight when it is not after the opening;
+///  • "never closes", no hours, or open around the clock → null: nothing
+///    to check;
+///  • otherwise one span per Google period, after-midnight closes included.
+/// Null also when the periods carry no usable times.
+List<OpenSpan>? engineOpenSpans(
+  List<OpeningPeriod>? hours, {
+  int? closingOverride,
+}) {
+  const day = 1440;
+  if (closingOverride != null) {
+    if (closingOverride >= kNeverCloses) return null;
+    return [
+      for (var d = 0; d < 7; d++)
+        () {
+          int? first;
+          for (final p in hours ?? const <OpeningPeriod>[]) {
+            if (p.openDay != d) continue;
+            if (first == null || p.openMinutes < first) first = p.openMinutes;
+          }
+          final open = first ?? 0;
+          final close =
+              closingOverride <= open ? closingOverride + day : closingOverride;
+          return OpenSpan(d * day + open, d * day + close);
+        }(),
+    ];
+  }
+  if (hours == null || hours.isEmpty) return null;
+  if (hours.any((p) => p.isAlwaysOpen)) return null;
+  final spans = <OpenSpan>[];
+  for (final p in hours) {
+    final closeDay = p.closeDay;
+    final closeMinutes = p.closeMinutes;
+    if (closeDay == null || closeMinutes == null) continue;
+    final start = p.openDay * day + p.openMinutes;
+    final end = (p.openDay + (closeDay - p.openDay) % 7) * day + closeMinutes;
+    if (end > start) spans.add(OpenSpan(start, end));
+  }
+  return spans.isEmpty ? null : spans;
 }

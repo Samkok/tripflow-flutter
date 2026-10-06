@@ -4,12 +4,12 @@ import 'package:purchases_flutter/purchases_flutter.dart';
 import 'package:purchases_ui_flutter/purchases_ui_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:intl/intl.dart';
-import 'package:device_info_plus/device_info_plus.dart';
 import 'dart:io';
 import '../providers/subscription_provider.dart';
 import '../providers/user_trip_provider.dart';
 import '../services/analytics_service.dart';
 import '../providers/location_provider.dart';
+import '../services/abuse_check_device_id.dart';
 import '../services/revenuecat_service.dart';
 import '../services/referral_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -357,7 +357,7 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
       heroIcon = Icons.add_location_alt_rounded;
     } else if (isTrialExpired || hasUsedTrialBefore) {
       headline = 'Your free trial has ended';
-      subheadline = 'Subscribe to keep creating trips and locations.';
+      subheadline = 'Go Pro for unlimited places, Auto-plan and trip copies.';
       heroIcon = Icons.lock_clock;
     } else if (trialPhrase != null) {
       headline = 'Try VoyZa Pro free for $trialPhrase';
@@ -465,7 +465,8 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
                       style: const TextStyle(fontWeight: FontWeight.bold),
                     ),
                     const TextSpan(
-                      text: '. Subscribe to keep planning and editing them.',
+                      text:
+                          '. Go Pro to keep adding places beyond the free allowance.',
                     ),
                   ],
                 ),
@@ -1378,17 +1379,8 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
       if (_packageHasEligibleTrial(_selectedPackage) && user != null) {
         try {
           final repo = UserProfileRepository();
-          final deviceInfo = DeviceInfoPlugin();
-          String deviceId;
-          if (Platform.isAndroid) {
-            final android = await deviceInfo.androidInfo;
-            deviceId = android.id;
-          } else if (Platform.isIOS) {
-            final ios = await deviceInfo.iosInfo;
-            deviceId = ios.identifierForVendor ?? user.id;
-          } else {
-            deviceId = user.id;
-          }
+          // iOS vendor id / Android ID; the account id when neither exists.
+          final deviceId = await abuseCheckDeviceId() ?? user.id;
           final productId = _selectedPackage!.storeProduct.identifier;
 
           await repo.logTrialStart(

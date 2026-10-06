@@ -84,4 +84,9 @@ flutter {
 
 dependencies {
     coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.4'
+    // Meta's SDK, App Events only (ads measurement; see MetaAdsBridge.kt).
+    // Pinned to an exact version on purpose: a new SDK version can start
+    // collecting more on its own, and the privacy policy lists exactly what
+    // Meta receives. Upgrade deliberately, reading the release notes.
+    implementation 'com.facebook.android:facebook-core:18.3.0'
 }

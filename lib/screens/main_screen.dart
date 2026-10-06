@@ -15,7 +15,10 @@ import 'package:voyza/screens/trip_screen.dart';
 import 'package:voyza/screens/map_screen.dart';
 import 'package:voyza/screens/settings_screen.dart';
 import 'package:voyza/screens/onboarding/onboarding_screen.dart';
+import 'package:voyza/core/measurement_config.dart';
+import 'package:voyza/providers/user_trip_provider.dart';
 import 'package:voyza/widgets/analytics_consent_dialog.dart';
+import 'package:voyza/widgets/measurement_consent_dialog.dart';
 import 'package:voyza/providers/onboarding_checklist_provider.dart';
 import 'package:voyza/widgets/onboarding_checklist.dart';
 
@@ -73,9 +76,15 @@ class _MainScreenState extends ConsumerState<MainScreen> {
       // Ongoing trips with "carry unvisited places forward" on: move what
       // wasn't visited on past days to today (once per trip per day).
       if (mounted) unawaited(TripRolloverService.runIfDue(ref));
-      // One-time analytics consent prompt for EU/UK/CH users (no-op elsewhere).
+      // One-time analytics consent prompt for EU/UK/CH users (no-op
+      // elsewhere). Builds with ads measurement ask about both purposes
+      // there, and show a one-time notice everywhere else.
       if (mounted) {
-        await maybeShowAnalyticsConsent(context);
+        if (MeasurementConfig.adsMeasurement) {
+          await maybeShowMeasurementPrompts(context);
+        } else {
+          await maybeShowAnalyticsConsent(context);
+        }
       }
       // One-time first-run onboarding for fresh users with zero trips
       // (no-op for everyone else). Sequenced AFTER consent so the two
@@ -84,6 +93,14 @@ class _MainScreenState extends ConsumerState<MainScreen> {
       // they were sent is their first screen.
       if (mounted && !TripLinkService.instance.linkSeen) {
         await maybeShowOnboarding(context, ref);
+      }
+      // Apple's tracking question — only where ads measurement is on, and
+      // only for someone who already has a trip: never the first thing a
+      // new person sees. Asked once; a no-op on Android.
+      if (mounted && MeasurementConfig.adsMeasurement) {
+        final hasTrip =
+            ref.read(userTripsProvider).valueOrNull?.isNotEmpty ?? false;
+        if (hasTrip) await maybeAskTrackingPermission(context);
       }
       // Onboarding resolved (shown, skipped, or not needed) — let the map
       // tutorial re-evaluate in case the user is already on the map tab

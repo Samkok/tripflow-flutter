@@ -744,6 +744,8 @@ final routeInfoMarkersProvider = FutureProvider<Set<Marker>>((ref) async {
   String? chipVehicleType = firstSeg?['vehicleType'] as String?;
   String? chipBadgeText = firstSeg?['lineShort'] as String?;
   Color? chipBadgeColor = _parseLineColor(firstSeg?['lineColor'] as String?);
+  Color? chipBadgeTextColor =
+      _parseLineColor(firstSeg?['lineTextColor'] as String?);
   var chipDistanceLabel = distanceLabel;
   String? chipDurationLabel = durationLabel;
   var chipFromName = fromLoc.name.isEmpty ? 'Your location' : fromLoc.name;
@@ -770,6 +772,8 @@ final routeInfoMarkersProvider = FutureProvider<Set<Marker>>((ref) async {
       chipBadgeText = isRide ? run['lineShort'] as String? : null;
       chipBadgeColor =
           isRide ? _parseLineColor(run['lineColor'] as String?) : null;
+      chipBadgeTextColor =
+          isRide ? _parseLineColor(run['lineTextColor'] as String?) : null;
       // Per-run distance isn't in the API payload — derive it from the
       // run's own geometry.
       final meters = _polylineMeters(runPoints);
@@ -816,6 +820,7 @@ final routeInfoMarkersProvider = FutureProvider<Set<Marker>>((ref) async {
     vehicleType: chipVehicleType,
     badgeText: chipBadgeText,
     badgeColor: chipBadgeColor,
+    badgeTextColor: chipBadgeTextColor,
     fromName: chipFromName,
     toName: chipToName,
   );

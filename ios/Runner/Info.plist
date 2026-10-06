@@ -40,6 +40,67 @@
 	<string>VoyZa only adds route share cards you choose to save. It never reads or browses your photos.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>VoyZa uses your location to display your current position on the map, provide accurate directions, and help you plan your trips.</string>
+	<!-- Firebase Analytics and Performance start OFF and with every Consent
+	     Mode signal denied. The consent services (MeasurementConsentService,
+	     AnalyticsConsentService) switch them on once the person's choice is
+	     known, so nothing is collected before that — the privacy policy's
+	     promise for the EEA, the UK and Switzerland. -->
+	<key>FIREBASE_ANALYTICS_COLLECTION_ENABLED</key>
+	<false/>
+	<key>firebase_performance_collection_enabled</key>
+	<false/>
+	<key>GOOGLE_ANALYTICS_DEFAULT_ALLOW_ANALYTICS_STORAGE</key>
+	<false/>
+	<key>GOOGLE_ANALYTICS_DEFAULT_ALLOW_AD_STORAGE</key>
+	<false/>
+	<key>GOOGLE_ANALYTICS_DEFAULT_ALLOW_AD_USER_DATA</key>
+	<false/>
+	<key>GOOGLE_ANALYTICS_DEFAULT_ALLOW_AD_PERSONALIZATION_SIGNALS</key>
+	<false/>
+	<!-- Apple's tracking prompt (ads measurement). Shown after the app's own
+	     explanation, only where ads measurement is on. -->
+	<key>NSUserTrackingUsageDescription</key>
+	<string>This lets VoyZa see which of its ads brought you here. Your trips, places and location are never shared.</string>
+	<!-- Meta's SDK (ads measurement). It does NOT start with the app:
+	     MetaAdsBridge (Runner/AppDelegate.swift) starts it only once the
+	     person has allowed ads measurement. The App ID and Client Token are
+	     public values that ship in every build; Meta's App Secret is never
+	     used in the app.
+	     The four "false" keys are the SDK's own off switches, so that even
+	     once started it does nothing the app did not ask for. The bridge
+	     turns the first two on when measurement is allowed. The other two
+	     stay off for good: AutoLogMetaData is screen titles and opened links
+	     (in newer SDK versions), and AemAutoSetup would let the SDK watch
+	     every link the app is opened with, where the bridge passes it only
+	     links that come from a Meta ad. -->
+	<key>FacebookAppID</key>
+	<string>2785293015222172</string>
+	<key>FacebookClientToken</key>
+	<string>b78776087b73afd594279b0e66062f75</string>
+	<key>FacebookDisplayName</key>
+	<string>VoyZa</string>
+	<key>FacebookAutoLogAppEventsEnabled</key>
+	<false/>
+	<key>FacebookAdvertiserIDCollectionEnabled</key>
+	<false/>
+	<key>FBSDKAutoLogMetaDataEnabled</key>
+	<false/>
+	<key>FBSDKAemAutoSetupEnabled</key>
+	<false/>
+	<!-- Apple's SKAdNetwork: lets Apple tell Meta that an ad led to an
+	     install, without identifying the person or the device. These are
+	     Meta's two network IDs. -->
+	<key>SKAdNetworkItems</key>
+	<array>
+		<dict>
+			<key>SKAdNetworkIdentifier</key>
+			<string>v9wttpbfk9.skadnetwork</string>
+		</dict>
+		<dict>
+			<key>SKAdNetworkIdentifier</key>
+			<string>n38lu8286q.skadnetwork</string>
+		</dict>
+	</array>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 	<key>UILaunchStoryboardName</key>

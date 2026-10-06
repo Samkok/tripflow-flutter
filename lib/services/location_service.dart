@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_compass/flutter_compass.dart';
 import 'package:geolocator/geolocator.dart';
@@ -103,7 +104,36 @@ class LocationService {
     return true;
   }
 
-  static Future<LatLng?> getCurrentLocation() async {
+  /// The newest fix this run has seen — from the position stream or a
+  /// one-shot request — and when it arrived.
+  static LatLng? _lastFix;
+  static DateTime? _lastFixAt;
+
+  static void _remember(LatLng fix) {
+    _lastFix = fix;
+    _lastFixAt = DateTime.now();
+  }
+
+  static LatLng? _recentFix(Duration maxAge) {
+    final at = _lastFixAt;
+    if (_lastFix == null || at == null) return null;
+    return DateTime.now().difference(at) <= maxAge ? _lastFix : null;
+  }
+
+  /// A fresh, precise fix: the position stream's latest reading when it is
+  /// younger than [maxAge], otherwise one high-accuracy request.
+  ///
+  /// A one-shot request is not free on Android: the plugin starts a
+  /// location client with an NMEA listener and tears it down afterwards,
+  /// and that teardown is a binder call on the main thread that has been
+  /// seen to stall for seconds (an ANR on the emulator on 2026-10-06). So
+  /// callers that only need a rough position should use
+  /// [getApproximateLocation], which never starts a request.
+  static Future<LatLng?> getCurrentLocation({
+    Duration maxAge = const Duration(seconds: 30),
+  }) async {
+    final recent = _recentFix(maxAge);
+    if (recent != null) return recent;
     try {
       final hasPermission = await requestLocationPermission();
       if (!hasPermission) return null;
@@ -113,11 +143,38 @@ class LocationService {
         timeLimit: const Duration(seconds: 10),
       );
 
-      return LatLng(position.latitude, position.longitude);
+      final fix = LatLng(position.latitude, position.longitude);
+      _remember(fix);
+      return fix;
     } catch (e) {
       debugPrint('Error getting current location: $e');
       return null;
     }
+  }
+
+  /// A position good enough to bias a place search or label distances: the
+  /// newest fix of this run (up to ten minutes old), else the platform's
+  /// last known position. It never starts location updates, so it answers
+  /// at once and cannot stall the main thread. Null when nothing is known
+  /// yet; a one-shot request is then started in the background so the next
+  /// call has an answer.
+  static Future<LatLng?> getApproximateLocation() async {
+    final recent = _recentFix(const Duration(minutes: 10));
+    if (recent != null) return recent;
+    try {
+      final hasPermission = await requestLocationPermission();
+      if (!hasPermission) return null;
+      final last = await Geolocator.getLastKnownPosition();
+      if (last != null) {
+        final fix = LatLng(last.latitude, last.longitude);
+        _remember(fix);
+        return fix;
+      }
+    } catch (e) {
+      debugPrint('Error getting last known location: $e');
+    }
+    unawaited(getCurrentLocation());
+    return null;
   }
 
   static Future<String?> getCurrentCountryCode() async {
@@ -199,7 +256,9 @@ class LocationService {
     ).handleError((Object error) {
       debugPrint('Position stream error (stream kept alive): $error');
     })) {
-      yield LatLng(position.latitude, position.longitude);
+      final fix = LatLng(position.latitude, position.longitude);
+      _remember(fix);
+      yield fix;
     }
   }
 

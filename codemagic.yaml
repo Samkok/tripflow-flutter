@@ -41,7 +41,6 @@ workflows:
           echo "" > .env
           echo "REVENUECAT_API_KEY_ANDROID=$REVENUECAT_API_KEY_ANDROID" >> .env
           echo "REVENUECAT_API_KEY_IOS=$REVENUECAT_API_KEY_IOS" >> .env
-          echo "REVENUECAT_WEBHOOK_AUTH_KEY=$REVENUECAT_WEBHOOK_AUTH_KEY" >> .env
           echo "SUPABASE_ANON_KEY=$SUPABASE_ANON_KEY" >> .env
           echo "SUPABASE_URL=$SUPABASE_URL" >> .env
           echo "GOOGLE_DIRECTIONS_API_KEY=$GOOGLE_DIRECTIONS_API_KEY" >> .env
@@ -152,7 +151,6 @@ workflows:
           echo "" > .env
           echo "REVENUECAT_API_KEY_ANDROID=$REVENUECAT_API_KEY_ANDROID" >> .env
           echo "REVENUECAT_API_KEY_IOS=$REVENUECAT_API_KEY_IOS" >> .env
-          echo "REVENUECAT_WEBHOOK_AUTH_KEY=$REVENUECAT_WEBHOOK_AUTH_KEY" >> .env
           echo "SUPABASE_ANON_KEY=$SUPABASE_ANON_KEY" >> .env
           echo "SUPABASE_URL=$SUPABASE_URL" >> .env
           echo "GOOGLE_DIRECTIONS_API_KEY=$GOOGLE_DIRECTIONS_API_KEY" >> .env

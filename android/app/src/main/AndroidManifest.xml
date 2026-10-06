@@ -1,5 +1,6 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
     <!-- Permissions -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
@@ -16,6 +17,17 @@
          <uses-permission android:name="com.google.android.gms.permission.AD_ID"
              tools:node="remove" /> (and add xmlns:tools to <manifest>). -->
     <uses-permission android:name="com.google.android.gms.permission.AD_ID" />
+    <!-- Meta's SDK declares Android's Privacy Sandbox permissions. Two of
+         them go beyond measuring our own ads (ad audiences kept on the
+         device, and the person's interest topics), which the privacy policy
+         does not describe, so they are taken out. The attribution and ad-ID
+         ones stay: they are ads measurement. -->
+    <uses-permission
+        android:name="android.permission.ACCESS_ADSERVICES_CUSTOM_AUDIENCE"
+        tools:node="remove" />
+    <uses-permission
+        android:name="android.permission.ACCESS_ADSERVICES_TOPICS"
+        tools:node="remove" />
 
     <supports-screens android:smallScreens="true"
                         android:normalScreens="true"
@@ -32,7 +44,10 @@
         android:fullBackupContent="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:supportsRtl="false"
-        android:enableOnBackInvokedCallback="true">
+        android:enableOnBackInvokedCallback="true"
+        tools:replace="android:supportsRtl">
+        <!-- tools:replace: Meta's SDK declares supportsRtl="true" in its own
+             manifest; this app's value above wins. -->
         
         <!-- Renderer: Skia, NOT Impeller (Flutter's Android default since 3.38).
              Measured on a OnePlus 7 Pro (Adreno 640, Android 12, 1440x3120 @90Hz):
@@ -52,7 +67,40 @@
         <!-- Google Maps API Key -->
         <meta-data android:name="com.google.android.geo.API_KEY"
                    android:value="${googleMapsApiKey}"/>
-        
+
+        <!-- Meta's SDK (ads measurement). It does NOT start with the app:
+             the provider that would start it at launch is removed below, and
+             MetaAdsBridge starts it only once the person has allowed ads
+             measurement. Until then it makes no request and stores nothing.
+             The three "false" values are the SDK's own off switches, so that
+             even once started it does nothing the app did not ask for; the
+             bridge turns the first two on when measurement is allowed.
+             AutoLogMetaData (screen titles and opened links, in newer SDK
+             versions) stays off for good. -->
+        <meta-data android:name="com.facebook.sdk.ApplicationId"
+                   android:value="@string/facebook_app_id" />
+        <meta-data android:name="com.facebook.sdk.ClientToken"
+                   android:value="@string/facebook_client_token" />
+        <meta-data android:name="com.facebook.sdk.AutoLogAppEventsEnabled"
+                   android:value="false" />
+        <meta-data android:name="com.facebook.sdk.AdvertiserIDCollectionEnabled"
+                   android:value="false" />
+        <meta-data android:name="com.facebook.sdk.AutoLogMetaDataEnabled"
+                   android:value="false" />
+        <!-- Firebase Analytics and Performance start OFF and with every Consent
+             Mode signal denied; the consent services switch them on once the
+             person's choice is known (see Info.plist for the iOS twin). -->
+        <meta-data android:name="firebase_analytics_collection_enabled" android:value="false" />
+        <meta-data android:name="firebase_performance_collection_enabled" android:value="false" />
+        <meta-data android:name="google_analytics_default_allow_analytics_storage" android:value="false" />
+        <meta-data android:name="google_analytics_default_allow_ad_storage" android:value="false" />
+        <meta-data android:name="google_analytics_default_allow_ad_user_data" android:value="false" />
+        <meta-data android:name="google_analytics_default_allow_ad_personalization_signals" android:value="false" />
+        <provider
+            android:name="com.facebook.internal.FacebookInitProvider"
+            android:authorities="${applicationId}.FacebookInitProvider"
+            tools:node="remove" />
+
         <activity
             android:name=".MainActivity"
             android:exported="true"

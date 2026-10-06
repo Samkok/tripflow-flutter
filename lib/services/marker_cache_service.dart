@@ -246,11 +246,13 @@ class MarkerCacheService {
     String? vehicleType,
     String? badgeText,
     Color? badgeColor,
+    Color? badgeTextColor,
     String? fromName,
     String? toName,
   }) async {
     final key = 'leg_chip_${mode}_${vehicleType ?? ''}_${badgeText ?? ''}_'
-        '${badgeColor?.toARGB32() ?? ''}_${distanceLabel}_${durationLabel ?? ''}_'
+        '${badgeColor?.toARGB32() ?? ''}_${badgeTextColor?.toARGB32() ?? ''}_'
+        '${distanceLabel}_${durationLabel ?? ''}_'
         '${fromName ?? ''}>${toName ?? ''}';
     if (_cache.containsKey(key)) {
       return _cache[key]!;
@@ -263,6 +265,7 @@ class MarkerCacheService {
       vehicleType: vehicleType,
       badgeText: badgeText,
       badgeColor: badgeColor,
+      badgeTextColor: badgeTextColor,
       fromName: fromName,
       toName: toName,
     );

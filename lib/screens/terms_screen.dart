@@ -2,6 +2,7 @@ import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:voyza/core/measurement_config.dart';
 import 'package:voyza/widgets/rotating_globe_background.dart';
 
 class TermsScreen extends StatelessWidget {
@@ -35,7 +36,7 @@ class TermsScreen extends StatelessWidget {
                 _buildSection(
                   context,
                   '1. Introduction',
-                  'Welcome to VoyZa ("VoyZa" or "the App"), a trip planner and multi-stop route optimizer. These Terms and Conditions govern your use of the App and its services. By downloading, accessing, or using the App, you agree to be bound by these Terms. If you do not agree, please do not use the App.',
+                  'Welcome to VoyZa ("VoyZa" or "the App"), a trip planner and multi-stop route optimizer. These Terms and Conditions govern your use of the App and its services. By downloading, accessing, or using the App, you agree to be bound by these Terms. If you do not agree, please do not use the App. You must be at least 13 years old to use the App — 16 in the EEA, the UK and Switzerland unless your country sets a lower age of digital consent (see our Privacy Policy).',
                 ),
                 _buildSection(
                   context,
@@ -63,43 +64,58 @@ class TermsScreen extends StatelessWidget {
                 _buildSection(
                   context,
                   '6. Subscriptions (VoyZa Pro)',
-                  'VoyZa Pro is an optional paid upgrade sold through ${Platform.isIOS ? 'the App Store' : 'the Play Store'}. It is available as an auto-renewing subscription — weekly ("Trip Pass"), monthly, or yearly — or as a one-time Lifetime purchase. Pricing, billing period, and any free-trial terms are shown at the point of purchase and are billed by the store. Subscription plans renew automatically unless cancelled at least 24 hours before the end of the current period; you can manage or cancel them in your ${Platform.isIOS ? 'App Store' : 'Play Store'} account settings. A Lifetime purchase is one-time and does not renew, so there is nothing to cancel. To keep our free tier fair, we use a device identifier to enforce one free trial per device. The free plan includes a limited number of saved places (currently 10 per account, plus any bonus slots earned through the referral program); VoyZa Pro removes this cap. We may adjust the free allowance from time to time.',
+                  'VoyZa Pro is an optional paid upgrade sold through ${Platform.isIOS ? 'the App Store' : 'the Play Store'}. It is available as an auto-renewing subscription — weekly ("Trip Pass"), monthly, or yearly — or as a one-time Lifetime purchase. Pricing, billing period, and any free-trial terms are shown at the point of purchase and are billed by the store. Subscription plans renew automatically unless cancelled at least 24 hours before the end of the current period; you can manage or cancel them in your ${Platform.isIOS ? 'App Store' : 'Play Store'} account settings. A Lifetime purchase is one-time and does not renew, so there is nothing to cancel. Whether you qualify for a free trial is decided by the store; when a trial starts while you are signed in, we record a device identifier to detect repeated trials and referral abuse. The free plan includes a limited number of saved places (currently 10 per account, plus any bonus slots earned through the referral program) and one copy of a shared trip, and applying an Auto-plan proposal needs VoyZa Pro; Pro removes the place cap and the copy limit. We may adjust the free allowance from time to time.',
                 ),
                 _buildSection(
                   context,
                   '7. Referral & Invitation Program',
-                  'You can invite other people to VoyZa and to collaborate on your trips. When you invite someone who is not yet a VoyZa user by email, we store that email address to deliver the invitation and to connect you both if they join (see our Privacy Policy). Under our referral program (for example, "give a month, get a month"), when a person you refer signs up using your referral link or code, they may receive a promotional period of VoyZa Pro; you may receive a small instant benefit at their sign-up (currently 2 additional free place slots per referred sign-up, up to a maximum of 10), and when they go on to start a paid subscription (after any free trial), you may receive a promotional period as well (currently 30 days each). If you have an active paid subscription when a reward is earned, your promotional period may be applied when your current subscription period ends. Rewards are granted as promotional access, have no cash value, and are non-transferable. To keep the program fair, rewards are capped (currently 12 rewarded referrals per 12-month period), and referrals must be genuine invitations to real people you know. Self-referrals; creating fake, duplicate, or additional accounts; referring your own devices or accounts; and any automated, deceptive, or abusive activity are prohibited, and we use limited signals (including a device identifier) to detect them. Please invite only people who are happy to hear from you, and do not send spam. We may change, suspend, or end the referral program, and may withhold, revoke, or reverse rewards obtained through prohibited or fraudulent activity, at any time.',
+                  'You can invite other people to VoyZa and to collaborate on your trips. When you invite someone who is not yet a VoyZa user by email, we store that email address to deliver the invitation and to connect you both if they join (see our Privacy Policy). Under our referral program (for example, "give a month, get a month"), when a person you refer signs up using your referral link or code, they may receive a promotional period of VoyZa Pro; you may receive a small instant benefit at their sign-up (currently 2 additional free place slots per referred sign-up, up to a maximum of 10), and when they go on to start a paid subscription (after any free trial), you may receive a promotional period as well (currently 30 days each; a one-time Lifetime purchase does not count). A code can be redeemed once per account, within 14 days of creating the account, and only with a verified email address. If you have an active paid subscription when a reward is earned, your promotional period may be applied when your current subscription period ends. Rewards are granted as promotional access, have no cash value, and are non-transferable. To keep the program fair, rewards are capped (currently 12 rewarded referrals per 12-month period), and referrals must be genuine invitations to real people you know. Self-referrals; creating fake, duplicate, or additional accounts; referring your own devices or accounts; and any automated, deceptive, or abusive activity are prohibited, and we use limited signals (including a device identifier) to detect them. Please invite only people who are happy to hear from you, and do not send spam. We may change, suspend, or end the referral program, and may withhold, revoke, or reverse rewards obtained through prohibited or fraudulent activity, at any time.',
                 ),
                 _buildSection(
                   context,
                   '8. Analytics & Advertising',
-                  "We use Firebase Analytics and Google Analytics to understand how VoyZa is used so we can improve it, and we measure the effectiveness of our own marketing — for example, attributing app installs and subscriptions to advertising campaigns run through Google Ads. VoyZa does not display third-party advertising inside the App, and we do not track you across other companies' apps and websites for advertising. For users in the EEA, the UK, and Switzerland, non-essential analytics and advertising signals stay off until you opt in; you can review or change your choice at any time in Settings → Privacy → Analytics & Ads consent. Full details are in our Privacy Policy.",
+                  // One text per build. Builds that measure advertising
+                  // (MeasurementConfig.adsMeasurement, the default) carry
+                  // Meta's SDK, two switches and Apple's tracking prompt;
+                  // the fallback build has none of them, so it keeps the
+                  // earlier wording. The platform sentence differs for the
+                  // same reason as in section 3 (Guideline 2.3.10). Keep in
+                  // step with legal/privacy-policy.md section 6 and the
+                  // website Terms section 5.
+                  MeasurementConfig.adsMeasurement
+                      ? "We use Firebase Analytics and Google Analytics to understand how VoyZa is used so we can improve it. We also advertise VoyZa on other companies' platforms and measure whether that advertising works: where ads measurement is on, the App tells Google and Meta (Facebook and Instagram) when one of our ads leads to an install, a trial, or a subscription, using your device's advertising identifier where you have allowed it. VoyZa does not display third-party advertising inside the App, and we never send advertisers your name, email address, trips, places, or location. These are two separate choices, Usage analytics and Ads measurement, each with its own switch in Settings under Preferences. For users in the EEA, the UK, and Switzerland, both stay off until you opt in; elsewhere they are on by default, ads measurement only after the App has shown you a notice, and you can switch either off at any time. ${Platform.isIOS ? 'The App also asks through the system tracking prompt before it uses the advertising identifier of your device; if you allow it, that is tracking as Apple defines it, and you can change your answer in iOS Settings → Privacy & Security → Tracking.' : 'You can also reset or delete your Advertising ID at any time in your device settings (Settings → Google → Ads).'} Full details, including exactly what each company receives, are in our Privacy Policy."
+                      : "We use Firebase Analytics and Google Analytics to understand how VoyZa is used so we can improve it, and we measure the effectiveness of our own marketing — for example, attributing app installs and subscriptions to advertising campaigns run through Google Ads. VoyZa does not display third-party advertising inside the App, and we do not track you across other companies' apps and websites for advertising. For users in the EEA, the UK, and Switzerland, non-essential analytics and advertising signals stay off until you opt in; you can review or change your choice at any time in Settings under Preferences. Full details are in our Privacy Policy.",
+                ),
+                _buildSection(
+                  context,
+                  '9. Acceptable Use & Termination',
+                  'You agree not to use the App for illegal purposes, to attempt to reverse engineer or exploit it, to interfere with its infrastructure or security, or to abuse the collaboration, sharing or referral features or other users. You may stop using the App at any time and delete your account from Settings. We may suspend or terminate access for violations of these Terms.',
                 ),
                 _buildPrivacySection(context),
                 _buildSection(
                   context,
-                  '10. Disclaimer of Warranties',
+                  '11. Disclaimer of Warranties',
                   'The App and its services are provided "as is" and "as available" without warranties of any kind. We do not warrant that the App will be error-free or uninterrupted. All travel information, including maps, routes, travel times, and distances, is provided by third-party services and may contain inaccuracies. Always exercise your own judgment, be aware of your surroundings, and verify information before relying on it for navigation or travel. We are not responsible for any damages or losses resulting from your reliance on this information.',
                 ),
                 _buildSection(
                   context,
-                  '11. Limitation of Liability',
+                  '12. Limitation of Liability',
                   'To the fullest extent permitted by applicable law, in no event shall VoyZa or its creators be liable for any indirect, incidental, special, consequential, or punitive damages, or any loss of profits, revenues, data, use, goodwill, or other intangible losses, resulting from (a) your access to or use of, or inability to access or use, the App; (b) any conduct or content of any third party on the App; or (c) unauthorized access, use, or alteration of your transmissions or content.',
                 ),
                 _buildSection(
                   context,
-                  '12. Intellectual Property',
+                  '13. Intellectual Property',
                   'All rights, title, and interest in and to the App (excluding content provided by third parties and Your Content) are and will remain the exclusive property of VoyZa and its creators. The App is protected by copyright and other laws. Nothing in these Terms gives you the right to use the VoyZa name or any VoyZa trademarks, logos, domain names, or other distinctive brand features.',
                 ),
                 _buildSection(
                   context,
-                  '13. Changes to Terms',
-                  'We may revise these Terms from time to time. We will notify you of material changes by posting the updated Terms on this page. Your continued use of the App after changes take effect means you accept the revised Terms. Please review this page periodically.',
+                  '14. Changes to Terms',
+                  'We may revise these Terms from time to time. We will notify you of material changes by posting the updated Terms on this page. Your continued use of the App after changes take effect means you accept the revised Terms. This does not apply to data processing that needs your consent: where our Privacy Policy says we will ask for it, we ask separately, and continued use of the App is never treated as that consent. Please review this page periodically.',
                 ),
                 _buildContactSection(context),
                 const SizedBox(height: 24),
                 const Text(
-                  'Last updated: September 13, 2026',
+                  'Last updated: October 6, 2026',
                   style: TextStyle(
                       fontStyle: FontStyle.italic, color: Colors.grey),
                 ),
@@ -120,7 +136,7 @@ class TermsScreen extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            '9. Privacy',
+            '10. Privacy',
             style: Theme.of(context).textTheme.titleLarge?.copyWith(
                   fontWeight: FontWeight.bold,
                 ),
@@ -172,7 +188,7 @@ class TermsScreen extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            '14. Contact Us',
+            '15. Contact Us',
             style: Theme.of(context).textTheme.titleLarge?.copyWith(
                   fontWeight: FontWeight.bold,
                 ),

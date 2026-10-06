@@ -9,6 +9,7 @@ import '../providers/optimized_map_overlay_provider.dart'
 import '../providers/trip_provider.dart';
 import '../services/multi_modal_router.dart';
 import '../utils/external_app_links.dart';
+import '../utils/line_badge_colors.dart';
 import '../utils/marker_utils.dart';
 import 'app_toast.dart';
 
@@ -282,9 +283,8 @@ class _RouteLegSheetState extends ConsumerState<_RouteLegSheet> {
         ? legsLive[widget.legIndex]
         : null;
     final mode = (live?['mode'] as String?) ?? widget.mode;
-    final transit =
-        (live?['transit'] as List?)?.cast<Map<String, dynamic>>() ??
-            widget.transit;
+    final transit = (live?['transit'] as List?)?.cast<Map<String, dynamic>>() ??
+        widget.transit;
     final liveMeters = (live?['distance'] as num?)?.toDouble();
     final distanceLabel = liveMeters == null
         ? widget.distanceLabel
@@ -649,6 +649,32 @@ class _RouteLegSheetState extends ConsumerState<_RouteLegSheet> {
     return delta.isNegative ? 0 : delta.inMinutes;
   }
 
+  /// A route option's line badge — the "[N680]" ahead of its times.
+  Widget _optionLineBadge(Map<String, dynamic> seg) {
+    final fill = _lineColor(seg['lineColor'] as String?) ??
+        Theme.of(context).colorScheme.primary;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
+      decoration: BoxDecoration(
+        color: fill,
+        borderRadius: BorderRadius.circular(5),
+      ),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 168),
+        child: Text(
+          (seg['lineShort'] as String?) ?? 'Ride',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+              color: lineBadgeTextColor(fill,
+                  preferred: _lineColor(seg['lineTextColor'] as String?)),
+              fontSize: 11,
+              fontWeight: FontWeight.w800),
+        ),
+      ),
+    );
+  }
+
   /// One route option, departure-board style: bold duration (the decision
   /// fact), identity line (transit badge chain + times / "via …" for
   /// roads), radio-style selection at the right. Index 0 = Google's
@@ -687,26 +713,7 @@ class _RouteLegSheetState extends ConsumerState<_RouteLegSheet> {
                         color: theme.colorScheme.onSurfaceVariant
                             .withValues(alpha: 0.5))),
               ),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
-              decoration: BoxDecoration(
-                color: _lineColor(option.transit![s]['lineColor'] as String?) ??
-                    theme.colorScheme.primary,
-                borderRadius: BorderRadius.circular(5),
-              ),
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 168),
-                child: Text(
-                  (option.transit![s]['lineShort'] as String?) ?? 'Ride',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 11,
-                      fontWeight: FontWeight.w800),
-                ),
-              ),
-            ),
+            _optionLineBadge(option.transit![s]),
           ],
           if (dep != null && arr != null)
             Padding(
@@ -926,8 +933,10 @@ class _RouteLegSheetState extends ConsumerState<_RouteLegSheet> {
                     ),
                     child: Text(
                       lineShort,
-                      style: const TextStyle(
-                          color: Colors.white,
+                      style: TextStyle(
+                          color: lineBadgeTextColor(color,
+                              preferred:
+                                  _lineColor(seg['lineTextColor'] as String?)),
                           fontWeight: FontWeight.w800,
                           fontSize: 13),
                     ),

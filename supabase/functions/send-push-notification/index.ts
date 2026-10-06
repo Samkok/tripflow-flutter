@@ -1,9 +1,30 @@
 // Supabase Edge Function: send-push-notification
 // Called by a Supabase Database Webhook on notifications table INSERT
 // Fetches device tokens for the recipient and dispatches via FCM HTTP v1 API
+//
+// Access: the caller must present the project's SERVICE ROLE key as
+// `Authorization: Bearer …`. The gateway's JWT check alone is not enough —
+// the public anon key is a valid JWT too, so without this check anyone could
+// push arbitrary text to any user_id. The Database Webhook (Dashboard →
+// Database → Webhooks → notifications INSERT) must therefore send that
+// header; configure it BEFORE deploying this version.
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
+
+/** The `role` claim of a bearer JWT, or null. Signature is checked by the gateway. */
+function jwtRole(authHeader: string): string | null {
+  const token = authHeader.replace(/^Bearer\s+/i, "");
+  const parts = token.split(".");
+  if (parts.length !== 3) return null;
+  try {
+    const b64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const pad = b64.length % 4 ? "=".repeat(4 - (b64.length % 4)) : "";
+    return (JSON.parse(atob(b64 + pad)).role as string) ?? null;
+  } catch {
+    return null;
+  }
+}
 
 // ============================================================================
 // Types
@@ -243,6 +264,12 @@ async function deactivateToken(fcmToken: string): Promise<void> {
 // ============================================================================
 
 serve(async (req) => {
+  if (jwtRole(req.headers.get("Authorization") ?? "") !== "service_role") {
+    return new Response(JSON.stringify({ error: "Forbidden" }), {
+      status: 403,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
   try {
     console.log("send-push-notification: Webhook received");
 

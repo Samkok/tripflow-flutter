@@ -4,6 +4,9 @@ import 'package:firebase_analytics/firebase_analytics.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart';
 
+import '../core/measurement_config.dart';
+import 'measurement_consent_service.dart';
+
 /// Funnel instrumentation — the master unblock from the marketing plan.
 ///
 /// Without these events the team cannot see where users leak (activation is
@@ -22,7 +25,18 @@ class AnalyticsService {
   AnalyticsService._();
   static final instance = AnalyticsService._();
 
+  /// Tests watch what is fired through this. Never set in the app.
+  @visibleForTesting
+  static void Function(String name, Map<String, Object>? params)? debugOnFire;
+
   void _fire(String name, [Map<String, Object>? params]) {
+    debugOnFire?.call(name, params);
+    // Advertising SDKs hear about a short, fixed list of these events, and
+    // only while ads measurement is on (see adsEventFor). Independent of
+    // Firebase, so it runs before the Firebase guard below. Never throws.
+    if (MeasurementConfig.adsMeasurement) {
+      MeasurementConsentService.instance.logAdsEvent(name, params);
+    }
     // `Firebase.apps` never throws; `FirebaseAnalytics.instance` does (before
     // init). Resolve lazily inside the guard + try/catch so nothing escapes.
     if (Firebase.apps.isEmpty) return;
@@ -42,8 +56,12 @@ class AnalyticsService {
   /// A new account was created. [method] = 'email' (extend for OAuth later).
   void signup(String method) => _fire('signup', {'method': method});
 
-  /// A trip was created (first real activation step).
-  void tripCreated() => _fire('trip_created');
+  /// A trip was created (first real activation step). [copied] marks a trip
+  /// that came from someone else's shared code or link: it counts the same,
+  /// and the marker lets the two be told apart in Firebase. Ad platforms
+  /// are told only that a trip was created (see adsEventFor).
+  void tripCreated({bool copied = false}) =>
+      _fire('trip_created', copied ? {'source': 'copy'} : null);
 
   /// A place was saved. [totalPlaces] feeds the 3–5 "aha" threshold analysis
   /// (approximate — derived from the current in-memory list).
@@ -52,7 +70,9 @@ class AnalyticsService {
 
   /// THE ACTIVATION AHA: a multi-stop route was optimized. [stops] = stop
   /// count; [minutesSaved] = travel time saved vs the user's original order
-  /// (0 = no saving or baseline unavailable).
+  /// (0 = no saving or baseline unavailable). Ad platforms are told only
+  /// that it happened, once per install, without either number (see
+  /// adsEventFor).
   void routeOptimized(int stops, {int minutesSaved = 0}) =>
       _fire('route_optimized', {'stops': stops, 'minutes_saved': minutesSaved});
 

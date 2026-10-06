@@ -46,7 +46,13 @@ import 'package:voyza/utils/same_day_place_guard.dart';
 import 'package:voyza/utils/search_text.dart';
 import 'package:voyza/utils/trip_dates.dart';
 import 'package:voyza/utils/trip_day_labels.dart';
+import 'package:voyza/utils/trip_qr_text.dart';
 import 'package:voyza/utils/trip_share_link.dart';
+import 'package:voyza/utils/countries.dart';
+import 'package:voyza/widgets/trip_qr_card.dart';
+import 'package:voyza/utils/trip_times.dart';
+import 'package:voyza/widgets/trip_times_lines.dart';
+import 'package:voyza/widgets/trip_times_sheet.dart';
 import 'package:voyza/widgets/trip_day_picker.dart';
 import 'package:voyza/services/trip_dates_service.dart';
 import 'package:voyza/services/itinerary_pdf_service.dart';
@@ -95,6 +101,9 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
   /// opens, and its key so the sheet can anchor to it on iPad.
   bool _sharingLink = false;
   final GlobalKey _shareButtonKey = GlobalKey();
+
+  /// QR button: busy while the trip is published before its card opens.
+  bool _openingQr = false;
 
   /// Map button: busy while the trip is made the active one.
   bool _openingMap = false;
@@ -336,6 +345,7 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
       Future.delayed(const Duration(milliseconds: 600), () {
         if (!mounted) return;
         ref.read(locationRepositoryProvider).fetchRemoteLocations();
+        unawaited(_loadSharedTripTimes());
       });
 
       // One-time "first trip" congrats. Double-gated: the caller only sets
@@ -493,24 +503,46 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
     }
   }
 
-  /// The share button: sends a link that opens this trip's copy flow — the
-  /// share code without the typing. A link only works while the trip is
-  /// public, so an owner whose trip is still private gets the same question
-  /// as the Publish button first.
-  Future<void> _shareTripLink() async {
-    if (_sharingLink) return;
+  /// What both ways of handing the trip over need first: an account, and
+  /// the trip public — a link or a QR code only works while it is. An owner
+  /// whose trip is still private gets the same question as the Publish
+  /// button. Returns the trip's share code, or null when there is nothing
+  /// to hand over (not signed in, not the owner, declined, or it failed).
+  Future<String?> _ensureShareCode({
+    required IconData icon,
+    required String signUpTitle,
+    required String signUpMessage,
+  }) async {
     if (ref.read(currentUserIdProvider) == null) {
       showSignUpRequiredSheet(
         context,
-        icon: Icons.ios_share_rounded,
-        title: 'Sign up to share this trip',
-        message: 'A shared trip travels as a link: whoever opens it gets '
-            'their own copy of your plan. Links belong to an account — '
-            'this trip stays on your device and comes with you when you '
-            'sign up.',
+        icon: icon,
+        title: signUpTitle,
+        message: signUpMessage,
       );
-      return;
+      return null;
     }
+    if (!(_trip.isPublic && _trip.shareCode != null)) {
+      final isOwner =
+          ref.read(isTripOwnerProvider(widget.trip.id)).valueOrNull ?? false;
+      if (!isOwner) {
+        AppToast.info(context, 'Only the trip owner can turn on sharing.');
+        return null;
+      }
+      final published = await _setTripPublished(true, announce: false);
+      if (!published || !mounted) return null;
+    }
+    final code = normalizeTripShareCode(_trip.shareCode);
+    if (code == null && mounted) {
+      AppToast.error(context, 'Could not create the link. Please try again.');
+    }
+    return code;
+  }
+
+  /// The share button: sends a link that opens this trip's copy flow — the
+  /// share code without the typing.
+  Future<void> _shareTripLink() async {
+    if (_sharingLink) return;
     // Where the share sheet points on iPad — read before any await.
     final box =
         _shareButtonKey.currentContext?.findRenderObject() as RenderBox?;
@@ -520,23 +552,17 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
 
     setState(() => _sharingLink = true);
     try {
-      if (!(_trip.isPublic && _trip.shareCode != null)) {
-        final isOwner =
-            ref.read(isTripOwnerProvider(widget.trip.id)).valueOrNull ?? false;
-        if (!isOwner) {
-          AppToast.info(context, 'Only the trip owner can turn on sharing.');
-          return;
-        }
-        final published = await _setTripPublished(true, announce: false);
-        if (!published || !mounted) return;
-      }
-      final code = _trip.shareCode;
-      if (tripShareLink(code) == null) {
-        AppToast.error(context, 'Could not create the link. Please try again.');
-        return;
-      }
+      final code = await _ensureShareCode(
+        icon: Icons.ios_share_rounded,
+        signUpTitle: 'Sign up to share this trip',
+        signUpMessage: 'A shared trip travels as a link: whoever opens it '
+            'gets their own copy of your plan. Links belong to an account '
+            '— this trip stays on your device and comes with you when you '
+            'sign up.',
+      );
+      if (code == null || !mounted) return;
       await SharePlus.instance.share(ShareParams(
-        text: tripShareMessage(tripName: _trip.name, shareCode: code!),
+        text: tripShareMessage(tripName: _trip.name, shareCode: code),
         subject: 'A trip for you on VoyZa: ${_trip.name}',
         sharePositionOrigin: origin,
       ));
@@ -547,6 +573,60 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
       }
     } finally {
       if (mounted) setState(() => _sharingLink = false);
+    }
+  }
+
+  /// The QR button: the trip as a card to show or send. The code on it
+  /// holds the same link the share button sends, and nothing else; the
+  /// card names the country — "Places to visit in Japan" — unless the
+  /// traveller has written a headline of their own for this trip.
+  Future<void> _showTripQr() async {
+    if (_openingQr) return;
+    setState(() => _openingQr = true);
+    try {
+      final code = await _ensureShareCode(
+        icon: Icons.qr_code_2_rounded,
+        signUpTitle: 'Sign up to share this trip',
+        signUpMessage: 'A trip QR code lets anyone who scans it copy your '
+            'plan. Codes belong to an account — this trip stays on your '
+            'device and comes with you when you sign up.',
+      );
+      final link = tripShareLink(code);
+      if (code == null || link == null || !mounted) return;
+
+      final trip = _trip;
+      final places = ref
+          .read(savedLocationsProvider)
+          .valueOrNull
+          ?.where((l) => l.tripId == trip.id)
+          .length;
+      final start = trip.startDate;
+      final end = trip.endDate;
+      final days = start == null || end == null
+          ? null
+          : daySpanDays(dayKey(start), dayKey(end)) + 1;
+
+      await showTripQrSheet(
+        context,
+        link: link,
+        shareCode: code,
+        tripId: trip.id,
+        countryCode: findCountryByCode(trip.countryCode)?.code,
+        text: TripQrText.forTrip(
+          tripName: trip.name,
+          countryName: findCountryByCode(trip.countryCode)?.name,
+          placeCount: places,
+          dayCount: days,
+        ),
+      );
+    } catch (e) {
+      debugPrint('_showTripQr: $e');
+      if (mounted) {
+        AppToast.error(
+            context, 'Could not open the QR code. Please try again.');
+      }
+    } finally {
+      if (mounted) setState(() => _openingQr = false);
     }
   }
 
@@ -836,10 +916,10 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
     );
   }
 
-  /// The fixed row above the list: search, then the page's two ways out —
-  /// to the map, and to someone else. Fixed, not in the scrolling card, so
-  /// both stay in reach however far down the plan the page is (an ongoing
-  /// trip opens scrolled to today).
+  /// The fixed row above the list: search, then the page's ways out — to
+  /// the map, and to someone else (as a QR card or as a link). Fixed, not
+  /// in the scrolling card, so they stay in reach however far down the plan
+  /// the page is (an ongoing trip opens scrolled to today).
   Widget _buildSearchBar() {
     final isOwner =
         ref.watch(isTripOwnerProvider(widget.trip.id)).valueOrNull ?? false;
@@ -860,6 +940,13 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
             onPressed: _openOnMap,
           ),
           if (canShare) ...[
+            const SizedBox(width: 8),
+            _buildPageAction(
+              icon: Icons.qr_code_2_rounded,
+              tooltip: 'Trip QR code',
+              busy: _openingQr,
+              onPressed: _showTripQr,
+            ),
             const SizedBox(width: 8),
             _buildPageAction(
               key: _shareButtonKey,
@@ -932,11 +1019,20 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
   }
 
   Widget _buildSearchField() {
+    return LayoutBuilder(
+      builder: (context, constraints) => _buildSearchInput(
+        // Beside three buttons a narrow phone leaves room for one word.
+        hint: constraints.maxWidth < 230 ? 'Search' : 'Search locations...',
+      ),
+    );
+  }
+
+  Widget _buildSearchInput({required String hint}) {
     return TextField(
       cursorOpacityAnimates: false,
       controller: _searchController,
       decoration: InputDecoration(
-        hintText: 'Search locations...',
+        hintText: hint,
         prefixIcon: const Icon(Icons.search),
         suffixIcon: _searchQuery.isNotEmpty
             ? IconButton(
@@ -1161,6 +1257,89 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
         AppToast.error(context, 'Couldn\'t set the dates — try again.');
       }
     }
+  }
+
+  /// A trip shared with this user reaches the page from a list that carries
+  /// only some of its columns, and the owner's arrival and departure times
+  /// are not among them. Read them from the trip itself (members may) so
+  /// the page shows what the owner set. Own and guest trips arrive whole.
+  Future<void> _loadSharedTripTimes() async {
+    final me = ref.read(currentUserIdProvider);
+    if (me == null || me == widget.trip.userId) return;
+    try {
+      final whole =
+          await ref.read(tripRepositoryProvider).getTripById(widget.trip.id);
+      if (!mounted || whole == null) return;
+      if (whole.arrivalMinute == _trip.arrivalMinute &&
+          whole.departureMinute == _trip.departureMinute) {
+        return;
+      }
+      setState(() => _tripOverride = _trip.copyWith(
+            arrivalMinute: whole.arrivalMinute,
+            departureMinute: whole.departureMinute,
+          ));
+    } catch (e) {
+      debugPrint('_loadSharedTripTimes: $e');
+    }
+  }
+
+  /// Opens the arrival / departure sheet (owner). The two times are part of
+  /// the trip, so the page's copy of it follows every save. [add] opens the
+  /// clock for that time at once (the "Add arrival time" line on a day).
+  void _openTripTimes({TripTimeField? add}) {
+    showTripTimesSheet(
+      context,
+      trip: _trip,
+      openClockFor: add,
+      onChanged: (changed) {
+        if (!mounted) return;
+        setState(() => _tripOverride = _trip.copyWith(
+              arrivalMinute: changed.arrivalMinute,
+              departureMinute: changed.departureMinute,
+            ));
+      },
+    );
+  }
+
+  /// The trip's arrival and departure times in the header card. The owner
+  /// sets them from here (or from the first / last day below); everyone
+  /// else on the trip sees them once they are set. A trip that is over
+  /// keeps what it has.
+  Widget _buildTripTimesRow() {
+    return Consumer(builder: (context, ref, _) {
+      final isOwner =
+          ref.watch(isTripOwnerProvider(widget.trip.id)).valueOrNull ?? false;
+      return TripTimesHeaderRow(
+        trip: _trip,
+        canEdit: isOwner && !_tripEnded,
+        onEdit: _openTripTimes,
+      );
+    });
+  }
+
+  /// Under the trip's first day: when the traveller arrives. Under its
+  /// last: when they leave. See [TripDayTimeLines].
+  List<Widget> _buildDayTimeLines(DateTime day) {
+    if (!TripDayTimeLines.appliesTo(_trip, day)) return const [];
+    return [
+      Consumer(builder: (context, ref, _) {
+        final isOwner =
+            ref.watch(isTripOwnerProvider(widget.trip.id)).valueOrNull ?? false;
+        return TripDayTimeLines(
+          trip: _trip,
+          day: day,
+          canEdit: isOwner && !_tripEnded,
+          // A time not set yet: straight to the clock. One that is set:
+          // the sheet, where it can be changed or removed.
+          onEdit: (field) {
+            final isSet = field == TripTimeField.arrival
+                ? _trip.arrivalMinute != null
+                : _trip.departureMinute != null;
+            _openTripTimes(add: isSet ? null : field);
+          },
+        );
+      }),
+    ];
   }
 
   bool _busyRollover = false;
@@ -1477,7 +1656,8 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
                   'name, your edits, or your progress, and you can turn '
                   'this off any time.'
               : 'People who have your link or code will no longer be able '
-                  'to copy this trip. Making it public again restores the '
+                  'to copy this trip, and itinerary links sent with route '
+                  'cards stop working. Making it public again restores the '
                   'same link and code.',
         ),
         actions: [
@@ -1678,6 +1858,7 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
                   ],
                 );
               }),
+              _buildTripTimesRow(),
             ],
             // ── Carry unvisited places forward (owner, dated trips only) ──
             if (_trip.startDate != null &&
@@ -2488,6 +2669,7 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
                     ),
                   ],
                 ),
+                ..._buildDayTimeLines(day),
                 if (folded)
                   _buildFoldedDaySummary(day, locations, isPast: isPast)
                 else ...[

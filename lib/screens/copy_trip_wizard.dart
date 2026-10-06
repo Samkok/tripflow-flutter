@@ -7,6 +7,7 @@ import 'package:intl/intl.dart';
 import '../providers/auth_provider.dart';
 import '../providers/user_trip_provider.dart';
 import '../repositories/trip_repository.dart';
+import '../services/analytics_service.dart';
 import '../services/photo_service.dart';
 import '../services/place_photo_cache.dart';
 import '../utils/trip_dates.dart';
@@ -61,6 +62,11 @@ class _CopyTripWizardState extends ConsumerState<CopyTripWizard> {
   Map<String, dynamic>? _preview; // RPC snapshot
   String? _normalizedCode;
   DateTime? _startDate;
+
+  /// "I don't know the dates yet": the copy is planned by day number (Day
+  /// 1, Day 2, …) and dated later from its own page. A start date picked
+  /// before the switch is kept, so switching back brings it up again.
+  bool _datesTbd = false;
 
   static const _stepCount = 3;
 
@@ -149,7 +155,9 @@ class _CopyTripWizardState extends ConsumerState<CopyTripWizard> {
   // ── Step 2: confirm ───────────────────────────────────────────────────
   Future<void> _confirm() async {
     final code = _normalizedCode;
-    final start = _startDate;
+    final undated = _datesTbd;
+    // An undated trip sits on the far-future anchor: Day N is anchor + N-1.
+    final start = undated ? tripDatesTbdAnchor : _startDate;
     if (code == null || start == null || _busy) return;
 
     // Client gate first (accurate RevenueCat pro state); the RPC re-checks
@@ -163,12 +171,30 @@ class _CopyTripWizardState extends ConsumerState<CopyTripWizard> {
 
     setState(() => _busy = true);
     try {
-      await ref.read(tripRepositoryProvider).duplicatePublicTrip(code, start);
+      final trips = ref.read(tripRepositoryProvider);
+      final newTripId = await trips.duplicatePublicTrip(code, start);
+      // A copied trip is a created trip: the person now has one of their
+      // own. Reported as soon as the copy exists, whatever happens next.
+      AnalyticsService.instance.tripCreated(copied: true);
+      if (undated) {
+        // The copy already sits on the anchor, so the app reads it as
+        // undated whatever happens next; this writes that down on the
+        // server too. Not worth failing a finished copy over.
+        try {
+          await trips.clearTripDatesRemote(newTripId);
+        } catch (e) {
+          debugPrint('CopyTripWizard: marking the copy undated failed: $e');
+        }
+      }
       ref.invalidate(userTripsProvider);
       ref.invalidate(tripCopiesUsedProvider);
       if (!mounted) return;
       Navigator.of(context).pop();
-      AppToast.success(context, "Trip copied — it's yours now!");
+      AppToast.success(
+          context,
+          undated
+              ? 'Trip copied — set its dates whenever you know them'
+              : "Trip copied — it's yours now!");
     } on TripCodeException catch (e) {
       if (!mounted) return;
       switch (e.error) {
@@ -521,8 +547,12 @@ class _CopyTripWizardState extends ConsumerState<CopyTripWizard> {
     final end = DateTime.tryParse(p?['end_date'] as String? ?? '');
     final span =
         (start != null && end != null) ? end.difference(start).inDays : 0;
+    final days = span + 1;
+    final daysLabel = '$days day${days == 1 ? '' : 's'}';
     final chosen = _startDate;
     final chosenEnd = chosen?.add(Duration(days: span));
+    final undated = _datesTbd;
+    final ready = undated || chosen != null;
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(24, 12, 24, 24),
@@ -534,9 +564,13 @@ class _CopyTripWizardState extends ConsumerState<CopyTripWizard> {
                   ?.copyWith(fontWeight: FontWeight.bold)),
           const SizedBox(height: 8),
           Text(
-            'Pick the first day — every place shifts to match, keeping the '
-            'same day-by-day plan (${span + 1} day${span == 0 ? '' : 's'}). '
-            'You can change anything later.',
+            undated
+                ? 'Your copy keeps the same day-by-day plan ($daysLabel), '
+                    'numbered Day 1, Day 2, … Set the dates later from the '
+                    'trip\'s page and every day keeps its plan.'
+                : 'Pick the first day — every place shifts to match, '
+                    'keeping the same day-by-day plan ($daysLabel). You can '
+                    'change anything later.',
             style: theme.textTheme.bodyMedium
                 ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
           ),
@@ -556,7 +590,11 @@ class _CopyTripWizardState extends ConsumerState<CopyTripWizard> {
                       helpText: 'Trip start date',
                     );
                     if (picked != null && mounted) {
-                      setState(() => _startDate = picked);
+                      // Picking a date is choosing to have one.
+                      setState(() {
+                        _startDate = picked;
+                        _datesTbd = false;
+                      });
                     }
                   },
             child: Container(
@@ -565,7 +603,7 @@ class _CopyTripWizardState extends ConsumerState<CopyTripWizard> {
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(16),
                 border: Border.all(
-                    color: chosen == null
+                    color: chosen == null || undated
                         ? theme.dividerColor.withValues(alpha: 0.4)
                         : theme.colorScheme.primary),
                 color: theme.cardColor.withValues(alpha: 0.55),
@@ -577,12 +615,14 @@ class _CopyTripWizardState extends ConsumerState<CopyTripWizard> {
                   const SizedBox(width: 12),
                   Expanded(
                     child: Text(
-                      chosen == null
-                          ? 'Choose a start date'
-                          : '${DateFormat('EEE, MMM d, yyyy').format(chosen)}'
-                              '${chosenEnd == null ? '' : '  →  ${DateFormat('MMM d').format(chosenEnd)}'}',
+                      undated
+                          ? 'No dates yet · $daysLabel'
+                          : chosen == null
+                              ? 'Choose a start date'
+                              : '${DateFormat('EEE, MMM d, yyyy').format(chosen)}'
+                                  '${chosenEnd == null ? '' : '  →  ${DateFormat('MMM d').format(chosenEnd)}'}',
                       style: theme.textTheme.titleMedium?.copyWith(
-                          fontWeight: chosen == null
+                          fontWeight: chosen == null && !undated
                               ? FontWeight.w500
                               : FontWeight.w700),
                     ),
@@ -591,6 +631,8 @@ class _CopyTripWizardState extends ConsumerState<CopyTripWizard> {
               ),
             ),
           ),
+          const SizedBox(height: 12),
+          _buildNoDatesToggle(theme),
           const Spacer(),
           Row(
             children: [
@@ -601,7 +643,7 @@ class _CopyTripWizardState extends ConsumerState<CopyTripWizard> {
               const SizedBox(width: 12),
               Expanded(
                 child: FilledButton(
-                  onPressed: chosen == null || _busy ? null : _confirm,
+                  onPressed: !ready || _busy ? null : _confirm,
                   style: FilledButton.styleFrom(
                     padding: const EdgeInsets.symmetric(vertical: 16),
                     shape: RoundedRectangleBorder(
@@ -618,6 +660,38 @@ class _CopyTripWizardState extends ConsumerState<CopyTripWizard> {
             ],
           ),
         ],
+      ),
+    );
+  }
+
+  /// "I don't know the dates yet" — the same choice, in the same words, as
+  /// when creating a trip. The number of days is the copied plan's, so
+  /// there is nothing to count here.
+  Widget _buildNoDatesToggle(ThemeData theme) {
+    final primary = theme.colorScheme.primary;
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color:
+              _datesTbd ? primary : theme.dividerColor.withValues(alpha: 0.5),
+          width: _datesTbd ? 1.4 : 1,
+        ),
+      ),
+      child: SwitchListTile.adaptive(
+        value: _datesTbd,
+        onChanged: _busy ? null : (v) => setState(() => _datesTbd = v),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text(
+          'I don\'t know the dates yet',
+          style:
+              theme.textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.w600),
+        ),
+        subtitle: Text(
+          'Plan by day number and set the dates later.',
+          style: theme.textTheme.bodySmall
+              ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+        ),
       ),
     );
   }

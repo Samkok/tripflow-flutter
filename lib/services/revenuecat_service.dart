@@ -75,6 +75,27 @@ class RevenueCatService {
     await _initCompleter.future;
   }
 
+  /// Apple Search Ads attribution (iOS only): RevenueCat reads the device's
+  /// AdServices attribution token so installs and purchases can be matched
+  /// to ASA campaigns and keywords. Reading that token is an advertising
+  /// signal, so it waits until ads measurement is allowed — the privacy
+  /// policy (section 6) promises nothing of the kind before opt-in in
+  /// Europe — and the consent services call this when it is. Once per run;
+  /// no-op on Android.
+  static Future<void> enableAppleSearchAdsAttribution() async {
+    if (!Platform.isIOS || _appleSearchAdsOn) return;
+    _appleSearchAdsOn = true;
+    try {
+      await waitForInitialization();
+      await Purchases.enableAdServicesAttributionTokenCollection();
+    } catch (e) {
+      _appleSearchAdsOn = false;
+      debugPrint('RevenueCatService: ASA attribution enable failed: $e');
+    }
+  }
+
+  static bool _appleSearchAdsOn = false;
+
   /// Links the Firebase App Instance ID to RevenueCat so the RC→Firebase
   /// integration attributes its server-side events (rc_initial_purchase, etc.)
   /// to the SAME Google Analytics user as the app's client events. Required by
@@ -126,16 +147,8 @@ class RevenueCatService {
 
       await Purchases.configure(configuration);
 
-      // Apple Search Ads attribution (iOS only): lets RevenueCat attribute
-      // installs/purchases to ASA campaigns + keywords via the AdServices token,
-      // so we can measure which keywords actually drive payers. No-op on Android.
-      if (Platform.isIOS) {
-        try {
-          await Purchases.enableAdServicesAttributionTokenCollection();
-        } catch (e) {
-          debugPrint('RevenueCatService: ASA attribution enable failed: $e');
-        }
-      }
+      // Apple Search Ads attribution is switched on separately, once ads
+      // measurement is allowed: see enableAppleSearchAdsAttribution.
 
       // Set up listener for customer info updates
       Purchases.addCustomerInfoUpdateListener((customerInfo) {

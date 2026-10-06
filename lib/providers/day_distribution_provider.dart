@@ -30,6 +30,13 @@ final autoPlanKeepCurrentProvider = StateProvider<bool>((ref) => true);
 final autoPlanRangeOverrideProvider =
     StateProvider<({DateTime start, DateTime end})?>((ref) => null);
 
+/// Arrival and departure times to plan against, when they were just changed
+/// from inside the sheet — same reason as the range override: the plan must
+/// follow the new times at once, not when the trip's reload lands. Minutes
+/// after midnight, null = not set. Cleared on sheet open.
+final autoPlanTimesOverrideProvider =
+    StateProvider<({int? arrival, int? departure})?>((ref) => null);
+
 /// Computes an Auto-plan proposal for the ACTIVE trip. autoDispose: every
 /// sheet-open recomputes against live data (the plan carries a fingerprint
 /// so applying re-validates anyway). Pure local work + zero API calls —
@@ -43,6 +50,7 @@ final autoPlanProvider =
   final fillStyle = ref.watch(autoPlanFillStyleProvider);
   final keepCurrent = ref.watch(autoPlanKeepCurrentProvider);
   final rangeOverride = ref.watch(autoPlanRangeOverrideProvider);
+  final timesOverride = ref.watch(autoPlanTimesOverrideProvider);
 
   final routingTripId = trip?.id ?? 'no_trip';
   final travelStyle = await LegModePrefs.travelProfile(routingTripId);
@@ -56,6 +64,12 @@ final autoPlanProvider =
     maxStopsPerDay: maxStops,
     fillStyle: fillStyle,
     keepCurrentDays: keepCurrent,
+    arrivalMinute:
+        timesOverride != null ? timesOverride.arrival : trip?.arrivalMinute,
+    departureMinute:
+        timesOverride != null ? timesOverride.departure : trip?.departureMinute,
+    // Numbered days have no weekday: no "closed on Mondays" guesses.
+    weekdaysKnown: !(trip?.isUndated ?? false),
     fingerprint: distributionFingerprint(locations),
   );
 

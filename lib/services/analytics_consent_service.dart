@@ -1,9 +1,13 @@
+import 'dart:async';
 import 'dart:ui' show PlatformDispatcher;
 
 import 'package:firebase_analytics/firebase_analytics.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_performance/firebase_performance.dart';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import 'revenuecat_service.dart';
 
 /// GDPR/UK-GDPR/FADP consent gate for Firebase Analytics.
 ///
@@ -113,6 +117,9 @@ class AnalyticsConsentService {
   }
 
   Future<void> _apply(bool enabled) async {
+    // Apple Search Ads attribution (iOS, through RevenueCat) follows the same
+    // choice: it is an advertising signal.
+    if (enabled) unawaited(RevenueCatService.enableAppleSearchAdsAttribution());
     if (Firebase.apps.isEmpty) return;
     try {
       final fa = FirebaseAnalytics.instance;
@@ -123,6 +130,13 @@ class AnalyticsConsentService {
         adUserDataConsentGranted: enabled,
         adPersonalizationSignalsConsentGranted: enabled,
       );
+      // Performance monitoring is declared off in the native config and
+      // follows the same choice.
+      await FirebasePerformance.instance
+          .setPerformanceCollectionEnabled(enabled);
+      // The app instance id exists only while analytics is on: link it to
+      // RevenueCat whenever that happens (idempotent).
+      if (enabled) unawaited(RevenueCatService().linkFirebaseAppInstanceId());
     } catch (e) {
       debugPrint('AnalyticsConsentService._apply: $e');
     }

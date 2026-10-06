@@ -18,7 +18,9 @@ import '../providers/email_verified_provider.dart';
 import '../providers/arrival_radius_provider.dart';
 import '../providers/zoom_fit_settings_provider.dart';
 import '../services/notification_service.dart';
+import '../core/measurement_config.dart';
 import '../services/analytics_consent_service.dart';
+import '../widgets/measurement_settings_tiles.dart';
 import '../providers/referral_provider.dart';
 import '../providers/trip_collaborator_provider.dart';
 import '../providers/user_trip_provider.dart';
@@ -124,7 +126,12 @@ class SettingsScreen extends ConsumerWidget {
               const SizedBox(height: 12),
               const _IncludeCurrentInFitTile(),
               const SizedBox(height: 12),
-              const _AnalyticsTile(),
+              // One switch today; two (usage analytics, ads measurement)
+              // in builds that measure advertising.
+              if (MeasurementConfig.adsMeasurement)
+                const MeasurementSettingsTiles()
+              else
+                const _AnalyticsTile(),
               const SizedBox(height: 24),
 
               // About Section

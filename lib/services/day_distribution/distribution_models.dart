@@ -3,6 +3,15 @@
 /// unit tests.
 library;
 
+/// One stretch of a place's weekly opening hours, in minutes from Sunday
+/// 00:00 (Google's week). [end] is exclusive, always after [start], and
+/// runs past the week's end for a Saturday-night close.
+class OpenSpan {
+  final int start;
+  final int end;
+  const OpenSpan(this.start, this.end);
+}
+
 /// One place, reduced to exactly what distribution needs. Built by the
 /// provider from SavedLocation/LocationModel; `placeKey` is the same-day
 /// duplicate identity string (same_day_place_guard's key, stringified).
@@ -31,6 +40,11 @@ class EnginePlace {
   /// hours unknown, empty = never open (data quirk — treated as unknown).
   final Set<int>? openWeekdays;
 
+  /// Opening hours WITH times, for the arrival and departure days (the only
+  /// days planned by the clock). Null = nothing to check: hours unknown,
+  /// open around the clock, or the traveller said it never closes.
+  final List<OpenSpan>? openSpans;
+
   const EnginePlace({
     required this.id,
     required this.name,
@@ -44,6 +58,7 @@ class EnginePlace {
     this.isSkipped = false,
     this.isAccommodation = false,
     this.openWeekdays,
+    this.openSpans,
   });
 }
 
@@ -93,6 +108,14 @@ class PlannedDay {
   /// this day's city and seeds the day's route.
   final String? accommodationId;
 
+  /// Set when the trip's arrival shortens this day: no visit starts before
+  /// this minute after midnight (the arrival plus its buffer).
+  final int? fromMinute;
+
+  /// Set when the trip's departure shortens this day: every visit ends by
+  /// this minute after midnight (the departure minus its buffer).
+  final int? untilMinute;
+
   const PlannedDay({
     required this.day,
     required this.clusterIndex,
@@ -100,6 +123,8 @@ class PlannedDay {
     required this.usedMinutes,
     required this.hopMinutes,
     this.accommodationId,
+    this.fromMinute,
+    this.untilMinute,
   });
 }
 
@@ -173,6 +198,10 @@ enum DistributionGate {
 
   /// Nothing movable (all done/pinned/empty).
   nothingMovable,
+
+  /// The arrival and departure times leave no visiting time on any day
+  /// that is left (a one-day trip landing in the evening, say).
+  noTimeToPlan,
 }
 
 class DistributionPlan {
@@ -186,6 +215,11 @@ class DistributionPlan {
   /// Editable trip days the plan leaves EMPTY (pack style spares them).
   final List<DateTime> freeDays;
 
+  /// Editable trip days the arrival or departure time leaves no visiting
+  /// time on (landing late at night, leaving first thing): nothing is
+  /// planned there, and anything movable that sat there is moved.
+  final List<DateTime> noTimeDays;
+
   /// Fingerprint of the input rows — apply-time staleness check.
   final String inputFingerprint;
 
@@ -197,10 +231,16 @@ class DistributionPlan {
     this.clusterOrder = const [],
     this.warnings = const [],
     this.freeDays = const [],
+    this.noTimeDays = const [],
     this.inputFingerprint = '',
   });
 
   bool get isNoOp => gate == DistributionGate.ok && changes.isEmpty;
+
+  /// True when the trip's arrival or departure time shaped this plan.
+  bool get shapedByTripTimes =>
+      noTimeDays.isNotEmpty ||
+      perDay.any((d) => d.fromMinute != null || d.untilMinute != null);
 
   DistributionPlan withClusterOrder(List<CityCluster> labeled) =>
       DistributionPlan(
@@ -211,6 +251,7 @@ class DistributionPlan {
         clusterOrder: labeled,
         warnings: warnings,
         freeDays: freeDays,
+        noTimeDays: noTimeDays,
         inputFingerprint: inputFingerprint,
       );
 }
@@ -244,6 +285,21 @@ class DistributionInput {
   /// places sit today.
   final bool keepCurrentDays;
 
+  /// When the traveller arrives on [tripStart], in minutes after midnight
+  /// (null = the first day is a full day). Visits on that day start after
+  /// it, and only at places still open then.
+  final int? arrivalMinute;
+
+  /// When the traveller leaves on [tripEnd], in minutes after midnight
+  /// (null = the last day is a full day). Visits on that day end well
+  /// before it, and only at places already open by then.
+  final int? departureMinute;
+
+  /// False for a trip planned by day number (no real dates yet): its days
+  /// sit on an anchor, so which weekday a day falls on is unknown and no
+  /// weekday-based opening-hours rule may be applied.
+  final bool weekdaysKnown;
+
   final String fingerprint;
 
   const DistributionInput({
@@ -255,6 +311,9 @@ class DistributionInput {
     this.maxStopsPerDay,
     this.fillStyle = FillStyle.balanced,
     this.keepCurrentDays = true,
+    this.arrivalMinute,
+    this.departureMinute,
+    this.weekdaysKnown = true,
     this.fingerprint = '',
   });
 }
