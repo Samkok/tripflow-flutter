@@ -109,6 +109,11 @@ final class MetaAdsBridge {
     case "logPurchase":
       logPurchase(call.arguments as? [String: Any] ?? [:])
       result(nil)
+    case "anonymousId":
+      // Meta's install identifier, handed to RevenueCat so the purchases it
+      // reports from its servers can be matched to this install. None
+      // until the SDK has been started with the person's agreement.
+      result(initialized ? AppEvents.shared.anonymousID : nil)
     case "deviceRegion":
       result(Self.deviceRegion)
     case "trackingStatus":

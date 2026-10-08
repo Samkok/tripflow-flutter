@@ -182,8 +182,7 @@ void main() {
   });
 
   group('adsEventFor', () {
-    test('sign-up, trip, first route, trial and purchase are the whole list',
-        () {
+    test('sign-up, trip and first route are the whole list', () {
       expect(adsEventFor('signup', {'method': 'email'})!.name,
           'fb_mobile_complete_registration');
       expect(adsEventFor('signup', {'method': 'email'})!.parameters,
@@ -191,27 +190,28 @@ void main() {
       expect(adsEventFor('trip_created')!.name, 'TripCreated');
       expect(adsEventFor('trip_created')!.parameters, isEmpty);
       expect(adsEventFor('route_optimized')!.name, 'RouteOptimized');
-
-      final trial =
-          adsEventFor('trial_started', {'product': 'premium.yearly'})!;
-      expect(trial.name, 'StartTrial');
-      expect(trial.parameters, {'fb_content_id': 'premium.yearly'});
-      expect(trial.value, isNull);
-
-      final sub = adsEventFor('purchase',
-          {'product': 'premium.monthly', 'value': 4.99, 'currency': 'USD'})!;
-      expect(sub.name, 'Subscribe');
-      expect(sub.value, 4.99);
-      expect(sub.currency, 'USD');
-      expect(sub.isPurchase, isFalse);
     });
 
-    test('a lifetime unlock is a purchase, not a subscription', () {
-      final once = adsEventFor('purchase',
-          {'product': 'premium.lifetime', 'value': 49, 'currency': 'USD'})!;
-      expect(once.name, 'fb_mobile_purchase');
+    test('trials and purchases are left to RevenueCat, not sent twice', () {
+      // RevenueCat's server-side integration reports them (it alone sees a
+      // trial convert days later); the app sending them as well would
+      // count every purchase twice.
+      expect(
+          adsEventFor('trial_started', {'product': 'premium.yearly'}), isNull);
+      expect(
+          adsEventFor('purchase',
+              {'product': 'premium.monthly', 'value': 4.99, 'currency': 'USD'}),
+          isNull);
+      expect(
+          adsEventFor('purchase',
+              {'product': 'premium.lifetime', 'value': 49, 'currency': 'USD'}),
+          isNull);
+    });
+
+    test('a sink can still tell a purchase from the rest', () {
+      const once = AdsEvent(adsEventPurchase, value: 49, currency: 'USD');
       expect(once.isPurchase, isTrue);
-      expect(once.value, 49.0);
+      expect(const AdsEvent(adsEventTripCreated).isPurchase, isFalse);
     });
 
     test('an optimized route is a milestone: told once, with no numbers', () {
@@ -228,11 +228,6 @@ void main() {
       for (final other in [
         adsEventFor('signup', {'method': 'email'})!,
         adsEventFor('trip_created')!,
-        adsEventFor('trial_started', {'product': 'premium.yearly'})!,
-        adsEventFor('purchase',
-            {'product': 'premium.yearly', 'value': 29.99, 'currency': 'USD'})!,
-        adsEventFor('purchase',
-            {'product': 'premium.lifetime', 'value': 49, 'currency': 'USD'})!,
       ]) {
         expect(other.oncePerInstall, isFalse, reason: other.name);
       }
@@ -258,15 +253,16 @@ void main() {
       }
     });
 
-    test('carries only the product, never what the app knows about a trip', () {
-      final event = adsEventFor('purchase', {
-        'product': 'premium.yearly',
-        'value': 29.99,
-        'currency': 'EUR',
+    test('carries nothing the app knows about a person or a trip', () {
+      final event = adsEventFor('signup', {
+        'method': 'email',
         'trip_name': 'Honeymoon',
         'email': 'someone@example.com',
       })!;
-      expect(event.parameters.keys, ['fb_content_id']);
+      expect(event.parameters.keys, ['fb_registration_method']);
+      expect(
+          adsEventFor('trip_created', {'trip_name': 'Honeymoon'})!.parameters,
+          isEmpty);
     });
 
     test('a copied trip is a created trip, and says no more than that', () {
@@ -277,11 +273,9 @@ void main() {
 
     test('tolerates missing or odd parameters', () {
       expect(adsEventFor('signup')!.parameters, isEmpty);
-      expect(adsEventFor('trial_started', {'product': 7})!.parameters, isEmpty);
-      final odd = adsEventFor('purchase', {'value': 'free', 'currency': 3})!;
-      expect(odd.name, 'Subscribe');
-      expect(odd.value, isNull);
-      expect(odd.currency, isNull);
+      expect(adsEventFor('signup', {'method': 7})!.parameters, isEmpty);
+      expect(adsEventFor('route_optimized', {'stops': 'many'})!.parameters,
+          isEmpty);
     });
   });
 }

@@ -414,10 +414,13 @@ void main() {
 
       await service.acknowledgeNotice(keepOn: true);
       service.logAdsEvent('trip_created');
+      service.logAdsEvent('signup', {'method': 'email'});
+      // Purchases are RevenueCat's to report, so the app's own copy is
+      // dropped even with ads measurement on.
       service.logAdsEvent('purchase',
           {'product': 'premium.yearly', 'value': 29.99, 'currency': 'USD'});
-      expect(
-          phone.sink.events.map((e) => e.name), ['TripCreated', 'Subscribe']);
+      expect(phone.sink.events.map((e) => e.name),
+          ['TripCreated', 'fb_mobile_complete_registration']);
 
       await service.setAds(false);
       service.logAdsEvent('trip_created');

@@ -219,7 +219,8 @@ Future<void> _bootstrap() async {
           trackingPermission = const AppleTrackingPermission();
           MeasurementConsentService.instance
             ..lookupDeviceRegion = deviceRegionFromPlatform
-            ..addSink(MetaAdsSink());
+            ..addSink(
+                MetaAdsSink(attribution: const RevenueCatAttributionLink()));
           await MeasurementConsentService.instance.applyAtStartup();
         } else {
           await AnalyticsConsentService.instance.applyAtStartup();

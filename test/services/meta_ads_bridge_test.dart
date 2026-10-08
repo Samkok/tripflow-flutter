@@ -39,6 +39,18 @@ class _Native {
           .setMockMethodCallHandler(metaAdsChannel, null);
 }
 
+/// A purchase reporter that remembers what it was handed.
+class _Link implements AdsAttributionLink {
+  final attached = <String?>[];
+  int detached = 0;
+
+  @override
+  Future<void> attach(String? anonymousId) async => attached.add(anonymousId);
+
+  @override
+  Future<void> detach() async => detached++;
+}
+
 /// Lets what was started run to its end: reading and writing the install's
 /// notes takes a few turns of the event loop.
 Future<void> _settle() async {
@@ -83,30 +95,24 @@ void main() {
 
       sink.log(adsEventFor('signup', {'method': 'google'})!);
       sink.log(adsEventFor('trip_created')!);
-      sink.log(adsEventFor('trial_started', {'product': 'premium.yearly'})!);
       await Future<void>.delayed(Duration.zero);
 
-      expect(native.methods, ['logEvent', 'logEvent', 'logEvent']);
+      expect(native.methods, ['logEvent', 'logEvent']);
       expect(native.calls[0].arguments, {
         'name': 'fb_mobile_complete_registration',
         'parameters': {'fb_registration_method': 'google'},
       });
       expect(native.calls[1].arguments,
           {'name': 'TripCreated', 'parameters': <String, Object>{}});
-      expect(native.calls[2].arguments, {
-        'name': 'StartTrial',
-        'parameters': {'fb_content_id': 'premium.yearly'},
-      });
     });
 
-    test('a subscription carries its price and currency', () async {
+    test('an event with a value carries its price and currency', () async {
       final sink = MetaAdsSink();
       await sink.setEnabled(true);
-      sink.log(adsEventFor('purchase', {
-        'product': 'premium.yearly',
-        'value': 29.99,
-        'currency': 'USD',
-      })!);
+      sink.log(const AdsEvent('Subscribe',
+          parameters: {'fb_content_id': 'premium.yearly'},
+          value: 29.99,
+          currency: 'USD'));
       await Future<void>.delayed(Duration.zero);
 
       expect(native.arguments('logEvent'), {
@@ -116,14 +122,13 @@ void main() {
       });
     });
 
-    test('a one-off purchase is logged as a purchase', () async {
+    test('a purchase event goes through the purchase call', () async {
       final sink = MetaAdsSink();
       await sink.setEnabled(true);
-      sink.log(adsEventFor('purchase', {
-        'product': 'premium.lifetime',
-        'value': 79.0,
-        'currency': 'EUR',
-      })!);
+      sink.log(const AdsEvent(adsEventPurchase,
+          parameters: {'fb_content_id': 'premium.lifetime'},
+          value: 79.0,
+          currency: 'EUR'));
       await Future<void>.delayed(Duration.zero);
 
       expect(native.methods.last, 'logPurchase');
@@ -174,6 +179,66 @@ void main() {
       await MetaAdsSink().setTrackingAllowed(true);
       expect(native.methods, ['setTrackingAllowed']);
       expect(native.calls.single.arguments, isTrue);
+    });
+  });
+
+  group('the purchase reporter (RevenueCat)', () {
+    test('gets the install identifier once the SDK is running', () async {
+      native.answer = (c) => c.method == 'anonymousId' ? 'XXXX-anon' : null;
+      final link = _Link();
+      final sink = MetaAdsSink(attribution: link);
+
+      await sink.setEnabled(true);
+      expect(native.methods, ['start', 'anonymousId']);
+      expect(link.attached, ['XXXX-anon']);
+      expect(link.detached, 0);
+    });
+
+    test('is told again when the tracking answer changes', () async {
+      native.answer = (c) => c.method == 'anonymousId' ? 'XXXX-anon' : null;
+      final link = _Link();
+      final sink = MetaAdsSink(attribution: link);
+      await sink.setEnabled(true);
+
+      await sink.setTrackingAllowed(true);
+      expect(native.methods.last, 'anonymousId');
+      expect(link.attached, ['XXXX-anon', 'XXXX-anon']);
+    });
+
+    test('hears nothing while ads measurement is off', () async {
+      final link = _Link();
+      final sink = MetaAdsSink(attribution: link);
+
+      await sink.setTrackingAllowed(true);
+      expect(link.attached, isEmpty);
+      expect(native.methods, ['setTrackingAllowed']);
+    });
+
+    test('is detached on withdrawal, so it stops reporting', () async {
+      native.answer = (c) => c.method == 'anonymousId' ? 'XXXX-anon' : null;
+      final link = _Link();
+      final sink = MetaAdsSink(attribution: link);
+      await sink.setEnabled(true);
+
+      await sink.setEnabled(false);
+      expect(native.methods.last, 'stop');
+      expect(link.detached, 1);
+    });
+
+    test('still gets the device identifiers if the SDK has no id', () async {
+      native.failOn = 'anonymousId';
+      final link = _Link();
+      await MetaAdsSink(attribution: link).setEnabled(true);
+      expect(link.attached, [null]);
+    });
+
+    test('is not touched where there is no native bridge', () async {
+      _Native.remove();
+      final link = _Link();
+      final sink = MetaAdsSink(attribution: link);
+      await sink.setEnabled(true);
+      await sink.setTrackingAllowed(true);
+      expect(link.attached, isEmpty);
     });
   });
 

@@ -1362,17 +1362,7 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
         );
       }
 
-      // Store email to RevenueCat for authenticated users
       final user = SupabaseService.instance.client.auth.currentUser;
-      if (user?.email != null) {
-        try {
-          await RevenueCatService().setUserAttributes(email: user!.email);
-          debugPrint(
-              'PaywallScreen: Stored email to RevenueCat after purchase');
-        } catch (e) {
-          debugPrint('PaywallScreen: Failed to store email to RevenueCat: $e');
-        }
-      }
 
       // Log trial start if this is a trial offer (app-side logging, not webhook)
       // Only authenticated users can start trials (webhook skips anonymous for this)

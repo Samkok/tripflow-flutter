@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../utils/ads_event_map.dart';
 import '../utils/measurement_region.dart';
 import 'measurement_consent_service.dart';
+import 'revenuecat_service.dart';
 import 'tracking_permission.dart';
 
 /// The channel to the native side that owns Meta's SDK and Apple's tracking
@@ -26,8 +27,10 @@ class MetaAdsSink implements AdsMeasurementSink {
   MetaAdsSink({
     MethodChannel channel = metaAdsChannel,
     Future<SharedPreferences> Function()? prefs,
+    AdsAttributionLink? attribution,
   })  : _channel = channel,
-        _prefs = prefs ?? SharedPreferences.getInstance;
+        _prefs = prefs ?? SharedPreferences.getInstance,
+        _attribution = attribution;
 
   /// The Graph API version the SDK talks to. SDK 18 still defaults to
   /// versions Meta has retired, so it has to be named. Meta retires each
@@ -46,6 +49,7 @@ class MetaAdsSink implements AdsMeasurementSink {
 
   final MethodChannel _channel;
   final Future<SharedPreferences> Function() _prefs;
+  final AdsAttributionLink? _attribution;
   bool _logging = false;
 
   /// The once-only events this run has sent, or is sending right now.
@@ -57,6 +61,7 @@ class MetaAdsSink implements AdsMeasurementSink {
     _logging = false;
     if (!enabled) {
       await _invoke('stop');
+      await _attribution?.detach();
       return;
     }
     _logging = await _invoke('start', {
@@ -69,11 +74,31 @@ class MetaAdsSink implements AdsMeasurementSink {
       // starting "FacebookSDK.").
       'debugLogging': kDebugMode,
     });
+    if (_logging) await _attach();
   }
 
   @override
   Future<void> setTrackingAllowed(bool allowed) async {
     await _invoke('setTrackingAllowed', allowed);
+    // The advertising identifier has just become readable (or not): the
+    // purchase reporter must see the current answer.
+    if (_logging) await _attach();
+  }
+
+  /// Gives the purchase reporter Meta's install identifier, so the trials
+  /// and purchases it reports can be matched to this install's ad clicks.
+  Future<void> _attach() async {
+    final link = _attribution;
+    if (link == null) return;
+    String? id;
+    try {
+      id = await _channel.invokeMethod<String>('anonymousId');
+    } on MissingPluginException {
+      return;
+    } catch (e) {
+      debugPrint('MetaAdsSink.anonymousId: $e');
+    }
+    await link.attach(id);
   }
 
   @override
@@ -146,6 +171,31 @@ class MetaAdsSink implements AdsMeasurementSink {
       return false;
     }
   }
+}
+
+/// Whoever reports purchases to the ad platform from a server — RevenueCat,
+/// through `RevenueCatService.attachMetaIdentifiers` — and needs the
+/// identifiers that let the platform match those purchases to an install.
+/// [attach] is called whenever ads measurement is on and the identifiers
+/// may have changed; [detach] when it is withdrawn, after which the reporter
+/// must send nothing more about this person. Never throws.
+abstract class AdsAttributionLink {
+  Future<void> attach(String? anonymousId);
+  Future<void> detach();
+}
+
+/// RevenueCat as the purchase reporter: its Meta integration sends trial
+/// starts, conversions, purchases and renewals from RevenueCat's servers,
+/// for customers carrying these identifiers and for no one else.
+class RevenueCatAttributionLink implements AdsAttributionLink {
+  const RevenueCatAttributionLink();
+
+  @override
+  Future<void> attach(String? anonymousId) =>
+      RevenueCatService.attachMetaIdentifiers(anonymousId);
+
+  @override
+  Future<void> detach() => RevenueCatService.detachMetaIdentifiers();
 }
 
 /// Apple's App Tracking Transparency question, asked through the native

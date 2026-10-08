@@ -104,6 +104,21 @@ run on a device, and no event has yet been seen in Events Manager.
   at launch is removed from the manifest, and so are two Privacy Sandbox
   permissions the SDK declares (ad audiences kept on the device, interest
   topics), which go beyond what the policy describes.
+- **Campaign IDs (added 2026-10-08).** A link from a Meta ad carries
+  `al_applink_data` with `campaign_ids`, which the SDK stores and attaches
+  to every later event so Meta can credit the ad without the advertising
+  ID. On iOS the SDK saves them inside its open-URL handler, which the
+  bridge calls for every such link. On Android the SDK reads them from the
+  activity's intent in started/resumed callbacks it registers at
+  initialisation; because the bridge initialises after the activity is
+  already running, `MetaAdsBridge.start` now reads the launch intent itself
+  (`AppLinkManager.handleURL`), and `MainActivity.onNewIntent` keeps the
+  intent current for links that arrive while the app is open. Verified on
+  the emulator: a `voyza://copy/…?al_applink_data={"campaign_ids":…}` launch
+  stored the id in `com.facebook.sdk.APPLINK_INFO` and the next event
+  request carried `campaign_ids`. Events Manager's "not enough events sent
+  with the Campaign ID parameter" diagnostic is expected until deep-linked
+  ads run: the parameter only exists on ad-driven opens.
 - **iOS:** the SDK is handed only links that carry Meta's ad parameter
   (`al_applink_data`), never trip links or password resets. Its own link
   watching is off (`FBSDKAemAutoSetupEnabled`).
@@ -217,12 +232,28 @@ the build described in 1a:
    reports nothing. In the Meta App Dashboard, "Log in-app events
    automatically" is No for both platforms so a purchase is not counted
    twice. No user data is sent with events: no advanced matching.
-8. **RevenueCat, later.** When the server-side integration is added, the app
-   calls `Purchases.collectDeviceIdentifiers()` and
-   `Purchases.setFBAnonymousID(...)` only for people who allowed ads
-   measurement, clears those attributes on withdrawal so RevenueCat stops
-   forwarding, and the policy gains the reserved paragraph about hashed
-   email and phone. Keep the Apple Search Ads collection as it is.
+8. **RevenueCat reports the money events (since 2026-10-08).** The app
+   no longer sends `StartTrial`, `Subscribe` or `fb_mobile_purchase`
+   itself: a trial converts on the store's servers days later, usually
+   with the app closed, so only RevenueCat's server-side Meta integration
+   (Conversions API mode) can report trial starts, conversions, purchases
+   and renewals, and sending them from the app as well would count each
+   twice. `MetaAdsSink` asks the bridge for Meta's install identifier
+   (`anonymousId`) whenever the SDK starts and after Apple's tracking
+   answer, and hands it to `RevenueCatService.attachMetaIdentifiers`
+   (`collectDeviceIdentifiers` + `setFBAnonymousID`); withdrawal calls
+   `detachMetaIdentifiers`, which clears `$fbAnonId`, `$idfa`, `$gpsAdId`,
+   `$idfv` and `$ip`, so RevenueCat sends nothing more for that person.
+   RevenueCat only forwards events for customers carrying those
+   identifiers. The email address is no longer stored in RevenueCat at all
+   (`setUserAttributes` deletes `$email`/`$phoneNumber` on every sign-in),
+   so nothing hashed reaches Meta and the policy's "never your email"
+   promise holds; the reserved hashed-email paragraph was not used. In the
+   RevenueCat dashboard, Trial Converted, Initial Purchase and Renewal are
+   mapped to `fb_mobile_purchase` so every payment lands in Meta's standard
+   purchase event (value optimisation needs 30 of those in 14 days; see
+   `docs/ads-campaign-research-2026-10-08.md`). Keep the Apple Search Ads
+   collection as it is.
 9. **Limited Data Use.** `['LDU'], 0, 0` is set each time the SDK starts,
    before anything is sent, so Meta applies its state-law mode to people it
    locates in the covered US states.
@@ -373,9 +404,15 @@ App ID and Client Token the app build needs)
 - Domain verification for `voyza.xtremon.com` in the portfolio (a meta tag
   in the site's head). Needed for web measurement; a Pixel on the landing
   pages would let you retarget people who opened a shared trip page.
-- **RevenueCat dashboard, later.** Meta Ads integration in Conversions API
-  mode, with the dataset ID and a Conversions API token from Events
-  Manager. Not in the first release, for the reason given in section 1.
+- **RevenueCat dashboard (done in part, 2026-10-08).** Meta Ads
+  integration in Conversions API mode. The Conversions API section only
+  exists on a dataset, not on the app data source, so the app had to be
+  linked to the `voyza` dataset first (step C1); the dataset ID is then
+  `1857447458754944` and the token is generated on that dataset's Settings
+  page. Fields: dataset ID, token, "Send events when ATT consent is not
+  authorized" on, sandbox fields empty, Sales Reporting after store
+  commission, Trial Converted / Initial Purchase / Renewal →
+  `fb_mobile_purchase`.
 
 ## 4. Running the campaigns
 

@@ -29,8 +29,10 @@ class AdsEvent {
 
 // Meta's standard event names.
 const String adsEventCompleteRegistration = 'fb_mobile_complete_registration';
-const String adsEventStartTrial = 'StartTrial';
-const String adsEventSubscribe = 'Subscribe';
+
+/// Meta's purchase event. The app itself no longer sends it: trials and
+/// purchases reach Meta from RevenueCat's servers (see [adsEventFor]). The
+/// name stays so a sink knows a purchase when it sees one.
 const String adsEventPurchase = 'fb_mobile_purchase';
 
 /// Ours: the first sign that someone is really using the app.
@@ -43,12 +45,19 @@ const String adsEventRouteOptimized = 'RouteOptimized';
 /// The advertising event for one of the app's own analytics events, or
 /// null when that event is none of an ad platform's business.
 ///
-/// The privacy policy lists exactly what advertising partners are told:
-/// that someone signed up, created a trip, optimized a route for the first
-/// time, started a trial or made a purchase (with product, price and
-/// currency). This function is that list. Nothing about places, sharing or
-/// onboarding goes through it, a route is reported only as having happened,
-/// and no parameter carries anything a person typed.
+/// The privacy policy lists exactly what advertising partners are told by
+/// the app: that someone signed up, created a trip, or optimized a route
+/// for the first time. This function is that list. Nothing about places,
+/// sharing or onboarding goes through it, a route is reported only as
+/// having happened, and no parameter carries anything a person typed.
+///
+/// Trials and purchases are deliberately NOT here. A trial that converts to
+/// a paid plan does so on the store's servers days later, usually with the
+/// app closed, so the app cannot report it; RevenueCat's server-side Meta
+/// integration reports trial starts, conversions, purchases and renewals
+/// instead, for people whose ads measurement is on (it only sends when the
+/// customer carries the identifiers `MetaAdsSink` hands it). Sending them
+/// from here as well would count every purchase twice.
 AdsEvent? adsEventFor(String name, [Map<String, Object>? params]) {
   switch (name) {
     case 'signup':
@@ -64,23 +73,7 @@ AdsEvent? adsEventFor(String name, [Map<String, Object>? params]) {
     case 'route_optimized':
       // That it happened, once: not how many stops, not the time saved.
       return const AdsEvent(adsEventRouteOptimized, oncePerInstall: true);
-    case 'trial_started':
-      final product = params?['product'];
-      return AdsEvent(
-        adsEventStartTrial,
-        parameters: {if (product is String) 'fb_content_id': product},
-      );
-    case 'purchase':
-      final product = params?['product'];
-      final value = params?['value'];
-      final currency = params?['currency'];
-      final oneOff = product is String && product.contains('lifetime');
-      return AdsEvent(
-        oneOff ? adsEventPurchase : adsEventSubscribe,
-        parameters: {if (product is String) 'fb_content_id': product},
-        value: value is num ? value.toDouble() : null,
-        currency: currency is String ? currency : null,
-      );
   }
+  // 'trial_started' and 'purchase' included: RevenueCat reports those.
   return null;
 }

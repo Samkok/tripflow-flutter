@@ -1,5 +1,6 @@
 package com.superiordev.voyza
 
+import android.app.Activity
 import android.app.Application
 import android.content.Context
 import android.os.Bundle
@@ -7,9 +8,11 @@ import android.util.Log
 import com.facebook.FacebookSdk
 import com.facebook.LoggingBehavior
 import com.facebook.appevents.AppEventsLogger
+import com.facebook.appevents.internal.AppLinkManager
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
+import java.lang.ref.WeakReference
 import java.math.BigDecimal
 import java.util.Currency
 
@@ -30,6 +33,9 @@ import java.util.Currency
 class MetaAdsBridge(context: Context) : MethodChannel.MethodCallHandler {
 
     private val application = context.applicationContext as Application
+
+    /** The activity the bridge was attached from, for the link it was opened with. */
+    private val activity = WeakReference(context as? Activity)
 
     /** Non-null while ads measurement is on. */
     private var logger: AppEventsLogger? = null
@@ -57,6 +63,16 @@ class MetaAdsBridge(context: Context) : MethodChannel.MethodCallHandler {
                     logPurchase(call)
                     result.success(null)
                 }
+                // Meta's install identifier, handed to RevenueCat so the
+                // purchases it reports from its servers can be matched to
+                // this install. None until the SDK has been started.
+                "anonymousId" -> result.success(
+                    if (FacebookSdk.isInitialized()) {
+                        AppEventsLogger.getAnonymousAppDeviceGUID(application)
+                    } else {
+                        null
+                    }
+                )
                 // Apple's tracking permission. Android has no such question.
                 "setTrackingAllowed" -> result.success(null)
                 "trackingStatus", "requestTracking" -> result.success("notSupported")
@@ -79,6 +95,20 @@ class MetaAdsBridge(context: Context) : MethodChannel.MethodCallHandler {
         if (!FacebookSdk.isInitialized()) {
             @Suppress("DEPRECATION")
             FacebookSdk.sdkInitialize(application)
+        }
+        // A link from a Meta ad carries al_applink_data with campaign ids,
+        // which the SDK attaches to every event so Meta can credit the ad.
+        // It reads them from the activity's intent in started/resumed
+        // callbacks it registers only now, and this activity is already
+        // running: without this call the link that opened the app would be
+        // seen at the next resume at the earliest, and the first session's
+        // events would go out without it.
+        activity.get()?.let { a ->
+            try {
+                AppLinkManager.getInstance()?.handleURL(a)
+            } catch (e: Exception) {
+                Log.w(TAG, "reading the launch link failed", e)
+            }
         }
         // Debug builds only: the SDK says in logcat (tags starting with
         // "FacebookSDK.") what it sends and what Meta answered.

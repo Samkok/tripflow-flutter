@@ -448,26 +448,65 @@ class RevenueCatService {
     return await Purchases.appUserID;
   }
 
-  /// Set user attributes for analytics
-  Future<void> setUserAttributes({
-    String? email,
-    String? displayName,
-    String? phoneNumber,
-  }) async {
+  /// The subscriber attributes RevenueCat holds for a signed-in person:
+  /// the display name, if they added one. Nothing else.
+  ///
+  /// The email address is deliberately NOT stored any more (and this call
+  /// removes one an older version of the app stored): RevenueCat's Meta
+  /// integration forwards `$email` and `$phoneNumber`, hashed, with every
+  /// purchase event it reports, and the privacy policy promises Meta never
+  /// gets either. With neither attribute present there is nothing to
+  /// forward. The app never collects a phone number; the clear is for the
+  /// same reason, in case one was ever set.
+  Future<void> setUserAttributes({String? displayName}) async {
     await waitForInitialization();
     try {
-      if (email != null) {
-        await Purchases.setEmail(email);
-      }
+      // An empty string deletes a subscriber attribute.
+      await Purchases.setAttributes({r'$email': '', r'$phoneNumber': ''});
       if (displayName != null) {
         await Purchases.setDisplayName(displayName);
-      }
-      if (phoneNumber != null) {
-        await Purchases.setPhoneNumber(phoneNumber);
       }
       debugPrint('RevenueCatService: User attributes set');
     } catch (e) {
       debugPrint('RevenueCatService: Failed to set user attributes - $e');
+    }
+  }
+
+  /// Hands RevenueCat the identifiers its Meta integration needs to report
+  /// this customer's trials and purchases to Meta: the device's advertising
+  /// identifier (and, on iOS, the tracking answer) through
+  /// `collectDeviceIdentifiers`, plus Meta's own install identifier
+  /// [anonymousId]. RevenueCat sends nothing to Meta for a customer without
+  /// them, which is how ads measurement stays off for people who refused:
+  /// this is called only when it is on, and [detachMetaIdentifiers] when it
+  /// is withdrawn. Called again after Apple's tracking prompt is answered so
+  /// the IDFA and the answer are current.
+  static Future<void> attachMetaIdentifiers(String? anonymousId) async {
+    try {
+      await waitForInitialization();
+      await Purchases.collectDeviceIdentifiers();
+      if (anonymousId != null && anonymousId.isNotEmpty) {
+        await Purchases.setFBAnonymousID(anonymousId);
+      }
+    } catch (e) {
+      debugPrint('RevenueCatService: Meta identifiers attach failed: $e');
+    }
+  }
+
+  /// Removes what [attachMetaIdentifiers] stored, so RevenueCat stops
+  /// reporting this customer to Meta.
+  static Future<void> detachMetaIdentifiers() async {
+    try {
+      await waitForInitialization();
+      await Purchases.setAttributes({
+        r'$fbAnonId': '',
+        r'$idfa': '',
+        r'$gpsAdId': '',
+        r'$idfv': '',
+        r'$ip': '',
+      });
+    } catch (e) {
+      debugPrint('RevenueCatService: Meta identifiers detach failed: $e');
     }
   }
 

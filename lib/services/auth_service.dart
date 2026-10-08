@@ -90,10 +90,9 @@ class AuthService {
         try {
           await RevenueCatService().login(response.user!.id);
 
-          // Set user attributes for analytics
-          await RevenueCatService().setUserAttributes(
-            email: response.user!.email,
-          );
+          // Subscriber attributes: name only; this also removes an email
+          // an older version stored (see RevenueCatService.setUserAttributes).
+          await RevenueCatService().setUserAttributes();
 
           // Safety: an anonymous trial bought on this device gets restored onto
           // this account by login(). Record it (with the original RC id) so the
@@ -297,13 +296,11 @@ class AuthService {
         try {
           await RevenueCatService().login(response.user!.id);
 
-          // Set user attributes for analytics
+          // Subscriber attributes: name only, never the email address.
           await RevenueCatService().setUserAttributes(
-            email: email,
             displayName: firstName != null && lastName != null
                 ? '$firstName $lastName'
                 : firstName ?? lastName,
-            phoneNumber: phoneNumber,
           );
 
           // Safety: If user had an active subscription as anonymous,
