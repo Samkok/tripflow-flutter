@@ -4,6 +4,7 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:intl/intl.dart';
 
 import '../models/location_model.dart';
+import '../utils/routing_place_id.dart';
 import '../providers/map_ui_state_provider.dart';
 import '../providers/theme_provider.dart';
 import '../providers/trip_listener_provider.dart';
@@ -200,6 +201,7 @@ Future<List<LatLng>> _fetchDayGeometry(List<LocationModel> stops) async {
     final segment = stops.sublist(i, end); // ≤cap intermediates + destination
     final details = await GoogleMapsService.getOptimizedRouteDetails(
       origin: from.coordinates,
+      originPlaceId: routingPlaceId(from),
       destination: segment.last,
       waypoints: segment.length > 1
           ? segment.sublist(0, segment.length - 1)

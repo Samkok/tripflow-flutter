@@ -174,6 +174,13 @@ class SavedLocation extends HiveObject {
   @HiveField(27, defaultValue: false)
   final bool handedOver;
 
+  /// Floor / unit inside the building as Google lists it, composed for
+  /// display ("23/F · Shop 2301"). Null = never looked up (rows saved
+  /// before this field, or added without Place Details); '' = looked up,
+  /// Google lists nothing. Server column `floor`.
+  @HiveField(28)
+  final String? floor;
+
   SavedLocation({
     required this.id,
     required this.userId,
@@ -203,6 +210,7 @@ class SavedLocation extends HiveObject {
     this.tag,
     this.placeTypes,
     this.handedOver = false,
+    this.floor,
   });
 
   /// Effective gallery list: prefers [photoReferences]; falls back to a
@@ -254,6 +262,7 @@ class SavedLocation extends HiveObject {
     Object? tag = _unset,
     List<String>? placeTypes,
     bool? handedOver,
+    String? floor,
   }) {
     return SavedLocation(
       id: id ?? this.id,
@@ -290,6 +299,7 @@ class SavedLocation extends HiveObject {
       tag: identical(tag, _unset) ? this.tag : tag as String?,
       placeTypes: placeTypes ?? this.placeTypes,
       handedOver: handedOver ?? this.handedOver,
+      floor: floor ?? this.floor,
     );
   }
 
@@ -347,6 +357,7 @@ class SavedLocation extends HiveObject {
       handedOver: json['handed_over_from'] != null,
       placeTypes:
           (json['place_types'] as List?)?.map((e) => e.toString()).toList(),
+      floor: json['floor'] as String?,
     );
   }
 
@@ -390,6 +401,7 @@ class SavedLocation extends HiveObject {
       'is_accommodation': isAccommodation,
       'tag': tag,
       'place_types': placeTypes,
+      'floor': floor,
     };
   }
 
@@ -429,6 +441,7 @@ class SavedLocation extends HiveObject {
       isAccommodation,
       tag ?? '',
       placeTypes?.join('|') ?? '',
+      floor ?? '',
     ].join('');
   }
 

@@ -65,7 +65,8 @@ class LocationService {
     LocationPermission permission = await checkLocationPermission();
 
     // If already granted (whileInUse or always), return true immediately
-    if (permission == LocationPermission.whileInUse) {
+    if (permission == LocationPermission.whileInUse ||
+        permission == LocationPermission.always) {
       debugPrint('Location permission already granted: $permission');
       return true;
     }
@@ -84,7 +85,7 @@ class LocationService {
 
       // Check if permission was granted after request
       if (permission == LocationPermission.whileInUse ||
-          permission == LocationPermission.whileInUse) {
+          permission == LocationPermission.always) {
         debugPrint('Location permission granted: $permission');
         return true;
       }
@@ -165,11 +166,10 @@ class LocationService {
       final hasPermission = await requestLocationPermission();
       if (!hasPermission) return null;
       final last = await Geolocator.getLastKnownPosition();
-      if (last != null) {
-        final fix = LatLng(last.latitude, last.longitude);
-        _remember(fix);
-        return fix;
-      }
+      // Not remembered: the platform's last known position can be hours
+      // old, and stamping it with the current time would let
+      // [getCurrentLocation] hand it out as a fresh fix.
+      if (last != null) return LatLng(last.latitude, last.longitude);
     } catch (e) {
       debugPrint('Error getting last known location: $e');
     }
@@ -217,50 +217,72 @@ class LocationService {
     }
   }
 
-  static Stream<LatLng> getLocationStream() async* {
-    final hasPermission = await requestLocationPermission();
-    if (!hasPermission) return;
+  /// Continuous fixes while something listens. NOT an `async*` generator:
+  /// cancelling a generator that is suspended in `await for` does nothing
+  /// until the next event arrives, so the inner Geolocator subscription —
+  /// and with it the native location session, which Geolocator keeps alive
+  /// and hands back to every later listener — outlived every cancel. A
+  /// restart after a stall therefore re-attached to the same stalled
+  /// session and the dot stayed frozen until the app was killed. Cancelling
+  /// this stream cancels the platform subscription at once.
+  ///
+  /// Transient platform errors are logged and skipped. A permission or
+  /// service error is not transient — nothing more will ever arrive — so it
+  /// is passed to the listener, which stops tracking and lets the resume /
+  /// service-status paths restart it once location is usable again.
+  static Stream<LatLng> getLocationStream() {
+    return Stream.fromFuture(requestLocationPermission())
+        .asyncExpand((hasPermission) {
+      if (!hasPermission) return const Stream<LatLng>.empty();
 
-    // 5m native filter: emits only on real movement (a stationary device
-    // produces ZERO events — the OS suppresses them), yet the pin tracks a
-    // walking user every few steps, Google-Maps-like. The old 50m throttle
-    // existed because every tick used to regenerate every marker bitmap;
-    // that pipeline is fixed (bitmaps cached, position applied downstream),
-    // so the coarse filter's reason is gone.
-    // Android: the fused provider's default interval is "as fast as
-    // possible" — a 3 s interval cuts the GPS duty cycle with no visible
-    // cost (walking pace = one step every 3 s; driving at 50 km/h ≈ 40 m
-    // hops, fine for a planning map). iOS keeps the plain settings: its
-    // auto-pause options can leave the stream silent after a long rest,
-    // the frozen-dot bug class we just fixed.
-    final LocationSettings locationSettings =
-        defaultTargetPlatform == TargetPlatform.android
-            ? AndroidSettings(
-                accuracy: LocationAccuracy.high,
-                distanceFilter: 5,
-                intervalDuration: const Duration(seconds: 3),
-              )
-            : const LocationSettings(
-                accuracy: LocationAccuracy.high,
-                distanceFilter: 5,
-              );
+      // 5m native filter: emits only on real movement (a stationary device
+      // produces ZERO events — the OS suppresses them), yet the pin tracks a
+      // walking user every few steps, Google-Maps-like. The old 50m throttle
+      // existed because every tick used to regenerate every marker bitmap;
+      // that pipeline is fixed (bitmaps cached, position applied downstream),
+      // so the coarse filter's reason is gone.
+      // Android: the fused provider's default interval is "as fast as
+      // possible" — a 3 s interval cuts the GPS duty cycle with no visible
+      // cost (walking pace = one step every 3 s; driving at 50 km/h ≈ 40 m
+      // hops, fine for a planning map). iOS keeps the plain settings: its
+      // auto-pause options can leave the stream silent after a long rest,
+      // the frozen-dot bug class we just fixed.
+      final LocationSettings locationSettings =
+          defaultTargetPlatform == TargetPlatform.android
+              ? AndroidSettings(
+                  accuracy: LocationAccuracy.high,
+                  distanceFilter: 5,
+                  intervalDuration: const Duration(seconds: 3),
+                )
+              : const LocationSettings(
+                  accuracy: LocationAccuracy.high,
+                  distanceFilter: 5,
+                );
 
-    // Errors must NOT end this stream. `await for` rethrows the first error
-    // the platform stream emits — a transient kCLErrorLocationUnknown, a
-    // provider hiccup right after the app comes back from the background —
-    // and that terminated the generator for good: the dot froze for the rest
-    // of the session. Geolocator's own stream survives its errors (updates
-    // keep coming after them), so log and keep pulling.
-    await for (final position in Geolocator.getPositionStream(
-      locationSettings: locationSettings,
-    ).handleError((Object error) {
-      debugPrint('Position stream error (stream kept alive): $error');
-    })) {
-      final fix = LatLng(position.latitude, position.longitude);
-      _remember(fix);
-      yield fix;
-    }
+      return Geolocator.getPositionStream(locationSettings: locationSettings)
+          .handleError(
+        (Object error) =>
+            debugPrint('Position stream error (stream kept alive): $error'),
+        test: (error) => !isPermissionOrServiceError(error),
+      )
+          .map((position) {
+        final fix = LatLng(position.latitude, position.longitude);
+        _remember(fix);
+        return fix;
+      });
+    });
   }
+
+  /// True for the stream errors after which no fix can follow: permission
+  /// withdrawn or location services switched off.
+  static bool isPermissionOrServiceError(Object error) =>
+      error is PermissionDeniedException ||
+      error is LocationServiceDisabledException;
+
+  /// Whether location services are on, as they change. True = switched on.
+  static Stream<bool> serviceStatusStream() =>
+      Geolocator.getServiceStatusStream()
+          .map((status) => status == ServiceStatus.enabled);
 
   static Stream<double?> getCompassStream() {
     // 750ms (was 500, was 250): every beam update redraws the map, and
@@ -269,8 +291,15 @@ class LocationService {
     // — small deltas accumulate per tick), and fast turns hide the latency.
     // The consumer (MapScreen) gates on a ≥3° change, so a stationary
     // phone's magnetometer noise produces zero downstream work.
+    // A negative heading is iOS saying "no valid heading" (-1): without a
+    // location fix of its own the plugin's manager cannot compute true
+    // north. Pass it on as null so the beam falls back to the plain dot
+    // instead of pointing at a made-up 359°.
     return FlutterCompass.events!
         .transform(StreamUtils.throttle(const Duration(milliseconds: 750)))
-        .map((event) => event.heading);
+        .map((event) {
+      final h = event.heading;
+      return (h == null || h < 0) ? null : h;
+    });
   }
 }

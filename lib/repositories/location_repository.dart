@@ -393,6 +393,13 @@ class LocationRepository {
             .copyWith(photoAttributions: [for (final a in raw) a.toString()]);
       }
     }
+    if (updates.containsKey('floor')) {
+      // Floor / unit from Place Details; '' = looked up, none.
+      final raw = updates['floor'];
+      if (raw is String) {
+        updatedLocation = updatedLocation.copyWith(floor: raw);
+      }
+    }
     if (updates.containsKey('place_types')) {
       // Google's type list — backfilled by the photo renewal for rows saved
       // before it was stored, and carrying the hand-picked transport mode

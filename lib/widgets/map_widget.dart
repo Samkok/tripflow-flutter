@@ -8,6 +8,7 @@ import 'package:voyza/providers/arrival_ring_provider.dart';
 import 'package:voyza/providers/optimized_map_overlay_provider.dart';
 import 'package:voyza/providers/trip_provider.dart';
 import '../providers/map_ui_state_provider.dart';
+import '../providers/building_outline_provider.dart';
 
 class MapWidget extends ConsumerWidget {
   final Function(GoogleMapController) onMapCreated;
@@ -15,12 +16,17 @@ class MapWidget extends ConsumerWidget {
   final Function(LocationModel)? onMarkerTap;
   final Map<String, dynamic>? temporaryDrawing;
 
+  /// The camera settled (gesture or animation ended). Once per move, never
+  /// per frame.
+  final VoidCallback? onCameraIdle;
+
   const MapWidget({
     super.key,
     required this.onMapCreated,
     this.onMapLongPress,
     this.onMarkerTap,
     this.temporaryDrawing,
+    this.onCameraIdle,
   });
 
   // OPTIMIZATION: Helper to reduce marker rebuild frequency. Also applies
@@ -132,6 +138,7 @@ class MapWidget extends ConsumerWidget {
             key: const ValueKey('main_google_map'),
             onMapCreated: onMapCreated,
             onLongPress: onMapLongPress,
+            onCameraIdle: onCameraIdle,
             onTap: (_) {
               // Two pieces of "selected route" state exist:
               //   - mapUIStateProvider.tappedPolylineId (drives the
@@ -142,6 +149,7 @@ class MapWidget extends ConsumerWidget {
               // its idle visual state without removing the route itself.
               ref.read(mapUIStateProvider.notifier).clearHighlights();
               ref.read(tripProvider.notifier).selectLeg(null);
+              ref.read(focusedPlaceProvider.notifier).state = null;
               // Tapping the map should also dismiss the search keyboard if
               // it's open. Routing through FocusManager keeps this widget
               // unaware of the search bar's FocusNode.
@@ -155,7 +163,9 @@ class MapWidget extends ConsumerWidget {
             markers: markers,
             polylines: polylines,
             circles: {...circles},
-            polygons: const {},
+            // The focused place's building footprint (tap a pin). Shown in
+            // both modes: it belongs to the place, not to a day.
+            polygons: overlayState.polygons,
             myLocationEnabled: false,
             myLocationButtonEnabled: false,
             zoomControlsEnabled: false,

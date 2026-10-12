@@ -88,13 +88,14 @@ class SavedLocationAdapter extends TypeAdapter<SavedLocation> {
       tag: fields[25] as String?,
       placeTypes: (fields[26] as List?)?.cast<String>(),
       handedOver: fields[27] == null ? false : fields[27] as bool,
+      floor: fields[28] as String?,
     );
   }
 
   @override
   void write(BinaryWriter writer, SavedLocation obj) {
     writer
-      ..writeByte(28)
+      ..writeByte(29)
       ..writeByte(0)
       ..write(obj.id)
       ..writeByte(1)
@@ -150,7 +151,9 @@ class SavedLocationAdapter extends TypeAdapter<SavedLocation> {
       ..writeByte(26)
       ..write(obj.placeTypes)
       ..writeByte(27)
-      ..write(obj.handedOver);
+      ..write(obj.handedOver)
+      ..writeByte(28)
+      ..write(obj.floor);
   }
 
   @override

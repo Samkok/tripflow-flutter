@@ -9,6 +9,7 @@ import 'package:uuid/uuid.dart';
 import 'package:voyza/providers/map_ui_state_provider.dart';
 import 'package:geolocator/geolocator.dart';
 import '../models/location_model.dart';
+import '../utils/routing_place_id.dart';
 import '../models/trip_model.dart';
 import '../models/trip.dart';
 import '../services/google_maps_service.dart';
@@ -321,6 +322,7 @@ class TripNotifier extends StateNotifier<TripState> {
             isAccommodation: saved.isAccommodation,
             tag: saved.tag,
             placeTypes: saved.placeTypes,
+            floor: saved.floor,
             stayDuration: Duration(seconds: saved.stayDuration),
             photoReference: saved.photoReference,
             photoReferences: refs.isEmpty ? null : refs,
@@ -852,6 +854,25 @@ class TripNotifier extends StateNotifier<TripState> {
     }
   }
 
+  /// Keeps a place's floor / unit on its row once looked up (see
+  /// placeFloorLookupProvider); '' records "Google lists none" so the
+  /// lookup is not repeated. Silently skipped without write access.
+  Future<void> updateLocationFloor(String locationId, String floor) async {
+    final hasAccess = await _hasWriteAccess();
+    if (!hasAccess) return;
+    state = state.copyWith(pinnedLocations: [
+      for (final loc in state.pinnedLocations)
+        loc.id == locationId ? loc.copyWith(floor: floor) : loc,
+    ]);
+    try {
+      await _ref
+          .read(locationRepositoryProvider)
+          .updateLocation(locationId, {'floor': floor});
+    } catch (e) {
+      log('Error updating floor in repository: $e');
+    }
+  }
+
   Future<void> updateLocationStayDuration(
       String locationId, Duration newDuration) async {
     // Permission check at function level
@@ -1300,6 +1321,7 @@ class TripNotifier extends StateNotifier<TripState> {
         isAccommodation: clone.isAccommodation,
         tag: clone.tag,
         placeTypes: clone.placeTypes.isEmpty ? null : clone.placeTypes,
+        floor: clone.floor,
         stayDuration: clone.stayDuration.inSeconds,
         scheduledDate: tailStart,
         scheduledEndDate: tailEnd,
@@ -1616,6 +1638,7 @@ class TripNotifier extends StateNotifier<TripState> {
             // A copy keeps its tag (same rule as copying a trip by code).
             tag: loc.tag,
             placeTypes: loc.placeTypes.isEmpty ? null : loc.placeTypes,
+            floor: loc.floor,
             stayDuration: loc.stayDuration.inSeconds,
             scheduledDate: loc.scheduledDate,
             createdAt: loc.addedAt,
@@ -1714,6 +1737,9 @@ class TripNotifier extends StateNotifier<TripState> {
     try {
       // 1. Determine the starting point and the list of locations to be optimized.
       LatLng startPoint;
+      // The start's Google place id when the day starts at a saved place:
+      // the first leg then leaves from its access point.
+      String? startPlaceId;
       List<LocationModel> locationsToOptimize = List.from(locationsForDate);
       String effectiveStartLocationId = '';
 
@@ -1734,6 +1760,7 @@ class TripNotifier extends StateNotifier<TripState> {
         );
 
         startPoint = startLocation.coordinates;
+        startPlaceId = routingPlaceId(startLocation);
         effectiveStartLocationId = startLocation.id;
         // If the anchor IS one of the day's optimizable stops, remove it
         // from the list so the optimizer doesn't visit it twice. Skipped/
@@ -1763,6 +1790,7 @@ class TripNotifier extends StateNotifier<TripState> {
           // safe choice when the device is far from every stop). The check at
           // the top of the function ensures locationsForDate is not empty.
           startPoint = locationsForDate.first.coordinates;
+          startPlaceId = routingPlaceId(locationsForDate.first);
           effectiveStartLocationId = locationsForDate.first.id;
           locationsToOptimize.removeAt(0);
         }
@@ -1787,6 +1815,7 @@ class TripNotifier extends StateNotifier<TripState> {
       if (originalOrder.length >= 2) {
         baselineTravelFuture = GoogleMapsService.getOptimizedRouteDetails(
           origin: startPoint,
+          originPlaceId: startPlaceId,
           destination: originalOrder.last,
           waypoints: originalOrder.sublist(0, originalOrder.length - 1),
           optimizeWaypoints: false,
@@ -1922,6 +1951,7 @@ class TripNotifier extends StateNotifier<TripState> {
       state = state.copyWith(finalLocationId: finalId ?? '');
       final routeResult = await MultiModalRouter.routeItinerary(
         origin: startPoint,
+        originPlaceId: startPlaceId,
         originId: effectiveStartLocationId.isEmpty
             ? 'start'
             : effectiveStartLocationId,
@@ -2234,6 +2264,12 @@ class TripNotifier extends StateNotifier<TripState> {
     final from = coordFor(old['fromId'] as String?, polys[legIndex].first);
     final to = coordFor(old['toId'] as String?, polys[legIndex].last);
 
+    String? placeIdFor(String? id) {
+      if (id == null || id == 'current_location') return null;
+      final match = state.pinnedLocations.where((l) => l.id == id);
+      return match.isNotEmpty ? routingPlaceId(match.first) : null;
+    }
+
     // Transit schedules need a departure estimate: trip start + everything
     // before this leg (travel + dwell). Display-grade, not timetable-grade.
     var departure = _ref.read(effectiveTripStartTimeProvider);
@@ -2248,6 +2284,8 @@ class TripNotifier extends StateNotifier<TripState> {
       to: to,
       mode: mode,
       departureTime: departure,
+      fromPlaceId: placeIdFor(old['fromId'] as String?),
+      toPlaceId: placeIdFor(old['toId'] as String?),
     );
     if (leg == null) return false;
 
@@ -2377,6 +2415,8 @@ class TripNotifier extends StateNotifier<TripState> {
       final leg = await MultiModalRouter.routeLegSmart(
         from: from.coordinates,
         to: to.coordinates,
+        fromPlaceId: originIsDevice ? null : routingPlaceId(from),
+        toPlaceId: routingPlaceId(to),
         overrideMode:
             previewOverrides[LegModePrefs.legOverrideKey(from.id, to.id)],
         maxWalkMeters: prefMaxWalk.toDouble(),

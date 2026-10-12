@@ -162,6 +162,13 @@ class MapZoomToLocationRequest {
 final mapZoomToLocationRequestProvider =
     StateProvider<MapZoomToLocationRequest?>((_) => null);
 
+/// Where the map was last left: its centre after the last gesture or
+/// animation settled. Written once per camera idle (no per-frame work) and
+/// READ, never watched, by the leg chip so it sits near what the person is
+/// looking at instead of at the segment's geometric midpoint, which for a
+/// long ride is usually off screen.
+final mapCameraTargetProvider = StateProvider<LatLng?>((_) => null);
+
 /// One-shot "frame this route leg on the map" request, fired by the
 /// route-leg sheet's Show-on-map button. MapScreen consumes it: collapses
 /// the plan sheet, fits the camera to the leg's bounds, and highlights it.

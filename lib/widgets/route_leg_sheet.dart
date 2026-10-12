@@ -5,12 +5,13 @@ import '../core/theme.dart';
 import '../models/location_model.dart';
 import '../providers/map_ui_state_provider.dart';
 import '../providers/optimized_map_overlay_provider.dart'
-    show formatLegDuration;
+    show RouteLegSheetRequest, formatLegDuration, routeLegSheetRequestFor;
 import '../providers/trip_provider.dart';
 import '../services/multi_modal_router.dart';
 import '../utils/external_app_links.dart';
 import '../utils/line_badge_colors.dart';
 import '../utils/marker_utils.dart';
+import '../utils/routing_place_id.dart';
 import 'app_toast.dart';
 
 /// Bottom sheet for one leg of an optimized route — now multi-modal.
@@ -45,35 +46,29 @@ Future<void> showRouteLegSheet(
     backgroundColor: Colors.transparent,
     isScrollControlled: true,
     barrierColor: AppTheme.sheetBarrierColor(context),
-    builder: (sheetContext) {
-      var popped = false;
-      return NotificationListener<DraggableScrollableNotification>(
-        onNotification: (n) {
-          // Dragged to the floor = dismiss, like every other sheet.
-          if (!popped && n.extent <= n.minExtent + 0.005) {
-            popped = true;
-            Navigator.of(sheetContext).pop();
-          }
-          return false;
-        },
-        child: DraggableScrollableSheet(
-          expand: false,
-          initialChildSize: 0.55,
-          minChildSize: 0.3,
-          maxChildSize: 0.85, // same ceiling as the trip-plan sheet
-          builder: (c, scrollController) => _RouteLegSheet(
-            origin: origin,
-            destination: destination,
-            distanceLabel: distanceLabel,
-            durationLabel: durationLabel,
-            legIndex: legIndex,
-            mode: mode,
-            transit: transit,
-            scrollController: scrollController,
-          ),
-        ),
-      );
-    },
+    // Dragged to the floor = dismiss. Flutter's own bottom sheet does
+    // this (it pops once the DraggableScrollableSheet reaches its minimum,
+    // and only while the sheet's route is current). The hand-rolled
+    // listener that used to sit here kept its "already popped" flag in
+    // the builder closure, which the bottom sheet re-runs on rebuild, so
+    // a drag held at the floor could pop TWICE — the second pop took the
+    // screen underneath with it.
+    builder: (sheetContext) => DraggableScrollableSheet(
+      expand: false,
+      initialChildSize: 0.55,
+      minChildSize: 0.3,
+      maxChildSize: 0.85, // same ceiling as the trip-plan sheet
+      builder: (c, scrollController) => _RouteLegSheet(
+        origin: origin,
+        destination: destination,
+        distanceLabel: distanceLabel,
+        durationLabel: durationLabel,
+        legIndex: legIndex,
+        mode: mode,
+        transit: transit,
+        scrollController: scrollController,
+      ),
+    ),
   );
 }
 
@@ -123,6 +118,41 @@ class _RouteLegSheet extends ConsumerStatefulWidget {
 }
 
 class _RouteLegSheetState extends ConsumerState<_RouteLegSheet> {
+  /// The leg on show. Starts as the one the sheet was opened for and moves
+  /// with the previous/next stepper, so every leg of the day is reachable
+  /// from here — on the map, legs that share a road cannot all be tapped.
+  int _legIndex = -1;
+
+  /// The live route's description of the leg on show. Null for previews
+  /// (no leg identity) and once the route is gone.
+  RouteLegSheetRequest? get _liveRequest {
+    if (_legIndex < 0) return null;
+    final s = ref.read(tripProvider);
+    return routeLegSheetRequestFor(
+      legDetails: s.legDetails,
+      legPolylines: s.legPolylines,
+      ordered: s.optimizedLocationsForSelectedDate,
+      startLocationId: s.startLocationId,
+      legIndex: _legIndex,
+    );
+  }
+
+  Map<String, dynamic>? get _liveLeg {
+    final legs = ref.read(tripProvider).legDetails;
+    return (_legIndex >= 0 && _legIndex < legs.length) ? legs[_legIndex] : null;
+  }
+
+  // The leg on show, live when the route still has it, else as opened.
+  LocationModel get _origin => _liveRequest?.origin ?? widget.origin;
+  LocationModel get _destination =>
+      _liveRequest?.destination ?? widget.destination;
+  String get _mode => (_liveLeg?['mode'] as String?) ?? widget.mode;
+  List<Map<String, dynamic>>? get _transit =>
+      (_liveLeg?['transit'] as List?)?.cast<Map<String, dynamic>>() ??
+      widget.transit;
+
+  String _nameOf(LocationModel l) => l.name.isEmpty ? 'Your location' : l.name;
+
   /// Mode being fetched by the switcher; null when idle.
   String? _switching;
 
@@ -151,40 +181,91 @@ class _RouteLegSheetState extends ConsumerState<_RouteLegSheet> {
   @override
   void initState() {
     super.initState();
+    _legIndex = widget.legIndex;
     _probeAvailability();
     _loadAlternatives();
   }
 
+  /// Show another leg of the day's route in this same sheet. The map
+  /// follows: highlight, chip and camera all key off the tapped id.
+  void _goToLeg(int index) {
+    final legs = ref.read(tripProvider).legDetails;
+    if (index < 0 || index >= legs.length || index == _legIndex) return;
+    setState(() {
+      _legIndex = index;
+      _alternatives = null;
+      _available = null;
+      _appliedAltIndex = null;
+      _applyingAltIndex = null;
+      _switching = null;
+    });
+    ref.read(mapUIStateProvider.notifier).setTappedPolyline('leg_$index');
+    ref.read(mapZoomToLegRequestProvider.notifier).state =
+        MapZoomToLegRequest(index);
+    _probeAvailability();
+    _loadAlternatives();
+  }
+
+  /// Previous / next leg, with the leg's place in the day.
+  Widget _legStepper(int legCount) {
+    final theme = Theme.of(context);
+    final canPrev = _legIndex > 0;
+    final canNext = _legIndex < legCount - 1;
+    return Row(children: [
+      IconButton(
+        tooltip: 'Previous leg',
+        onPressed: canPrev ? () => _goToLeg(_legIndex - 1) : null,
+        icon: const Icon(Icons.chevron_left_rounded),
+      ),
+      Expanded(
+        child: Text(
+          'Leg ${_legIndex + 1} of $legCount',
+          textAlign: TextAlign.center,
+          style: theme.textTheme.labelLarge?.copyWith(
+            fontWeight: FontWeight.w700,
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+        ),
+      ),
+      IconButton(
+        tooltip: 'Next leg',
+        onPressed: canNext ? () => _goToLeg(_legIndex + 1) : null,
+        icon: const Icon(Icons.chevron_right_rounded),
+      ),
+    ]);
+  }
+
   Future<void> _loadAlternatives() async {
-    if (widget.legIndex < 0 || widget.mode == 'direct') {
+    final forLeg = _legIndex;
+    if (_legIndex < 0 || _mode == 'direct') {
       setState(() => _alternatives = const []);
       return;
     }
     // Anchor to the leg's planned board time when it has one, so options
     // rank against the itinerary's clock, not "now".
     DateTime? departure;
-    final plannedBoard = widget.transit?.isNotEmpty == true
-        ? DateTime.tryParse(
-            (widget.transit!.first['departureTime'] as String?) ?? '')
+    final plannedBoard = _transit?.isNotEmpty == true
+        ? DateTime.tryParse((_transit!.first['departureTime'] as String?) ?? '')
         : null;
     departure = plannedBoard ?? DateTime.now().add(const Duration(minutes: 10));
     final options = await MultiModalRouter.fetchLegAlternatives(
-      from: widget.origin.coordinates,
-      to: widget.destination.coordinates,
-      mode: widget.mode,
+      from: _origin.coordinates,
+      to: _destination.coordinates,
+      fromPlaceId: routingPlaceId(_origin),
+      toPlaceId: routingPlaceId(_destination),
+      mode: _mode,
       departureTime: departure,
     ).catchError((Object _) => const <LegRoute>[]);
-    if (!mounted) return;
+    if (!mounted || forLeg != _legIndex) return; // stepped on meanwhile
     // Mark the option matching the currently applied leg; the recommended
     // top row is only "selected" when it actually is the applied route.
     int? applied;
     final legsNow = ref.read(tripProvider).legDetails;
     Duration? currentDuration;
     double? currentDistance;
-    if (widget.legIndex >= 0 && widget.legIndex < legsNow.length) {
-      currentDuration = legsNow[widget.legIndex]['duration'] as Duration?;
-      currentDistance =
-          (legsNow[widget.legIndex]['distance'] as num?)?.toDouble();
+    if (_legIndex >= 0 && _legIndex < legsNow.length) {
+      currentDuration = legsNow[_legIndex]['duration'] as Duration?;
+      currentDistance = (legsNow[_legIndex]['distance'] as num?)?.toDouble();
     }
     for (var i = 0; i < options.length; i++) {
       if (options[i].duration == currentDuration &&
@@ -206,7 +287,7 @@ class _RouteLegSheetState extends ConsumerState<_RouteLegSheet> {
     setState(() => _applyingAltIndex = index);
     final ok = await ref
         .read(tripProvider.notifier)
-        .applyLegRoute(widget.legIndex, options[index]);
+        .applyLegRoute(_legIndex, options[index]);
     if (!mounted) return;
     setState(() {
       _applyingAltIndex = null;
@@ -222,34 +303,38 @@ class _RouteLegSheetState extends ConsumerState<_RouteLegSheet> {
   }
 
   Future<void> _probeAvailability() async {
-    if (widget.legIndex < 0) return;
+    if (_legIndex < 0) return;
+    final forLeg = _legIndex;
     final entries = await Future.wait([
       for (final (m, _, _) in _switchableModes)
-        m == widget.mode
+        m == _mode
             ? Future.value(MapEntry(m, true))
             : MultiModalRouter.routeSingleLeg(
-                from: widget.origin.coordinates,
-                to: widget.destination.coordinates,
+                from: _origin.coordinates,
+                to: _destination.coordinates,
+                fromPlaceId: routingPlaceId(_origin),
+                toPlaceId: routingPlaceId(_destination),
                 mode: m,
                 departureTime: DateTime.now().add(const Duration(minutes: 10)),
               )
                 .then((r) => MapEntry(m, r != null))
                 .catchError((Object _) => MapEntry(m, false)),
     ]);
-    if (!mounted) return;
+    if (!mounted || forLeg != _legIndex) return; // stepped on meanwhile
     setState(() => _available = {for (final e in entries) e.key: e.value});
   }
 
   Future<void> _switchMode(String mode, String currentMode) async {
     if (_switching != null || mode == currentMode) return;
     setState(() => _switching = mode);
-    final ok = await ref
-        .read(tripProvider.notifier)
-        .overrideLegMode(widget.legIndex, mode);
+    final ok =
+        await ref.read(tripProvider.notifier).overrideLegMode(_legIndex, mode);
     if (!mounted) return;
     setState(() => _switching = null);
     if (ok) {
-      Navigator.of(context).pop();
+      if (ModalRoute.of(context)?.isCurrent ?? true) {
+        Navigator.of(context).pop();
+      }
       AppToast.success(context, 'Leg updated — this choice is remembered');
     } else {
       AppToast.warning(
@@ -279,12 +364,17 @@ class _RouteLegSheetState extends ConsumerState<_RouteLegSheet> {
     // re-runs this build only when the route actually changes — one
     // cheap rebuild, no reload, no polling.
     final legsLive = ref.watch(tripProvider.select((s) => s.legDetails));
-    final live = (widget.legIndex >= 0 && widget.legIndex < legsLive.length)
-        ? legsLive[widget.legIndex]
+    // The endpoints come from the live route too (the sheet steps between
+    // legs); these re-run the build only when the stops themselves change.
+    ref.watch(tripProvider.select((s) => s.optimizedLocationsForSelectedDate));
+    ref.watch(tripProvider.select((s) => s.startLocationId));
+    final legCount = legsLive.length;
+    final live = (_legIndex >= 0 && _legIndex < legsLive.length)
+        ? legsLive[_legIndex]
         : null;
-    final mode = (live?['mode'] as String?) ?? widget.mode;
-    final transit = (live?['transit'] as List?)?.cast<Map<String, dynamic>>() ??
-        widget.transit;
+    final mode = (live?['mode'] as String?) ?? _mode;
+    final transit =
+        (live?['transit'] as List?)?.cast<Map<String, dynamic>>() ?? _transit;
     final liveMeters = (live?['distance'] as num?)?.toDouble();
     final distanceLabel = liveMeters == null
         ? widget.distanceLabel
@@ -353,7 +443,7 @@ class _RouteLegSheetState extends ConsumerState<_RouteLegSheet> {
                       const SizedBox(width: 10),
                       Expanded(
                         child: Text(
-                          '${widget.origin.name} → ${widget.destination.name}',
+                          '${_nameOf(_origin)} → ${_nameOf(_destination)}',
                           style: theme.textTheme.titleLarge
                               ?.copyWith(fontWeight: FontWeight.bold),
                           maxLines: 3,
@@ -374,6 +464,10 @@ class _RouteLegSheetState extends ConsumerState<_RouteLegSheet> {
                     style: theme.textTheme.bodyMedium
                         ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
                   ),
+                  if (_legIndex >= 0 && legCount > 1) ...[
+                    const SizedBox(height: 6),
+                    _legStepper(legCount),
+                  ],
                   // ── Transit itinerary — every segment, walks included ──
                   if (transit != null && transit.isNotEmpty) ...[
                     const SizedBox(height: 14),
@@ -381,7 +475,7 @@ class _RouteLegSheetState extends ConsumerState<_RouteLegSheet> {
                   ],
 
                   // ── Mode switcher (only for real legs of a route) ─────
-                  if (widget.legIndex >= 0) ...[
+                  if (_legIndex >= 0) ...[
                     const SizedBox(height: 18),
                     Text(
                       'TRAVEL THIS LEG',
@@ -446,14 +540,14 @@ class _RouteLegSheetState extends ConsumerState<_RouteLegSheet> {
                   const SizedBox(height: 20),
                   // Frame this leg on the map (real legs only — previews
                   // have no leg identity to zoom to).
-                  if (widget.legIndex >= 0) ...[
+                  if (_legIndex >= 0) ...[
                     SizedBox(
                       width: double.infinity,
                       child: OutlinedButton.icon(
                         onPressed: () {
                           Navigator.of(context).pop();
                           ref.read(mapZoomToLegRequestProvider.notifier).state =
-                              MapZoomToLegRequest(widget.legIndex);
+                              MapZoomToLegRequest(_legIndex);
                         },
                         icon: const Icon(Icons.center_focus_strong_rounded,
                             size: 20),
@@ -478,8 +572,8 @@ class _RouteLegSheetState extends ConsumerState<_RouteLegSheet> {
                       onPressed: () {
                         Navigator.of(context).pop();
                         openDirectionsInGoogleMaps(
-                          origin: widget.origin,
-                          destination: widget.destination,
+                          origin: _origin,
+                          destination: _destination,
                           mode: mode,
                         );
                       },
@@ -539,10 +633,10 @@ class _RouteLegSheetState extends ConsumerState<_RouteLegSheet> {
   /// ride cards alone for legs routed before step data existed.
   List<Widget> _buildJourneySegments(List<Map<String, dynamic>> rides) {
     List<Map>? runs;
-    if (widget.legIndex >= 0) {
+    if (_legIndex >= 0) {
       final legs = ref.read(tripProvider).legDetails;
-      if (widget.legIndex < legs.length) {
-        runs = (legs[widget.legIndex]['transitSteps'] as List?)?.cast<Map>();
+      if (_legIndex < legs.length) {
+        runs = (legs[_legIndex]['transitSteps'] as List?)?.cast<Map>();
       }
     }
 
@@ -585,7 +679,7 @@ class _RouteLegSheetState extends ConsumerState<_RouteLegSheet> {
         // leg's destination after the last ride.
         final String? toName = rideIdx < rides.length
             ? rides[rideIdx]['boardStop'] as String?
-            : widget.destination.name;
+            : _destination.name;
         out.add(_tappableRun(j, _walkSegment(secs, to: toName)));
       }
     }
@@ -596,14 +690,14 @@ class _RouteLegSheetState extends ConsumerState<_RouteLegSheet> {
   /// closes the sheet, highlights the run's polyline, zooms to it, and
   /// surfaces its own chip (all driven by the tapped-polyline id).
   Widget _tappableRun(int runIndex, Widget child) {
-    if (widget.legIndex < 0) return child;
+    if (_legIndex < 0) return child;
     return InkWell(
       borderRadius: BorderRadius.circular(14),
       onTap: () {
         Navigator.of(context).pop();
         ref
             .read(mapUIStateProvider.notifier)
-            .setTappedPolyline('leg_${widget.legIndex}_s$runIndex');
+            .setTappedPolyline('leg_${_legIndex}_s$runIndex');
       },
       child: child,
     );
@@ -630,7 +724,7 @@ class _RouteLegSheetState extends ConsumerState<_RouteLegSheet> {
             overflow: TextOverflow.ellipsis,
           ),
         ),
-        if (widget.legIndex >= 0)
+        if (_legIndex >= 0)
           Icon(Icons.chevron_right_rounded,
               size: 18,
               color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.5)),

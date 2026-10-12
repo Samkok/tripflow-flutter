@@ -62,6 +62,11 @@ class TripRolloverService {
   /// Runs the carry-over for every owned, ongoing trip with the setting on.
   /// Returns how many places moved. Cheap when nothing is due.
   static Future<int> runIfDue(WidgetRef ref) async {
+    // Signed in: the server carries places forward on its own, hourly, for
+    // every trip with the setting on — whether or not the owner opens the
+    // app (run_trip_rollover, migration 20261012090000). Only a guest's
+    // trips, which live on this device alone, still need the app to do it.
+    if (ref.read(currentUserIdProvider) != null) return 0;
     List<Trip> trips;
     List<SavedLocation> rows;
     try {

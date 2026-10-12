@@ -86,14 +86,13 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
     final primary = theme.colorScheme.primary;
     final accent = _accentColor(primary);
 
-    // Translucent: these cards live inside the glass trip-plan sheet, so the
-    // map behind should read through them too.
+    // A quiet solid tint: the trip-plan sheet is opaque (2026-10-12), so
+    // the card needs its own contrast against the sheet's surface.
     final cardColor = isSelected
         ? primary.withValues(alpha: 0.18)
         : (isHighlighted
             ? primary.withValues(alpha: 0.10)
-            : theme.cardColor
-                .withValues(alpha: AppTheme.sheetCardAlpha(context)));
+            : AppTheme.planSheetCardColor(context));
 
     return RepaintBoundary(
       child: AnimatedContainer(

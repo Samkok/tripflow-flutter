@@ -34,6 +34,12 @@ class AppTheme {
 
   /// Fill for cards sitting INSIDE a glass sheet — translucent enough that
   /// the blurred backdrop reads through, opaque enough to group content.
+  /// Card fill inside the (opaque) trip-plan sheet: a faint tint of the
+  /// foreground over the sheet's surface, so cards keep their contrast
+  /// without the glass they used to sit on. Other sheets keep [sheetCardAlpha].
+  static Color planSheetCardColor(BuildContext context) =>
+      Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.06);
+
   static double sheetCardAlpha(BuildContext context) =>
       Theme.of(context).brightness == Brightness.dark ? 0.30 : 0.28;
 

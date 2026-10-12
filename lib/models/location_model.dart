@@ -63,6 +63,10 @@ class LocationModel {
   /// Google place types from the add, for tag suggestions.
   final List<String> placeTypes;
 
+  /// Floor / unit inside the building ("23/F · Shop 2301"); null = not
+  /// looked up yet, '' = none. Mirrors [SavedLocation.floor].
+  final String? floor;
+
   LocationModel({
     required this.id,
     required this.name,
@@ -88,6 +92,7 @@ class LocationModel {
     this.isAccommodation = false,
     this.tag,
     List<String>? placeTypes,
+    this.floor,
   })  : placeTypes = placeTypes ?? const [],
         photoReferences = photoReferences ??
             (photoReference != null && photoReference.isNotEmpty
@@ -121,6 +126,7 @@ class LocationModel {
       'isAccommodation': isAccommodation,
       'tag': tag,
       'placeTypes': placeTypes,
+      'floor': floor,
     };
   }
 
@@ -166,6 +172,7 @@ class LocationModel {
       tag: json['tag'] as String?,
       placeTypes:
           (json['placeTypes'] as List?)?.map((e) => e.toString()).toList(),
+      floor: json['floor'] as String?,
     );
   }
 
@@ -201,6 +208,7 @@ class LocationModel {
     // Sentinel-nullable: `copyWith(tag: null)` really CLEARS the tag.
     Object? tag = _unset,
     List<String>? placeTypes,
+    String? floor,
   }) {
     return LocationModel(
       id: id ?? this.id,
@@ -233,6 +241,7 @@ class LocationModel {
       isAccommodation: isAccommodation ?? this.isAccommodation,
       tag: identical(tag, _unset) ? this.tag : tag as String?,
       placeTypes: placeTypes ?? this.placeTypes,
+      floor: floor ?? this.floor,
     );
   }
 
@@ -308,6 +317,11 @@ extension ToLocationModel on SavedLocation {
       scheduledEndDate: scheduledEndDate,
       tripId: tripId,
       isAccommodation: isAccommodation,
+      // Both conversions (this one and TripNotifier's) must carry these:
+      // the detail sheet opened from the trip page lost its tag without.
+      tag: tag,
+      placeTypes: placeTypes,
+      floor: floor,
     );
   }
 }

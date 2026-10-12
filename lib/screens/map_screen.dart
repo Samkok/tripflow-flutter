@@ -39,6 +39,7 @@ import '../providers/trip_provider.dart';
 import '../providers/theme_provider.dart';
 import '../providers/all_days_route_provider.dart';
 import '../providers/map_ui_state_provider.dart';
+import '../providers/building_outline_provider.dart';
 import '../providers/debounced_settings_provider.dart';
 import '../providers/trip_collaborator_provider.dart';
 import '../providers/user_trip_provider.dart';
@@ -100,8 +101,12 @@ class _MapScreenState extends ConsumerState<MapScreen>
   StreamSubscription<LatLng>?
       _locationSubscription; // PERFORMANCE: Track subscription for cleanup
 
+  /// Location services switched on/off while the app runs: off stops the
+  /// sensors, on brings them back (see [_restartTrackingIfPossible]).
+  StreamSubscription<bool>? _serviceStatusSubscription;
+
   // Compass feed for the current-location heading beam. The stream is
-  // throttled at the source (250ms); _lastAppliedHeading backs the ≥3°
+  // throttled at the source (750ms); _lastAppliedHeading backs the ≥5°
   // change gate below, so magnetometer noise while the phone lies still
   // writes nothing into deviceHeadingProvider (zero marker churn).
   StreamSubscription<double?>? _compassSubscription;
@@ -188,6 +193,18 @@ class _MapScreenState extends ConsumerState<MapScreen>
     // resumed, so unseeded it silently dropped every GPS update (frozen
     // current-location dot on a cold start).
     _lastLifecycleState = WidgetsBinding.instance.lifecycleState;
+    _serviceStatusSubscription =
+        LocationService.serviceStatusStream().listen((enabled) {
+      if (!mounted) return;
+      if (enabled) {
+        _restartTrackingIfPossible();
+      } else if (_isTrackingLocation) {
+        // Nothing can arrive until it is switched back on; the stream's
+        // own error path says the same. Stop cleanly so the restart has a
+        // clean slate.
+        _stopSensorStreams();
+      }
+    }, onError: (Object e) => debugPrint('Location service status: $e'));
     _sheetController = DraggableScrollableController();
     // Compass stops while the plan sheet covers the map (thermal).
     _sheetController!.addListener(_syncCompassToSheetExtent);
@@ -232,6 +249,11 @@ class _MapScreenState extends ConsumerState<MapScreen>
       if (_sensorsStoppedByLifecycle) {
         _sensorsStoppedByLifecycle = false;
         _startLocationTracking();
+      } else {
+        // Not stopped by us, yet not tracking: the first fix failed, the
+        // person granted permission in Settings, or a retry was skipped
+        // while backgrounded. Resume is the moment to try again.
+        _restartTrackingIfPossible();
       }
       _startArrivalPolling();
     }
@@ -252,6 +274,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
     // PERFORMANCE: Cancel location stream to prevent memory leaks and battery drain
     _locationSubscription?.cancel();
     _compassSubscription?.cancel();
+    _serviceStatusSubscription?.cancel();
     _stopArrivalPolling();
 
     // OPTIMIZATION: Dispose map controller if still active
@@ -352,6 +375,10 @@ class _MapScreenState extends ConsumerState<MapScreen>
   /// on top yet — so the prompt fired seconds before onboarding appeared.
   bool _locationGateOpen = false;
 
+  /// While the leg sheet is up, leg framing leaves it room (see
+  /// [_legSheetFitWindow]).
+  bool _legSheetOpen = false;
+
   /// Marks the map as the user's current, uncovered surface and takes the
   /// first location reading. Called from the two signals that genuinely mean
   /// that: startup chrome (consent + onboarding + sign-up) having fully
@@ -395,6 +422,12 @@ class _MapScreenState extends ConsumerState<MapScreen>
           );
         }
         _startLocationTracking();
+      } else if (await LocationService.hasLocationPermissionAlready()) {
+        // No fix within the one-shot's time limit (indoors, a competing
+        // request) but location is usable: the stream will deliver the
+        // first fix when it comes. Before, this path left the dot and the
+        // compass off for the whole session.
+        _startLocationTracking();
       }
     } catch (e) {
       debugPrint("Failed to get location: $e");
@@ -414,6 +447,24 @@ class _MapScreenState extends ConsumerState<MapScreen>
         ),
       );
     }
+  }
+
+  /// Starts the sensors when the map is visible and location is usable but
+  /// nothing is tracking — the state left behind when the first fix failed,
+  /// permission arrived later (Settings), the location service came back,
+  /// or a restart was skipped while the app was in the background. Never
+  /// shows the OS prompt.
+  Future<void> _restartTrackingIfPossible() async {
+    if (_isTrackingLocation || !_locationGateOpen || !mounted) return;
+    if (ref.read(selectedTabIndexProvider) != 1) return;
+    if (!_locationInitStarted) {
+      _maybeInitLocationForVisibleMap();
+      return;
+    }
+    if (!await LocationService.hasLocationPermissionAlready()) return;
+    if (!mounted || _isTrackingLocation) return;
+    if (_lastLifecycleState == AppLifecycleState.paused) return;
+    _startLocationTracking();
   }
 
   void _startLocationTracking() {
@@ -439,9 +490,12 @@ class _MapScreenState extends ConsumerState<MapScreen>
         // OPTIMIZATION: Only update if app is in foreground to prevent background processing
         // null = no lifecycle event seen yet → we're foreground (same
         // null-tolerance as the arrival-poll gates below).
+        // Dropped only in the background. `inactive` (Control Center, a
+        // system alert, split screen) still shows the map, and a fix
+        // dropped there stayed missing until the next 5 m of movement.
         if (mounted &&
-            (_lastLifecycleState == null ||
-                _lastLifecycleState == AppLifecycleState.resumed)) {
+            _lastLifecycleState != AppLifecycleState.paused &&
+            _lastLifecycleState != AppLifecycleState.hidden) {
           ref.read(tripProvider.notifier).updateCurrentLocation(location);
           // FOREGROUND-ONLY by construction: this stream only runs while the
           // app is active (no background modes are declared on either
@@ -452,23 +506,31 @@ class _MapScreenState extends ConsumerState<MapScreen>
         // Location tracking without automatic camera animation
         // Camera only moves when user explicitly requests it
       },
-      onError: (error) {
-        // Handle location stream errors gracefully
+      onError: (Object error) {
         debugPrint('Location stream error: $error');
+        // Permission withdrawn or services off: no fix can follow. Stop
+        // cleanly; resume and the service-status stream restart tracking
+        // (without prompting) once location is usable again.
+        if (LocationService.isPermissionOrServiceError(error) &&
+            _isTrackingLocation) {
+          _stopSensorStreams();
+        }
       },
       onDone: () {
         // The platform stream only ends on cancel — if it ended while we
         // still think we're tracking, the dot would silently freeze.
-        // Restart shortly (foreground only; the resume handler covers the
-        // backgrounded case).
+        // Restart shortly; if the app is in the background by then, leave
+        // it to the resume handler (which restarts what was stopped here).
         if (!mounted || !_isTrackingLocation) return;
         debugPrint('Location stream ended unexpectedly — restarting');
         _stopSensorStreams();
         Future.delayed(const Duration(seconds: 2), () {
-          if (!mounted || _lastLifecycleState == AppLifecycleState.paused) {
+          if (!mounted) return;
+          if (_lastLifecycleState == AppLifecycleState.paused) {
+            _sensorsStoppedByLifecycle = true;
             return;
           }
-          _startLocationTracking();
+          _restartTrackingIfPossible();
         });
       },
     );
@@ -503,6 +565,11 @@ class _MapScreenState extends ConsumerState<MapScreen>
     // against a stale reference), so the beam re-aims immediately.
     _lastAppliedHeading = null;
     _isTrackingLocation = false;
+    // No compass = no beam. Leaving the last heading in place drew a beam
+    // frozen at a stale angle for as long as the sensors were off.
+    if (ref.read(deviceHeadingProvider) != null) {
+      ref.read(deviceHeadingProvider.notifier).state = null;
+    }
   }
 
   /// Compass feed for the current-location heading beam (the Google-Maps
@@ -544,6 +611,15 @@ class _MapScreenState extends ConsumerState<MapScreen>
       },
       onError: (error) {
         debugPrint('Compass stream error: $error');
+      },
+      onDone: () {
+        // The compass feed ended while tracking is still on: re-arm it,
+        // rather than leaving the beam off (or stale) for the session.
+        _compassSubscription = null;
+        if (!mounted || !_isTrackingLocation) return;
+        Future.delayed(const Duration(seconds: 2), () {
+          if (mounted && _isTrackingLocation) _startCompassTracking();
+        });
       },
     );
   }
@@ -1163,6 +1239,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
         tag: fallback.tag,
         placeTypes:
             details?.types.isNotEmpty == true ? details!.types : fallback.types,
+        floor: details?.floor,
       );
       final added = await LocationAddService(ref).beforeAddingLocation(
         context,
@@ -1205,7 +1282,29 @@ class _MapScreenState extends ConsumerState<MapScreen>
     return '${(meters / 1000).toStringAsFixed(meters % 1000 == 0 ? 0 : 1)}km';
   }
 
+  /// The camera settled: remember its centre for the leg chip (see
+  /// mapCameraTargetProvider). One visible-region read per move.
+  Future<void> _onCameraIdle() async {
+    final controller = _mapController;
+    if (controller == null) return;
+    try {
+      final region = await controller.getVisibleRegion();
+      final centre = LatLng(
+        (region.southwest.latitude + region.northeast.latitude) / 2,
+        (region.southwest.longitude + region.northeast.longitude) / 2,
+      );
+      if (mounted) ref.read(mapCameraTargetProvider.notifier).state = centre;
+    } catch (e) {
+      debugPrint('camera idle: $e');
+    }
+  }
+
   void _onMarkerTapped(LocationModel location) {
+    // Highlight the place's building (fetched once per place; see
+    // building_outline_provider.dart). Stays until a map tap or a day
+    // change, like the selected place in Google Maps.
+    ref.read(focusedPlaceProvider.notifier).state = location;
+
     // Find the index of the tapped location in the list for the currently selected date.
     var locationsForDate = ref.read(locationsForSelectedDateProvider);
     var indexInList = locationsForDate.indexWhere((l) => l.id == location.id);
@@ -1492,7 +1591,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
         if (!mounted) return;
         ref.read(checklistGuideRequestProvider.notifier).state = null;
         _sheetController?.animateTo(
-          0.15,
+          TripBottomSheet.collapsedSize,
           duration: const Duration(milliseconds: 300),
           curve: Curves.easeInOut,
         );
@@ -1518,23 +1617,21 @@ class _MapScreenState extends ConsumerState<MapScreen>
   }
 
   Widget _buildMapScreenContent(BuildContext context) {
-    // Listen to polyline taps to animate the camera to fit the route
-    // segment — 'leg_3' fits the whole leg, 'leg_3_s1' fits just that run
-    // of a transit leg (the walk connector or ride the user tapped).
-    ref.listen<String?>(tappedPolylineIdProvider, (previous, next) {
-      if (next == null) return;
-      final m = RegExp(r'^leg_(\d+)(?:_s(\d+))?$').firstMatch(next);
-      if (m == null) return;
-      _zoomToFitLeg(
-        int.parse(m.group(1)!),
-        runIndex: m.group(2) == null ? null : int.parse(m.group(2)!),
-      );
-    });
+    // A tap on a route line selects it (highlight + chip) and leaves the
+    // camera alone — the chip is placed near the map's centre, where the
+    // person is looking. The camera moves for a leg only on request: the
+    // sheet's Show-on-map button and its previous/next stepper, and when
+    // the sheet opens (both below).
 
     // PERFORMANCE: Only listen to optimizedRoute changes, not entire TripState
     ref.listen<List<LatLng>>(
       tripProvider.select((s) => s.optimizedRoute),
       (previous, next) {
+        // A new route (re-optimize, preview, clear): the old leg index
+        // means nothing now, so no stale chip or highlight survives it.
+        if (!identical(previous, next)) {
+          ref.read(mapUIStateProvider.notifier).clearHighlights();
+        }
         final selectedDate = ref.read(selectedDateProvider);
         final now = DateTime.now();
         final today = DateTime(now.year, now.month, now.day);
@@ -1615,7 +1712,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
       if (next == null) return;
       ref.read(mapZoomToLocationRequestProvider.notifier).state = null;
       _sheetController?.animateTo(
-        0.15,
+        TripBottomSheet.collapsedSize,
         duration: const Duration(milliseconds: 300),
         curve: Curves.easeInOut,
       );
@@ -1633,33 +1730,16 @@ class _MapScreenState extends ConsumerState<MapScreen>
       ref.read(mapZoomToLegRequestProvider.notifier).state = null; // consume
       final polys = ref.read(tripProvider).legPolylines;
       if (next.legIndex < 0 || next.legIndex >= polys.length) return;
-      final points = polys[next.legIndex];
-      if (points.isEmpty) return;
-      var minLat = points.first.latitude, maxLat = points.first.latitude;
-      var minLng = points.first.longitude, maxLng = points.first.longitude;
-      for (final p in points) {
-        if (p.latitude < minLat) minLat = p.latitude;
-        if (p.latitude > maxLat) maxLat = p.latitude;
-        if (p.longitude < minLng) minLng = p.longitude;
-        if (p.longitude > maxLng) maxLng = p.longitude;
-      }
       _sheetController?.animateTo(
-        0.15,
+        TripBottomSheet.collapsedSize,
         duration: const Duration(milliseconds: 300),
         curve: Curves.easeInOut,
       );
-      ref
-          .read(mapUIStateProvider.notifier)
-          .setTappedPolyline('leg_${next.legIndex}');
-      _mapController?.animateCamera(
-        CameraUpdate.newLatLngBounds(
-          LatLngBounds(
-            southwest: LatLng(minLat, minLng),
-            northeast: LatLng(maxLat, maxLng),
-          ),
-          70,
-        ),
-      );
+      final id = 'leg_${next.legIndex}';
+      if (ref.read(tappedPolylineIdProvider) != id) {
+        ref.read(mapUIStateProvider.notifier).setTappedPolyline(id);
+      }
+      _zoomToFitLeg(next.legIndex);
     });
 
     // A route-leg chip was tapped → open its sheet. The markers live in a
@@ -1669,6 +1749,23 @@ class _MapScreenState extends ConsumerState<MapScreen>
         (prev, next) {
       if (next == null) return;
       ref.read(routeLegSheetRequestProvider.notifier).state = null; // consume
+      _legSheetOpen = true;
+      if (next.legIndex >= 0) {
+        // Frame the leg in the space above the sheet. A selected run of
+        // this leg stays selected (and is what gets framed); otherwise the
+        // whole leg becomes the selection.
+        final tapped = ref.read(tappedPolylineIdProvider);
+        final m = RegExp(r'^leg_(\d+)(?:_s(\d+))?$').firstMatch(tapped ?? '');
+        int? runIndex;
+        if (m != null && int.parse(m.group(1)!) == next.legIndex) {
+          runIndex = m.group(2) == null ? null : int.parse(m.group(2)!);
+        } else {
+          ref
+              .read(mapUIStateProvider.notifier)
+              .setTappedPolyline('leg_${next.legIndex}');
+        }
+        _zoomToFitLeg(next.legIndex, runIndex: runIndex);
+      }
       showRouteLegSheet(
         context,
         origin: next.origin,
@@ -1678,7 +1775,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
         legIndex: next.legIndex,
         mode: next.mode,
         transit: next.transit,
-      );
+      ).whenComplete(() => _legSheetOpen = false);
     });
 
     ref.listen<int>(mapTutorialRecheckProvider, (prev, next) {
@@ -1816,6 +1913,11 @@ class _MapScreenState extends ConsumerState<MapScreen>
     // is enough — pinnedLocations is already correct.
     ref.listen<DateTime>(selectedDateProvider, (previous, next) {
       if (previous == null || previous == next) return;
+      // The highlighted leg and its chip were this day's; on another day
+      // the same index is a different leg (or none). The focused building
+      // belongs to a pin of this day too.
+      ref.read(mapUIStateProvider.notifier).clearHighlights();
+      ref.read(focusedPlaceProvider.notifier).state = null;
       // All-days mode owns the camera — don't re-frame per selected date.
       if (ref.read(allDaysModeProvider)) return;
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -1827,6 +1929,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
     // selected day's framing.
     ref.listen<bool>(allDaysModeProvider, (previous, next) {
       if (previous == next) return;
+      ref.read(mapUIStateProvider.notifier).clearHighlights();
       _allDaysRoutesFitSig = null;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
@@ -1839,13 +1942,16 @@ class _MapScreenState extends ConsumerState<MapScreen>
     });
 
     // Day routes stream in asynchronously after the mode flips on (Directions
-    // per day). Re-fit when they land so long road detours aren't cropped —
-    // the initial fit only knew the stop coordinates.
+    // per day). Re-fit when they FIRST land so long road detours aren't
+    // cropped — the initial fit only knew the stop coordinates. Later
+    // geometry changes (a place added or removed re-routes its day) do not
+    // move the camera: same rule as the single-day listener below.
     ref.listen<AsyncValue<Map<DateTime, List<LatLng>>>>(allDayRoutesProvider,
         (previous, next) {
       final routes = next.valueOrNull;
       if (routes == null || routes.isEmpty) return;
       if (!ref.read(allDaysModeProvider)) return;
+      if (_allDaysRoutesFitSig != null) return; // only the first landing
       // Cheap geometry signature: day keys + per-day point counts (+ end
       // points). Recomputes triggered by unrelated state churn produce the
       // SAME geometry from the route cache — those must never move the
@@ -1904,32 +2010,15 @@ class _MapScreenState extends ConsumerState<MapScreen>
           return;
         }
 
-        // Reframe whenever the set of locations active on the selected
-        // date changes — covers:
-        //   • Adding a location via the search-bar / long-press flow.
-        //   • Deleting a location.
-        //   • Collaborator-driven adds/deletes arriving through the
-        //     sync listener (locations show up after a remote fetch).
-        // Comparing ID sets (not lengths) catches the same-count
-        // "deleted A, added B in the same tick" case too. Edits that
-        // don't change membership (rename, stayDuration, etc.) leave
-        // the set unchanged and don't trigger reframes.
-        final selectedDate = ref.read(selectedDateProvider);
-        final prevIds = (previous ?? const <LocationModel>[])
-            .where((l) => l.isActiveOnDate(selectedDate))
-            .map((l) => l.id)
-            .toSet();
-        final nextIds = next
-            .where((l) => l.isActiveOnDate(selectedDate))
-            .map((l) => l.id)
-            .toSet();
-        final membershipChanged =
-            prevIds.length != nextIds.length || !prevIds.containsAll(nextIds);
-        if (membershipChanged) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            _updateCameraForCurrentDate();
-          });
-        }
+        // A place added or removed (by this device or by a travel buddy
+        // through the sync listener) used to re-frame the whole day here.
+        // That yanked the map away from wherever the person was looking —
+        // mid-pan, zoomed on a street — every time anyone touched the
+        // list. Owner call (2026-10-12): never move the camera for an
+        // add or a delete. The change is announced instead: this device's
+        // own adds and removals already toast, a buddy's add arrives as
+        // the "New stop added" notification. The camera still moves for a
+        // trip switch (above), a day change, All-days mode and Optimize.
       },
     );
 
@@ -1975,6 +2064,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
               onMapCreated: _onMapCreated,
               onMapLongPress: _onMapLongPress,
               onMarkerTap: _onMarkerTapped,
+              onCameraIdle: _onCameraIdle,
             ),
           ),
 
@@ -2761,6 +2851,11 @@ class _MapScreenState extends ConsumerState<MapScreen>
       }
     }
 
+    // The button proves location is usable right now; if the sensors are
+    // off (first fix failed earlier, permission granted later) this is
+    // the moment to start them, so the dot follows from here on.
+    if (!_isTrackingLocation && mounted) _startLocationTracking();
+
     if (_mapController != null && mounted) {
       _mapController?.animateCamera(
         CameraUpdate.newCameraPosition(
@@ -2769,7 +2864,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
 
       // Collapse the bottom sheet to show more of the map
       _sheetController?.animateTo(
-        0.15, // minChildSize
+        TripBottomSheet.collapsedSize, // the sheet's floor
         duration: const Duration(milliseconds: 300),
         curve: Curves.easeInOut,
       );
@@ -3152,33 +3247,35 @@ class _MapScreenState extends ConsumerState<MapScreen>
   /// pin is anchored on its tip, so a point framed exactly on the window's
   /// top edge would still draw its head under the chrome, and one on the
   /// bottom edge would hang its name under the sheet.
+  /// Bottom edge of the top overlay (banner, filter bar, search field) in
+  /// screen pixels — measured as laid out, since its height changes with
+  /// the trip banner, the filter bar (hidden when the day is empty) and the
+  /// Pro status. The constants are only a pre-layout fallback.
+  double _topChromeBottom() {
+    final chrome = _topChromeKey.currentContext?.findRenderObject();
+    if (chrome is RenderBox && chrome.hasSize) {
+      return chrome.localToGlobal(Offset.zero).dy + chrome.size.height;
+    }
+    final hasActiveTrip =
+        ref.read(realtimeActiveTripProvider).valueOrNull != null;
+    const topMargin = 50.0;
+    final bannerH = hasActiveTrip ? 72.0 + 12.0 : 0.0;
+    const filterBarH = 46.0;
+    const searchBarHeight = 60.0;
+    const allowanceChipH = 40.0;
+    return MediaQuery.of(context).padding.top +
+        topMargin +
+        bannerH +
+        filterBarH +
+        searchBarHeight +
+        allowanceChipH;
+  }
+
   Rect _browsingFitWindow() {
     final size = MediaQuery.of(context).size;
     const buffer = 20.0;
 
-    // Measure the overlay as laid out — its height changes with the trip
-    // banner, the filter bar (hidden when the day is empty) and the Pro
-    // status. The constants are only a pre-layout fallback.
-    double? chromeBottom;
-    final chrome = _topChromeKey.currentContext?.findRenderObject();
-    if (chrome is RenderBox && chrome.hasSize) {
-      chromeBottom = chrome.localToGlobal(Offset.zero).dy + chrome.size.height;
-    }
-    if (chromeBottom == null) {
-      final hasActiveTrip =
-          ref.read(realtimeActiveTripProvider).valueOrNull != null;
-      const topMargin = 50.0;
-      final bannerH = hasActiveTrip ? 72.0 + 12.0 : 0.0;
-      const filterBarH = 46.0;
-      const searchBarHeight = 60.0;
-      const allowanceChipH = 40.0;
-      chromeBottom = MediaQuery.of(context).padding.top +
-          topMargin +
-          bannerH +
-          filterBarH +
-          searchBarHeight +
-          allowanceChipH;
-    }
+    final chromeBottom = _topChromeBottom();
     final top = chromeBottom + buffer + MarkerUtils.pinAboveAnchorPx;
     // The sheet's top edge is exactly collapsedSize of the screen up from the
     // bottom — use the sheet's own constant (a stale hardcoded fraction here
@@ -3383,26 +3480,89 @@ class _MapScreenState extends ConsumerState<MapScreen>
     }
     if (legPoints.length < 2) return;
 
-    // Calculate the bounds of the polyline
-    double minLat = legPoints.first.latitude;
-    double maxLat = legPoints.first.latitude;
-    double minLng = legPoints.first.longitude;
-    double maxLng = legPoints.first.longitude;
+    // Framed in the part of the screen the person can actually see: under
+    // the top chrome and above whichever sheet is up. Uniform padding
+    // framed legs under the plan sheet, which read as "zoomed in and cut
+    // off".
+    _fitPointsInWindow(
+      legPoints,
+      _legSheetOpen ? _legSheetFitWindow() : _browsingFitWindow(),
+    );
+  }
 
-    for (final point in legPoints) {
-      minLat = math.min(minLat, point.latitude);
-      maxLat = math.max(maxLat, point.latitude);
-      minLng = math.min(minLng, point.longitude);
-      maxLng = math.max(maxLng, point.longitude);
+  /// The screen area left for the map while the leg sheet is open at its
+  /// opening height: the strip between the top chrome and the sheet's top
+  /// edge, same sides as [_browsingFitWindow]. That strip is short (about
+  /// 120 px on a phone), so it is used edge to edge: no pin padding — a leg
+  /// is framed by its geometry, not its pins — and slim gaps under the
+  /// chrome and above the sheet. With the browsing window's pin padding
+  /// the strip collapsed to a few dozen pixels and the fit zoomed out to a
+  /// whole country.
+  Rect _legSheetFitWindow() {
+    final base = _browsingFitWindow();
+    final size = MediaQuery.of(context).size;
+    const sheetInitialSize = 0.55; // showRouteLegSheet's initialChildSize
+    final bottom = size.height * (1 - sheetInitialSize) - 12.0;
+    var top = _topChromeBottom() + 8.0;
+    if (bottom - top < 90.0) {
+      // Chrome taller than usual (small screen, big text): frame under
+      // the status bar instead; the chrome is translucent over the map.
+      top = MediaQuery.of(context).padding.top + 8.0;
+    }
+    return Rect.fromLTRB(base.left, top, base.right, math.max(bottom, top + 1));
+  }
+
+  /// Frames [points] inside [window] (screen pixels) with the map level:
+  /// the zoom that fits their mercator extent in the window, and a target
+  /// shifted so the extent's centre lands on the window's centre, not the
+  /// screen's. Leg framing must not rotate the map the way the day fit
+  /// does; a leg is read against the stops around it.
+  void _fitPointsInWindow(List<LatLng> points, Rect window) {
+    if (_mapController == null || points.isEmpty) return;
+    final size = MediaQuery.of(context).size;
+    final availW = math.max(window.width, 1.0);
+    final availH = math.max(window.height, 1.0);
+
+    double mercYOf(double latDeg) {
+      final s = math.sin(latDeg * math.pi / 180).clamp(-0.9999999, 0.9999999);
+      return 0.5 - math.log((1 + s) / (1 - s)) / (4 * math.pi);
     }
 
-    final bounds = LatLngBounds(
-      southwest: LatLng(minLat, minLng),
-      northeast: LatLng(maxLat, maxLng),
-    );
+    double latOfMercY(double y) {
+      // Inverse of mercYOf: y = 0.5 - atanh(sin lat) / 2π.
+      final n = 2 * math.pi * (0.5 - y);
+      return 180 / math.pi * math.atan(0.5 * (math.exp(n) - math.exp(-n)));
+    }
 
-    _mapController!.animateCamera(
-        CameraUpdate.newLatLngBounds(bounds, 80.0)); // 80.0 padding
+    var minX = double.infinity, maxX = -double.infinity;
+    var minY = double.infinity, maxY = -double.infinity;
+    for (final p in points) {
+      final x = (p.longitude + 180) / 360.0;
+      final y = mercYOf(p.latitude);
+      minX = math.min(minX, x);
+      maxX = math.max(maxX, x);
+      minY = math.min(minY, y);
+      maxY = math.max(maxY, y);
+    }
+    final spanX = math.max(maxX - minX, 1e-12);
+    final spanY = math.max(maxY - minY, 1e-12);
+
+    const tileSize = 256.0;
+    final zoomForX = math.log(availW / (tileSize * spanX)) / math.ln2;
+    final zoomForY = math.log(availH / (tileSize * spanY)) / math.ln2;
+    final zoom = math.min(zoomForX, zoomForY).clamp(2.0, 17.5).toDouble();
+    final scale = tileSize * math.pow(2.0, zoom).toDouble();
+
+    // Shift the target so the window's centre, not the screen's, holds
+    // the extent's centre.
+    final dxPx = window.center.dx - size.width / 2;
+    final dyPx = window.center.dy - size.height / 2;
+    final cx = (minX + maxX) / 2 - dxPx / scale;
+    final cy = (minY + maxY) / 2 - dyPx / scale;
+    final target = LatLng(latOfMercY(cy), cx * 360.0 - 180.0);
+    _mapController!.animateCamera(CameraUpdate.newCameraPosition(
+      CameraPosition(target: target, zoom: zoom),
+    ));
   }
 
   void _zoomToFitRoute(List<LatLng> routePoints, {double padding = 60.0}) {

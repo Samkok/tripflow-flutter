@@ -1,9 +1,11 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import '../models/location_model.dart';
+import '../utils/routing_place_id.dart';
 
 /// Routing service, migrated from the legacy Directions API to the Routes
 /// API v2 (`computeRoutes`). The legacy endpoint is EOL — disabled for all
@@ -45,6 +47,58 @@ class GoogleMapsService {
         'status': status,
       };
 
+  /// Farthest a leg may start or end from the pin it was routed to before
+  /// the place id is distrusted. Generous on purpose: a large venue's
+  /// access point can sit several hundred metres from its pin, and that is
+  /// exactly the case a place id handles better than coordinates.
+  static const double maxPlaceIdSnapMeters = 2000;
+
+  /// True when leg 0 starts near [origin] and every leg ends near the stop
+  /// it was routed to (intermediates in visited order, then [finalStop]).
+  static bool _legsEndNearStops({
+    required LatLng origin,
+    required List<List<LatLng>> legPolylines,
+    required List<int> waypointOrder,
+    required List<LocationModel> waypoints,
+    required LocationModel finalStop,
+  }) {
+    if (legPolylines.isEmpty) return true;
+    final first = legPolylines.first;
+    if (first.isNotEmpty &&
+        _haversineMeters(first.first, origin) > maxPlaceIdSnapMeters) {
+      return false;
+    }
+    for (var i = 0; i < legPolylines.length; i++) {
+      final pts = legPolylines[i];
+      if (pts.isEmpty) continue;
+      final isLast = i == legPolylines.length - 1;
+      final LocationModel stop;
+      if (isLast) {
+        stop = finalStop;
+      } else if (i < waypointOrder.length &&
+          waypointOrder[i] < waypoints.length) {
+        stop = waypoints[waypointOrder[i]];
+      } else {
+        continue;
+      }
+      if (_haversineMeters(pts.last, stop.coordinates) > maxPlaceIdSnapMeters) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  static double _haversineMeters(LatLng a, LatLng b) {
+    const r = 6371000.0;
+    final dLat = (b.latitude - a.latitude) * math.pi / 180;
+    final dLng = (b.longitude - a.longitude) * math.pi / 180;
+    final la1 = a.latitude * math.pi / 180;
+    final la2 = b.latitude * math.pi / 180;
+    final h = math.sin(dLat / 2) * math.sin(dLat / 2) +
+        math.cos(la1) * math.cos(la2) * math.sin(dLng / 2) * math.sin(dLng / 2);
+    return 2 * r * math.asin(math.min(1.0, math.sqrt(h)));
+  }
+
   /// Routes API cap on free `intermediates` per request. Not a cap on a
   /// day: [MultiModalRouter.routeItinerary] routes longer days as several
   /// consecutive requests of at most this many stops each.
@@ -52,6 +106,10 @@ class GoogleMapsService {
 
   static Future<Map<String, dynamic>> getOptimizedRouteDetails({
     required LatLng origin,
+    // Routes from the origin place's access point instead of snapping the
+    // coordinates to the nearest road (see [routingPlaceId]). Stops carry
+    // their own ids on the [LocationModel].
+    String? originPlaceId,
     LocationModel? destination,
     List<LocationModel> waypoints = const [],
     bool optimizeWaypoints = true,
@@ -62,6 +120,9 @@ class GoogleMapsService {
     // the leg sheet can offer a choice. Never combined with waypoints —
     // the API doesn't support alternatives alongside intermediates.
     bool includeAlternatives = false,
+    // Internal: the retry after a place id produced a leg far from its
+    // pin, or a request Google rejected, goes by coordinates only.
+    bool usePlaceIds = true,
   }) async {
     final allDestinations = [
       ...waypoints,
@@ -88,9 +149,25 @@ class GoogleMapsService {
       return _emptyResult('error');
     }
 
+    // Set while building the body: whether any waypoint went by place id.
+    var placeIdsUsed = false;
+    Future<Map<String, dynamic>> retryByCoordinates(String why) {
+      debugPrint('Routes API ($mode): $why — retrying with coordinates');
+      return getOptimizedRouteDetails(
+        origin: origin,
+        destination: destination,
+        waypoints: waypoints,
+        optimizeWaypoints: optimizeWaypoints,
+        mode: mode,
+        departureTime: departureTime,
+        includeAlternatives: includeAlternatives,
+        usePlaceIds: false,
+      );
+    }
+
     try {
-      final finalDestination = destination?.coordinates ??
-          waypoints.last.coordinates; // destination null ⇒ waypoints nonempty
+      final finalStop = destination ??
+          waypoints.last; // destination null ⇒ waypoints nonempty
 
       Map<String, dynamic> latLng(LatLng p) => {
             'location': {
@@ -98,14 +175,30 @@ class GoogleMapsService {
             }
           };
 
+      // A place id makes Google end the leg at the place's access point —
+      // the entrance side of the road. Bare coordinates snap to whichever
+      // road is nearest, which for a place between two streets is as often
+      // the back street as the front.
+      Map<String, dynamic> waypoint(LatLng p, String? placeId) {
+        if (usePlaceIds && placeId != null && placeId.isNotEmpty) {
+          placeIdsUsed = true;
+          return {'placeId': placeId};
+        }
+        return latLng(p);
+      }
+
       final isTransit = mode == 'transit';
       final travelMode = modeEnum[mode] ?? 'DRIVE';
 
       final body = <String, dynamic>{
-        'origin': latLng(origin),
-        'destination': latLng(finalDestination),
+        'origin': waypoint(origin, originPlaceId),
+        'destination':
+            waypoint(finalStop.coordinates, routingPlaceId(finalStop)),
         if (destination != null && waypoints.isNotEmpty)
-          'intermediates': [for (final w in waypoints) latLng(w.coordinates)],
+          'intermediates': [
+            for (final w in waypoints)
+              waypoint(w.coordinates, routingPlaceId(w))
+          ],
         'travelMode': travelMode,
         // TRAFFIC_UNAWARE = cheapest tier and matches the legacy behavior
         // (no departure_time was ever sent). Only valid for DRIVE and
@@ -225,6 +318,19 @@ class GoogleMapsService {
         legSteps.add(isTransit ? extractStepGeometry(leg) : null);
       }
 
+      // A place id that is not what we think it is (a street, a stale id)
+      // ends a leg far from the pin. Caught here, once, for every caller.
+      if (placeIdsUsed &&
+          !_legsEndNearStops(
+            origin: origin,
+            legPolylines: legPolylines,
+            waypointOrder: waypointOrder,
+            waypoints: waypoints,
+            finalStop: finalStop,
+          )) {
+        return retryByCoordinates('a place id routed far from its pin');
+      }
+
       final fullRoutePoints =
           legPolylines.expand((leg) => leg).toList(growable: false);
 
@@ -271,6 +377,11 @@ class GoogleMapsService {
       final code = e.response?.statusCode ?? 0;
       debugPrint('Routes API ($mode) failed [$code]: '
           '${e.response?.data ?? e.message}');
+      // A rejected place id (unknown, expired) must not read as "no route
+      // for this mode" — ask again by coordinates before giving up.
+      if (placeIdsUsed && code >= 400 && code < 500) {
+        return retryByCoordinates('request rejected [$code]');
+      }
       return _emptyResult(code >= 400 && code < 500 ? 'empty' : 'error');
     } catch (e) {
       debugPrint('Error getting optimized route ($mode): $e');

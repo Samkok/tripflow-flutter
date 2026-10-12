@@ -7,6 +7,7 @@ import 'package:voyza/models/location_model.dart';
 import 'package:voyza/providers/map_ui_state_provider.dart';
 import 'package:voyza/providers/theme_provider.dart';
 import '../providers/trip_provider.dart';
+import 'building_outline_provider.dart';
 import '../providers/debounced_settings_provider.dart';
 import '../services/marker_cache_service.dart';
 import '../utils/zone_utils.dart';
@@ -142,8 +143,35 @@ final cachedMarkerBitmapsProvider =
 /// A lightweight provider that assembles the final Marker set.
 /// It watches the marker bitmaps and the `showPlaceNamesProvider`.
 /// This provider rebuilds instantly when names are toggled, without re-running the expensive bitmap generation.
+/// Label bitmaps for the names of the day's transit stops (board / alight
+/// points), keyed by name. Rasterised once per name and theme; the markers
+/// themselves are placed by [finalMarkersProvider].
+final transitStopLabelsProvider =
+    FutureProvider<Map<String, MarkerBitmapResult>>((ref) async {
+  final legDetails = ref.watch(tripProvider.select((s) => s.legDetails));
+  final isDarkMode = ref.watch(themeProvider) == ThemeMode.dark;
+  final names = <String>{};
+  for (final leg in legDetails) {
+    for (final seg in (leg['transit'] as List?) ?? const []) {
+      for (final key in const ['boardStop', 'alightStop']) {
+        final name = ((seg as Map)[key] as String?)?.trim();
+        if (name != null && name.isNotEmpty) names.add(name);
+      }
+    }
+  }
+  if (names.isEmpty) return const {};
+  final cache = MarkerCacheService();
+  final out = <String, MarkerBitmapResult>{};
+  for (final name in names) {
+    out[name] = await cache.getStopLabel(name, isDarkMode: isDarkMode);
+  }
+  return out;
+});
+
 final finalMarkersProvider = Provider<Set<Marker>>((ref) {
   final markerBitmapsAsync = ref.watch(cachedMarkerBitmapsProvider);
+  final stopLabels =
+      ref.watch(transitStopLabelsProvider).valueOrNull ?? const {};
   final showPlaceNames =
       ref.watch(showPlaceNamesProvider); // This watch is crucial
   final locationsForDate = ref.watch(locationsForSelectedDateProvider);
@@ -214,16 +242,52 @@ final finalMarkersProvider = Provider<Set<Marker>>((ref) {
           ));
         }
 
+        // Station names at the board / alight points of every ride, so a
+        // transit leg reads on the map as it does in its sheet: where you
+        // get on and where you get off. Follows the place-name switch.
+        final labelled = <String>{};
+        void addStopLabel(LatLng p, String? name) {
+          if (!showPlaceNames || name == null) return;
+          final text = name.trim();
+          if (text.isEmpty || nearAPin(p)) return;
+          final icon = stopLabels[text];
+          if (icon == null) return;
+          final key = '${p.latitude.toStringAsFixed(5)},'
+              '${p.longitude.toStringAsFixed(5)}';
+          if (!labelled.add(key)) return;
+          markers.add(Marker(
+            markerId: MarkerId('leg_stop_label_$key'),
+            position: p,
+            icon: icon.bitmap,
+            anchor: icon.anchor,
+            zIndexInt: 1,
+            consumeTapEvents: false,
+          ));
+        }
+
         for (var i = 0; i < dotLegPolylines.length; i++) {
           final steps = i < dotLegDetails.length
               ? (dotLegDetails[i]['transitSteps'] as List?)
               : null;
           if (steps != null && steps.isNotEmpty) {
+            // Ride ordinal pairs a run with its ride card, which carries
+            // the stop names (same pairing as the chip).
+            final rides = (dotLegDetails[i]['transit'] as List?) ?? const [];
+            var ride = 0;
             for (final run in steps) {
-              final pts = ((run as Map)['points'] as List).cast<LatLng>();
+              final r = run as Map;
+              final pts = (r['points'] as List).cast<LatLng>();
               if (pts.isEmpty) continue;
               addDot(pts.first);
               addDot(pts.last);
+              if (r['mode'] == 'TRANSIT') {
+                if (ride < rides.length) {
+                  final seg = rides[ride] as Map;
+                  addStopLabel(pts.first, seg['boardStop'] as String?);
+                  addStopLabel(pts.last, seg['alightStop'] as String?);
+                }
+                ride++;
+              }
             }
           } else {
             final pts = dotLegPolylines[i];
@@ -480,9 +544,7 @@ final styledPolylinesProvider = Provider<Set<Polyline>>((ref) {
               // "approach, not a route" read comes from thinness + alpha.
               patterns: const <PatternItem>[],
               consumeTapEvents: true,
-              onTap: () {
-                ref.read(mapUIStateProvider.notifier).setTappedPolyline(runId);
-              },
+              onTap: () => _onLegGeometryTap(ref, runId, i),
               startCap: Cap.roundCap,
               endCap: Cap.roundCap,
               jointType: JointType.round,
@@ -561,9 +623,7 @@ final styledPolylinesProvider = Provider<Set<Polyline>>((ref) {
           patterns: patterns,
           // Ensure tap events are captured for interaction
           consumeTapEvents: true,
-          onTap: () {
-            ref.read(mapUIStateProvider.notifier).setTappedPolyline(polylineId);
-          },
+          onTap: () => _onLegGeometryTap(ref, polylineId, i),
           // Round caps for smooth, professional appearance
           startCap: Cap.roundCap,
           endCap: Cap.roundCap,
@@ -598,6 +658,50 @@ final styledPolylinesProvider = Provider<Set<Polyline>>((ref) {
     }
   }
 
+  // ── Road-to-pin connectors ─────────────────────────────────────────────
+  // A leg routed by place id ends at the place's access point, which can
+  // sit tens of metres from the pin (the pin marks the place, the road
+  // ends at its entrance). A thin line joins the two, as Google Maps does,
+  // so the route visibly reaches each stop. Solid, not dotted: patterned
+  // lines are the per-zoom-frame cost class. A leg routed by coordinates
+  // ends within a few metres of the pin and draws nothing here.
+  final startLocationIdState =
+      ref.watch(tripProvider.select((s) => s.startLocationId));
+  final connectorColor = const Color(0xFF9AA3AE).withValues(alpha: 0.8);
+  void connect(String id, LatLng roadEnd, LocationModel stop) {
+    if (stop.id == 'leg_anchor' || stop.id == 'current_location') return;
+    final d = _metersBetween(roadEnd, stop.coordinates);
+    if (d < 12 || d > 1500) return;
+    polylines.add(Polyline(
+      polylineId: PolylineId(id),
+      points: [roadEnd, stop.coordinates],
+      color: connectorColor,
+      width: 2,
+      zIndex: 4,
+      consumeTapEvents: false,
+      geodesic: false,
+      startCap: Cap.roundCap,
+      endCap: Cap.roundCap,
+    ));
+  }
+
+  for (var i = 0; i < legPolylinesState.length; i++) {
+    final pts = legPolylinesState[i];
+    if (pts.isEmpty) continue;
+    final ends = legEndpointsFor(
+      legDetails: legDetailsState,
+      legPolylines: legPolylinesState,
+      ordered: optimizedForDate,
+      startLocationId: startLocationIdState,
+      legIndex: i,
+    );
+    if (ends == null) continue;
+    // Every stop is the END of one leg; the day's first stop can also be
+    // the start of leg 0 (a day that starts at a saved place).
+    if (i == 0) connect('leg_${i}_from_pin', pts.first, ends.from);
+    connect('leg_${i}_to_pin', pts.last, ends.to);
+  }
+
   return polylines;
 });
 
@@ -630,6 +734,87 @@ class RouteLegSheetRequest {
 /// Set by a chip tap, cleared by MapScreen once the sheet is shown.
 final routeLegSheetRequestProvider =
     StateProvider<RouteLegSheetRequest?>((_) => null);
+
+/// The two stops leg [legIndex] of the day's route runs between. Leg 0
+/// starts at the device when the route starts from the current location,
+/// in which case the stops are shifted by one. Out-of-range indices fall
+/// back to the ids the router recorded on the leg (the loop-home return leg
+/// points BACK to the day's first stop, which positional math can't
+/// reach), then to a nameless point on the geometry, so a leg can always
+/// be described. Null when the index is out of range.
+({LocationModel from, LocationModel to})? legEndpointsFor({
+  required List<Map<String, dynamic>> legDetails,
+  required List<List<LatLng>> legPolylines,
+  required List<LocationModel> ordered,
+  required String? startLocationId,
+  required int legIndex,
+}) {
+  if (legIndex < 0 ||
+      legIndex >= legDetails.length ||
+      legIndex >= legPolylines.length) {
+    return null;
+  }
+  final legPoints = legPolylines[legIndex];
+  if (legPoints.isEmpty) return null;
+  final legData = legDetails[legIndex];
+  final isStartCurrentLocation = startLocationId == 'current_location';
+  final fromIdx = isStartCurrentLocation ? legIndex - 1 : legIndex;
+  final toIdx = isStartCurrentLocation ? legIndex : legIndex + 1;
+  LocationModel resolveById(String? id, LocationModel fallback) {
+    if (id == null) return fallback;
+    for (final l in ordered) {
+      if (l.id == id) return l;
+    }
+    return fallback;
+  }
+
+  final from = (fromIdx >= 0 && fromIdx < ordered.length)
+      ? ordered[fromIdx]
+      : resolveById(
+          legData['fromId'] as String?, _coordOnlyLocation(legPoints.first));
+  final to = (toIdx >= 0 && toIdx < ordered.length)
+      ? ordered[toIdx]
+      : resolveById(
+          legData['toId'] as String?, _coordOnlyLocation(legPoints.last));
+  return (from: from, to: to);
+}
+
+/// Everything the leg sheet needs to show leg [legIndex] of the day's
+/// route, from the live route state. One builder for the chip tap, the
+/// polyline tap and the sheet's own previous/next stepping, so the three
+/// can never describe the same leg differently. Null when there is no
+/// such leg.
+RouteLegSheetRequest? routeLegSheetRequestFor({
+  required List<Map<String, dynamic>> legDetails,
+  required List<List<LatLng>> legPolylines,
+  required List<LocationModel> ordered,
+  required String? startLocationId,
+  required int legIndex,
+}) {
+  final ends = legEndpointsFor(
+    legDetails: legDetails,
+    legPolylines: legPolylines,
+    ordered: ordered,
+    startLocationId: startLocationId,
+    legIndex: legIndex,
+  );
+  if (ends == null) return null;
+  final legData = legDetails[legIndex];
+  final distanceMeters = (legData['distance'] as num?)?.toDouble() ?? 0.0;
+  final distanceLabel = distanceMeters >= 1000
+      ? '${(distanceMeters / 1000).toStringAsFixed(1)} km'
+      : '${distanceMeters.round()} m';
+  final legDuration = legData['duration'] as Duration?;
+  return RouteLegSheetRequest(
+    origin: ends.from,
+    destination: ends.to,
+    distanceLabel: distanceLabel,
+    durationLabel: legDuration == null ? null : formatLegDuration(legDuration),
+    legIndex: legIndex,
+    mode: legData['mode'] as String? ?? 'drive',
+    transit: (legData['transit'] as List?)?.cast<Map<String, dynamic>>(),
+  );
+}
 
 /// "12 min" / "1h 5m" — compact enough for the on-map chip.
 String formatLegDuration(Duration d) {
@@ -677,8 +862,11 @@ final routeInfoMarkersProvider = FutureProvider<Set<Marker>>((ref) async {
   if (legPoints.isEmpty) return {};
 
   // Calculate midpoint for marker placement.
-  final midIndex = legPoints.length ~/ 2;
-  final midpoint = legPoints[midIndex];
+  // The chip sits on the selected geometry at the point nearest the map's
+  // centre — near what the person is looking at. A long ride's geometric
+  // midpoint was usually off screen, which read as "no box appeared".
+  final viewCentre = ref.read(mapCameraTargetProvider);
+  final midpoint = _chipAnchorOn(legPoints, viewCentre);
 
   // Format distance label from legDetails
   final legData = legDetailsState[legIndex];
@@ -690,40 +878,16 @@ final routeInfoMarkersProvider = FutureProvider<Set<Marker>>((ref) async {
   final String? durationLabel =
       legDuration == null ? null : formatLegDuration(legDuration);
 
-  final start = legPoints.first;
-  final end = legPoints.last;
-
-  // Resolve the leg's start/end LocationModels — the chip prints their names
-  // ("A → B") and the external-app handoff uses place_id + originalName
-  // instead of bare coordinates. Index mapping mirrors
-  // _performRouteOptimization in trip_provider.dart:
-  //   - When startLocationId == 'current_location', `optimizedLocationsForSelectedDate`
-  //     contains only the waypoints (no start), so leg i goes from
-  //     [i-1] → [i], and leg 0's "from" is the device's current position
-  //     (no LocationModel, falls back to coords).
-  //   - Otherwise, the start stop is at index 0, so leg i goes from
-  //     [i] → [i+1].
-  final ordered = orderedForDate;
-  final isStartCurrentLocation = startLocationIdState == 'current_location';
-  final fromIdx = isStartCurrentLocation ? legIndex - 1 : legIndex;
-  final toIdx = isStartCurrentLocation ? legIndex : legIndex + 1;
-  // Out-of-range indices fall back to the leg's own ids before bare
-  // coordinates — the loop-home return leg points BACK to the day's first
-  // stop (the accommodation), which positional math can't reach.
-  LocationModel resolveById(String? id, LocationModel fallback) {
-    if (id == null) return fallback;
-    for (final l in ordered) {
-      if (l.id == id) return l;
-    }
-    return fallback;
-  }
-
-  final fromLoc = (fromIdx >= 0 && fromIdx < ordered.length)
-      ? ordered[fromIdx]
-      : resolveById(legData['fromId'] as String?, _coordOnlyLocation(start));
-  final toLoc = (toIdx >= 0 && toIdx < ordered.length)
-      ? ordered[toIdx]
-      : resolveById(legData['toId'] as String?, _coordOnlyLocation(end));
+  final ends = legEndpointsFor(
+    legDetails: legDetailsState,
+    legPolylines: legPolylinesState,
+    ordered: orderedForDate,
+    startLocationId: startLocationIdState,
+    legIndex: legIndex,
+  );
+  if (ends == null) return {};
+  final fromLoc = ends.from;
+  final toLoc = ends.to;
 
   final markerCache = MarkerCacheService();
   // ONE compact chip on the polyline: [mode glyph] 4.4 km · 12 min (>) with
@@ -765,7 +929,7 @@ final routeInfoMarkersProvider = FutureProvider<Set<Marker>>((ref) async {
     final run = transitRuns[runIndex] as Map;
     final runPoints = (run['points'] as List).cast<LatLng>();
     if (runPoints.isNotEmpty) {
-      chipPosition = runPoints[runPoints.length ~/ 2];
+      chipPosition = _chipAnchorOn(runPoints, viewCentre);
       final isRide = run['mode'] == 'TRANSIT';
       chipMode = isRide ? 'transit' : 'walk';
       chipVehicleType = isRide ? run['vehicleType'] as String? : null;
@@ -831,7 +995,11 @@ final routeInfoMarkersProvider = FutureProvider<Set<Marker>>((ref) async {
   // run chip is a caption, the sheet is the journey.
   return {
     Marker(
-        markerId: MarkerId('route_leg_chip_$legIndex'),
+        // Keyed by the tapped id (leg or run), not the leg index: a run
+        // chip and the whole-leg chip are different bitmaps at different
+        // points, and mutating one platform marker into the other left
+        // stale chips behind on iOS.
+        markerId: MarkerId('route_leg_chip_$tappedPolylineId'),
         position: chipPosition,
         icon: chipResult.bitmap,
         anchor: chipResult.anchor,
@@ -878,6 +1046,63 @@ final routeInfoMarkersProvider = FutureProvider<Set<Marker>>((ref) async {
 /// "from" side is the device's current position (no saved place_id) — keeps
 /// [openDirectionsInGoogleMaps] / [openGrabRoute] callable without
 /// nullable params.
+/// A tap on a leg's line (or one run of a transit leg). First tap selects
+/// it: highlight, chip, camera. A tap on the line that is ALREADY selected
+/// opens its sheet — the selected leg is drawn above the others, so where
+/// legs share a road every further tap lands on it; without this, the
+/// other legs there could never be reached from the map (the sheet steps
+/// through all of them).
+void _onLegGeometryTap(Ref ref, String tappedId, int legIndex) {
+  final ui = ref.read(mapUIStateProvider.notifier);
+  if (ref.read(tappedPolylineIdProvider) != tappedId) {
+    ui.setTappedPolyline(tappedId);
+    return;
+  }
+  final s = ref.read(tripProvider);
+  final request = routeLegSheetRequestFor(
+    legDetails: s.legDetails,
+    legPolylines: s.legPolylines,
+    ordered: s.optimizedLocationsForSelectedDate,
+    startLocationId: s.startLocationId,
+    legIndex: legIndex,
+  );
+  if (request != null) {
+    ref.read(routeLegSheetRequestProvider.notifier).state = request;
+  }
+}
+
+/// The point of [points] nearest to [near] (the map's centre), or the
+/// list's middle point when the centre is unknown. Flat-earth squared
+/// distance in degrees: an ordering, not a measurement, and cheap.
+LatLng _chipAnchorOn(List<LatLng> points, LatLng? near) {
+  if (points.isEmpty) return const LatLng(0, 0);
+  if (near == null || points.length < 3) return points[points.length ~/ 2];
+  final cosLat = math.cos(near.latitude * math.pi / 180);
+  var best = points[points.length ~/ 2];
+  var bestD = double.infinity;
+  for (final p in points) {
+    final dy = p.latitude - near.latitude;
+    final dx = (p.longitude - near.longitude) * cosLat;
+    final d = dx * dx + dy * dy;
+    if (d < bestD) {
+      bestD = d;
+      best = p;
+    }
+  }
+  return best;
+}
+
+double _metersBetween(LatLng a, LatLng b) {
+  const r = 6371000.0;
+  final dLat = (b.latitude - a.latitude) * math.pi / 180;
+  final dLng = (b.longitude - a.longitude) * math.pi / 180;
+  final la1 = a.latitude * math.pi / 180;
+  final la2 = b.latitude * math.pi / 180;
+  final h = math.sin(dLat / 2) * math.sin(dLat / 2) +
+      math.cos(la1) * math.cos(la2) * math.sin(dLng / 2) * math.sin(dLng / 2);
+  return 2 * r * math.asin(math.min(1.0, math.sqrt(h)));
+}
+
 LocationModel _coordOnlyLocation(LatLng coord) => LocationModel(
       id: 'leg_anchor',
       name: '',
@@ -910,10 +1135,15 @@ class AssembledMapOverlays {
   final Set<Polyline> polylines;
   final Set<Circle> automaticZones;
 
+  /// The focused place's building footprint (see
+  /// building_outline_provider.dart); empty when none is focused.
+  final Set<Polygon> polygons;
+
   const AssembledMapOverlays({
     required this.markers,
     required this.polylines,
     required this.automaticZones,
+    this.polygons = const {},
   });
 }
 
@@ -923,6 +1153,7 @@ final assembledMapOverlaysProvider =
   final polylines = ref.watch(styledPolylinesProvider);
   final automaticZones = ref.watch(memoizedAutomaticZonesProvider);
   final routeInfoMarkersAsync = ref.watch(routeInfoMarkersProvider);
+  final buildingPolygons = ref.watch(buildingPolygonsProvider);
 
   // Since finalMarkersProvider is synchronous (deriving from an async one),
   // we can treat it more directly. We'll use the async state of the bitmap provider to manage loading/error states.
@@ -930,7 +1161,12 @@ final assembledMapOverlaysProvider =
         skipLoadingOnReload: true,
         data: (_) {
           // We don't need the data here, just the state.
-          final routeInfoMarkers = routeInfoMarkersAsync.valueOrNull ?? {};
+          // While a new chip rasterizes the previous one stays (no
+          // flicker); if rasterizing FAILED, show none rather than the
+          // previous leg's chip with its stale tap target.
+          final routeInfoMarkers = routeInfoMarkersAsync.hasError
+              ? const <Marker>{}
+              : routeInfoMarkersAsync.valueOrNull ?? {};
 
           // DEBUG: Uncomment to track overlay assembly
           // debugPrint('✅ Assembling map overlays: ${markers.length} base markers, ${routeInfoMarkers.length} route info markers, ${polylines.length} polylines, ${automaticZones.length} auto zones');
@@ -939,6 +1175,7 @@ final assembledMapOverlaysProvider =
             markers: {...markers, ...routeInfoMarkers},
             polylines: polylines,
             automaticZones: automaticZones,
+            polygons: buildingPolygons,
           ));
         },
         loading: () {

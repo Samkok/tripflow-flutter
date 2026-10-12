@@ -603,6 +603,71 @@ class MarkerUtils {
     );
   }
 
+  /// A bare name label for a transit stop (board / alight point), in the
+  /// same type as the pin names so the map reads as one. Transparent room
+  /// at the top clears the junction dot it hangs under; the anchor is the
+  /// top centre, so the marker is placed AT the dot.
+  static Future<MarkerBitmapResult> getStopLabelMarker(
+    String text, {
+    required bool isDarkMode,
+  }) async {
+    final double dpr = (WidgetsBinding
+                .instance.platformDispatcher.implicitView?.devicePixelRatio ??
+            3.0)
+        .clamp(1.0, 4.0);
+    final display =
+        text.length > 40 ? '${text.substring(0, 40).trimRight()}…' : text;
+    final painter = TextPainter(
+      textDirection: TextDirection.ltr,
+      textAlign: TextAlign.center,
+      maxLines: 2,
+      ellipsis: '...',
+      text: TextSpan(
+        text: display,
+        style: TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.w700,
+          color: isDarkMode ? Colors.white : Colors.black87,
+          shadows: [
+            Shadow(
+                color: isDarkMode
+                    ? Colors.black.withValues(alpha: 0.9)
+                    : Colors.white.withValues(alpha: 0.95),
+                blurRadius: 3,
+                offset: const Offset(0, 0)),
+            Shadow(
+                color: isDarkMode
+                    ? Colors.black.withValues(alpha: 0.7)
+                    : Colors.white.withValues(alpha: 0.8),
+                blurRadius: 6,
+                offset: const Offset(0, 1)),
+          ],
+        ),
+      ),
+    )..layout(maxWidth: 150);
+    const double topRoom = 9.0; // dot radius 6.4 + a little air
+    const double sidePad = 6.0; // room for the halo
+    final double width = painter.width + sidePad * 2;
+    final double height = topRoom + painter.height + 4;
+
+    final ui.PictureRecorder pictureRecorder = ui.PictureRecorder();
+    final Canvas canvas = Canvas(pictureRecorder);
+    canvas.scale(dpr);
+    painter.paint(canvas, const Offset(sidePad, topRoom));
+    final ui.Image img = await pictureRecorder
+        .endRecording()
+        .toImage((width * dpr).round(), (height * dpr).round());
+    final ByteData? data = await img.toByteData(format: ui.ImageByteFormat.png);
+    if (data == null) {
+      return MarkerBitmapResult(
+          BitmapDescriptor.defaultMarker, const Offset(0.5, 0.0));
+    }
+    return MarkerBitmapResult(
+      BitmapDescriptor.bytes(data.buffer.asUint8List(), imagePixelRatio: dpr),
+      const Offset(0.5, 0.0),
+    );
+  }
+
   static Future<MarkerBitmapResult> getRouteLegChipMarker({
     required String distanceLabel,
     String? durationLabel,
@@ -619,14 +684,10 @@ class MarkerUtils {
     String? fromName,
     String? toName,
   }) async {
-    final double dpr = (WidgetsBinding
+    double dpr = (WidgetsBinding
                 .instance.platformDispatcher.implicitView?.devicePixelRatio ??
             3.0)
         .clamp(1.0, 4.0);
-
-    final ui.PictureRecorder pictureRecorder = ui.PictureRecorder();
-    final Canvas canvas = Canvas(pictureRecorder);
-    canvas.scale(dpr);
 
     const double hPad = 11.0;
     const double vPad = 8.0;
@@ -649,6 +710,12 @@ class MarkerUtils {
     // the line's official color right after the vehicle glyph.
     final bool hasBadge = badgeText != null && badgeText.isNotEmpty;
     final Color badgeFill = badgeColor ?? const Color(0xFFE53935);
+    // The badge is a short line code ("2", "N3", "Island Line"); a feed
+    // with no `nameShort` hands over the full route name ("Kennedy Town -
+    // Happy Valley"), which pushed the chip past 600 pt. Google Maps drops
+    // marker icons wider than its texture atlas without a word (both
+    // platforms), so the badge is trimmed here and the whole chip is
+    // capped below — see [maxChipPx].
     final TextPainter? badgePainter = !hasBadge
         ? null
         : (TextPainter(
@@ -660,8 +727,10 @@ class MarkerUtils {
                   fontSize: 12,
                   fontWeight: FontWeight.w800),
             ),
+            maxLines: 1,
+            ellipsis: '…',
             textDirection: TextDirection.ltr,
-          )..layout());
+          )..layout(maxWidth: maxBadgeTextWidth));
     const double badgeHPad = 6.0;
     final double badgeWidth =
         badgePainter == null ? 0 : badgePainter.width + badgeHPad * 2;
@@ -739,6 +808,17 @@ class MarkerUtils {
             ? routePainter.width + hPad * 2
             : mainRowWidth);
     final double totalHeight = chipHeight + shadowExtra;
+    // A chip wider than the atlas allows (long endpoint names at 4×) is
+    // rendered at a lower pixel ratio instead of vanishing: the SDK scales
+    // the bitmap by [imagePixelRatio], so it keeps its logical size and
+    // only loses a little crispness.
+    if (chipWidth * dpr > maxChipPx) {
+      dpr = maxChipPx / chipWidth;
+    }
+
+    final ui.PictureRecorder pictureRecorder = ui.PictureRecorder();
+    final Canvas canvas = Canvas(pictureRecorder);
+    canvas.scale(dpr);
 
     final chipRect = RRect.fromRectAndRadius(
       Rect.fromLTWH(0, 0, chipWidth, chipHeight),
@@ -824,6 +904,17 @@ class MarkerUtils {
       const Offset(0.5, 0.5),
     );
   }
+
+  /// Widest a chip's bitmap may be, in device pixels. Google Maps packs
+  /// marker icons into a texture atlas and silently skips any icon that
+  /// does not fit it — the marker exists, takes taps, and draws nothing.
+  /// 1024 is the smallest atlas edge seen in the field; staying under it
+  /// keeps every chip visible on every device.
+  static const int maxChipPx = 1000;
+
+  /// Room the transit line badge may take in the chip, in logical pixels:
+  /// enough for "Island Line" / "Kennedy Town…", never a full route name.
+  static const double maxBadgeTextWidth = 104.0;
 
   static Future<MarkerBitmapResult> getDistanceAndMapsMarker(
       String distanceLabel) async {

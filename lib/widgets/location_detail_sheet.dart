@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:intl/intl.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:voyza/models/location_model.dart';
 import 'package:voyza/models/saved_location.dart'
     show OpeningPeriod, SavedLocation;
@@ -19,6 +20,8 @@ import 'package:voyza/providers/map_ui_state_provider.dart';
 import 'package:voyza/providers/place_photo_refresh_provider.dart';
 import 'package:voyza/providers/trip_listener_provider.dart';
 import 'package:voyza/providers/trip_provider.dart';
+import 'package:voyza/providers/auth_provider.dart';
+import 'package:voyza/providers/place_floor_provider.dart';
 import 'package:voyza/providers/trip_collaborator_provider.dart';
 import 'package:voyza/utils/date_picker_utils.dart';
 import 'package:voyza/utils/external_app_links.dart';
@@ -26,6 +29,7 @@ import 'package:voyza/utils/trip_date_validator.dart';
 import 'package:voyza/utils/trip_dates.dart';
 import 'package:voyza/utils/trip_day_labels.dart';
 import 'package:voyza/widgets/trip_day_picker.dart';
+import 'package:voyza/widgets/trip_collaborators_row.dart';
 
 import '../core/theme.dart';
 import 'accommodation_prompts.dart';
@@ -162,6 +166,9 @@ class LocationDetailSheet extends ConsumerWidget {
                     const Divider(height: 32),
                     _buildTravelInfo(context, ref, updatedLocation),
                   ],
+
+                  // Who put this place in the trip (signed-in, trip places).
+                  ..._buildAddedBySection(context, ref, updatedLocation),
                 ],
               ),
             ),
@@ -843,9 +850,58 @@ class LocationDetailSheet extends ConsumerWidget {
             ),
           ],
         ),
+        _buildFloorLine(context, ref, updatedLocation),
       ],
     );
   }
+
+  /// "23/F · Shop 2301" under the name: where the place sits inside its
+  /// building, from Google's address components. Stored on the row when
+  /// the place was saved; for older rows looked up once here and, when
+  /// this person may write, kept on the row so nobody asks again. Nothing
+  /// is shown while unknown or when Google lists no floor.
+  Widget _buildFloorLine(
+      BuildContext context, WidgetRef ref, LocationModel loc) {
+    String? floor = loc.floor;
+    if (floor == null) {
+      final placeId = loc.placeId;
+      if (placeId == null || placeId.isEmpty) return const SizedBox.shrink();
+      final looked = ref.watch(placeFloorLookupProvider(placeId)).valueOrNull;
+      if (looked == null) return const SizedBox.shrink();
+      floor = looked;
+      if (_floorPersisted.add(loc.id)) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          ref.read(tripProvider.notifier).updateLocationFloor(loc.id, looked);
+        });
+      }
+    }
+    if (floor.isEmpty) return const SizedBox.shrink();
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(top: 4),
+      child: Row(
+        children: [
+          Icon(Icons.layers_outlined,
+              size: 16, color: theme.colorScheme.onSurfaceVariant),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              floor,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+                fontWeight: FontWeight.w600,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Rows whose looked-up floor was handed to the repository this run.
+  static final Set<String> _floorPersisted = {};
 
   /// Everything below the drag zone: the 2×2 action grid and the rows that
   /// follow. Lives INSIDE the sheet's scroll view.
@@ -1386,6 +1442,113 @@ class LocationDetailSheet extends ConsumerWidget {
     final h = (minutes ~/ 60) % 24;
     final m = minutes % 60;
     return '${h.toString().padLeft(2, '0')}:${m.toString().padLeft(2, '0')}';
+  }
+
+  // ── Added by ────────────────────────────────────────────────────────────
+  /// Who put this place in the trip, and when. The saved row's user id is
+  /// the adder — except for a place handed to the owner when its adder left
+  /// the trip, which says so instead of naming the owner. Names come from
+  /// the public-profile lookup (answers only for people who share a trip
+  /// with the viewer); the member list's email is the fallback. Returns the
+  /// divider and the section, or nothing for guests and loose places.
+  List<Widget> _buildAddedBySection(
+      BuildContext context, WidgetRef ref, LocationModel loc) {
+    final me = ref.watch(currentUserIdProvider);
+    final tripId = loc.tripId;
+    if (me == null || tripId == null) return const [];
+    final rows = (ref.watch(savedLocationsProvider).valueOrNull ??
+            const <SavedLocation>[])
+        .where((l) => l.id == loc.id);
+    if (rows.isEmpty) return const [];
+    final row = rows.first;
+    if (row.userId.isEmpty) return const [];
+    final theme = Theme.of(context);
+
+    String name;
+    String? email;
+    String? note;
+    if (row.handedOver) {
+      name = 'A former trip member';
+      note = 'Kept in the trip when they left';
+    } else if (row.userId == me) {
+      name = 'You';
+      email = Supabase.instance.client.auth.currentUser?.email;
+    } else {
+      final profile =
+          ref.watch(userProfileByIdProvider(row.userId)).valueOrNull;
+      final members =
+          ref.watch(tripCollaboratorsProvider(tripId)).valueOrNull ?? const [];
+      final member = members.where((c) => c.userId == row.userId);
+      email = profile?.email ?? (member.isEmpty ? null : member.first.email);
+      final full = [profile?.firstName, profile?.lastName]
+          .whereType<String>()
+          .map((s) => s.trim())
+          .where((s) => s.isNotEmpty)
+          .join(' ');
+      name = full.isNotEmpty ? full : (email ?? 'A trip member');
+      if (full.isNotEmpty && email != null) note = email;
+    }
+    final avatarSeed = email ?? name;
+    final when = DateFormat('MMM d, yyyy').format(loc.addedAt);
+
+    return [
+      const Divider(height: 32),
+      Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.person_outline_rounded,
+                  size: 18, color: theme.colorScheme.primary),
+              const SizedBox(width: 8),
+              Text(
+                'Added by',
+                style: theme.textTheme.titleMedium?.copyWith(
+                  color: theme.colorScheme.primary,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              CircleAvatar(
+                radius: 16,
+                backgroundColor: TripCollaboratorsRow.colorFor(avatarSeed),
+                child: Text(
+                  TripCollaboratorsRow.initialFor(avatarSeed),
+                  style: const TextStyle(
+                      color: Colors.white, fontWeight: FontWeight.w700),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(name,
+                        style: theme.textTheme.bodyMedium
+                            ?.copyWith(fontWeight: FontWeight.w600),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis),
+                    Text(
+                      note == null ? 'Added $when' : '$note · added $when',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color:
+                            theme.colorScheme.onSurface.withValues(alpha: 0.6),
+                      ),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    ];
   }
 
   String _formatRelative(DateTime past) {

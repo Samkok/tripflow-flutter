@@ -5,6 +5,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 
 import '../models/location_model.dart';
+import '../utils/routing_place_id.dart';
 import 'google_maps_service.dart';
 
 /// One routed leg of an itinerary, in whatever mode the ladder (or the user)
@@ -83,13 +84,22 @@ class MultiModalRouter {
   static final LinkedHashMap<String, LegRoute> _cache = LinkedHashMap();
   static const int _maxCacheEntries = 300;
 
-  static String _cacheKey(LatLng a, LatLng b, String mode, DateTime? dep) {
+  static String _cacheKey(
+    LatLng a,
+    LatLng b,
+    String mode,
+    DateTime? dep, {
+    String? aPlaceId,
+    String? bPlaceId,
+  }) {
     final band = (mode == 'transit' && dep != null)
         ? (dep.millisecondsSinceEpoch ~/ (30 * 60 * 1000)).toString()
         : '-';
     String pt(LatLng p) =>
         '${p.latitude.toStringAsFixed(5)},${p.longitude.toStringAsFixed(5)}';
-    return '${pt(a)}|${pt(b)}|$mode|$band';
+    // Place ids are part of the key: the same coordinates route differently
+    // with and without them (access point vs nearest road).
+    return '${pt(a)}|${pt(b)}|$mode|$band|${aPlaceId ?? ''}>${bPlaceId ?? ''}';
   }
 
   static void _cachePut(String key, LegRoute leg) {
@@ -109,12 +119,18 @@ class MultiModalRouter {
     required LatLng to,
     required String mode,
     DateTime? departureTime,
+    // Google place ids of the endpoints (see [routingPlaceId]); null
+    // routes to the coordinates.
+    String? fromPlaceId,
+    String? toPlaceId,
   }) async {
-    final key = _cacheKey(from, to, mode, departureTime);
+    final key = _cacheKey(from, to, mode, departureTime,
+        aPlaceId: fromPlaceId, bPlaceId: toPlaceId);
     final cached = _cache[key];
     if (cached != null) return cached;
 
-    var leg = await _fetchSingle(from, to, mode, departureTime);
+    var leg = await _fetchSingle(from, to, mode, departureTime,
+        fromPlaceId: fromPlaceId, toPlaceId: toPlaceId);
 
     // Transit schedule-miss retry: an itinerary whose clock has drifted
     // into the night (default stays add up) queries a REAL "no service at
@@ -125,7 +141,8 @@ class MultiModalRouter {
     if (leg == null && mode == 'transit' && departureTime != null) {
       final soon = DateTime.now().add(const Duration(minutes: 10));
       if (departureTime.difference(soon).abs() > const Duration(hours: 2)) {
-        leg = await _fetchSingle(from, to, mode, soon);
+        leg = await _fetchSingle(from, to, mode, soon,
+            fromPlaceId: fromPlaceId, toPlaceId: toPlaceId);
       }
     }
 
@@ -137,15 +154,19 @@ class MultiModalRouter {
     LatLng from,
     LatLng to,
     String mode,
-    DateTime? departureTime,
-  ) async {
+    DateTime? departureTime, {
+    String? fromPlaceId,
+    String? toPlaceId,
+  }) async {
     final res = await GoogleMapsService.getOptimizedRouteDetails(
       origin: from,
+      originPlaceId: fromPlaceId,
       destination: LocationModel(
         id: '_leg_dest',
         name: '',
         address: '',
         coordinates: to,
+        placeId: toPlaceId,
         addedAt: DateTime.fromMillisecondsSinceEpoch(0),
       ),
       optimizeWaypoints: false,
@@ -199,19 +220,24 @@ class MultiModalRouter {
     required LatLng to,
     required String mode,
     DateTime? departureTime,
+    String? fromPlaceId,
+    String? toPlaceId,
   }) async {
-    final key = 'alt|${_cacheKey(from, to, mode, departureTime)}';
+    final key =
+        'alt|${_cacheKey(from, to, mode, departureTime, aPlaceId: fromPlaceId, bPlaceId: toPlaceId)}';
     final cached = _altCache[key];
     if (cached != null) return cached;
 
     Future<List<LegRoute>> fetch(DateTime? dep) async {
       final res = await GoogleMapsService.getOptimizedRouteDetails(
         origin: from,
+        originPlaceId: fromPlaceId,
         destination: LocationModel(
           id: '_leg_dest',
           name: '',
           address: '',
           coordinates: to,
+          placeId: toPlaceId,
           addedAt: DateTime.fromMillisecondsSinceEpoch(0),
         ),
         optimizeWaypoints: false,
@@ -293,10 +319,17 @@ class MultiModalRouter {
     String? overrideMode,
     double maxWalkMeters = longWalkMeters,
     DateTime? departureTime,
+    String? fromPlaceId,
+    String? toPlaceId,
   }) async {
     Future<LegRoute?> f(String m) => routeSingleLeg(
-                from: from, to: to, mode: m, departureTime: departureTime)
-            .catchError((Object e) {
+          from: from,
+          to: to,
+          mode: m,
+          departureTime: departureTime,
+          fromPlaceId: fromPlaceId,
+          toPlaceId: toPlaceId,
+        ).catchError((Object e) {
           debugPrint('routeLegSmart $m failed: $e');
           return null;
         });
@@ -385,6 +418,9 @@ class MultiModalRouter {
   static Future<Map<String, dynamic>> routeItinerary({
     required LatLng origin,
     required String originId,
+    // The origin's Google place id when it is a saved place (null for the
+    // device's position) — see [routingPlaceId].
+    String? originPlaceId,
     required List<LocationModel> orderedStops,
     required String profile, // 'auto' | 'walk' | 'drive'
     required DateTime departureAnchor,
@@ -557,6 +593,7 @@ class MultiModalRouter {
       final orderedAll = <LocationModel>[];
       final legsAll = <LegRoute>[];
       var segOrigin = origin;
+      var segOriginPlaceId = originPlaceId;
       var allOk = true;
       for (var c = 0; c < segmentCount && allOk; c++) {
         final segEnd =
@@ -571,6 +608,7 @@ class MultiModalRouter {
             isLast ? segment : segment.sublist(0, segment.length - 1);
         final res = await GoogleMapsService.getOptimizedRouteDetails(
           origin: segOrigin,
+          originPlaceId: segOriginPlaceId,
           destination: segDest,
           waypoints: segInter,
           optimizeWaypoints: true,
@@ -602,8 +640,9 @@ class MultiModalRouter {
           legsAll.add(legFrom(det[i], pol[i], anchorMode));
         }
         orderedAll.addAll(segOrdered);
-        segOrigin =
-            (segOrdered.isNotEmpty ? segOrdered.last : segDest).coordinates;
+        final segLast = segOrdered.isNotEmpty ? segOrdered.last : segDest;
+        segOrigin = segLast.coordinates;
+        segOriginPlaceId = routingPlaceId(segLast);
       }
       if (allOk) {
         stops = orderedAll;
@@ -619,6 +658,7 @@ class MultiModalRouter {
       Future<bool> tryChain(String m) async {
         final res = await GoogleMapsService.getOptimizedRouteDetails(
           origin: origin,
+          originPlaceId: originPlaceId,
           destination: stops.last,
           waypoints: legCount > 1 ? stops.sublist(0, legCount - 1) : const [],
           optimizeWaypoints: false,
@@ -653,6 +693,7 @@ class MultiModalRouter {
     // Leg endpoints reflect the FINAL order: origin → s0 → s1 → …
     final points = <LatLng>[origin, ...stops.map((s) => s.coordinates)];
     final ids = <String>[originId, ...stops.map((s) => s.id)];
+    final placeIds = <String?>[originPlaceId, ...stops.map(routingPlaceId)];
     legCount = stops.length;
 
     // 2+3) Resolve each leg. Cumulative clock feeds transit departures.
@@ -665,9 +706,14 @@ class MultiModalRouter {
       final overrideMode = legModeOverrides['${ids[i]}>${ids[i + 1]}'];
       final base = chain[i];
 
-      Future<LegRoute?> fetch(String m) =>
-          routeSingleLeg(from: from, to: to, mode: m, departureTime: clock)
-              .catchError((Object e) {
+      Future<LegRoute?> fetch(String m) => routeSingleLeg(
+            from: from,
+            to: to,
+            mode: m,
+            departureTime: clock,
+            fromPlaceId: placeIds[i],
+            toPlaceId: placeIds[i + 1],
+          ).catchError((Object e) {
             debugPrint('leg $i $m failed: $e');
             return null;
           });
@@ -815,6 +861,8 @@ class MultiModalRouter {
       var homeLeg = await routeLegSmart(
         from: from,
         to: to,
+        fromPlaceId: placeIds.last,
+        toPlaceId: routingPlaceId(returnTo),
         overrideMode: legModeOverrides['${ids.last}>${returnTo.id}'],
         maxWalkMeters: maxWalkMeters,
         departureTime: clock,

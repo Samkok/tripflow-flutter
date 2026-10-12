@@ -239,6 +239,19 @@ class MarkerCacheService {
     return result;
   }
 
+  /// Transit stop name labels, one bitmap per distinct name and theme.
+  Future<MarkerBitmapResult> getStopLabel(String text,
+      {required bool isDarkMode}) async {
+    final key = 'stop_label_${isDarkMode ? 'd' : 'l'}_$text';
+    if (_cache.containsKey(key)) {
+      return _cache[key]!;
+    }
+    final result =
+        await MarkerUtils.getStopLabelMarker(text, isDarkMode: isDarkMode);
+    _addToCache(key, result);
+    return result;
+  }
+
   Future<MarkerBitmapResult> getRouteLegChipMarker({
     required String distanceLabel,
     String? durationLabel,

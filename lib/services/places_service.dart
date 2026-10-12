@@ -73,6 +73,11 @@ class PlaceDetails {
   /// tag suggestion when the place is added. Empty when not requested.
   final List<String> types;
 
+  /// Where the place sits inside its building, composed for display
+  /// ("23/F · Shop 2301"); '' when Google lists nothing; null when the
+  /// answer carried no address components at all.
+  final String? floor;
+
   PlaceDetails({
     required this.name,
     required this.address,
@@ -86,6 +91,7 @@ class PlaceDetails {
     this.placeId,
     this.openingHours,
     List<String>? types,
+    this.floor,
   })  : photoReferences = photoReferences ?? const [],
         types = types ?? const [];
 
@@ -106,6 +112,10 @@ class PlaceDetails {
       photoHeight: photos.height,
       photoAttributions: photos.attributionsOrNull,
       countryCode: _extractCountryCode(json['address_components']),
+      floor: placeFloorOf(
+        components: json['address_components'],
+        address: json['formatted_address'] as String?,
+      ),
       placeId: json['place_id'] as String?,
       types: [
         for (final t in (json['types'] as List? ?? const [])) t.toString(),
@@ -397,6 +407,96 @@ double _haversineMeters(LatLng a, LatLng b) {
 /// Pulls the ISO-2 country code (e.g. "KH") out of a Google Places
 /// address_components array. Returns null when the array is missing or
 /// contains no entry of type "country".
+/// The floor / unit a place occupies, from Google's address components:
+/// the `floor` component ("23/F", "G/F", "2"), then `subpremise` ("Shop
+/// 2301", "Unit 5"), then `room`, joined with a middle dot. A bare number
+/// becomes "Floor 2". Returns '' when the components carry none of them
+/// and null when there are no components to read (a failed or partial
+/// answer), so a caller can tell "none" from "unknown".
+String? placeFloorFromComponents(dynamic addressComponents) {
+  if (addressComponents is! List) return null;
+  String? floor, unit, room;
+  for (final component in addressComponents) {
+    if (component is! Map) continue;
+    final types = component['types'];
+    if (types is! List) continue;
+    final name = (component['long_name'] ?? component['short_name']);
+    if (name is! String || name.trim().isEmpty) continue;
+    final text = name.trim();
+    if (types.contains('floor')) {
+      floor ??= text;
+    } else if (types.contains('subpremise')) {
+      unit ??= text;
+    } else if (types.contains('room')) {
+      room ??= text;
+    }
+  }
+  if (floor != null && RegExp(r'^-?\d+$').hasMatch(floor)) {
+    floor = 'Floor $floor';
+  }
+  final parts = [floor, unit, room].whereType<String>().toList();
+  return parts.join(' · ');
+}
+
+/// The floor / unit of a place from its Place Details answer: the address
+/// components first, then the address text. Google's component typing is
+/// thin in many cities — Hong Kong addresses carry "Shop 20, 4/F" as a
+/// `subpremise`, or only in the formatted address ("SHOP NO.G29 ON GROUND
+/// FLOOR OF K11") — so both are read. '' = nothing found; null = there was
+/// nothing to read.
+String? placeFloorOf({dynamic components, String? address}) {
+  final fromComponents = placeFloorFromComponents(components);
+  if (fromComponents != null && fromComponents.isNotEmpty) {
+    return fromComponents;
+  }
+  final fromAddress = address == null ? null : placeFloorFromAddress(address);
+  if (fromAddress != null && fromAddress.isNotEmpty) return fromAddress;
+  if (fromComponents == null && fromAddress == null) return null;
+  return '';
+}
+
+final RegExp _floorInAddress = RegExp(
+  r'\b(?:LG\d?|UG|G|M|B\d?|\d{1,3})\s*/\s*F\b'
+  r'|\bLevel\s*\d{1,3}\b'
+  r'|\b\d{1,3}(?:st|nd|rd|th)\s+floor\b'
+  r'|\b(?:lower ground|upper ground|ground|basement|mezzanine)\s+floor\b'
+  r'|\bbasement\b'
+  r'|\d{1,3}\s*[樓楼]|地下|地庫|閣樓',
+  caseSensitive: false,
+);
+
+final RegExp _unitInAddress = RegExp(
+  r'\b(?:shop|unit|suite|room|kiosk|stall|flat|office)\s*(?:no\.?\s*)?'
+  r'[A-Z]?\d{1,5}[A-Z]?(?:\s*[-–&]\s*[A-Z]?\d{1,5}[A-Z]?)?\b'
+  r'|[A-Z]?\d{1,4}(?:[-–]\d{1,4})?\s*[舖鋪]',
+  caseSensitive: false,
+);
+
+/// Floor / unit read out of a formatted address: the first floor-like
+/// token ("4/F", "Level 2", "Ground Floor", "3樓", "地下") and the first
+/// unit-like token ("Shop 20", "Unit 5B", "3-11舖"), joined with a middle
+/// dot. '' when the text has neither. Tokens written in capitals are
+/// title-cased.
+String placeFloorFromAddress(String address) {
+  String tidy(String t) {
+    final squashed = t.replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (squashed == squashed.toUpperCase() &&
+        RegExp(r'[A-Z]{3,}').hasMatch(squashed)) {
+      return squashed
+          .split(' ')
+          .map((w) =>
+              w.isEmpty ? w : w[0].toUpperCase() + w.substring(1).toLowerCase())
+          .join(' ');
+    }
+    return squashed;
+  }
+
+  final floor = _floorInAddress.firstMatch(address)?.group(0);
+  final unit = _unitInAddress.firstMatch(address)?.group(0);
+  final parts = [floor, unit].whereType<String>().map(tidy).toList();
+  return parts.join(' · ');
+}
+
 String? _extractCountryCode(dynamic addressComponents) {
   if (addressComponents is! List) return null;
   for (final component in addressComponents) {
@@ -703,6 +803,35 @@ class PlacesService {
   /// Never throws: the result's status says whether Google answered,
   /// refused, lost the place, or couldn't be reached at all — callers must
   /// not read "unreached" as "no photos".
+  /// The floor / unit of [placeId] (see [placeFloorFromComponents]): ''
+  /// when Google lists none, null when the request failed. Address
+  /// components only — Basic Data, the cheapest Place Details field set.
+  static Future<String?> fetchPlaceFloor(String placeId) async {
+    try {
+      final url = 'https://maps.googleapis.com/maps/api/place/details/json'
+          '?place_id=$placeId'
+          '&fields=address_components,formatted_address'
+          '&key=${ApiService.googlePlacesApiKey}';
+      final response = await ApiService.dio.get(url);
+      final data = response.data;
+      if (data is! Map || data['status'] != 'OK') {
+        debugPrint(
+            'fetchPlaceFloor($placeId): status=${data is Map ? data['status'] : '?'}');
+        return null;
+      }
+      final result = data['result'];
+      return placeFloorOf(
+            components: result is Map ? result['address_components'] : null,
+            address:
+                result is Map ? result['formatted_address'] as String? : null,
+          ) ??
+          '';
+    } catch (e) {
+      debugPrint('fetchPlaceFloor($placeId): $e');
+      return null;
+    }
+  }
+
   static Future<PlacePhotosResult> fetchPlacePhotos(String placeId) async {
     try {
       // `types` rides along with the photos: both are Basic fields, so the
