@@ -457,7 +457,9 @@ class RevenueCatService {
   /// purchase event it reports, and the privacy policy promises Meta never
   /// gets either. With neither attribute present there is nothing to
   /// forward. The app never collects a phone number; the clear is for the
-  /// same reason, in case one was ever set.
+  /// same reason, in case one was ever set. Called at sign-up, sign-in and
+  /// on every launch of a signed-in session (`revenueCatAuthSyncProvider`),
+  /// so the stored address goes on the next start, not the next sign-in.
   Future<void> setUserAttributes({String? displayName}) async {
     await waitForInitialization();
     try {

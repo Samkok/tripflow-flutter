@@ -99,6 +99,12 @@ final revenueCatAuthSyncProvider =
       } else {
         debugPrint('AuthProvider: RevenueCat already linked to ${user.id}');
       }
+      // Every launch of a signed-in session, not only sign-in: a device
+      // that stays signed in never passes through AuthService again, and an
+      // email address stored by an older version would otherwise sit in
+      // RevenueCat for as long as the session lasts. Idempotent; the name
+      // is left as it is (null = unchanged).
+      await revenueCatService.setUserAttributes();
     } catch (e) {
       debugPrint('AuthProvider: Failed to link RevenueCat user: $e');
       rethrow;
