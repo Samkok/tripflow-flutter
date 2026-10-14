@@ -257,14 +257,12 @@ class MarkerCacheService {
     String? durationLabel,
     String mode = 'drive',
     String? vehicleType,
-    String? badgeText,
-    Color? badgeColor,
-    Color? badgeTextColor,
+    List<ChipBadge> badges = const [],
     String? fromName,
     String? toName,
   }) async {
-    final key = 'leg_chip_${mode}_${vehicleType ?? ''}_${badgeText ?? ''}_'
-        '${badgeColor?.toARGB32() ?? ''}_${badgeTextColor?.toARGB32() ?? ''}_'
+    final key = 'leg_chip_${mode}_${vehicleType ?? ''}_'
+        '${badges.map((b) => b.key).join('|')}_'
         '${distanceLabel}_${durationLabel ?? ''}_'
         '${fromName ?? ''}>${toName ?? ''}';
     if (_cache.containsKey(key)) {
@@ -276,12 +274,21 @@ class MarkerCacheService {
       durationLabel: durationLabel,
       mode: mode,
       vehicleType: vehicleType,
-      badgeText: badgeText,
-      badgeColor: badgeColor,
-      badgeTextColor: badgeTextColor,
+      badges: badges,
       fromName: fromName,
       toName: toName,
     );
+    _addToCache(key, result);
+    return result;
+  }
+
+  /// The intermediate-stop dot of a ride — one bitmap, used by every dot.
+  Future<MarkerBitmapResult> getTransitStopDot() async {
+    const key = 'transit_stop_dot';
+    if (_cache.containsKey(key)) {
+      return _cache[key]!;
+    }
+    final result = await MarkerUtils.getTransitStopDotMarker();
     _addToCache(key, result);
     return result;
   }

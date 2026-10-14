@@ -5,6 +5,7 @@ import '../providers/optimized_map_overlay_provider.dart';
 import '../models/location_model.dart';
 import '../utils/line_badge_colors.dart';
 import '../utils/marker_utils.dart';
+import '../utils/transit_line_style.dart';
 
 /// The travel segment BETWEEN two stop cards in the trip plan list — the
 /// Google-Maps-itinerary treatment in VoyZa's language: a short vertical
@@ -24,14 +25,6 @@ class LegRail extends ConsumerWidget {
   final Map<String, dynamic> legData;
   final LocationModel from;
   final LocationModel to;
-
-  Color? _lineColor(String? hex) {
-    if (hex == null || hex.isEmpty) return null;
-    final cleaned = hex.replaceFirst('#', '');
-    if (cleaned.length != 6) return null;
-    final value = int.tryParse(cleaned, radix: 16);
-    return value == null ? null : Color(0xFF000000 | value);
-  }
 
   String _fact(BuildContext context) {
     final distance = ((legData['distance'] as num?) ?? 0).toDouble();
@@ -108,8 +101,7 @@ class LegRail extends ConsumerWidget {
         ));
       }
       if (isRide) {
-        final color =
-            _lineColor(s['lineColor'] as String?) ?? theme.colorScheme.primary;
+        final color = transitLineFill(s);
         final label = (s['lineShort'] as String?) ?? '';
         rows.add(Row(mainAxisSize: MainAxisSize.min, children: [
           if (label.isNotEmpty)
@@ -129,7 +121,7 @@ class LegRail extends ConsumerWidget {
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                       color: lineBadgeTextColor(color,
-                          preferred: _lineColor(s['lineTextColor'] as String?)),
+                          preferred: transitLineTextColor(s)),
                       fontSize: 11,
                       fontWeight: FontWeight.w800),
                 ),
@@ -173,8 +165,7 @@ class LegRail extends ConsumerWidget {
     final firstSeg =
         (transit != null && transit.isNotEmpty) ? transit.first : null;
     final railColor = mode == 'transit'
-        ? (_lineColor(firstSeg?['lineColor'] as String?) ??
-            theme.colorScheme.primary)
+        ? transitLineFill(firstSeg)
         : theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.5);
 
     String? boardTime;

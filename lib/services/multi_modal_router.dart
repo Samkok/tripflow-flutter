@@ -222,10 +222,15 @@ class MultiModalRouter {
     DateTime? departureTime,
     String? fromPlaceId,
     String? toPlaceId,
+    // true = ask Google again even when this leg was fetched a moment ago:
+    // the sheet's refresh. Suggestions change with the clock (the next
+    // departure, a disruption), and the half-hour cache band would
+    // otherwise hand the old answer back.
+    bool refresh = false,
   }) async {
     final key =
         'alt|${_cacheKey(from, to, mode, departureTime, aPlaceId: fromPlaceId, bPlaceId: toPlaceId)}';
-    final cached = _altCache[key];
+    final cached = refresh ? null : _altCache[key];
     if (cached != null) return cached;
 
     Future<List<LegRoute>> fetch(DateTime? dep) async {

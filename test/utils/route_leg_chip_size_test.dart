@@ -31,8 +31,9 @@ void main() {
         durationLabel: '20 min',
         mode: 'transit',
         vehicleType: 'TRAM',
-        badgeText: 'Kennedy Town - Happy Valley',
-        badgeColor: const Color(0xFF4CAF50),
+        badges: const [
+          ChipBadge('Kennedy Town - Happy Valley', fill: Color(0xFF4CAF50))
+        ],
         fromName: 'Tonnochy Road',
         toName: 'Man Wa Lane',
       ));
@@ -49,8 +50,12 @@ void main() {
         durationLabel: '1h 20m',
         mode: 'transit',
         vehicleType: 'BUS',
-        badgeText: 'Hong Kong International Airport Express Shuttle A21X',
-        badgeColor: const Color(0xFFE53935),
+        badges: const [
+          ChipBadge('Hong Kong International Airport Express Shuttle A21X',
+              fill: Color(0xFFE53935)),
+          ChipBadge('Tsuen Wan Line', fill: Color(0xFFE2231A)),
+          ChipBadge('Island Line', fill: Color(0xFF0860A8)),
+        ],
         fromName: 'Hong Kong Convention and Exhibition Centre',
         toName: 'Hong Kong International Airport Terminal 1',
       ));

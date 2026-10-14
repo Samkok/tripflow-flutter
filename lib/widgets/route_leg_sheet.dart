@@ -12,6 +12,7 @@ import '../utils/external_app_links.dart';
 import '../utils/line_badge_colors.dart';
 import '../utils/marker_utils.dart';
 import '../utils/routing_place_id.dart';
+import '../utils/transit_line_style.dart';
 import 'app_toast.dart';
 
 /// Bottom sheet for one leg of an optimized route — now multi-modal.
@@ -80,14 +81,6 @@ String _modeLabel(String mode) => switch (mode) {
       'direct' => 'no route found — straight-line estimate',
       _ => 'by car',
     };
-
-Color? _lineColor(String? hex) {
-  if (hex == null || hex.isEmpty) return null;
-  final cleaned = hex.replaceFirst('#', '');
-  if (cleaned.length != 6) return null;
-  final value = int.tryParse(cleaned, radix: 16);
-  return value == null ? null : Color(0xFF000000 | value);
-}
 
 class _RouteLegSheet extends ConsumerStatefulWidget {
   const _RouteLegSheet({
@@ -176,6 +169,10 @@ class _RouteLegSheetState extends ConsumerState<_RouteLegSheet> {
   /// route leads the list — that's the recommended one.
   List<LegRoute>? _alternatives;
   int? _appliedAltIndex;
+
+  /// The refresh button's round trip: Google asked again for this leg as
+  /// of now, the new default applied to the map.
+  bool _refreshing = false;
   int? _applyingAltIndex;
 
   @override
@@ -278,6 +275,66 @@ class _RouteLegSheetState extends ConsumerState<_RouteLegSheet> {
       _alternatives = options;
       _appliedAltIndex = applied ?? (options.isEmpty ? null : 0);
     });
+  }
+
+  /// Ask Google again for this leg, as of right now, and put its new
+  /// default route on the map and in this sheet. Transit suggestions move
+  /// with the clock — the next departure, a line that stopped running —
+  /// and the itinerary was planned at an earlier moment.
+  Future<void> _refreshRoute() async {
+    if (_legIndex < 0 ||
+        _mode == 'direct' ||
+        _refreshing ||
+        _applyingAltIndex != null ||
+        _switching != null) {
+      return;
+    }
+    final forLeg = _legIndex;
+    final before = _liveLeg;
+    setState(() {
+      _refreshing = true;
+      _alternatives = null;
+    });
+    final options = await MultiModalRouter.fetchLegAlternatives(
+      from: _origin.coordinates,
+      to: _destination.coordinates,
+      fromPlaceId: routingPlaceId(_origin),
+      toPlaceId: routingPlaceId(_destination),
+      mode: _mode,
+      departureTime: DateTime.now(),
+      refresh: true,
+    ).catchError((Object _) => const <LegRoute>[]);
+    if (!mounted || forLeg != _legIndex) return;
+    if (options.isEmpty) {
+      setState(() {
+        _refreshing = false;
+        _alternatives = const [];
+        _appliedAltIndex = null;
+      });
+      AppToast.warning(context, 'No route found right now');
+      return;
+    }
+    final ok = await ref
+        .read(tripProvider.notifier)
+        .applyLegRoute(_legIndex, options[0]);
+    if (!mounted || forLeg != _legIndex) return;
+    setState(() {
+      _refreshing = false;
+      _alternatives = options;
+      _appliedAltIndex = ok ? 0 : null;
+    });
+    if (!ok) {
+      AppToast.error(context, 'Could not update the route');
+      return;
+    }
+    final same = before != null &&
+        before['duration'] == options[0].duration &&
+        before['distance'] == options[0].distance;
+    if (same) {
+      AppToast.info(context, 'Route is up to date');
+    } else {
+      AppToast.success(context, 'Route refreshed');
+    }
   }
 
   Future<void> _applyAlternative(int index) async {
@@ -451,6 +508,23 @@ class _RouteLegSheetState extends ConsumerState<_RouteLegSheet> {
                         ),
                       ),
                       const SizedBox(width: 8),
+                      // Ask again as of now: the suggestion was fetched
+                      // when the day was planned, and transit changes
+                      // with the clock. Real legs only — a preview has
+                      // no leg on the map to update.
+                      if (_legIndex >= 0 && mode != 'direct')
+                        IconButton(
+                          tooltip: 'Refresh route',
+                          onPressed: _refreshing ? null : _refreshRoute,
+                          icon: _refreshing
+                              ? const SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child:
+                                      CircularProgressIndicator(strokeWidth: 2),
+                                )
+                              : const Icon(Icons.refresh_rounded),
+                        ),
                       IconButton(
                         icon: const Icon(Icons.close),
                         tooltip: 'Close',
@@ -745,8 +819,7 @@ class _RouteLegSheetState extends ConsumerState<_RouteLegSheet> {
 
   /// A route option's line badge — the "[N680]" ahead of its times.
   Widget _optionLineBadge(Map<String, dynamic> seg) {
-    final fill = _lineColor(seg['lineColor'] as String?) ??
-        Theme.of(context).colorScheme.primary;
+    final fill = transitLineFill(seg);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
       decoration: BoxDecoration(
@@ -761,7 +834,7 @@ class _RouteLegSheetState extends ConsumerState<_RouteLegSheet> {
           overflow: TextOverflow.ellipsis,
           style: TextStyle(
               color: lineBadgeTextColor(fill,
-                  preferred: _lineColor(seg['lineTextColor'] as String?)),
+                  preferred: transitLineTextColor(seg)),
               fontSize: 11,
               fontWeight: FontWeight.w800),
         ),
@@ -993,9 +1066,12 @@ class _RouteLegSheetState extends ConsumerState<_RouteLegSheet> {
   /// One ridden vehicle: [badge] line · headsign, board → alight, times.
   Widget _transitSegment(Map<String, dynamic> seg) {
     final theme = Theme.of(context);
-    final color =
-        _lineColor(seg['lineColor'] as String?) ?? theme.colorScheme.primary;
+    final color = transitLineFill(seg);
     final lineShort = (seg['lineShort'] as String?) ?? '';
+    // Other lines that serve this same hop, from the leg's route options
+    // — Google's "15 or 23". Only once the options have loaded.
+    final others = alternativeLinesFor(seg,
+        (_alternatives ?? const <LegRoute>[]).map((o) => o.transit).toList());
     final headsign = (seg['headsign'] as String?) ?? '';
     final stops = (seg['stopCount'] as num?)?.toInt() ?? 0;
     final board = (seg['boardStop'] as String?) ?? '';
@@ -1029,8 +1105,7 @@ class _RouteLegSheetState extends ConsumerState<_RouteLegSheet> {
                       lineShort,
                       style: TextStyle(
                           color: lineBadgeTextColor(color,
-                              preferred:
-                                  _lineColor(seg['lineTextColor'] as String?)),
+                              preferred: transitLineTextColor(seg)),
                           fontWeight: FontWeight.w800,
                           fontSize: 13),
                     ),
@@ -1061,6 +1136,20 @@ class _RouteLegSheetState extends ConsumerState<_RouteLegSheet> {
                   ),
               ],
             ),
+            if (others.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Wrap(
+                crossAxisAlignment: WrapCrossAlignment.center,
+                spacing: 6,
+                runSpacing: 4,
+                children: [
+                  Text('or',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant)),
+                  for (final o in others) _optionLineBadge(o),
+                ],
+              ),
+            ],
             const SizedBox(height: 8),
             _stopRow(board, dep, isBoard: true),
             const SizedBox(height: 4),

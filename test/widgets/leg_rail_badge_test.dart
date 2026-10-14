@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:voyza/utils/transit_line_style.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:voyza/core/theme.dart';
 import 'package:voyza/models/location_model.dart';
@@ -77,9 +78,15 @@ void main() {
     expect(labelColor(tester, 'N680'), Colors.white);
   });
 
-  testWidgets('a line with no colour sits on the app cyan, in black',
+  testWidgets('a line with no colour sits on the shared transit blue, in white',
       (tester) async {
+    // The same blue the map line and the chip badge fall back to — one
+    // colour for one ride, wherever it is drawn.
     await tester.pumpWidget(rail({'lineShort': '87'}));
-    expect(labelColor(tester, '87'), Colors.black);
+    expect(labelColor(tester, '87'), Colors.white);
+    final box = tester.widget<Container>(find
+        .ancestor(of: find.text('87'), matching: find.byType(Container))
+        .first);
+    expect((box.decoration as BoxDecoration).color, defaultTransitLineColor);
   });
 }

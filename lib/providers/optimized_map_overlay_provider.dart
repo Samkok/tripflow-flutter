@@ -12,7 +12,8 @@ import '../providers/debounced_settings_provider.dart';
 import '../services/marker_cache_service.dart';
 import '../utils/zone_utils.dart';
 import '../utils/place_tags.dart';
-import '../utils/marker_utils.dart'; // Needed for MarkerBitmapResult type
+import '../utils/marker_utils.dart';
+import '../utils/transit_line_style.dart'; // Needed for MarkerBitmapResult type
 import '../utils/polyline_simplify.dart';
 import '../utils/external_app_links.dart';
 import '../core/theme.dart';
@@ -77,6 +78,7 @@ final cachedMarkerBitmapsProvider =
   markerIcons['current_location_heading'] =
       await markerCache.getCurrentLocationHeadingMarker();
   markerIcons['leg_endpoint'] = await markerCache.getLegEndpointDot();
+  markerIcons['transit_stop'] = await markerCache.getTransitStopDot();
 
   // Numbering is order-dependent → compute it synchronously first, THEN
   // rasterize every bitmap in PARALLEL. The serial awaits here were the
@@ -185,6 +187,14 @@ final finalMarkersProvider = Provider<Set<Marker>>((ref) {
   // Leg geometry for the endpoint collars — changes on optimize only.
   final dotLegPolylines = ref.watch(tripProvider.select((s) => s.legPolylines));
   final dotLegDetails = ref.watch(tripProvider.select((s) => s.legDetails));
+  // The selected leg's rides get their intermediate-stop dots (Google's
+  // "N stops" beads). Only the selected leg: a transit-heavy day would
+  // otherwise bead every line at once, and the dots are there to read
+  // the ride you are looking at.
+  final tappedLegMatch = RegExp(r'^leg_(\d+)')
+      .firstMatch(ref.watch(tappedPolylineIdProvider) ?? '');
+  final tappedLeg =
+      tappedLegMatch == null ? -1 : int.parse(tappedLegMatch.group(1)!);
 
   return markerBitmapsAsync.when(
     // During a RELOAD (background sync updates locations), keep showing the
@@ -285,6 +295,21 @@ final finalMarkersProvider = Provider<Set<Marker>>((ref) {
                   final seg = rides[ride] as Map;
                   addStopLabel(pts.first, seg['boardStop'] as String?);
                   addStopLabel(pts.last, seg['alightStop'] as String?);
+                  final stopIcon = markerIcons['transit_stop'];
+                  if (i == tappedLeg && stopIcon != null) {
+                    final dots = transitStopDotPositions(
+                        pts, (seg['stopCount'] as num?)?.toInt() ?? 0);
+                    for (var k = 0; k < dots.length; k++) {
+                      markers.add(Marker(
+                        markerId: MarkerId('leg_stop_dot_${i}_${ride}_$k'),
+                        position: dots[k],
+                        icon: stopIcon.bitmap,
+                        anchor: stopIcon.anchor,
+                        zIndexInt: 1,
+                        consumeTapEvents: false,
+                      ));
+                    }
+                  }
                 }
                 ride++;
               }
@@ -310,9 +335,12 @@ final finalMarkersProvider = Provider<Set<Marker>>((ref) {
             icon: result.bitmap,
             anchor: result.anchor,
             zIndexInt: 2,
-            infoWindow: showPlaceNames
-                ? InfoWindow(title: location.name, snippet: location.address)
-                : InfoWindow.noText,
+            // Same marker whether names are shown or hidden: the names
+            // switch must not touch the pins. Any change to a pin makes
+            // the platform re-apply its icon, and on iOS that redraws the
+            // pin — toggling names a few times made pins blink out.
+            infoWindow:
+                InfoWindow(title: location.name, snippet: location.address),
           ));
         }
       }
@@ -391,15 +419,6 @@ final memoizedAutomaticZonesProvider = Provider<Set<Circle>>((ref) {
   return zones;
 });
 
-/// '#RRGGBB' (Routes API transit line colors) → Color; null on any junk.
-Color? _parseLineColor(String? hex) {
-  if (hex == null || hex.isEmpty) return null;
-  final cleaned = hex.replaceFirst('#', '');
-  if (cleaned.length != 6) return null;
-  final value = int.tryParse(cleaned, radix: 16);
-  return value == null ? null : Color(0xFF000000 | value);
-}
-
 final styledPolylinesProvider = Provider<Set<Polyline>>((ref) {
   // Narrow watches (moving-pin hygiene): a full tripProvider watch made
   // every GPS tick re-style the polylines via currentLocation.
@@ -443,13 +462,13 @@ final styledPolylinesProvider = Provider<Set<Polyline>>((ref) {
       final mode = i < legDetailsState.length
           ? (legDetailsState[i]['mode'] as String? ?? 'drive')
           : 'drive';
+      // One colour per line everywhere (map, chip, sheet): the feed's, or
+      // the shared transit blue when it publishes none.
       Color? transitColor;
       if (mode == 'transit' && i < legDetailsState.length) {
         final segs = legDetailsState[i]['transit'] as List?;
-        if (segs != null && segs.isNotEmpty) {
-          transitColor =
-              _parseLineColor((segs.first as Map)['lineColor'] as String?);
-        }
+        transitColor = transitLineFill(
+            (segs != null && segs.isNotEmpty) ? segs.first as Map : null);
       }
       // NO PatternItem.dot anywhere: the iOS plugin maps each pattern item
       // to a style span of `length ?: 0` — a dot has no length, so dotted
@@ -507,9 +526,7 @@ final styledPolylinesProvider = Provider<Set<Polyline>>((ref) {
           final emphasized = isRunSelected || isHighlighted;
           final isRide = run['mode'] == 'TRANSIT';
           final runColor = isRide
-              ? (_parseLineColor(run['lineColor'] as String?) ??
-                  transitColor ??
-                  AppTheme.primaryColor)
+              ? transitLineFill(run)
               : Colors.white.withValues(alpha: emphasized ? 0.95 : 0.55);
           if (isRide) {
             polylines.add(
@@ -906,10 +923,9 @@ final routeInfoMarkersProvider = FutureProvider<Set<Marker>>((ref) async {
   var chipPosition = midpoint;
   var chipMode = legMode;
   String? chipVehicleType = firstSeg?['vehicleType'] as String?;
-  String? chipBadgeText = firstSeg?['lineShort'] as String?;
-  Color? chipBadgeColor = _parseLineColor(firstSeg?['lineColor'] as String?);
-  Color? chipBadgeTextColor =
-      _parseLineColor(firstSeg?['lineTextColor'] as String?);
+  // Every ride of the leg gets its badge ("[Tram] [Island Line]"), so a
+  // two-ride journey is not announced by its first line alone.
+  var chipBadges = chipBadgesFor(transitSegs);
   var chipDistanceLabel = distanceLabel;
   String? chipDurationLabel = durationLabel;
   var chipFromName = fromLoc.name.isEmpty ? 'Your location' : fromLoc.name;
@@ -933,11 +949,7 @@ final routeInfoMarkersProvider = FutureProvider<Set<Marker>>((ref) async {
       final isRide = run['mode'] == 'TRANSIT';
       chipMode = isRide ? 'transit' : 'walk';
       chipVehicleType = isRide ? run['vehicleType'] as String? : null;
-      chipBadgeText = isRide ? run['lineShort'] as String? : null;
-      chipBadgeColor =
-          isRide ? _parseLineColor(run['lineColor'] as String?) : null;
-      chipBadgeTextColor =
-          isRide ? _parseLineColor(run['lineTextColor'] as String?) : null;
+      chipBadges = isRide ? chipBadgesFor([run]) : const [];
       // Per-run distance isn't in the API payload — derive it from the
       // run's own geometry.
       final meters = _polylineMeters(runPoints);
@@ -982,9 +994,7 @@ final routeInfoMarkersProvider = FutureProvider<Set<Marker>>((ref) async {
     durationLabel: chipDurationLabel,
     mode: chipMode,
     vehicleType: chipVehicleType,
-    badgeText: chipBadgeText,
-    badgeColor: chipBadgeColor,
-    badgeTextColor: chipBadgeTextColor,
+    badges: chipBadges,
     fromName: chipFromName,
     toName: chipToName,
   );
@@ -1090,6 +1100,22 @@ LatLng _chipAnchorOn(List<LatLng> points, LatLng? near) {
     }
   }
   return best;
+}
+
+/// The chip badges for a list of ride cards / ride runs: one per ride
+/// that names its line, in the line's colour (shared fallback when the
+/// feed has none). Public for the test.
+List<ChipBadge> chipBadgesFor(List? rides) {
+  if (rides == null) return const [];
+  final out = <ChipBadge>[];
+  for (final r in rides) {
+    if (r is! Map) continue;
+    final text = ((r['lineShort'] as String?) ?? '').trim();
+    if (text.isEmpty) continue;
+    out.add(ChipBadge(text,
+        fill: transitLineFill(r), textColor: transitLineTextColor(r)));
+  }
+  return out;
 }
 
 double _metersBetween(LatLng a, LatLng b) {

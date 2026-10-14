@@ -4,6 +4,8 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 
+import 'transit_line_style.dart';
+
 import 'line_badge_colors.dart';
 
 class MarkerBitmapResult {
@@ -11,6 +13,21 @@ class MarkerBitmapResult {
   final Offset anchor;
 
   MarkerBitmapResult(this.bitmap, this.anchor);
+}
+
+/// A transit line badge on a route leg chip: the line's number or name in
+/// the line's colour (null = the shared transit fallback).
+class ChipBadge {
+  const ChipBadge(this.text, {this.fill, this.textColor});
+
+  final String text;
+  final Color? fill;
+  final Color? textColor;
+
+  /// Cache-key fragment: text and colours, so two chips differing only by
+  /// a line colour never share a bitmap.
+  String get key =>
+      '$text/${fill?.toARGB32() ?? ''}/${textColor?.toARGB32() ?? ''}';
 }
 
 class MarkerUtils {
@@ -673,11 +690,10 @@ class MarkerUtils {
     String? durationLabel,
     String mode = 'drive',
     String? vehicleType,
-    String? badgeText,
-    Color? badgeColor,
-    // The line's own text colour from the feed, if any — see
-    // [lineBadgeTextColor] for when it is used.
-    Color? badgeTextColor,
+    // Transit line badges — one per ride of the leg (a run chip carries
+    // its one ride). Each in the line's own colour, trimmed to fit; at
+    // most [maxChipBadges] are drawn.
+    List<ChipBadge> badges = const [],
     // Endpoint names — when provided, a second smaller line "A → B" renders
     // under the stats row so the chip says WHERE the leg goes, not just how
     // far. Long names are trimmed per side so both ends always survive.
@@ -706,34 +722,49 @@ class MarkerUtils {
       textDirection: TextDirection.ltr,
     )..layout();
 
-    // Transit line badge — the "[2]" in Google's itinerary rows, drawn in
-    // the line's official color right after the vehicle glyph.
-    final bool hasBadge = badgeText != null && badgeText.isNotEmpty;
-    final Color badgeFill = badgeColor ?? const Color(0xFFE53935);
-    // The badge is a short line code ("2", "N3", "Island Line"); a feed
-    // with no `nameShort` hands over the full route name ("Kennedy Town -
-    // Happy Valley"), which pushed the chip past 600 pt. Google Maps drops
-    // marker icons wider than its texture atlas without a word (both
-    // platforms), so the badge is trimmed here and the whole chip is
-    // capped below — see [maxChipPx].
-    final TextPainter? badgePainter = !hasBadge
-        ? null
-        : (TextPainter(
-            text: TextSpan(
-              text: badgeText,
-              style: TextStyle(
-                  color:
-                      lineBadgeTextColor(badgeFill, preferred: badgeTextColor),
-                  fontSize: 12,
-                  fontWeight: FontWeight.w800),
-            ),
-            maxLines: 1,
-            ellipsis: '…',
-            textDirection: TextDirection.ltr,
-          )..layout(maxWidth: maxBadgeTextWidth));
+    // Transit line badges — the "[2]" in Google's itinerary rows, drawn in
+    // each line's official colour right after the vehicle glyph (the shared
+    // transit blue when the feed publishes none, the same fallback the map
+    // line and the sheet use — a red badge over a green line read as two
+    // different rides).
+    // A badge is a short line code ("2", "N3", "Island Line"); a feed with
+    // no `nameShort` hands over the full route name ("Kennedy Town - Happy
+    // Valley"), which pushed the chip past 600 pt. Google Maps drops marker
+    // icons wider than its texture atlas without a word (both platforms),
+    // so each badge is trimmed here and the whole chip is capped below —
+    // see [maxChipPx].
+    final shownBadges = badges
+        .where((b) => b.text.trim().isNotEmpty)
+        .take(maxChipBadges)
+        .toList();
+    final double badgeTextMax =
+        shownBadges.length <= 1 ? maxBadgeTextWidth : maxBadgeTextWidthEach;
+    final badgePainters = <({TextPainter painter, Color fill})>[];
+    for (final b in shownBadges) {
+      final fill = b.fill ?? defaultTransitLineColor;
+      badgePainters.add((
+        fill: fill,
+        painter: TextPainter(
+          text: TextSpan(
+            text: b.text.trim(),
+            style: TextStyle(
+                color: lineBadgeTextColor(fill, preferred: b.textColor),
+                fontSize: 12,
+                fontWeight: FontWeight.w800),
+          ),
+          maxLines: 1,
+          ellipsis: '…',
+          textDirection: TextDirection.ltr,
+        )..layout(maxWidth: badgeTextMax),
+      ));
+    }
     const double badgeHPad = 6.0;
-    final double badgeWidth =
-        badgePainter == null ? 0 : badgePainter.width + badgeHPad * 2;
+    const double badgeGap = 4.0;
+    double badgeWidthOf(TextPainter p) => p.width + badgeHPad * 2;
+    final double badgesWidth = badgePainters.isEmpty
+        ? 0
+        : badgePainters.fold<double>(0, (w, b) => w + badgeWidthOf(b.painter)) +
+            badgeGap * (badgePainters.length - 1);
 
     // "4.4 km · 12 min" — the middle dot is dropped when the route service
     // gave us no duration for this leg.
@@ -797,7 +828,7 @@ class MarkerUtils {
     final double mainRowWidth = hPad +
         iconPainter.width +
         gap +
-        (badgePainter == null ? 0 : badgeWidth + gap) +
+        (badgePainters.isEmpty ? 0 : badgesWidth + gap) +
         textPainter.width +
         gap +
         chevronDiameter +
@@ -852,16 +883,18 @@ class MarkerUtils {
     double x = hPad + (chipWidth - mainRowWidth) / 2;
     iconPainter.paint(canvas, Offset(x, rowMid - iconPainter.height / 2));
     x += iconPainter.width + gap;
-    if (badgePainter != null) {
-      final badgeHeight = badgePainter.height + 4;
+    for (var i = 0; i < badgePainters.length; i++) {
+      final b = badgePainters[i];
+      final w = badgeWidthOf(b.painter);
+      final badgeHeight = b.painter.height + 4;
       final badgeRect = RRect.fromRectAndRadius(
-        Rect.fromLTWH(x, rowMid - badgeHeight / 2, badgeWidth, badgeHeight),
+        Rect.fromLTWH(x, rowMid - badgeHeight / 2, w, badgeHeight),
         const Radius.circular(5),
       );
-      canvas.drawRRect(badgeRect, Paint()..color = badgeFill);
-      badgePainter.paint(
-          canvas, Offset(x + badgeHPad, rowMid - badgePainter.height / 2));
-      x += badgeWidth + gap;
+      canvas.drawRRect(badgeRect, Paint()..color = b.fill);
+      b.painter
+          .paint(canvas, Offset(x + badgeHPad, rowMid - b.painter.height / 2));
+      x += w + (i == badgePainters.length - 1 ? gap : badgeGap);
     }
     textPainter.paint(canvas, Offset(x, rowMid - textPainter.height / 2));
     x += textPainter.width + gap;
@@ -915,6 +948,44 @@ class MarkerUtils {
   /// Room the transit line badge may take in the chip, in logical pixels:
   /// enough for "Island Line" / "Kennedy Town…", never a full route name.
   static const double maxBadgeTextWidth = 104.0;
+
+  /// Room per badge when a leg chip carries several rides' badges.
+  static const double maxBadgeTextWidthEach = 64.0;
+
+  /// Badges drawn on one chip at most — a three-ride journey reads; more
+  /// is the sheet's job.
+  static const int maxChipBadges = 3;
+
+  /// A small white dot for an intermediate stop of a ride, placed along
+  /// the ride geometry (see `transitStopDotPositions`). Quieter than the
+  /// board / alight collars so the two ends still read as the ends.
+  static Future<MarkerBitmapResult> getTransitStopDotMarker() async {
+    final double dpr = (WidgetsBinding
+                .instance.platformDispatcher.implicitView?.devicePixelRatio ??
+            3.0)
+        .clamp(1.0, 4.0);
+    final ui.PictureRecorder pictureRecorder = ui.PictureRecorder();
+    final Canvas canvas = Canvas(pictureRecorder);
+    canvas.scale(dpr);
+
+    const double d = 10;
+    const Offset c = Offset(d / 2, d / 2);
+    canvas.drawCircle(c, 4.2, Paint()..color = const Color(0xCC33404F));
+    canvas.drawCircle(c, 2.8, Paint()..color = Colors.white);
+
+    final ui.Image img = await pictureRecorder
+        .endRecording()
+        .toImage((d * dpr).round(), (d * dpr).round());
+    final ByteData? data = await img.toByteData(format: ui.ImageByteFormat.png);
+    if (data == null) {
+      return MarkerBitmapResult(
+          BitmapDescriptor.defaultMarker, const Offset(0.5, 0.5));
+    }
+    return MarkerBitmapResult(
+      BitmapDescriptor.bytes(data.buffer.asUint8List(), imagePixelRatio: dpr),
+      const Offset(0.5, 0.5),
+    );
+  }
 
   static Future<MarkerBitmapResult> getDistanceAndMapsMarker(
       String distanceLabel) async {
