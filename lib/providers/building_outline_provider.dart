@@ -4,10 +4,35 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import '../core/theme.dart';
 import '../models/location_model.dart';
 import '../services/building_outline_service.dart';
+import '../services/marker_cache_service.dart';
 
 /// The place whose building is highlighted on the map: the pin last opened.
 /// Cleared by a tap on the map and by a change of day.
 final focusedPlaceProvider = StateProvider<LocationModel?>((_) => null);
+
+/// The focused place's name card above its pin — the app's own callout in
+/// the route chip's style, in place of the platform's white info window.
+/// One marker (`place_callout_<id>`), gone with the focus. The tap opens
+/// the place like the pin does (wired in the map widget).
+final focusedPlaceCalloutProvider = FutureProvider<Set<Marker>>((ref) async {
+  final place = ref.watch(focusedPlaceProvider);
+  if (place == null) return const {};
+  final address = place.address.trim();
+  final callout = await MarkerCacheService().getPlaceCallout(
+    place.name,
+    subtitle: address.isEmpty ? place.floor : address,
+  );
+  return {
+    Marker(
+      markerId: MarkerId('place_callout_${place.id}'),
+      position: place.coordinates,
+      icon: callout.bitmap,
+      anchor: callout.anchor,
+      zIndexInt: 3,
+      consumeTapEvents: true,
+    ),
+  };
+});
 
 /// The focused place's footprint, fetched once per place per run (see
 /// [BuildingOutlineService]). Null while nothing is focused, for a place

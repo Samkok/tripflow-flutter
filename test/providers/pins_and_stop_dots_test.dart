@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:voyza/models/location_model.dart';
+import 'package:voyza/providers/building_outline_provider.dart';
 import 'package:voyza/providers/map_ui_state_provider.dart';
 import 'package:voyza/providers/optimized_map_overlay_provider.dart';
 import 'package:voyza/providers/theme_provider.dart';
@@ -145,6 +146,30 @@ void main() {
 
     c.read(mapUIStateProvider.notifier).clearHighlights();
     expect(dots(await markersOf(c)), isEmpty);
+  });
+
+  test('the focused place gets the app callout, not a platform info window',
+      () async {
+    final c = _container();
+    final pins = (await markersOf(c))
+        .where((m) => m.markerId.value == 'a' || m.markerId.value == 'b');
+    for (final p in pins) {
+      expect(p.infoWindow, InfoWindow.noText);
+    }
+    expect(await c.read(focusedPlaceCalloutProvider.future), isEmpty);
+
+    final a = c.read(tripProvider).pinnedLocations.first;
+    c.read(focusedPlaceProvider.notifier).state = a;
+    final callout = await c.read(focusedPlaceCalloutProvider.future);
+    expect(callout.map((m) => m.markerId.value), ['place_callout_a']);
+    final m = callout.single;
+    expect(m.position, a.coordinates);
+    // Bottom-centre anchored: the card floats above the pin's head.
+    expect(m.anchor, const Offset(0.5, 1.0));
+    expect(m.consumeTapEvents, isTrue);
+
+    c.read(focusedPlaceProvider.notifier).state = null;
+    expect(await c.read(focusedPlaceCalloutProvider.future), isEmpty);
   });
 
   test('chip badges carry every ride in its line colour, or the shared blue',

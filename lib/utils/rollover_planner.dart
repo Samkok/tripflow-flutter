@@ -11,32 +11,79 @@ import 'trip_dates.dart';
 /// A row moves when it belongs to [tripId], sits on a day BEFORE [today],
 /// and is still an ordinary active stop — not done, not skipped, not an
 /// accommodation (it defines its own nights) and not a multi-day stay.
-/// A row whose place is already planned on [today] — same place id, or the
-/// same name within a kilometre ([isLikelySamePlace]) — is left where it
-/// is rather than creating a same-day duplicate; two such leftovers from
-/// different past days move only once.
-List<String> planRollover({
+///
+/// A leftover ALWAYS moves. When the same place is already planned on
+/// [today] — same place id, or the same name within a kilometre
+/// ([isLikelySamePlace]) — the moved row replaces that copy: an OPEN copy
+/// (not done, not skipped, not a stay, single-day) is deleted so today
+/// still plans the place once. When today's copy is already decided
+/// (done, skipped, or a stay spanning today) it stays the plan and the
+/// leftover is deleted instead — a visit that happened, or a choice
+/// already made, is never replaced by an open stop from an earlier day.
+/// Two leftovers of one place from different past days: the older moves
+/// first, the newer replaces it like any other open copy.
+RolloverPlan planRollover({
   required String tripId,
   required Iterable<SavedLocation> rows,
   required DateTime today,
 }) {
   final day = dayKey(today);
   final mine = rows.where((l) => l.tripId == tripId).toList();
-  final occupants = <PlaceKey>[
+  final occupants = <_Occupant>[
     for (final l in mine)
-      if (l.scheduledDate != null && l.isActiveOnDate(day)) placeKeyOfSaved(l),
+      if (l.scheduledDate != null && l.isActiveOnDate(day))
+        _Occupant(
+          id: l.id,
+          key: placeKeyOfSaved(l),
+          open:
+              !l.isDone && !l.isSkipped && !l.isAccommodation && !l.isMultiDay,
+        ),
   ];
-  final out = <String>[];
+  final move = <String>[];
+  final delete = <String>[];
   for (final l in mine) {
     final start = l.scheduledDate;
     if (start == null || !dayKey(start).isBefore(day)) continue;
     if (l.isDone || l.isSkipped || l.isAccommodation || l.isMultiDay) continue;
     final key = placeKeyOfSaved(l);
-    if (occupants.any((o) => isLikelySamePlace(o, key))) continue;
-    occupants.add(key);
-    out.add(l.id);
+    final matches =
+        occupants.where((o) => isLikelySamePlace(o.key, key)).toList();
+    if (matches.isNotEmpty) {
+      if (matches.any((o) => !o.open)) {
+        delete.add(l.id);
+        continue;
+      }
+      for (final o in matches) {
+        delete.add(o.id);
+        move.remove(o.id); // an earlier leftover of this run: replaced too
+        occupants.remove(o);
+      }
+    }
+    occupants.add(_Occupant(id: l.id, key: key, open: true));
+    move.add(l.id);
   }
-  return out;
+  return RolloverPlan(move: move, delete: delete);
+}
+
+class _Occupant {
+  const _Occupant({required this.id, required this.key, required this.open});
+  final String id;
+  final PlaceKey key;
+  final bool open;
+}
+
+/// What one carry-forward run does to a trip's rows.
+class RolloverPlan {
+  const RolloverPlan({required this.move, required this.delete});
+
+  /// Rows to put on today.
+  final List<String> move;
+
+  /// Rows that go: today's open copies replaced by a moved leftover, and
+  /// leftovers whose place today has already been decided.
+  final List<String> delete;
+
+  bool get isEmpty => move.isEmpty && delete.isEmpty;
 }
 
 /// Wording for the ONE notice a carry-forward run produces — "3 places

@@ -18,6 +18,9 @@ import '../utils/polyline_simplify.dart';
 import '../utils/external_app_links.dart';
 import '../core/theme.dart';
 import 'trip_day_labeler_provider.dart';
+import 'pin_clock_provider.dart';
+import 'trip_simulation_provider.dart';
+import '../utils/pin_closing_status.dart';
 
 class CachedMarkersState {
   // This will now hold the generated bitmaps AND anchors
@@ -105,6 +108,33 @@ final cachedMarkerBitmapsProvider =
   // A trip without dates has no weekday: the "might be closed" hint would
   // be noise, so it stays off until dates are set.
   final undated = ref.watch(activeTripDayLabelerProvider).tbd;
+
+  // Opening-hours status per pin (pin_closing_status.dart): judged at the
+  // traveller's expected arrival when the plan knows it — the day's
+  // simulation, or the ETA of a route from the device — else at the
+  // minute clock for today's view. The clock ticks once a minute while the
+  // map is shown; the bitmaps are cached by their text, so a tick only
+  // rasterizes pins whose line actually changed.
+  final now = ref.watch(pinClockProvider);
+  final todayView = selectedDate.year == now.year &&
+      selectedDate.month == now.month &&
+      selectedDate.day == now.day;
+  final arrivalById = <String, DateTime>{
+    for (final s in ref.watch(tripSimulationProvider)?.stops ?? const [])
+      s.locationId: s.arrival,
+  };
+  final previewTargetId = ref.watch(tripProvider.select((s) =>
+      s.isRoutePreview &&
+              s.startLocationId == 'current_location' &&
+              s.optimizedLocationsForSelectedDate.isNotEmpty
+          ? s.optimizedLocationsForSelectedDate.last.id
+          : null));
+  if (previewTargetId != null) {
+    final travel = ref.watch(tripProvider.select((s) =>
+        s.legDetails.isNotEmpty ? s.legDetails.first['duration'] : null));
+    if (travel is Duration) arrivalById[previewTargetId] = now.add(travel);
+  }
+
   final results = await Future.wait(specs.map((spec) {
     // "Might be closed": Google lists no opening period for this weekday.
     // Amber pin + caution line — phrased as a maybe, because Places hours
@@ -113,6 +143,14 @@ final cachedMarkerBitmapsProvider =
         !spec.loc.isDone &&
         !spec.loc.isSkipped &&
         spec.loc.mightBeClosedOn(selectedDate);
+    final status = (spec.loc.isDone || spec.loc.isSkipped)
+        ? PinClosingStatus.none
+        : pinClosingStatus(
+            loc: spec.loc,
+            now: now,
+            arrival: arrivalById[spec.loc.id],
+            todayView: todayView,
+          );
     return markerCache.getNumberedMarker(
       isStart: spec.isStart,
       number: spec.number,
@@ -133,6 +171,11 @@ final cachedMarkerBitmapsProvider =
       isDone: spec.loc.isDone,
       warningLine:
           mightBeClosed ? 'Might be closed on this date — please check' : null,
+      // The hours status outranks the weekday hint: red/yellow name and
+      // its line replace the amber caution.
+      nameColor: status.isNone ? null : status.color,
+      statusLine: status.isNone ? null : status.line,
+      statusColor: status.isNone ? null : status.color,
     );
   }));
   for (var i = 0; i < specs.length; i++) {
@@ -335,12 +378,13 @@ final finalMarkersProvider = Provider<Set<Marker>>((ref) {
             icon: result.bitmap,
             anchor: result.anchor,
             zIndexInt: 2,
-            // Same marker whether names are shown or hidden: the names
-            // switch must not touch the pins. Any change to a pin makes
-            // the platform re-apply its icon, and on iOS that redraws the
-            // pin — toggling names a few times made pins blink out.
-            infoWindow:
-                InfoWindow(title: location.name, snippet: location.address),
+            // No platform info window: the focused place gets the app's
+            // own callout (focusedPlaceCalloutProvider) instead of the
+            // white box the platform draws. Also keeps the pin identical
+            // whether names are shown or hidden — any change to a pin
+            // makes the platform re-apply its icon, and on iOS that
+            // redraws the pin, so toggling names made pins blink out.
+            infoWindow: InfoWindow.noText,
           ));
         }
       }
@@ -1179,6 +1223,11 @@ final assembledMapOverlaysProvider =
   final polylines = ref.watch(styledPolylinesProvider);
   final automaticZones = ref.watch(memoizedAutomaticZonesProvider);
   final routeInfoMarkersAsync = ref.watch(routeInfoMarkersProvider);
+  // The focused place's callout: like the chip, the previous one stays
+  // while a new one rasterizes; none on an error.
+  final calloutAsync = ref.watch(focusedPlaceCalloutProvider);
+  final calloutMarkers =
+      calloutAsync.hasError ? const <Marker>{} : calloutAsync.valueOrNull ?? {};
   final buildingPolygons = ref.watch(buildingPolygonsProvider);
 
   // Since finalMarkersProvider is synchronous (deriving from an async one),
@@ -1198,7 +1247,7 @@ final assembledMapOverlaysProvider =
           // debugPrint('✅ Assembling map overlays: ${markers.length} base markers, ${routeInfoMarkers.length} route info markers, ${polylines.length} polylines, ${automaticZones.length} auto zones');
 
           return AsyncValue.data(AssembledMapOverlays(
-            markers: {...markers, ...routeInfoMarkers},
+            markers: {...markers, ...routeInfoMarkers, ...calloutMarkers},
             polylines: polylines,
             automaticZones: automaticZones,
             polygons: buildingPolygons,

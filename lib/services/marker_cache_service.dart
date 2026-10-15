@@ -138,12 +138,17 @@ class MarkerCacheService {
     bool showNumber = true,
     // false = day-coloured pin whatever the status (Entire-trip mode).
     bool statusColors = true,
+    // Opening-hours status colouring (see pin_closing_status.dart).
+    Color? nameColor,
+    String? statusLine,
+    Color? statusColor,
   }) async {
     // Trigger background prewarming on first marker access
     prewarmCacheInBackground();
 
     final key =
-        'numbered_${showNumber ? number : 'dot'}_${name}_${backgroundColor.value}_${textColor.value}_${isDarkMode}_${isSkipped}_${isDone}_${isStart}_${statusColors}_${warningLine ?? ''}';
+        'numbered_${showNumber ? number : 'dot'}_${name}_${backgroundColor.value}_${textColor.value}_${isDarkMode}_${isSkipped}_${isDone}_${isStart}_${statusColors}_${warningLine ?? ''}'
+        '_${nameColor?.toARGB32() ?? ''}_${statusLine ?? ''}_${statusColor?.toARGB32() ?? ''}';
 
     if (_cache.containsKey(key)) {
       _moveToEnd(key);
@@ -162,6 +167,9 @@ class MarkerCacheService {
       isDone: isDone,
       warningLine: warningLine,
       statusColors: statusColors,
+      nameColor: nameColor,
+      statusLine: statusLine,
+      statusColor: statusColor,
     );
 
     _addToCache(key, result);
@@ -278,6 +286,20 @@ class MarkerCacheService {
       fromName: fromName,
       toName: toName,
     );
+    _addToCache(key, result);
+    return result;
+  }
+
+  /// The focused place's callout, cached per (name, subtitle).
+  Future<MarkerBitmapResult> getPlaceCallout(String name,
+      {String? subtitle}) async {
+    final key = 'place_callout_${name}_${subtitle ?? ''}';
+    if (_cache.containsKey(key)) {
+      _moveToEnd(key);
+      return _cache[key]!;
+    }
+    final result =
+        await MarkerUtils.getPlaceCalloutMarker(name: name, subtitle: subtitle);
     _addToCache(key, result);
     return result;
   }

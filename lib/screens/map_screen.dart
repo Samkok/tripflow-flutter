@@ -34,6 +34,7 @@ import '../utils/geo_utils.dart';
 import '../utils/marker_utils.dart';
 import '../providers/location_provider.dart';
 import '../providers/optimized_map_overlay_provider.dart';
+import '../providers/pin_clock_provider.dart';
 import '../providers/trip_provider.dart';
 // import '../providers/trip_simulation_provider.dart'; // DISABLED with first-optimize celebration (2026-08-07)
 import '../providers/theme_provider.dart';
@@ -186,6 +187,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
     super.initState();
     // OPTIMIZATION: Register as lifecycle observer to handle app state changes
     WidgetsBinding.instance.addObserver(this);
+    _startPinClock();
     // Seed from the binding: didChangeAppLifecycleState only fires on LATER
     // transitions, and on Android the launch "resumed" is delivered before
     // this observer exists — leaving the field null for the whole session
@@ -226,6 +228,20 @@ class _MapScreenState extends ConsumerState<MapScreen>
   }
 
   // OPTIMIZATION: Handle app lifecycle to pause heavy operations when app is backgrounded
+  /// Minute ticks for the pins' opening-hours status (pin_clock_provider):
+  /// set now, then once a minute while the map is on screen and in the
+  /// foreground. Cancelled on background and dispose.
+  Timer? _pinClockTimer;
+
+  void _startPinClock() {
+    _pinClockTimer?.cancel();
+    ref.read(pinClockProvider.notifier).state = DateTime.now();
+    _pinClockTimer = Timer.periodic(const Duration(minutes: 1), (_) {
+      if (!mounted) return;
+      ref.read(pinClockProvider.notifier).state = DateTime.now();
+    });
+  }
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _lastLifecycleState = state;
@@ -238,7 +254,13 @@ class _MapScreenState extends ConsumerState<MapScreen>
       }
       // …and stop arrival polling entirely (no background location, ever).
       _stopArrivalPolling();
+      // No minute ticks in the background either.
+      _pinClockTimer?.cancel();
+      _pinClockTimer = null;
     } else if (state == AppLifecycleState.resumed) {
+      // The pins' opening-hours status is as of the last minute tick, which
+      // did not run while suspended: read the clock now and resume ticking.
+      _startPinClock();
       // Foreground again: RESTART the streams instead of resume()-ing the
       // old subscriptions. After a suspension the native session is often
       // stalled — CoreLocation stops delivering to a when-in-use app in the
@@ -263,6 +285,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
   void dispose() {
     // OPTIMIZATION: Remove lifecycle observer
     WidgetsBinding.instance.removeObserver(this);
+    _pinClockTimer?.cancel();
 
     // Defensive: never strand the tutorial's OverlayEntry on teardown.
     _activeTutorial?.finish();
@@ -2760,6 +2783,8 @@ class _MapScreenState extends ConsumerState<MapScreen>
       // background comes back here, so the refresh fixes "no live updates"
       // as well as stale data.
       repository.subscribeToRealtimeChanges();
+      // Re-read the clock so the pins' opening-hours status is as of now.
+      ref.read(pinClockProvider.notifier).state = DateTime.now();
       final results = await Future.wait<Object?>([
         performInitialLocationSync(repository),
         // Floor so the spinner reads as action, not flicker.

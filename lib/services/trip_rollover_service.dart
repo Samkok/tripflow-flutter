@@ -142,8 +142,9 @@ class TripRolloverService {
     required LocationRepository repo,
     required DateTime today,
   }) async {
-    final ids = planRollover(tripId: trip.id, rows: rows, today: today);
-    if (ids.isEmpty) return null;
+    final plan = planRollover(tripId: trip.id, rows: rows, today: today);
+    if (plan.isEmpty) return null;
+    final ids = plan.move;
 
     // Remember where the rows came from BEFORE the write — that is what the
     // notice says ("from yesterday" / "from Sep 9" / "from earlier days").
@@ -153,9 +154,17 @@ class TripRolloverService {
         if (moving.contains(l.id) && l.scheduledDate != null) l.scheduledDate!,
     ];
 
-    await repo.updateLocationsBatch({
-      for (final id in ids) id: {'scheduled_date': today},
-    });
+    if (ids.isNotEmpty) {
+      await repo.updateLocationsBatch({
+        for (final id in ids) id: {'scheduled_date': today},
+      });
+    }
+    // Replaced copies of today and leftovers whose place today has
+    // already been decided (same rule as the server job).
+    for (final id in plan.delete) {
+      await repo.deleteLocation(id);
+    }
+    if (ids.isEmpty) return null;
 
     final notice = RolloverNotice(
       tripId: trip.id,

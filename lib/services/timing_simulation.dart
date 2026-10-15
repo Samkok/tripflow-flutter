@@ -93,12 +93,17 @@ class TimingSimulationResult {
   }
 }
 
-/// Internal: a wall-clock open/close interval anchored to a real date.
+/// A wall-clock open/close interval anchored to a real date — one opening
+/// period of a place on one day. Public so the map's pin status can read
+/// the same hours the planner's warnings use.
 @immutable
-class _Interval {
+class HoursInterval {
   final DateTime open;
   final DateTime close;
-  const _Interval(this.open, this.close);
+  const HoursInterval(this.open, this.close);
+
+  /// True when [t] falls inside the period (open inclusive, close exclusive).
+  bool covers(DateTime t) => !t.isBefore(open) && t.isBefore(close);
 }
 
 /// Pure timing simulator. Walks [orderedStops] in order, accumulates wall-clock
@@ -175,7 +180,7 @@ List<TimingWarning> _evaluateStop(
   DateTime arrival,
   Duration stay,
 ) {
-  final intervals = _buildIntervalsForDate(stop, arrival);
+  final intervals = effectiveHoursIntervalsOn(stop, arrival);
 
   if (intervals == null) {
     // No effective hours constraint — 24/7 / no data / no override.
@@ -210,7 +215,7 @@ List<TimingWarning> _evaluateStop(
   }
 
   // Not in any interval — find the next one (if any) that opens after arrival.
-  _Interval? next;
+  HoursInterval? next;
   for (final iv in intervals) {
     if (iv.open.isAfter(arrival)) {
       if (next == null || iv.open.isBefore(next.open)) next = iv;
@@ -250,13 +255,15 @@ List<TimingWarning> _evaluateStop(
 }
 
 /// Builds the wall-clock open/close intervals that could be relevant on
-/// [arrival]'s calendar date. Returns:
+/// [arrival]'s calendar date (the user's closing override first, then
+/// Google's periods, after-midnight closes included). Returns:
 ///   - `null` when the stop has no effective-hours constraint (24/7, no
 ///     data, no override).
 ///   - An empty list when there's a constraint but no period covers this
 ///     day (closed all day).
 ///   - A list of one or more intervals otherwise.
-List<_Interval>? _buildIntervalsForDate(LocationModel loc, DateTime arrival) {
+List<HoursInterval>? effectiveHoursIntervalsOn(
+    LocationModel loc, DateTime arrival) {
   final override = loc.userClosingMinuteOverride;
   final hours = loc.googleOpeningHours;
   final dateOnly = DateTime(arrival.year, arrival.month, arrival.day);
@@ -279,14 +286,14 @@ List<_Interval>? _buildIntervalsForDate(LocationModel loc, DateTime arrival) {
       // 18:00 open) — push close to tomorrow.
       closeDt = closeDt.add(const Duration(days: 1));
     }
-    return [_Interval(openDt, closeDt)];
+    return [HoursInterval(openDt, closeDt)];
   }
 
   if (hours == null || hours.isEmpty) return null;
   if (hours.length == 1 && hours.first.isAlwaysOpen) return null;
 
   final googleDay = _googleDayFor(arrival.weekday);
-  final intervals = <_Interval>[];
+  final intervals = <HoursInterval>[];
 
   // Periods opening today (may close today or any later day).
   for (final p in hours) {
@@ -297,7 +304,7 @@ List<_Interval>? _buildIntervalsForDate(LocationModel loc, DateTime arrival) {
     final open = dateOnly.add(Duration(minutes: p.openMinutes));
     final close =
         dateOnly.add(Duration(days: dayOffset, minutes: p.closeMinutes!));
-    intervals.add(_Interval(open, close));
+    intervals.add(HoursInterval(open, close));
   }
 
   // Period opened the previous day and closes today (after-midnight close
@@ -311,7 +318,7 @@ List<_Interval>? _buildIntervalsForDate(LocationModel loc, DateTime arrival) {
     if (dayOffset != 1) continue; // we only care about ones that close today
     final open = yesterday.add(Duration(minutes: p.openMinutes));
     final close = dateOnly.add(Duration(minutes: p.closeMinutes!));
-    intervals.add(_Interval(open, close));
+    intervals.add(HoursInterval(open, close));
   }
 
   return intervals;

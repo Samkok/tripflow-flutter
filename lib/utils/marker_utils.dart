@@ -214,6 +214,12 @@ class MarkerUtils {
     // Optional amber caution line drawn under the name (e.g. "might be
     // closed on this date"). Wraps to two lines like the name.
     String? warningLine,
+    // Opening-hours status (see pin_closing_status.dart): the name takes
+    // [nameColor] and [statusLine] replaces the caution line, in
+    // [statusColor]. Null = the ordinary white/black name.
+    Color? nameColor,
+    String? statusLine,
+    Color? statusColor,
     // false = no visit order yet (day not optimized): a small white dot
     // sits in the pin instead of a number.
     bool showNumber = true,
@@ -297,7 +303,7 @@ class MarkerUtils {
       style: TextStyle(
         fontSize: 12, // Increased from 14 for better readability
         fontWeight: FontWeight.w700, // Bolder for better visibility
-        color: isDarkMode ? Colors.white : Colors.black87,
+        color: nameColor ?? (isDarkMode ? Colors.white : Colors.black87),
         shadows: [
           // Multiple shadows for crisp text outline
           Shadow(
@@ -319,21 +325,26 @@ class MarkerUtils {
     // onto two lines instead of vanishing into an ellipsis.
     namePainter.layout(maxWidth: 170);
 
-    // Optional caution line under the name, amber with the same halo so
+    // Optional line under the name — the hours status when there is one
+    // (in its red/yellow), else the amber caution — with the same halo so
     // it stays legible over any map tile.
+    final bool hasStatus = statusLine != null && statusLine.trim().isNotEmpty;
+    final String? cautionLine = hasStatus ? statusLine : warningLine;
+    final Color cautionColor =
+        hasStatus ? (statusColor ?? warningAmber) : warningAmber;
     TextPainter? warningPainter;
-    if (warningLine != null && warningLine.trim().isNotEmpty) {
+    if (cautionLine != null && cautionLine.trim().isNotEmpty) {
       warningPainter = TextPainter(
           textDirection: TextDirection.ltr,
           textAlign: TextAlign.center,
           maxLines: 2,
           ellipsis: '...');
       warningPainter.text = TextSpan(
-        text: warningLine,
+        text: cautionLine,
         style: TextStyle(
           fontSize: 10.5,
           fontWeight: FontWeight.w700,
-          color: warningAmber,
+          color: cautionColor,
           shadows: [
             Shadow(
                 color: isDarkMode
@@ -955,6 +966,119 @@ class MarkerUtils {
   /// Badges drawn on one chip at most — a three-ride journey reads; more
   /// is the sheet's job.
   static const int maxChipBadges = 3;
+
+  /// The callout over the focused place's pin — the pin last opened. Same
+  /// family as the route leg chip (navy card, cyan hairline, white name,
+  /// quieter second line) instead of the platform's white info window,
+  /// which sat on the dark map like a sticky note. Anchored at the bottom
+  /// centre with transparent room beneath for the pin's head, so it floats
+  /// just above the pin.
+  static Future<MarkerBitmapResult> getPlaceCalloutMarker({
+    required String name,
+    String? subtitle,
+  }) async {
+    double dpr = (WidgetsBinding
+                .instance.platformDispatcher.implicitView?.devicePixelRatio ??
+            3.0)
+        .clamp(1.0, 4.0);
+
+    const double hPad = 12.0;
+    const double vPad = 8.0;
+    const double lineGap = 2.0;
+    const double shadowExtra = 5.0;
+    const double maxTextWidth = 230.0;
+    const Color cyan = Color(0xFF00D4FF);
+    final double pinRoom = pinAboveAnchorPx + 4.0;
+
+    final namePainter = TextPainter(
+      text: TextSpan(
+        text: name.trim().isEmpty ? 'Place' : name.trim(),
+        style: const TextStyle(
+            color: Colors.white, fontSize: 13, fontWeight: FontWeight.w700),
+      ),
+      maxLines: 1,
+      ellipsis: '…',
+      textDirection: TextDirection.ltr,
+    )..layout(maxWidth: maxTextWidth);
+    final sub = subtitle?.trim() ?? '';
+    final TextPainter? subPainter = sub.isEmpty
+        ? null
+        : (TextPainter(
+            text: TextSpan(
+              text: sub,
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.78),
+                fontSize: 10.5,
+                fontWeight: FontWeight.w500,
+                letterSpacing: 0.1,
+              ),
+            ),
+            maxLines: 1,
+            ellipsis: '…',
+            textDirection: TextDirection.ltr,
+          )..layout(maxWidth: maxTextWidth));
+
+    final double textWidth = subPainter == null
+        ? namePainter.width
+        : (subPainter.width > namePainter.width
+            ? subPainter.width
+            : namePainter.width);
+    final double cardWidth = textWidth + hPad * 2;
+    final double cardHeight = vPad +
+        namePainter.height +
+        (subPainter == null ? 0 : lineGap + subPainter.height) +
+        vPad;
+    final double totalHeight = cardHeight + shadowExtra + pinRoom;
+    if (cardWidth * dpr > maxChipPx) {
+      dpr = maxChipPx / cardWidth;
+    }
+
+    final ui.PictureRecorder pictureRecorder = ui.PictureRecorder();
+    final Canvas canvas = Canvas(pictureRecorder);
+    canvas.scale(dpr);
+
+    final cardRect = RRect.fromRectAndRadius(
+      Rect.fromLTWH(0, 0, cardWidth, cardHeight),
+      const Radius.circular(12),
+    );
+    canvas.drawShadow(
+      Path()
+        ..addRRect(RRect.fromRectAndRadius(
+          Rect.fromLTWH(0, 2, cardWidth, cardHeight),
+          const Radius.circular(12),
+        )),
+      Colors.black.withValues(alpha: 0.45),
+      4.0,
+      true,
+    );
+    canvas.drawRRect(cardRect, Paint()..color = const Color(0xF01B2A3F));
+    canvas.drawRRect(
+      cardRect,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1
+        ..color = cyan.withValues(alpha: 0.45),
+    );
+    namePainter.paint(
+        canvas, Offset((cardWidth - namePainter.width) / 2, vPad));
+    subPainter?.paint(
+        canvas,
+        Offset((cardWidth - subPainter.width) / 2,
+            vPad + namePainter.height + lineGap));
+
+    final ui.Image img = await pictureRecorder
+        .endRecording()
+        .toImage((cardWidth * dpr).round(), (totalHeight * dpr).round());
+    final ByteData? data = await img.toByteData(format: ui.ImageByteFormat.png);
+    if (data == null) {
+      return MarkerBitmapResult(
+          BitmapDescriptor.defaultMarker, const Offset(0.5, 1.0));
+    }
+    return MarkerBitmapResult(
+      BitmapDescriptor.bytes(data.buffer.asUint8List(), imagePixelRatio: dpr),
+      const Offset(0.5, 1.0),
+    );
+  }
 
   /// A small white dot for an intermediate stop of a ride, placed along
   /// the ride geometry (see `transitStopDotPositions`). Quieter than the

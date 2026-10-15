@@ -33,6 +33,18 @@ class MapWidget extends ConsumerWidget {
   // the status pin filter (All / Active / Skipped / Done): hidden pins are
   // simply left out of the set handed to GoogleMap — no bitmap work, no
   // provider reload — so toggling the filter is a cheap marker diff.
+  static const _calloutPrefix = 'place_callout_';
+
+  /// The place a callout marker stands over, by the id in its marker id.
+  static LocationModel? _calloutTarget(
+      String markerId, List<LocationModel> candidates) {
+    final locId = markerId.substring(_calloutPrefix.length);
+    for (final l in candidates) {
+      if (l.id == locId) return l;
+    }
+    return null;
+  }
+
   Set<Marker> _buildMarkers(
     Set<Marker> overlayMarkers,
     List<LocationModel> locationsForDate,
@@ -52,6 +64,14 @@ class MapWidget extends ConsumerWidget {
           id.startsWith('leg_') ||
           id.startsWith('route_')) {
         out.add(marker);
+        continue;
+      }
+      // The focused place's callout opens the place like its pin.
+      if (id.startsWith(_calloutPrefix)) {
+        final loc = _calloutTarget(id, locationsForDate);
+        out.add(loc == null
+            ? marker
+            : marker.copyWith(onTapParam: () => onMarkerTap?.call(loc)));
         continue;
       }
       final idx = locationsForDate.indexWhere((loc) => loc.id == id);
@@ -121,6 +141,17 @@ class MapWidget extends ConsumerWidget {
                 ...tappableAllDays,
                 ...overlayState.markers
                     .where((m) => m.markerId.value == 'current_location'),
+                // The focused place's callout follows into All-days mode;
+                // its tap opens the place from the whole-trip list.
+                for (final m in overlayState.markers
+                    .where((m) => m.markerId.value.startsWith(_calloutPrefix)))
+                  () {
+                    final loc =
+                        _calloutTarget(m.markerId.value, pinnedLocations);
+                    return loc == null
+                        ? m
+                        : m.copyWith(onTapParam: () => onMarkerTap?.call(loc));
+                  }(),
               }
             : _buildMarkers(overlayState.markers, locationsForDate, pinFilter);
         // The dotted arrival ring around the current-location dot rides on
