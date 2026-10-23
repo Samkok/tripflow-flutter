@@ -5,6 +5,7 @@ import 'package:voyza/main.dart' show SharedPrefsCache;
 import '../providers/all_days_route_provider.dart';
 import '../providers/trip_provider.dart';
 import '../utils/place_tags.dart';
+import '../providers/unvisited_places_provider.dart';
 
 /// Colour key for the tagged pins on the single-day map: one row per tag
 /// present on the selected day, dot + label, no background — the text
@@ -36,6 +37,10 @@ class _TagLegendState extends ConsumerState<TagLegend> {
 
   @override
   Widget build(BuildContext context) {
+    // The unvisited preview's banner takes this slot.
+    if (ref.watch(unvisitedPreviewActiveProvider)) {
+      return const SizedBox.shrink();
+    }
     if (ref.watch(allDaysModeProvider)) return const SizedBox.shrink();
     final locations = ref.watch(locationsForSelectedDateProvider);
     // Only tags that are actually painted: done and skipped pins keep their

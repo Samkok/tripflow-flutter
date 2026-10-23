@@ -12,7 +12,12 @@ class MarkerBitmapResult {
   final BitmapDescriptor bitmap;
   final Offset anchor;
 
-  MarkerBitmapResult(this.bitmap, this.anchor);
+  /// The bitmap's logical size in points, when the drawer reports it.
+  /// Ground overlays stretch an image to a box on the ground, so they need
+  /// the aspect ratio to keep the drawing undistorted.
+  final Size? size;
+
+  MarkerBitmapResult(this.bitmap, this.anchor, {this.size});
 }
 
 /// A transit line badge on a route leg chip: the line's number or name in
@@ -693,6 +698,141 @@ class MarkerUtils {
     return MarkerBitmapResult(
       BitmapDescriptor.bytes(data.buffer.asUint8List(), imagePixelRatio: dpr),
       const Offset(0.5, 0.0),
+    );
+  }
+
+  /// A station gate's symbol: a small upright badge with the gate's label
+  /// ("A", "C1"), Google-style — white in light mode, ink in dark. Sits
+  /// centred on the gate's mouth, over [getStationGateArrowMarker].
+  static Future<MarkerBitmapResult> getStationGateBadgeMarker(
+    String label, {
+    required bool isDarkMode,
+  }) async {
+    final double dpr = (WidgetsBinding
+                .instance.platformDispatcher.implicitView?.devicePixelRatio ??
+            3.0)
+        .clamp(1.0, 4.0);
+    final text = label.length > 4 ? label.substring(0, 4) : label;
+    final painter = TextPainter(
+      textDirection: TextDirection.ltr,
+      textAlign: TextAlign.center,
+      maxLines: 1,
+      text: TextSpan(
+        text: text,
+        style: TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.w800,
+          height: 1.0,
+          color: isDarkMode ? Colors.white : const Color(0xFF1F2A37),
+        ),
+      ),
+    )..layout();
+    const double h = 22;
+    const double pad = 4; // room for the halo
+    final double w = math.max(h, painter.width + 12);
+    final double cw = w + pad * 2;
+    const double ch = h + pad * 2;
+
+    final ui.PictureRecorder pictureRecorder = ui.PictureRecorder();
+    final Canvas canvas = Canvas(pictureRecorder);
+    canvas.scale(dpr);
+    final rect = RRect.fromRectAndRadius(
+        Rect.fromLTWH(pad, pad, w, h), const Radius.circular(6));
+    canvas.drawRRect(
+        rect.shift(const Offset(0, 1)),
+        Paint()
+          ..color = Colors.black.withValues(alpha: 0.35)
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2));
+    canvas.drawRRect(rect,
+        Paint()..color = isDarkMode ? const Color(0xFF1F2A37) : Colors.white);
+    canvas.drawRRect(
+        rect,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.5
+          ..color = isDarkMode ? Colors.white : const Color(0xFF1F2A37));
+    painter.paint(canvas,
+        Offset(pad + (w - painter.width) / 2, pad + (h - painter.height) / 2));
+
+    final ui.Image img = await pictureRecorder
+        .endRecording()
+        .toImage((cw * dpr).round(), (ch * dpr).round());
+    final ByteData? data = await img.toByteData(format: ui.ImageByteFormat.png);
+    if (data == null) {
+      return MarkerBitmapResult(
+          BitmapDescriptor.defaultMarker, const Offset(0.5, 0.5));
+    }
+    return MarkerBitmapResult(
+      // Ground overlays take the image as is and stretch it to their box
+      // on the ground: no pixel-ratio scaling.
+      BitmapDescriptor.bytes(data.buffer.asUint8List(),
+          bitmapScaling: MapBitmapScaling.none),
+      const Offset(0.5, 0.5),
+      size: Size(cw, ch),
+    );
+  }
+
+  /// The gate's direction: an arrow pointing UP, drawn entirely OUTSIDE
+  /// the badge's footprint — it begins past the badge's corners and runs
+  /// out from there, with clear air between the two. Placed with anchor
+  /// (0.5, 0.5), flat, and `rotation` = the gate's outward heading, it
+  /// swings around the badge to point the way out of the station — and
+  /// keeps pointing there when the map is rotated, because the platform
+  /// rotates it with the map. Drawn from the centre it overlapped the
+  /// badge and only its tip showed, a notch nobody could read.
+  static Future<MarkerBitmapResult> getStationGateArrowMarker() async {
+    final double dpr = (WidgetsBinding
+                .instance.platformDispatcher.implicitView?.devicePixelRatio ??
+            3.0)
+        .clamp(1.0, 4.0);
+    const double d = 76;
+    const Offset c = Offset(d / 2, d / 2);
+    // Radii from the centre: the badge is 22 pt square, so its corners
+    // reach ~15.6 pt; the arrow starts beyond that, with a gap.
+    const double tail = 19;
+    const double tip = 35;
+    const double head = 7;
+    final ui.PictureRecorder pictureRecorder = ui.PictureRecorder();
+    final Canvas canvas = Canvas(pictureRecorder);
+    canvas.scale(dpr);
+    final path = Path()
+      ..moveTo(c.dx, c.dy - tail)
+      ..lineTo(c.dx, c.dy - tip)
+      ..moveTo(c.dx - head, c.dy - tip + head)
+      ..lineTo(c.dx, c.dy - tip)
+      ..lineTo(c.dx + head, c.dy - tip + head);
+    canvas.drawPath(
+        path,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 7
+          ..strokeCap = StrokeCap.round
+          ..strokeJoin = StrokeJoin.round
+          ..color = const Color(0xFF1F2A37).withValues(alpha: 0.92));
+    canvas.drawPath(
+        path,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 3.5
+          ..strokeCap = StrokeCap.round
+          ..strokeJoin = StrokeJoin.round
+          ..color = Colors.white);
+
+    final ui.Image img = await pictureRecorder
+        .endRecording()
+        .toImage((d * dpr).round(), (d * dpr).round());
+    final ByteData? data = await img.toByteData(format: ui.ImageByteFormat.png);
+    if (data == null) {
+      return MarkerBitmapResult(
+          BitmapDescriptor.defaultMarker, const Offset(0.5, 0.5));
+    }
+    return MarkerBitmapResult(
+      // Ground overlays take the image as is and stretch it to their box
+      // on the ground: no pixel-ratio scaling.
+      BitmapDescriptor.bytes(data.buffer.asUint8List(),
+          bitmapScaling: MapBitmapScaling.none),
+      const Offset(0.5, 0.5),
+      size: const Size(d, d),
     );
   }
 

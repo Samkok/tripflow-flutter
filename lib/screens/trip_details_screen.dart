@@ -45,6 +45,7 @@ import 'package:voyza/utils/open_trip_on_map.dart';
 import 'package:voyza/utils/same_day_place_guard.dart';
 import 'package:voyza/utils/search_text.dart';
 import 'package:voyza/utils/trip_dates.dart';
+import 'package:voyza/utils/unvisited_places.dart';
 import 'package:voyza/utils/trip_day_labels.dart';
 import 'package:voyza/utils/trip_qr_text.dart';
 import 'package:voyza/utils/trip_share_link.dart';
@@ -54,6 +55,7 @@ import 'package:voyza/utils/trip_times.dart';
 import 'package:voyza/widgets/trip_times_lines.dart';
 import 'package:voyza/widgets/trip_times_sheet.dart';
 import 'package:voyza/widgets/trip_day_picker.dart';
+import 'package:voyza/widgets/unvisited_places_sheet.dart';
 import 'package:voyza/services/trip_dates_service.dart';
 import 'package:voyza/services/itinerary_pdf_service.dart';
 import 'package:voyza/services/trip_day_service.dart';
@@ -1441,9 +1443,19 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
     // each day in their `[scheduledDate..scheduledEndDate]` range — same
     // SavedLocation instance reused across day groups so edits/drag still
     // work via id.
+    // An ended trip's leftovers (never done, never skipped) leave their
+    // days for the "Not visited" panel above the list.
+    final unvisited = _tripEnded
+        ? unvisitedPlaces([for (final l in locations) l.toLocationModel()])
+        : const <LocationModel>[];
+    final unvisitedIds = {for (final p in unvisited) p.id};
+    final unvisitedRows =
+        locations.where((l) => unvisitedIds.contains(l.id)).toList();
+
     final groupedByDay = <DateTime, List<SavedLocation>>{};
     final unscheduled = <SavedLocation>[];
     for (final location in locations) {
+      if (unvisitedIds.contains(location.id)) continue;
       final startRaw = location.scheduledDate;
       if (startRaw == null) {
         // No date = the trip's Unscheduled bucket, rendered as its own
@@ -1507,6 +1519,14 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
         SliverToBoxAdapter(
           child: _buildTripInfoSection(),
         ),
+        if (unvisited.isNotEmpty)
+          SliverToBoxAdapter(
+            child: _buildUnvisitedSection(
+              unvisited,
+              rows: unvisitedRows,
+              hasWriteAccess: hasWriteAccess,
+            ),
+          ),
         // Places that belong to the trip but sit on NO day. Rendered above
         // the day list so leftovers are impossible to miss; each card can
         // be dragged onto any day below (or scheduled via its own sheet).
@@ -2139,6 +2159,90 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
             _trip.copyWith(startDate: range.start, endDate: range.end);
       });
     }
+  }
+
+  /// An ended trip's leftovers — the places never ticked off — with the one
+  /// thing left to do about them: review (delete, or move to another trip).
+  /// Red identity so it reads as a loose end, not a day.
+  Widget _buildUnvisitedSection(
+    List<LocationModel> unvisited, {
+    required List<SavedLocation> rows,
+    required bool hasWriteAccess,
+  }) {
+    final theme = Theme.of(context);
+    const red = Color(0xFFFF5252);
+    final n = unvisited.length;
+    final them = n == 1 ? 'it' : 'them';
+    return Padding(
+      padding: const EdgeInsets.only(top: 16, left: 16, right: 16),
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: red.withValues(alpha: 0.06),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: red.withValues(alpha: 0.35), width: 1.2),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: red.withValues(alpha: 0.18),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.flag_outlined, size: 15, color: red),
+                  const SizedBox(width: 6),
+                  Text(
+                    'Not visited',
+                    style: theme.textTheme.labelLarge?.copyWith(
+                      color: red,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    '$n',
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: red.withValues(alpha: 0.8),
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'This trip has ended with $n place${n == 1 ? '' : 's'} you '
+              'never got to. Delete $them, or move $them to another trip.',
+              style: theme.textTheme.bodySmall
+                  ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+            ),
+            const SizedBox(height: 10),
+            // The places themselves — same cards as a day, so each still
+            // opens its sheet and carries its Options.
+            for (var i = 0; i < rows.length; i++) ...[
+              if (i > 0) const SizedBox(height: 8),
+              _buildLocationCard(rows[i], i, rows,
+                  hasWriteAccess: hasWriteAccess),
+            ],
+            const SizedBox(height: 10),
+            Align(
+              alignment: Alignment.centerRight,
+              child: FilledButton.tonalIcon(
+                onPressed: () => showUnvisitedPlacesSheet(context,
+                    trip: _trip, places: unvisited),
+                icon: const Icon(Icons.checklist_rounded, size: 18),
+                label: Text(hasWriteAccess ? 'Review' : 'View'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   /// The trip's Unscheduled bucket: places that belong to the trip but sit

@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../providers/optimized_map_overlay_provider.dart';
 import '../models/location_model.dart';
+import '../models/transit_fare.dart';
 import '../utils/line_badge_colors.dart';
 import '../utils/marker_utils.dart';
 import '../utils/transit_line_style.dart';
@@ -48,9 +49,11 @@ class LegRail extends ConsumerWidget {
       _ => 'Drive',
     };
     if (mode == 'direct') return '$verb · $distanceLabel direct';
+    final fare = TransitFare.ofLeg(legData);
+    final fareSuffix = fare == null ? '' : ' · ${fare.label}';
     return durationLabel == null
-        ? '$verb · $distanceLabel'
-        : '$verb $durationLabel · $distanceLabel';
+        ? '$verb · $distanceLabel$fareSuffix'
+        : '$verb $durationLabel · $distanceLabel$fareSuffix';
   }
 
   /// The rail's middle: transit legs with step data render a VERTICAL
@@ -91,7 +94,8 @@ class LegRail extends ConsumerWidget {
     for (final s in steps) {
       final isRide = s['mode'] == 'TRANSIT';
       final secs = ((s['durationSeconds'] as num?) ?? 0).toInt();
-      if (!isRide && secs < 20) continue;
+      final gateLabel = s['gateLabel'] as String?;
+      if (!isRide && gateLabel == null && secs < 20) continue;
       if (rows.isNotEmpty) {
         rows.add(Padding(
           padding: const EdgeInsets.only(left: 1, top: 2, bottom: 2),
@@ -137,6 +141,17 @@ class LegRail extends ConsumerWidget {
           const SizedBox(width: 5),
           Text('Ride · ${mins(s)}', style: factStyle),
         ]));
+      } else if (gateLabel != null) {
+        // The gate the ride is boarded or left through — "Exit A" — so the
+        // plan says which way out of the station, as the map does.
+        final isEntrance = s['gate'] == 'entrance';
+        rows.add(Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(isEntrance ? Icons.login_rounded : Icons.logout_rounded,
+              size: 14, color: theme.colorScheme.onSurfaceVariant),
+          const SizedBox(width: 5),
+          Text('${isEntrance ? 'Entrance' : 'Exit'} $gateLabel',
+              style: factStyle),
+        ]));
       } else {
         rows.add(Row(mainAxisSize: MainAxisSize.min, children: [
           Icon(Icons.directions_walk_rounded,
@@ -149,6 +164,20 @@ class LegRail extends ConsumerWidget {
     if (rows.isEmpty) {
       return Text(_fact(context),
           style: factStyle, maxLines: 1, overflow: TextOverflow.ellipsis);
+    }
+    // The leg's fare closes the stack: one price for the whole journey,
+    // rides and transfers included, when Google publishes it.
+    final fare = TransitFare.ofLeg(legData);
+    if (fare != null) {
+      rows.add(Padding(
+        padding: const EdgeInsets.only(top: 2),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(Icons.confirmation_number_outlined,
+              size: 14, color: theme.colorScheme.onSurfaceVariant),
+          const SizedBox(width: 5),
+          Text(fare.label, style: factStyle),
+        ]),
+      ));
     }
     return Column(
       mainAxisSize: MainAxisSize.min,

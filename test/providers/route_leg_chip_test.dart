@@ -5,6 +5,7 @@ import 'package:voyza/models/location_model.dart';
 import 'package:voyza/providers/map_ui_state_provider.dart';
 import 'package:voyza/providers/optimized_map_overlay_provider.dart';
 import 'package:voyza/providers/trip_provider.dart';
+import 'package:voyza/utils/marker_ids.dart';
 
 class _FakeTripNotifier extends StateNotifier<TripState>
     implements TripNotifier {
@@ -94,16 +95,16 @@ void main() {
 
   group('route leg chip', () {
     test('the whole transit leg has a chip', () async {
-      final markers =
-          await chipFor(_transitDay(lineColor: '#00A040'), 'leg_0');
-      expect(markers.map((m) => m.markerId.value), ['route_leg_chip_leg_0']);
+      final markers = await chipFor(_transitDay(lineColor: '#00A040'), 'leg_0');
+      expect(markers.map((m) => baseMarkerId(m.markerId.value)),
+          ['route_leg_chip_leg_0']);
     });
 
     test('a tapped tram ride run has its own chip', () async {
       final markers = await chipFor(
           _transitDay(lineShort: '', lineColor: '#00A040'), 'leg_0_s1');
-      expect(
-          markers.map((m) => m.markerId.value), ['route_leg_chip_leg_0_s1']);
+      expect(markers.map((m) => baseMarkerId(m.markerId.value)),
+          ['route_leg_chip_leg_0_s1']);
       final chip = markers.single;
       // Anchored on the ride itself (its middle point when the map centre
       // is unknown), never on the walk connectors.
@@ -118,8 +119,8 @@ void main() {
     test('a walk connector run has a chip too', () async {
       final markers =
           await chipFor(_transitDay(lineColor: '#00A040'), 'leg_0_s0');
-      expect(
-          markers.map((m) => m.markerId.value), ['route_leg_chip_leg_0_s0']);
+      expect(markers.map((m) => baseMarkerId(m.markerId.value)),
+          ['route_leg_chip_leg_0_s0']);
     });
   });
 }

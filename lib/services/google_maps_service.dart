@@ -5,7 +5,9 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import '../models/location_model.dart';
+import '../models/transit_fare.dart';
 import '../utils/routing_place_id.dart';
+import '../utils/station_gates.dart';
 
 /// Routing service, migrated from the legacy Directions API to the Routes
 /// API v2 (`computeRoutes`). The legacy endpoint is EOL — disabled for all
@@ -24,6 +26,11 @@ class GoogleMapsService {
     receiveTimeout: const Duration(seconds: 15),
   ));
   static String get _apiKey => dotenv.env['GOOGLE_DIRECTIONS_API_KEY'] ?? '';
+
+  /// Tests swap this client's adapter to replay canned Routes API payloads
+  /// through the real request builder and response parser.
+  @visibleForTesting
+  static Dio get dioForTesting => _dio;
 
   static const _endpoint =
       'https://routes.googleapis.com/directions/v2:computeRoutes';
@@ -221,6 +228,11 @@ class GoogleMapsService {
         if (isTransit)
           'departureTime':
               _transitQueryTime(departureTime).toUtc().toIso8601String(),
+        // Rank itineraries by the least walking (Sam, 2026-10-17): the
+        // default ranking happily trades a 15-minute walk for a few
+        // minutes saved; travellers between sights would rather ride.
+        if (isTransit)
+          'transitPreferences': {'routingPreference': 'LESS_WALKING'},
       };
 
       // Field-mask API: unlisted fields are simply not returned. Transit
@@ -233,7 +245,12 @@ class GoogleMapsService {
         if (optimizeWaypoints) 'routes.optimizedIntermediateWaypointIndex',
         if (isTransit) 'routes.legs.steps.travelMode',
         if (isTransit) 'routes.legs.steps.transitDetails',
+        // The itinerary's price, when the agency publishes one.
+        if (isTransit) 'routes.travelAdvisory.transitFare',
         if (isTransit) 'routes.legs.steps.staticDuration',
+        // "Take exit A" / "Take entrance C1": the only place Google names
+        // the gate a ride is left or boarded through (see station_gates).
+        if (isTransit) 'routes.legs.steps.navigationInstruction.instructions',
         // Per-step geometry: a transit leg is walk → ride → walk, and the
         // map must draw those pieces differently (dotted walk, line-colored
         // ride) — one solid leg polyline looked like the ride started at
@@ -304,11 +321,18 @@ class GoogleMapsService {
       final List<List<Map<String, dynamic>>?> legTransit = [];
       final List<List<Map<String, dynamic>>?> legSteps = [];
 
+      // The fare is per ROUTE; transit never carries intermediates, so the
+      // one leg is the route and takes it.
+      final routeFare = legs.length == 1
+          ? TransitFare.parseMoney(
+              (route['travelAdvisory'] as Map?)?['transitFare'])
+          : null;
       for (final legRaw in legs) {
         final leg = legRaw as Map<String, dynamic>;
         legDetails.add({
           'duration': _parseDuration(leg['duration']),
           'distance': ((leg['distanceMeters'] as num?) ?? 0).toDouble(),
+          if (routeFare != null) 'fare': routeFare.toJson(),
         });
         final encoded =
             (leg['polyline'] as Map?)?['encodedPolyline'] as String?;
@@ -357,6 +381,9 @@ class GoogleMapsService {
             'steps': isTransit ? extractStepGeometry(rLeg) : null,
             'description': r['description'],
             'labels': (r['routeLabels'] as List?)?.cast<String>(),
+            'fare': TransitFare.parseMoney(
+                    (r['travelAdvisory'] as Map?)?['transitFare'])
+                ?.toJson(),
           });
         }
       }
@@ -425,10 +452,19 @@ class GoogleMapsService {
   static List<Map<String, dynamic>> extractTransitSegments(
       Map<String, dynamic> leg) {
     final segments = <Map<String, dynamic>>[];
-    for (final stepRaw in (leg['steps'] as List?) ?? const []) {
-      final step = stepRaw as Map<String, dynamic>;
+    final steps = ((leg['steps'] as List?) ?? const [])
+        .cast<Map<String, dynamic>>()
+        .toList();
+    for (var t = 0; t < steps.length; t++) {
+      final step = steps[t];
       final td = step['transitDetails'] as Map<String, dynamic>?;
       if (td == null) continue;
+      // The gates on either side of this ride, when Google names them: the
+      // step just before ("Take entrance C1", mouth → platform) and the one
+      // just after ("Take exit A", platform → mouth). The step beyond each
+      // supplies the point in front of the gate.
+      final boardGate = _gateAt(steps, t - 1, boarding: true);
+      final alightGate = _gateAt(steps, t + 1, boarding: false);
       final line = td['transitLine'] as Map<String, dynamic>? ?? const {};
       final stopDetails =
           td['stopDetails'] as Map<String, dynamic>? ?? const {};
@@ -445,9 +481,64 @@ class GoogleMapsService {
         'alightStop': (stopDetails['arrivalStop'] as Map?)?['name'] ?? '',
         'departureTime': stopDetails['departureTime'],
         'arrivalTime': stopDetails['arrivalTime'],
+        // How often the line runs ("600s"), when the feed says — the card
+        // prints it as "every 10 min" so a missed bus is not a lost plan.
+        if (td['headway'] != null)
+          'headwaySeconds': _parseDuration(td['headway']).inSeconds,
+        if (boardGate != null) 'boardGate': boardGate.toJson(),
+        if (alightGate != null) 'alightGate': alightGate.toJson(),
       });
     }
     return segments;
+  }
+
+  /// Google's walking instruction for a step, when it has one.
+  static String? _instructionOf(Map<String, dynamic>? step) =>
+      (step?['navigationInstruction'] as Map?)?['instructions'] as String?;
+
+  static List<LatLng>? _pointsOf(Map<String, dynamic>? step) {
+    final encoded = (step?['polyline'] as Map?)?['encodedPolyline'] as String?;
+    if (encoded == null) return null;
+    final pts = _decodePolyline(encoded);
+    return pts.isEmpty ? null : pts;
+  }
+
+  static bool _isWalkStep(Map<String, dynamic>? step) =>
+      step != null &&
+      step['transitDetails'] == null &&
+      (step['travelMode'] as String? ?? 'WALK') == 'WALK';
+
+  /// The gate described by the walking step at [index], or null when that
+  /// step is not a "Take exit/entrance …" step. [boarding] says which way
+  /// the step runs (mouth → platform before a ride, platform → mouth
+  /// after), and which neighbouring step holds the point in front.
+  static StationGate? _gateAt(List<Map<String, dynamic>> steps, int index,
+      {required bool boarding}) {
+    if (index < 0 || index >= steps.length) return null;
+    final step = steps[index];
+    if (!_isWalkStep(step)) return null;
+    final parsed = parseGateInstruction(_instructionOf(step));
+    if (parsed == null) return null;
+    final gatePts = _pointsOf(step);
+    if (gatePts == null) return null;
+    final neighbourIndex = boarding ? index - 1 : index + 1;
+    final neighbour = (neighbourIndex >= 0 && neighbourIndex < steps.length)
+        ? steps[neighbourIndex]
+        : null;
+    final neighbourPts = _isWalkStep(neighbour) ? _pointsOf(neighbour) : null;
+    return boarding
+        ? boardingGate(
+            kind: parsed.kind,
+            label: parsed.label,
+            gateStep: gatePts,
+            prevStep: neighbourPts,
+          )
+        : alightingGate(
+            kind: parsed.kind,
+            label: parsed.label,
+            gateStep: gatePts,
+            nextStep: neighbourPts,
+          );
   }
 
   /// Per-step DRAWABLE geometry for a transit leg, with consecutive
@@ -460,14 +551,50 @@ class GoogleMapsService {
   static List<Map<String, dynamic>> extractStepGeometry(
       Map<String, dynamic> leg) {
     final runs = <Map<String, dynamic>>[];
-    for (final stepRaw in (leg['steps'] as List?) ?? const []) {
-      final step = stepRaw as Map<String, dynamic>;
+    final steps = ((leg['steps'] as List?) ?? const [])
+        .cast<Map<String, dynamic>>()
+        .toList();
+    for (var t = 0; t < steps.length; t++) {
+      final step = steps[t];
       final encoded = (step['polyline'] as Map?)?['encodedPolyline'] as String?;
       if (encoded == null) continue;
       final points = _decodePolyline(encoded);
       if (points.isEmpty) continue;
       final isRide = step['transitDetails'] != null ||
           (step['travelMode'] as String?) == 'TRANSIT';
+      // A "Take exit A" / "Take entrance C1" step is the passage through
+      // the station building. It becomes a run of its own — never merged
+      // into the street walk — so the walking leg proper starts (or ends)
+      // at the gate's mouth, where the map puts the exit symbol.
+      final gate = isRide ? null : parseGateInstruction(_instructionOf(step));
+      if (gate != null) {
+        final prevIsRide = t > 0 && !_isWalkStep(steps[t - 1]);
+        final nextIsRide = t + 1 < steps.length && !_isWalkStep(steps[t + 1]);
+        final role = prevIsRide ? 'alight' : (nextIsRide ? 'board' : null);
+        if (role != null) {
+          // Before a ride the street walk ends at the entrance: close the
+          // preceding walk run on the mouth so it does not stop short.
+          if (role == 'board' &&
+              runs.isNotEmpty &&
+              runs.last['mode'] == 'WALK' &&
+              runs.last['gate'] == null) {
+            final prevPts = runs.last['points'] as List<LatLng>;
+            if (metersBetween(prevPts.last, points.first) <=
+                gateFrontMaxMeters) {
+              prevPts.add(points.first);
+            }
+          }
+          runs.add({
+            'mode': 'WALK',
+            'points': List<LatLng>.from(points),
+            'durationSeconds': _parseDuration(step['staticDuration']).inSeconds,
+            'gate': gate.kind,
+            'gateLabel': gate.label,
+            'gateRole': role,
+          });
+          continue;
+        }
+      }
       String? color;
       String? textColor;
       String? lineShort;
@@ -492,14 +619,29 @@ class GoogleMapsService {
       // the run↔ride pairing everywhere it's assumed — the leg sheet fell
       // back to rides-only (walk rows vanished) and per-run chips would
       // have shown the wrong stops.
-      if (!isRide && runs.isNotEmpty && runs.last['mode'] == 'WALK') {
-        (runs.last['points'] as List<LatLng>).addAll(points);
-        runs.last['durationSeconds'] =
-            (runs.last['durationSeconds'] as int) + stepSeconds;
+      final last = runs.isNotEmpty ? runs.last : null;
+      if (!isRide &&
+          last != null &&
+          last['mode'] == 'WALK' &&
+          last['gate'] == null) {
+        (last['points'] as List<LatLng>).addAll(points);
+        last['durationSeconds'] =
+            (last['durationSeconds'] as int) + stepSeconds;
       } else {
+        // The street walk after an exit starts AT the exit's mouth: Google
+        // begins the next step a few metres out, on the pavement.
+        final startsAtGate = !isRide &&
+            last != null &&
+            last['gateRole'] == 'alight' &&
+            metersBetween(
+                    (last['points'] as List<LatLng>).last, points.first) <=
+                gateFrontMaxMeters;
         runs.add({
           'mode': mode,
-          'points': List<LatLng>.from(points),
+          'points': [
+            if (startsAtGate) (last['points'] as List<LatLng>).last,
+            ...points,
+          ],
           'durationSeconds': stepSeconds,
           if (color != null) 'lineColor': color,
           if (textColor != null) 'lineTextColor': textColor,

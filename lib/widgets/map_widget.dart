@@ -9,6 +9,7 @@ import 'package:voyza/providers/optimized_map_overlay_provider.dart';
 import 'package:voyza/providers/trip_provider.dart';
 import '../providers/map_ui_state_provider.dart';
 import '../providers/building_outline_provider.dart';
+import '../utils/marker_ids.dart';
 
 class MapWidget extends ConsumerWidget {
   final Function(GoogleMapController) onMapCreated;
@@ -38,7 +39,7 @@ class MapWidget extends ConsumerWidget {
   /// The place a callout marker stands over, by the id in its marker id.
   static LocationModel? _calloutTarget(
       String markerId, List<LocationModel> candidates) {
-    final locId = markerId.substring(_calloutPrefix.length);
+    final locId = baseMarkerId(markerId).substring(_calloutPrefix.length);
     for (final l in candidates) {
       if (l.id == locId) return l;
     }
@@ -58,7 +59,8 @@ class MapWidget extends ConsumerWidget {
 
     final out = <Marker>{};
     for (final marker in overlayMarkers) {
-      final id = marker.markerId.value;
+      // Ids carry a bitmap version (marker_ids.dart); match on the base.
+      final id = baseMarkerId(marker.markerId.value);
       // Special markers (current location, route markers) pass through.
       if (id == 'current_location' ||
           id.startsWith('leg_') ||
@@ -197,6 +199,11 @@ class MapWidget extends ConsumerWidget {
             // The focused place's building footprint (tap a pin). Shown in
             // both modes: it belongs to the place, not to a day.
             polygons: overlayState.polygons,
+            // Station exits/entrances on the ground; day-scoped like the
+            // route they belong to.
+            groundOverlays: allDaysMode
+                ? const <GroundOverlay>{}
+                : overlayState.groundOverlays,
             myLocationEnabled: false,
             myLocationButtonEnabled: false,
             zoomControlsEnabled: false,

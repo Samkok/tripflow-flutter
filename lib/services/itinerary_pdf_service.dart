@@ -70,6 +70,7 @@ class ItineraryPdfService {
   static const _heroFrom = PdfColor.fromInt(0xFF0AA5D8);
   static const _heroTo = PdfColor.fromInt(0xFF7C3AED);
   static const _amber = PdfColor.fromInt(0xFFF59E0B);
+  static const _rose = PdfColor.fromInt(0xFFE53935);
   static const _green = PdfColor.fromInt(0xFF1EA672);
   static const _stayNavy = PdfColor.fromInt(0xFF2B4C9E);
 
@@ -118,6 +119,9 @@ class ItineraryPdfService {
       }
     }
     for (final s in doc.unscheduled) {
+      check(RasterRole.stopName, s.name);
+    }
+    for (final s in doc.unvisited) {
       check(RasterRole.stopName, s.name);
     }
     return out;
@@ -576,6 +580,63 @@ class ItineraryPdfService {
       ];
     }
 
+    // The ended trip's leftovers: what was planned and never happened,
+    // each with the day it was meant for. A reader deciding what to carry
+    // to the next trip starts here.
+    List<pw.Widget> unvisitedBlock() {
+      if (doc.unvisited.isEmpty) return const [];
+      final n = doc.unvisited.length;
+      final header = pw.Container(
+        margin: const pw.EdgeInsets.only(top: 16, bottom: 5),
+        padding: const pw.EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+        decoration: pw.BoxDecoration(
+          color: _rose,
+          borderRadius: pw.BorderRadius.circular(9),
+        ),
+        child: pw.Row(children: [
+          pw.Text('NOT VISITED',
+              style: pw.TextStyle(
+                  font: bold,
+                  fontSize: 11,
+                  color: PdfColors.white,
+                  letterSpacing: 0.8)),
+          pw.SizedBox(width: 8),
+          pw.Text('planned, never reached',
+              style: pw.TextStyle(
+                  font: medium, fontSize: 9, color: PdfColors.white)),
+          pw.Spacer(),
+          pw.Text(
+            '$n ${n == 1 ? 'place' : 'places'}',
+            style:
+                pw.TextStyle(font: medium, fontSize: 9, color: PdfColors.white),
+          ),
+        ]),
+      );
+      final rows = [
+        for (final s in doc.unvisited)
+          pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.stretch,
+              children: [
+                stopRow(s, _rose),
+                if (s.dayLabel != null)
+                  pw.Padding(
+                    padding: const pw.EdgeInsets.only(left: 12, bottom: 4),
+                    child: pw.Text('Was planned for ${s.dayLabel}',
+                        style: const pw.TextStyle(fontSize: 8, color: _muted)),
+                  ),
+              ]),
+      ];
+      return [
+        pw.Inseparable(
+          child: pw.Column(
+            crossAxisAlignment: pw.CrossAxisAlignment.stretch,
+            children: [header, rows.first],
+          ),
+        ),
+        ...rows.skip(1),
+      ];
+    }
+
     // ── the way back to the app ──────────────────────────────────────────
     // A link in a PDF is one fixed address, and the reader may be on any
     // phone or laptop — so the label goes to the site's download section
@@ -684,6 +745,7 @@ class ItineraryPdfService {
             legend,
           ],
           for (final day in doc.days) ...dayBlock(day),
+          ...unvisitedBlock(),
           ...unscheduledBlock(),
           poweredBy,
         ],

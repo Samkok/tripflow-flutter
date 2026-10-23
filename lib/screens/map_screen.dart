@@ -40,6 +40,8 @@ import '../providers/trip_provider.dart';
 import '../providers/theme_provider.dart';
 import '../providers/all_days_route_provider.dart';
 import '../providers/map_ui_state_provider.dart';
+import '../providers/unvisited_places_provider.dart';
+import '../widgets/unvisited_preview_banner.dart';
 import '../providers/building_outline_provider.dart';
 import '../providers/debounced_settings_provider.dart';
 import '../providers/trip_collaborator_provider.dart';
@@ -1684,6 +1686,15 @@ class _MapScreenState extends ConsumerState<MapScreen>
     });
 
     // Listen for the zoom trigger after route optimization
+    // Switching the unvisited preview on frames those places at once —
+    // they are usually nowhere near the day the map was showing.
+    ref.listen<bool>(showUnvisitedOnMapProvider, (previous, next) {
+      if (!next || (previous ?? false)) return;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _zoomToFitTrip();
+      });
+    });
+
     ref.listen<int>(zoomToFitRouteTrigger, (previous, next) {
       if (next <= (previous ?? 0)) return;
       // A From/To preview is ONE leg between two pins: frame that pair (its
@@ -2481,7 +2492,16 @@ class _MapScreenState extends ConsumerState<MapScreen>
                           // In flow, the Stack — and the measured chrome —
                           // grow to contain it, so the day fit also keeps
                           // pins from hiding behind an interactive legend.
-                          const DayLegend(),
+                          const Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              // "Showing the places you didn't visit":
+                              // the preview's one line of explanation.
+                              UnvisitedPreviewBanner(),
+                              DayLegend(),
+                            ],
+                          ),
                         ],
                       ),
                     ],
@@ -2544,8 +2564,11 @@ class _MapScreenState extends ConsumerState<MapScreen>
                     alignment: Alignment.bottomRight,
                     child: Consumer(
                       builder: (context, ref, _) {
+                        // The MAP's list: during the unvisited preview the
+                        // leftovers, else the day — so the fit button stays
+                        // while the preview shows pins the day list lacks.
                         final locationsForDate =
-                            ref.watch(locationsForSelectedDateProvider);
+                            ref.watch(mapLocationsForSelectedDateProvider);
                         final hasSelectedDayRoute = ref.watch(tripProvider
                             .select((s) => s.optimizedRoute.isNotEmpty));
                         // In All-days mode the share/fit affordances key off the
@@ -2972,6 +2995,18 @@ class _MapScreenState extends ConsumerState<MapScreen>
     // selected date.
     if (ref.read(allDaysModeProvider)) {
       _zoomToFitAllDays();
+      return;
+    }
+
+    // The unvisited preview: frame the leftovers alone — no route, no pin
+    // filter, no device position (the trip is over; the phone may be home).
+    if (ref.read(unvisitedPreviewActiveProvider)) {
+      final leftovers = ref.read(mapLocationsForSelectedDateProvider);
+      if (leftovers.isEmpty) return;
+      _fitPointsInWindow(
+        [for (final l in leftovers) l.coordinates],
+        _browsingFitWindow(),
+      );
       return;
     }
 
@@ -4137,10 +4172,17 @@ class _DayPickerSheetState extends ConsumerState<_DayPickerSheet> {
         (ref.watch(hasActiveTripWriteAccessProvider).valueOrNull ?? false);
 
     // Stops scheduled per day — the same isActiveOnDate the planner uses.
+    // An ended trip's unvisited places are off their days (they have their
+    // own row below), so they are not counted here.
+    final leftovers = ref.watch(endedTripUnvisitedProvider);
+    final leftoverIds = {for (final l in leftovers) l.id};
     final stopCount = <DateTime, int>{
       for (final d in days)
-        d: locations.where((l) => l.isActiveOnDate(d)).length,
+        d: locations
+            .where((l) => l.isActiveOnDate(d) && !leftoverIds.contains(l.id))
+            .length,
     };
+    final previewOn = ref.watch(showUnvisitedOnMapProvider);
 
     final selIndex = days.indexWhere((d) => d.isAtSameMomentAs(selected));
 
@@ -4240,6 +4282,11 @@ class _DayPickerSheetState extends ConsumerState<_DayPickerSheet> {
                               if (i != days.length - 1)
                                 const SizedBox(height: 4),
                             ],
+                            if (leftovers.isNotEmpty) ...[
+                              const SizedBox(height: 4),
+                              _unvisitedRow(theme,
+                                  count: leftovers.length, active: previewOn),
+                            ],
                           ],
                         ),
                 ),
@@ -4337,6 +4384,46 @@ class _DayPickerSheetState extends ConsumerState<_DayPickerSheet> {
     );
   }
 
+  /// The ended trip's leftovers, as a destination of their own: tapping it
+  /// previews them on the map (alone, with a banner), the way a day row
+  /// shows that day.
+  Widget _unvisitedRow(ThemeData theme,
+      {required int count, required bool active}) {
+    const red = Color(0xFFFF5252);
+    return _pickerRow(
+      theme,
+      selected: active,
+      accent: red,
+      leading: Icon(
+        Icons.flag_outlined,
+        size: 18,
+        color:
+            active ? red : theme.colorScheme.onSurface.withValues(alpha: 0.65),
+      ),
+      title: 'Not visited',
+      subtitle: 'Trip ended — show these on the map',
+      trailing: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(
+          color: red.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(999),
+        ),
+        child: Text(
+          '$count place${count == 1 ? '' : 's'}',
+          style: theme.textTheme.labelSmall?.copyWith(
+            fontWeight: FontWeight.w700,
+            color: red,
+          ),
+        ),
+      ),
+      onTap: () {
+        ref.read(allDaysModeProvider.notifier).state = false;
+        ref.read(showUnvisitedOnMapProvider.notifier).state = true;
+        Navigator.of(context).pop();
+      },
+    );
+  }
+
   Widget _dayRow(
     ThemeData theme, {
     required int index,
@@ -4383,6 +4470,7 @@ class _DayPickerSheetState extends ConsumerState<_DayPickerSheet> {
           : null,
       onTap: () {
         ref.read(allDaysModeProvider.notifier).state = false;
+        ref.read(showUnvisitedOnMapProvider.notifier).state = false;
         ref.read(selectedDateProvider.notifier).state = day;
         Navigator.of(context).pop();
       },

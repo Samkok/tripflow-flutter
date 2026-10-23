@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:flutter/material.dart';
 import 'package:voyza/models/location_model.dart';
+import 'package:voyza/models/transit_fare.dart';
 import 'package:voyza/providers/map_ui_state_provider.dart';
 import 'package:voyza/providers/theme_provider.dart';
 import '../providers/trip_provider.dart';
@@ -12,6 +13,7 @@ import '../providers/debounced_settings_provider.dart';
 import '../services/marker_cache_service.dart';
 import '../utils/zone_utils.dart';
 import '../utils/place_tags.dart';
+import '../utils/marker_ids.dart';
 import '../utils/marker_utils.dart';
 import '../utils/transit_line_style.dart'; // Needed for MarkerBitmapResult type
 import '../utils/polyline_simplify.dart';
@@ -20,7 +22,9 @@ import '../core/theme.dart';
 import 'trip_day_labeler_provider.dart';
 import 'pin_clock_provider.dart';
 import 'trip_simulation_provider.dart';
+import 'unvisited_places_provider.dart';
 import '../utils/pin_closing_status.dart';
+import '../utils/station_gates.dart';
 
 class CachedMarkersState {
   // This will now hold the generated bitmaps AND anchors
@@ -50,8 +54,9 @@ String _generateLocationsCacheKey(List<LocationModel> locations,
 /// This is the expensive part that should only run when location data changes.
 final cachedMarkerBitmapsProvider =
     FutureProvider<CachedMarkersState>((ref) async {
-  final locationsForDate = ref.watch(
-      locationsForSelectedDateProvider); // This will now be the optimized list if available
+  // The MAP's list: the day, plus the ended trip's unvisited places when
+  // the "Not visited" switch asks for them.
+  final locationsForDate = ref.watch(mapLocationsForSelectedDateProvider);
   final selectedDate = ref.watch(selectedDateProvider);
   // NARROW watches (pin-appearance fix): this used to watch the ENTIRE
   // tripProvider plus the live GPS position — every location tick and any
@@ -82,11 +87,15 @@ final cachedMarkerBitmapsProvider =
       await markerCache.getCurrentLocationHeadingMarker();
   markerIcons['leg_endpoint'] = await markerCache.getLegEndpointDot();
   markerIcons['transit_stop'] = await markerCache.getTransitStopDot();
+  markerIcons['gate_arrow'] = await markerCache.getStationGateArrow();
 
   // Numbering is order-dependent → compute it synchronously first, THEN
   // rasterize every bitmap in PARALLEL. The serial awaits here were the
   // "pins take seconds to appear" lag: 40 places meant 40 back-to-back
   // canvas→GPU→PNG round-trips.
+  // The ended trip's unvisited places, shown on request: no stop number
+  // (they are off the day), a red "Not visited" line instead.
+  final unvisitedIds = ref.watch(endedTripUnvisitedIdsProvider);
   var nonSkippedIndex = 0;
   final specs = <({LocationModel loc, int number, bool isStart})>[];
   for (final location in locationsForDate) {
@@ -98,6 +107,8 @@ final cachedMarkerBitmapsProvider =
       markerNumber = -2;
     } else if (location.isSkipped) {
       markerNumber = -1;
+    } else if (unvisitedIds.contains(location.id)) {
+      markerNumber = -3;
     } else {
       nonSkippedIndex++;
       markerNumber = nonSkippedIndex;
@@ -151,12 +162,14 @@ final cachedMarkerBitmapsProvider =
             arrival: arrivalById[spec.loc.id],
             todayView: todayView,
           );
+    final unvisited = spec.number == -3;
     return markerCache.getNumberedMarker(
       isStart: spec.isStart,
       number: spec.number,
       // Sequence numbers mean "visit order" — which only exists once the
-      // day is optimized. Before that, pins carry a plain dot.
-      showNumber: routeActive,
+      // day is optimized. Before that, pins carry a plain dot. An unvisited
+      // leftover is off the day: never numbered.
+      showNumber: routeActive && !unvisited,
       // The start pin says so in words — the flag alone read as "just
       // another marker" and its numbering confused the map↔list mapping.
       name: spec.isStart ? '${spec.loc.name} (Start here)' : spec.loc.name,
@@ -173,6 +186,8 @@ final cachedMarkerBitmapsProvider =
           mightBeClosed ? 'Might be closed on this date — please check' : null,
       // The hours status outranks the weekday hint: red/yellow name and
       // its line replace the amber caution.
+      // A previewed leftover keeps the plain pin: the banner on the map
+      // says what these are, the pin itself does not need to.
       nameColor: status.isNone ? null : status.color,
       statusLine: status.isNone ? null : status.line,
       statusColor: status.isNone ? null : status.color,
@@ -213,13 +228,104 @@ final transitStopLabelsProvider =
   return out;
 });
 
+/// One badge bitmap per gate label ("A", "C1") the day's rides use, so a
+/// label rasterizes once however many stations share it.
+final stationGateIconsProvider =
+    FutureProvider<Map<String, MarkerBitmapResult>>((ref) async {
+  final legDetails = ref.watch(tripProvider.select((s) => s.legDetails));
+  final isDarkMode = ref.watch(themeProvider) == ThemeMode.dark;
+  final labels = <String>{};
+  for (final leg in legDetails) {
+    for (final seg in (leg['transit'] as List?) ?? const []) {
+      for (final key in const ['boardGate', 'alightGate']) {
+        final label = StationGate.fromJson((seg as Map)[key])?.label;
+        if (label != null) labels.add(label);
+      }
+    }
+  }
+  if (labels.isEmpty) return const {};
+  final cache = MarkerCacheService();
+  final out = <String, MarkerBitmapResult>{};
+  for (final label in labels) {
+    out[label] = await cache.getStationGateBadge(label, isDarkMode: isDarkMode);
+  }
+  return out;
+});
+
+/// The gates each ride is boarded and left through, as Google names them,
+/// drawn ON THE GROUND: an upright label badge over an arrow turned to the
+/// gate's outward heading. Ground overlays have a footprint in metres —
+/// they are specks from afar and read only once the traveller zooms in to
+/// the station, like the exit signs themselves (a marker kept one screen
+/// size at every zoom and cluttered the city view). The arrow's bearing is
+/// a map bearing, so it keeps pointing out of the station when the map is
+/// rotated. The station's own collar and name still mark the platform.
+final stationGateOverlaysProvider = Provider<Set<GroundOverlay>>((ref) {
+  if (ref.watch(unvisitedPreviewActiveProvider)) return const {};
+  final legDetails = ref.watch(tripProvider.select((s) => s.legDetails));
+  final badges = ref.watch(stationGateIconsProvider).valueOrNull ?? const {};
+  final arrow = ref
+      .watch(cachedMarkerBitmapsProvider)
+      .valueOrNull
+      ?.markerIcons['gate_arrow'];
+  final out = <GroundOverlay>{};
+  for (var i = 0; i < legDetails.length; i++) {
+    final rides = (legDetails[i]['transit'] as List?) ?? const [];
+    for (var k = 0; k < rides.length; k++) {
+      final seg = rides[k] as Map;
+      for (final role in const ['board', 'alight']) {
+        final gate = StationGate.fromJson(seg['${role}Gate']);
+        if (gate == null) continue;
+        final id = 'gate_${i}_${k}_$role';
+        final arrowImage = arrow?.bitmap;
+        final arrowSize = arrow?.size;
+        if (arrowImage is BytesMapBitmap && arrowSize != null) {
+          out.add(GroundOverlay.fromBounds(
+            groundOverlayId: GroundOverlayId('${id}_arrow'),
+            image: arrowImage,
+            bounds: gateGroundBounds(
+              gate.position,
+              widthMeters:
+                  gateArrowGroundMeters * arrowSize.width / arrowSize.height,
+              heightMeters: gateArrowGroundMeters,
+            ),
+            bearing: gate.headingDeg,
+            // Above every route line (polylines top out at 13): the symbol
+            // must not be struck through by the walk it starts.
+            zIndex: 20,
+            clickable: false,
+          ));
+        }
+        final badge = badges[gate.label];
+        final badgeImage = badge?.bitmap;
+        final badgeSize = badge?.size;
+        if (badgeImage is BytesMapBitmap && badgeSize != null) {
+          out.add(GroundOverlay.fromBounds(
+            groundOverlayId: GroundOverlayId(id),
+            image: badgeImage,
+            bounds: gateGroundBounds(
+              gate.position,
+              widthMeters:
+                  gateBadgeGroundMeters * badgeSize.width / badgeSize.height,
+              heightMeters: gateBadgeGroundMeters,
+            ),
+            zIndex: 21,
+            clickable: false,
+          ));
+        }
+      }
+    }
+  }
+  return out;
+});
+
 final finalMarkersProvider = Provider<Set<Marker>>((ref) {
   final markerBitmapsAsync = ref.watch(cachedMarkerBitmapsProvider);
   final stopLabels =
       ref.watch(transitStopLabelsProvider).valueOrNull ?? const {};
   final showPlaceNames =
       ref.watch(showPlaceNamesProvider); // This watch is crucial
-  final locationsForDate = ref.watch(locationsForSelectedDateProvider);
+  final locationsForDate = ref.watch(mapLocationsForSelectedDateProvider);
   final currentLocation =
       ref.watch(tripProvider.select((s) => s.currentLocation));
   // Compass heading for the beam. Already noise-gated at the source
@@ -274,9 +380,11 @@ final finalMarkersProvider = Provider<Set<Marker>>((ref) {
 
       // Google-style white collars at leg boundaries and transit junctions
       // (board/alight points). Skipped wherever a numbered pin already sits
-      // — they mark stations and hand-off points, not stops.
+      // — they mark stations and hand-off points, not stops. None during
+      // the unvisited preview: its map carries no route.
       final endpointIcon = markerIcons['leg_endpoint'];
-      if (endpointIcon != null && dotLegPolylines.isNotEmpty) {
+      final previewOn = ref.watch(unvisitedPreviewActiveProvider);
+      if (!previewOn && endpointIcon != null && dotLegPolylines.isNotEmpty) {
         bool nearAPin(LatLng p) => locationsForDate.any((l) =>
             (l.coordinates.latitude - p.latitude).abs() < 0.00015 &&
             (l.coordinates.longitude - p.longitude).abs() < 0.00015);
@@ -309,7 +417,8 @@ final finalMarkersProvider = Provider<Set<Marker>>((ref) {
               '${p.longitude.toStringAsFixed(5)}';
           if (!labelled.add(key)) return;
           markers.add(Marker(
-            markerId: MarkerId('leg_stop_label_$key'),
+            markerId:
+                MarkerId(versionedMarkerId('leg_stop_label_$key', icon.bitmap)),
             position: p,
             icon: icon.bitmap,
             anchor: icon.anchor,
@@ -331,8 +440,11 @@ final finalMarkersProvider = Provider<Set<Marker>>((ref) {
               final r = run as Map;
               final pts = (r['points'] as List).cast<LatLng>();
               if (pts.isEmpty) continue;
-              addDot(pts.first);
-              addDot(pts.last);
+              // A gate run's mouth carries the gate symbol, not a collar.
+              if (r['gate'] == null) {
+                addDot(pts.first);
+                addDot(pts.last);
+              }
               if (r['mode'] == 'TRANSIT') {
                 if (ride < rides.length) {
                   final seg = rides[ride] as Map;
@@ -373,7 +485,9 @@ final finalMarkersProvider = Provider<Set<Marker>>((ref) {
         if (markerIcons.containsKey(location.id)) {
           final result = markerIcons[location.id]!;
           markers.add(Marker(
-            markerId: MarkerId(location.id),
+            // Keyed by bitmap too (marker_ids.dart): a pin whose line
+            // ticks gets a fresh marker, never an in-place icon swap.
+            markerId: MarkerId(versionedMarkerId(location.id, result.bitmap)),
             position: location.coordinates,
             icon: result.bitmap,
             anchor: result.anchor,
@@ -428,9 +542,15 @@ final memoizedAutomaticZonesProvider = Provider<Set<Circle>>((ref) {
   // stop whose pin is filtered out would be an orphan on the map.
   final pinFilter = ref.watch(mapPinFilterProvider);
 
+  // An ended trip's leftovers are off the map unless previewed — and the
+  // preview shows them alone.
+  final leftoverIds = ref.watch(endedTripUnvisitedIdsProvider);
+  final previewOn = ref.watch(unvisitedPreviewActiveProvider);
+
   // Filter locations to only include those for the selected date and are not skipped.
   final locationsForDate = allLocations.where((loc) {
     if (loc.isSkipped) return false;
+    if (leftoverIds.contains(loc.id) != previewOn) return false;
     if (!pinMatchesFilter(pinFilter,
         isSkipped: loc.isSkipped, isDone: loc.isDone)) {
       return false;
@@ -464,6 +584,8 @@ final memoizedAutomaticZonesProvider = Provider<Set<Circle>>((ref) {
 });
 
 final styledPolylinesProvider = Provider<Set<Polyline>>((ref) {
+  // The unvisited preview shows the missed places alone — no route.
+  if (ref.watch(unvisitedPreviewActiveProvider)) return const {};
   // Narrow watches (moving-pin hygiene): a full tripProvider watch made
   // every GPS tick re-style the polylines via currentLocation.
   final legPolylinesState =
@@ -569,9 +691,14 @@ final styledPolylinesProvider = Provider<Set<Polyline>>((ref) {
           // journey; a run tap lights only that run.
           final emphasized = isRunSelected || isHighlighted;
           final isRide = run['mode'] == 'TRANSIT';
+          // The passage through the station (platform ↔ gate) is drawn as
+          // a faint stub: the walking leg proper starts at the exit's
+          // mouth, where the gate symbol sits.
+          final isGate = run['gate'] != null;
           final runColor = isRide
               ? transitLineFill(run)
-              : Colors.white.withValues(alpha: emphasized ? 0.95 : 0.55);
+              : Colors.white
+                  .withValues(alpha: isGate ? 0.3 : (emphasized ? 0.95 : 0.55));
           if (isRide) {
             polylines.add(
               Polyline(
@@ -596,7 +723,7 @@ final styledPolylinesProvider = Provider<Set<Polyline>>((ref) {
               color: runColor,
               width: isRide
                   ? (isRunSelected ? 9 : (isHighlighted ? 8 : 7))
-                  : (emphasized ? 6 : 4),
+                  : (isGate ? 3 : (emphasized ? 6 : 4)),
               // dash, not dot — see the pattern comment above (iOS renders
               // dots as zero-length spans = invisible). Connector dots are
               // tighter/shorter than walking-leg dots on purpose.
@@ -887,6 +1014,8 @@ String formatLegDuration(Duration d) {
 }
 
 final routeInfoMarkersProvider = FutureProvider<Set<Marker>>((ref) async {
+  // No route on the map during the unvisited preview → no chip either.
+  if (ref.watch(unvisitedPreviewActiveProvider)) return const {};
   // This provider now only generates a marker for the *tapped* route segment.
   final tappedPolylineId = ref.watch(tappedPolylineIdProvider);
 
@@ -972,6 +1101,13 @@ final routeInfoMarkersProvider = FutureProvider<Set<Marker>>((ref) async {
   var chipBadges = chipBadgesFor(transitSegs);
   var chipDistanceLabel = distanceLabel;
   String? chipDurationLabel = durationLabel;
+  // The leg's price rides with its time on the whole-leg chip.
+  final legFare = TransitFare.ofLeg(legData);
+  if (legFare != null) {
+    chipDurationLabel = durationLabel == null
+        ? legFare.label
+        : '$durationLabel · ${legFare.label}';
+  }
   var chipFromName = fromLoc.name.isEmpty ? 'Your location' : fromLoc.name;
   var chipToName = toLoc.name.isEmpty ? 'Your location' : toLoc.name;
 
@@ -1020,15 +1156,40 @@ final routeInfoMarkersProvider = FutureProvider<Set<Marker>>((ref) async {
       }
       String nonEmpty(String? s, String fallback) =>
           (s == null || s.isEmpty) ? fallback : s;
+      // A gate run's title ("Exit A"), from the ride card it belongs to.
+      String? gateTitleOf(Map r) {
+        final label = r['gateLabel'] as String?;
+        if (label == null) return null;
+        return '${r['gate'] == 'entrance' ? 'Entrance' : 'Exit'} $label';
+      }
+
+      final gateTitle = gateTitleOf(run);
       if (isRide) {
         chipFromName = nonEmpty(boardOf(ridesBefore), chipFromName);
         chipToName = nonEmpty(alightOf(ridesBefore), chipToName);
+      } else if (gateTitle != null) {
+        // The passage through the station: platform → exit, or
+        // entrance → platform.
+        if (run['gateRole'] == 'alight') {
+          chipFromName = nonEmpty(alightOf(ridesBefore - 1), chipFromName);
+          chipToName = gateTitle;
+        } else {
+          chipFromName = gateTitle;
+          chipToName = nonEmpty(boardOf(ridesBefore), chipToName);
+        }
       } else {
         // Walk connector: from the previous ride's alight stop (or the leg
         // origin when it's the first run) to the next ride's board stop (or
-        // the leg destination when it's the last).
-        chipFromName = nonEmpty(alightOf(ridesBefore - 1), chipFromName);
-        chipToName = nonEmpty(boardOf(ridesBefore), chipToName);
+        // the leg destination when it's the last) — named by the gate when
+        // the walk starts at one or ends at one.
+        final prevGate =
+            runIndex > 0 ? gateTitleOf(transitRuns[runIndex - 1] as Map) : null;
+        final nextGate = runIndex + 1 < transitRuns.length
+            ? gateTitleOf(transitRuns[runIndex + 1] as Map)
+            : null;
+        chipFromName =
+            prevGate ?? nonEmpty(alightOf(ridesBefore - 1), chipFromName);
+        chipToName = nextGate ?? nonEmpty(boardOf(ridesBefore), chipToName);
       }
     }
   }
@@ -1053,7 +1214,8 @@ final routeInfoMarkersProvider = FutureProvider<Set<Marker>>((ref) async {
         // chip and the whole-leg chip are different bitmaps at different
         // points, and mutating one platform marker into the other left
         // stale chips behind on iOS.
-        markerId: MarkerId('route_leg_chip_$tappedPolylineId'),
+        markerId: MarkerId(versionedMarkerId(
+            'route_leg_chip_$tappedPolylineId', chipResult.bitmap)),
         position: chipPosition,
         icon: chipResult.bitmap,
         anchor: chipResult.anchor,
@@ -1209,11 +1371,15 @@ class AssembledMapOverlays {
   /// building_outline_provider.dart); empty when none is focused.
   final Set<Polygon> polygons;
 
+  /// Station gate symbols (see [stationGateOverlaysProvider]).
+  final Set<GroundOverlay> groundOverlays;
+
   const AssembledMapOverlays({
     required this.markers,
     required this.polylines,
     required this.automaticZones,
     this.polygons = const {},
+    this.groundOverlays = const {},
   });
 }
 
@@ -1229,6 +1395,7 @@ final assembledMapOverlaysProvider =
   final calloutMarkers =
       calloutAsync.hasError ? const <Marker>{} : calloutAsync.valueOrNull ?? {};
   final buildingPolygons = ref.watch(buildingPolygonsProvider);
+  final gateOverlays = ref.watch(stationGateOverlaysProvider);
 
   // Since finalMarkersProvider is synchronous (deriving from an async one),
   // we can treat it more directly. We'll use the async state of the bitmap provider to manage loading/error states.
@@ -1251,6 +1418,7 @@ final assembledMapOverlaysProvider =
             polylines: polylines,
             automaticZones: automaticZones,
             polygons: buildingPolygons,
+            groundOverlays: gateOverlays,
           ));
         },
         loading: () {

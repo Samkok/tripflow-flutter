@@ -5,6 +5,7 @@ import '../core/theme.dart';
 import '../models/location_model.dart';
 import '../services/building_outline_service.dart';
 import '../services/marker_cache_service.dart';
+import '../utils/marker_ids.dart';
 
 /// The place whose building is highlighted on the map: the pin last opened.
 /// Cleared by a tap on the map and by a change of day.
@@ -24,7 +25,8 @@ final focusedPlaceCalloutProvider = FutureProvider<Set<Marker>>((ref) async {
   );
   return {
     Marker(
-      markerId: MarkerId('place_callout_${place.id}'),
+      markerId: MarkerId(
+          versionedMarkerId('place_callout_${place.id}', callout.bitmap)),
       position: place.coordinates,
       icon: callout.bitmap,
       anchor: callout.anchor,

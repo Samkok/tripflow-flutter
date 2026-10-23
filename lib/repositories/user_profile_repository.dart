@@ -177,20 +177,34 @@ class UserProfileRepository {
     required String deviceId,
   }) async {
     try {
-      final now = DateTime.now().toIso8601String();
+      // UTC with the offset spelled out: a bare local time was stored as
+      // UTC and read back hours off.
+      final now = DateTime.now().toUtc().toIso8601String();
       await _supabase.from(_tableName).update({
         'trial_started_at': now,
         'updated_at': now,
       }).eq('user_id', userId);
 
-      await _supabase.from('trial_devices').insert({
-        'user_id': userId,
-        'device_id': deviceId,
-        'trial_started_at': now,
+      // `trial_devices` is closed to clients (row security, no policies):
+      // the direct insert was refused with 403 on every trial start, so
+      // the device record was never written. The server function writes
+      // it (and keeps the first start when the device is already known).
+      await _supabase.rpc('start_trial_for_device', params: {
+        'p_device_id': deviceId,
+        'p_user_id': userId,
       });
     } catch (e) {
       rethrow;
     }
+  }
+
+  /// When this device first started a trial, or null when it never did.
+  /// Server function: the table is not readable by clients.
+  Future<DateTime?> getTrialForDevice(String deviceId) async {
+    final raw = await _supabase
+        .rpc('get_trial_for_device', params: {'p_device_id': deviceId});
+    if (raw == null) return null;
+    return DateTime.tryParse(raw.toString());
   }
 
   /// Ensure user_subscriptions record exists for an active trial.

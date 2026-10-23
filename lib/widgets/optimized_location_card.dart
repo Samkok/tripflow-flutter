@@ -16,6 +16,7 @@ import 'package:voyza/services/place_photo_refresh_service.dart';
 import 'package:voyza/widgets/accommodation_prompts.dart';
 import 'package:voyza/widgets/location_detail_sheet.dart';
 import 'package:voyza/widgets/location_photo_gallery.dart';
+import 'package:voyza/widgets/move_to_trip_sheet.dart';
 import 'package:voyza/widgets/photo_gallery_viewer.dart';
 import 'package:voyza/widgets/stay_duration_dialog.dart';
 import 'package:voyza/utils/date_picker_utils.dart';
@@ -700,6 +701,19 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
                 title: Text('Move to another day',
                     style: TextStyle(color: canEdit ? null : Colors.grey))),
           ),
+          // Only a place that is IN a trip can move to another one; loose
+          // places use "Add to trip" from the detail sheet instead.
+          if (activeTrip != null)
+            PopupMenuItem<String>(
+              value: 'move_trip',
+              enabled: hasWriteAccess,
+              child: ListTile(
+                  leading: Icon(Icons.luggage_outlined,
+                      color: hasWriteAccess ? null : Colors.grey),
+                  title: Text('Move to another trip',
+                      style: TextStyle(
+                          color: hasWriteAccess ? null : Colors.grey))),
+            ),
           const PopupMenuItem<String>(
             value: 'copy',
             child: ListTile(
@@ -741,6 +755,8 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
       ref.read(tripProvider.notifier).unskipMultipleLocations(selectedIds);
     } else if (value == 'move') {
       _showMoveCopyDialog(context, ref, isCopy: false);
+    } else if (value == 'move_trip') {
+      showMoveToTripSheet(context, ref, [location]);
     } else if (value == 'copy') {
       _showMoveCopyDialog(context, ref, isCopy: true);
     } else if (value == 'done') {

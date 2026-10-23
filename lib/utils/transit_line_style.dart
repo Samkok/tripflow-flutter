@@ -110,3 +110,38 @@ List<Map<String, dynamic>> alternativeLinesFor(
   }
   return out;
 }
+
+/// The ride card's schedule line: when the vehicle leaves the board stop,
+/// how long until then, and how often the line runs — "Departs 11:55 AM ·
+/// in 8 min · every 10 min". Pieces are dropped when unknown; the
+/// countdown shows only for a departure still ahead and within 12 hours
+/// (a plan from yesterday says nothing about the next bus). Null when
+/// there is nothing to say.
+String? transitScheduleLine({
+  required String? departureTime,
+  required int? headwaySeconds,
+  required DateTime now,
+  required String Function(DateTime) formatTime,
+}) {
+  final parts = <String>[];
+  final dep = departureTime == null
+      ? null
+      : DateTime.tryParse(departureTime)?.toLocal();
+  if (dep != null) {
+    parts.add('Departs ${formatTime(dep)}');
+    final until = dep.difference(now);
+    if (!until.isNegative && until <= const Duration(hours: 12)) {
+      final m = until.inMinutes;
+      parts.add(m < 1
+          ? 'leaving now'
+          : m < 60
+              ? 'in $m min'
+              : 'in ${m ~/ 60}h ${m % 60}m');
+    }
+  }
+  if (headwaySeconds != null && headwaySeconds > 0) {
+    final m = (headwaySeconds / 60).round();
+    parts.add(m <= 1 ? 'every minute' : 'every $m min');
+  }
+  return parts.isEmpty ? null : parts.join(' · ');
+}

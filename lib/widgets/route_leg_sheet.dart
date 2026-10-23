@@ -11,8 +11,10 @@ import '../services/multi_modal_router.dart';
 import '../utils/external_app_links.dart';
 import '../utils/line_badge_colors.dart';
 import '../utils/marker_utils.dart';
+import '../models/transit_fare.dart';
 import '../utils/routing_place_id.dart';
 import '../utils/transit_line_style.dart';
+import '../utils/station_gates.dart';
 import 'app_toast.dart';
 
 /// Bottom sheet for one leg of an optimized route — now multi-modal.
@@ -442,9 +444,12 @@ class _RouteLegSheetState extends ConsumerState<_RouteLegSheet> {
     final durationLabel = live == null
         ? widget.durationLabel
         : (liveDuration == null ? null : formatLegDuration(liveDuration));
-    final subtitle = (durationLabel == null || durationLabel.isEmpty)
-        ? '$distanceLabel · ${_modeLabel(mode)}'
-        : '$distanceLabel · $durationLabel ${_modeLabel(mode)}';
+    // The journey's price when Google publishes one for this itinerary.
+    final fare = TransitFare.fromJson(_liveLeg?['fare']);
+    final subtitle = ((durationLabel == null || durationLabel.isEmpty)
+            ? '$distanceLabel · ${_modeLabel(mode)}'
+            : '$distanceLabel · $durationLabel ${_modeLabel(mode)}') +
+        (fare == null ? '' : ' · ${fare.label}');
 
     return ClipRRect(
       borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
@@ -743,11 +748,21 @@ class _RouteLegSheetState extends ConsumerState<_RouteLegSheet> {
       final run = runs[j];
       final isRide = run['mode'] == 'TRANSIT';
       final secs = ((run['durationSeconds'] as num?) ?? 0).toInt();
-      if (!isRide && secs < 20) continue; // curb-length shuffles
+      final gateLabel = run['gateLabel'] as String?;
+      if (!isRide && gateLabel == null && secs < 20) {
+        continue; // curb-length shuffles
+      }
       if (out.isNotEmpty) out.add(arrow());
       if (isRide) {
         out.add(_tappableRun(j, _transitSegment(rides[rideIdx])));
         rideIdx++;
+      } else if (gateLabel != null) {
+        out.add(_tappableRun(
+            j,
+            _gateSegment(secs,
+                title:
+                    '${run['gate'] == 'entrance' ? 'Entrance' : 'Exit'} $gateLabel',
+                isEntrance: run['gate'] == 'entrance')));
       } else {
         // Where this walk is TAKING you: the next ride's board stop, or the
         // leg's destination after the last ride.
@@ -774,6 +789,33 @@ class _RouteLegSheetState extends ConsumerState<_RouteLegSheet> {
             .setTappedPolyline('leg_${_legIndex}_s$runIndex');
       },
       child: child,
+    );
+  }
+
+  /// The passage through the station — "Exit A · 1 min" — between the ride
+  /// and the street walk, so the journey reads the way the signs do.
+  Widget _gateSegment(int seconds,
+      {required String title, required bool isEntrance}) {
+    final theme = Theme.of(context);
+    final mins = (seconds / 60).round().clamp(1, 999);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(children: [
+        Icon(isEntrance ? Icons.login_rounded : Icons.logout_rounded,
+            size: 18, color: theme.colorScheme.onSurfaceVariant),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            '$title · $mins min',
+            style: theme.textTheme.bodyMedium?.copyWith(
+              fontWeight: FontWeight.w600,
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+      ]),
     );
   }
 
@@ -941,6 +983,17 @@ class _RouteLegSheetState extends ConsumerState<_RouteLegSheet> {
                           style: theme.textTheme.titleMedium
                               ?.copyWith(fontWeight: FontWeight.w800),
                         ),
+                        // The price beside the time — the two facts a
+                        // choice between routes is made on.
+                        if (option.fare != null) ...[
+                          const SizedBox(width: 8),
+                          Text(
+                            option.fare!.label,
+                            style: theme.textTheme.titleSmall?.copyWith(
+                                fontWeight: FontWeight.w700,
+                                color: theme.colorScheme.onSurfaceVariant),
+                          ),
+                        ],
                         if (index == 0) ...[
                           const SizedBox(width: 8),
                           Container(
@@ -1078,6 +1131,15 @@ class _RouteLegSheetState extends ConsumerState<_RouteLegSheet> {
     final alight = (seg['alightStop'] as String?) ?? '';
     final dep = _localTime(seg['departureTime'] as String?);
     final arr = _localTime(seg['arrivalTime'] as String?);
+    // "Departs 11:55 AM · in 8 min · every 10 min" — when the bus comes and
+    // how often, so a missed one is a wait, not a lost plan.
+    final schedule = transitScheduleLine(
+      departureTime: seg['departureTime'] as String?,
+      headwaySeconds: (seg['headwaySeconds'] as num?)?.toInt(),
+      now: DateTime.now(),
+      formatTime: (t) => MaterialLocalizations.of(context)
+          .formatTimeOfDay(TimeOfDay.fromDateTime(t)),
+    );
 
     return Padding(
       padding: const EdgeInsets.only(top: 10),
@@ -1136,6 +1198,24 @@ class _RouteLegSheetState extends ConsumerState<_RouteLegSheet> {
                   ),
               ],
             ),
+            if (schedule != null) ...[
+              const SizedBox(height: 6),
+              Row(children: [
+                Icon(Icons.schedule_rounded,
+                    size: 13, color: theme.colorScheme.onSurfaceVariant),
+                const SizedBox(width: 5),
+                Expanded(
+                  child: Text(
+                    schedule,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                        fontWeight: FontWeight.w600),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ]),
+            ],
             if (others.isNotEmpty) ...[
               const SizedBox(height: 6),
               Wrap(
@@ -1151,17 +1231,24 @@ class _RouteLegSheetState extends ConsumerState<_RouteLegSheet> {
               ),
             ],
             const SizedBox(height: 8),
-            _stopRow(board, dep, isBoard: true),
+            _stopRow(board, dep,
+                isBoard: true,
+                gate: StationGate.fromJson(seg['boardGate'])?.title),
             const SizedBox(height: 4),
-            _stopRow(alight, arr, isBoard: false),
+            _stopRow(alight, arr,
+                isBoard: false,
+                gate: StationGate.fromJson(seg['alightGate'])?.title),
           ],
         ),
       ),
     );
   }
 
-  Widget _stopRow(String stop, String? time, {required bool isBoard}) {
+  /// A stop line; [gate] ("Exit A") names the way in or out when known.
+  Widget _stopRow(String stop, String? time,
+      {required bool isBoard, String? gate}) {
     final theme = Theme.of(context);
+    final name = stop.isEmpty ? (isBoard ? 'Board' : 'Alight') : stop;
     return Row(
       children: [
         Icon(
@@ -1172,7 +1259,7 @@ class _RouteLegSheetState extends ConsumerState<_RouteLegSheet> {
         const SizedBox(width: 6),
         Expanded(
           child: Text(
-            stop.isEmpty ? (isBoard ? 'Board' : 'Alight') : stop,
+            gate == null ? name : '$name · $gate',
             style: theme.textTheme.bodySmall,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,

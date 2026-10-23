@@ -194,9 +194,9 @@ final lifetimePackageProvider = FutureProvider<Package?>((ref) async {
 /// iOS consults StoreKit and is therefore tied to the Apple ID — it returns
 /// the same answer across RevenueCat sign-in/sign-out and anonymous sessions
 /// on the same device, closing the loophole where a user could log out to
-/// "reset" their trial. Android always returns `unknown`; Google Play still
-/// enforces eligibility at purchase, so callers should treat unknown as
-/// optimistically eligible to keep the flow visible.
+/// "reset" their trial. Android always returns `unknown`. One input of the
+/// paywall's trial decision — see trial_offer_provider.dart, which also
+/// weighs what the app itself knows and stays pessimistic while loading.
 final introEligibilityProvider =
     FutureProvider<Map<String, IntroEligibilityStatus>>((ref) async {
   final monthly = await ref.watch(monthlyPackageProvider.future);
@@ -217,20 +217,6 @@ final introEligibilityProvider =
     return const {};
   }
 });
-
-/// True when the device may still be offered the intro free trial for the
-/// given product. Treats `unknown` (Android, or iOS with missing subscription
-/// group info) as eligible so the trial CTA stays visible — the store rejects
-/// the offer at purchase time if the user is actually ineligible.
-bool isEligibleForIntroOffer(
-  Map<String, IntroEligibilityStatus> eligibility,
-  String productId,
-) {
-  final status = eligibility[productId];
-  if (status == null) return true; // not loaded yet — be optimistic
-  return status == IntroEligibilityStatus.introEligibilityStatusEligible ||
-      status == IntroEligibilityStatus.introEligibilityStatusUnknown;
-}
 
 /// Conflict information when database and SDK disagree
 class ConflictInfo {

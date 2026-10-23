@@ -20,7 +20,7 @@ void main() {
       );
 
   /// A walk → ride → walk transit leg whose ride is [ride].
-  Widget rail(Map<String, dynamic> ride) {
+  Widget rail(Map<String, dynamic> ride, {Map<String, dynamic>? fare}) {
     return ProviderScope(
       child: MaterialApp(
         theme: AppTheme.darkTheme,
@@ -33,6 +33,7 @@ void main() {
               'mode': 'transit',
               'distance': 3700.0,
               'duration': const Duration(minutes: 18),
+              if (fare != null) 'fare': fare,
               'transitSteps': [
                 const {'mode': 'WALK', 'durationSeconds': 180},
                 {'mode': 'TRANSIT', 'durationSeconds': 660, ...ride},
@@ -88,5 +89,16 @@ void main() {
         .ancestor(of: find.text('87'), matching: find.byType(Container))
         .first);
     expect((box.decoration as BoxDecoration).color, defaultTransitLineColor);
+  });
+
+  testWidgets('a priced leg closes its stack with the fare', (tester) async {
+    await tester.pumpWidget(
+        rail({'lineShort': '87'}, fare: {'currency': 'HKD', 'amount': 6.5}));
+    expect(find.text('HK\$6.50'), findsOneWidget);
+  });
+
+  testWidgets('an unpriced leg shows no fare row', (tester) async {
+    await tester.pumpWidget(rail({'lineShort': '87'}));
+    expect(find.textContaining('HK\$'), findsNothing);
   });
 }

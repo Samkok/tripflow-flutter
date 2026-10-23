@@ -58,6 +58,7 @@ void main() {
     final doc = buildItineraryDocument(
       trip: trip(),
       locations: [_loc('A', day: d(0)), _loc('B', day: d(2))],
+      now: DateTime(2026, 10, 6),
     );
     expect(doc.days.map((x) => x.title), ['Day 1', 'Day 2', 'Day 3']);
     expect(doc.days[1].stops, isEmpty);
@@ -69,22 +70,30 @@ void main() {
   });
 
   test('within a day: to-do first, then done, then skipped, by when added', () {
-    final doc = buildItineraryDocument(trip: trip(), locations: [
-      _loc('skipped', day: d(0), skipped: true, order: 0),
-      _loc('done', day: d(0), done: true, order: 1),
-      _loc('second', day: d(0), order: 3),
-      _loc('first', day: d(0), order: 2),
-    ]);
+    final doc = buildItineraryDocument(
+      trip: trip(),
+      locations: [
+        _loc('skipped', day: d(0), skipped: true, order: 0),
+        _loc('done', day: d(0), done: true, order: 1),
+        _loc('second', day: d(0), order: 3),
+        _loc('first', day: d(0), order: 2),
+      ],
+      now: DateTime(2026, 10, 6),
+    );
     expect(doc.days.first.stops.map((s) => s.name),
         ['first', 'second', 'done', 'skipped']);
   });
 
   test('accommodation is where you stay on every day it covers, not a stop',
       () {
-    final doc = buildItineraryDocument(trip: trip(), locations: [
-      _loc('Hotel', day: d(0), end: d(2), accommodation: true),
-      _loc('Museum', day: d(1)),
-    ]);
+    final doc = buildItineraryDocument(
+      trip: trip(),
+      locations: [
+        _loc('Hotel', day: d(0), end: d(2), accommodation: true),
+        _loc('Museum', day: d(1)),
+      ],
+      now: DateTime(2026, 10, 6),
+    );
     for (final day in doc.days) {
       expect(day.stays.single.name, 'Hotel');
       expect(day.stays.single.spanLabel, 'Oct 5 – Oct 7');
@@ -95,17 +104,24 @@ void main() {
 
   test('places with no day are listed separately', () {
     final doc = buildItineraryDocument(
-        trip: trip(), locations: [_loc('Later'), _loc('A', day: d(0))]);
+      trip: trip(),
+      locations: [_loc('Later'), _loc('A', day: d(0))],
+      now: DateTime(2026, 10, 6),
+    );
     expect(doc.unscheduled.single.name, 'Later');
     expect(doc.days.expand((x) => x.stops).map((s) => s.name), ['A']);
   });
 
   test('a trip without dates prints day numbers and no weekday', () {
     final a = tripDatesTbdAnchor;
-    final doc = buildItineraryDocument(trip: trip(undated: true), locations: [
-      _loc('Hotel', day: a, end: shiftTripDay(a, 2), accommodation: true),
-      _loc('A', day: shiftTripDay(a, 1)),
-    ]);
+    final doc = buildItineraryDocument(
+      trip: trip(undated: true),
+      locations: [
+        _loc('Hotel', day: a, end: shiftTripDay(a, 2), accommodation: true),
+        _loc('A', day: shiftTripDay(a, 1)),
+      ],
+      now: DateTime(2026, 10, 6),
+    );
     expect(doc.dateLine, 'No dates yet');
     expect(doc.days.map((x) => x.subtitle), everyElement(isNull));
     expect(doc.days.first.stays.single.spanLabel, 'Day 1 – Day 3');
@@ -124,6 +140,7 @@ void main() {
         _loc('Museum', day: d(0), tag: 'culture', order: 3)
             .copyWith(placeTypes: ['museum', 'train_station']),
       ],
+      now: DateTime(2026, 10, 6),
     );
     final stops = doc.days.first.stops;
     expect([for (final s in stops) s.tagLabel],
@@ -132,12 +149,16 @@ void main() {
   });
 
   test('tags used anywhere make up the colour key, in the fixed order', () {
-    final doc = buildItineraryDocument(trip: trip(), locations: [
-      _loc('A', day: d(0), tag: 'stay'),
-      _loc('B', day: d(0), tag: 'food'),
-      _loc('C', tag: 'food'),
-      _loc('D', day: d(1), tag: 'not-a-tag'),
-    ]);
+    final doc = buildItineraryDocument(
+      trip: trip(),
+      locations: [
+        _loc('A', day: d(0), tag: 'stay'),
+        _loc('B', day: d(0), tag: 'food'),
+        _loc('C', tag: 'food'),
+        _loc('D', day: d(1), tag: 'not-a-tag'),
+      ],
+      now: DateTime(2026, 10, 6),
+    );
     expect(doc.usedTags, [PlaceTag.food, PlaceTag.stay]);
     expect(
         doc.days.first.stops.map((s) => s.tag), [PlaceTag.stay, PlaceTag.food]);
@@ -181,5 +202,40 @@ void main() {
     expect(withId, contains('query=1.5%2C2.5'));
     expect(withId, contains('query_place_id=ChIJabc'));
     expect(googleMapsUrlFor(_loc('B')), isNot(contains('query_place_id')));
+  });
+
+  test('an ended trip moves its never-visited places into their own section',
+      () {
+    final doc = buildItineraryDocument(
+      trip: trip(),
+      locations: [
+        _loc('Museum', day: d(2)), // planned for the last day, never reached
+        _loc('Temple', day: d(1), done: true), // visited: stays on its day
+        _loc('Bar', day: d(1), skipped: true), // a decision: stays too
+        _loc('Hotel', day: d(0), end: d(2), accommodation: true),
+        _loc('Loose'), // never scheduled, never reached
+      ],
+      now: DateTime(2026, 10, 20), // the trip ended on Oct 7
+    );
+    expect(doc.unvisited.map((s) => s.name), ['Museum', 'Loose']);
+    expect(doc.unvisited.first.dayLabel, 'Wed, Oct 7');
+    expect(doc.unvisited.last.dayLabel, isNull);
+    // The last day no longer lists the Museum; the stay is untouched.
+    expect(doc.days.last.stops, isEmpty);
+    expect(doc.days.last.stays.map((s) => s.name), ['Hotel']);
+    expect(doc.days[1].stops.map((s) => s.name), ['Temple', 'Bar']);
+    // The loose leftover left the Unscheduled bucket as well.
+    expect(doc.unscheduled, isEmpty);
+  });
+
+  test('while the trip runs, nothing moves', () {
+    final doc = buildItineraryDocument(
+      trip: trip(),
+      locations: [_loc('Museum', day: d(2)), _loc('Loose')],
+      now: DateTime(2026, 10, 6),
+    );
+    expect(doc.unvisited, isEmpty);
+    expect(doc.days.last.stops.map((s) => s.name), ['Museum']);
+    expect(doc.unscheduled.map((s) => s.name), ['Loose']);
   });
 }

@@ -9,6 +9,7 @@ import '../providers/map_ui_state_provider.dart';
 import '../providers/theme_provider.dart';
 import '../providers/trip_listener_provider.dart';
 import '../providers/trip_provider.dart';
+import 'unvisited_places_provider.dart';
 import '../services/google_maps_service.dart';
 import '../services/marker_cache_service.dart';
 import '../utils/day_visibility.dart';
@@ -91,10 +92,18 @@ final allDayStopsProvider = Provider<Map<DateTime, List<LocationModel>>>((ref) {
       .watch(tripProvider.select((s) => s.optimizedLocationsForSelectedDate));
   final optimizedDay =
       optimized.isEmpty ? null : _dayKey(ref.watch(selectedDateProvider));
+  // An ended trip's unvisited places are off every day — unless the
+  // preview is on, when they are the only stops shown.
+  final leftoverIds = ref.watch(endedTripUnvisitedIdsProvider);
+  final previewOn = ref.watch(unvisitedPreviewActiveProvider);
   final byDay = <DateTime, List<LocationModel>>{};
   for (final day in axis) {
-    final stops =
-        locations.where((l) => !l.isSkipped && l.isActiveOnDate(day)).toList();
+    final stops = locations
+        .where((l) =>
+            !l.isSkipped &&
+            leftoverIds.contains(l.id) == previewOn &&
+            l.isActiveOnDate(day))
+        .toList();
     if (optimizedDay != null && day == optimizedDay) {
       final rank = {
         for (var i = 0; i < optimized.length; i++) optimized[i].id: i

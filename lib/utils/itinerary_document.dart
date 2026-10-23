@@ -26,6 +26,11 @@ class ItineraryDocument {
   /// Places that belong to the trip but sit on no day.
   final List<ItineraryStop> unscheduled;
 
+  /// An ended trip's leftovers — never done, never skipped, not a stay —
+  /// pulled out of their days into a section of their own. Empty while the
+  /// trip runs.
+  final List<ItineraryStop> unvisited;
+
   /// Tags that appear anywhere in the trip, in the fixed tag order — the
   /// colour key printed under the header.
   final List<PlaceTag> usedTags;
@@ -40,6 +45,7 @@ class ItineraryDocument {
     required this.stayCount,
     required this.days,
     required this.unscheduled,
+    this.unvisited = const [],
     required this.usedTags,
     required this.generatedAt,
   });
@@ -95,6 +101,11 @@ class ItineraryStop {
   /// "Oct 6 – Oct 8" / "Day 2 – Day 4" for a stop that spans days.
   final String? spanLabel;
 
+  /// Only in the "Not visited" section: the day the place was meant for
+  /// ("Day 3", "Sat, Oct 19"), or null when it sat in the Unscheduled
+  /// bucket.
+  final String? dayLabel;
+
   /// Opens the exact place in Google Maps.
   final String mapsUrl;
 
@@ -107,6 +118,7 @@ class ItineraryStop {
     required this.hoursCaution,
     required this.isDone,
     required this.isSkipped,
+    this.dayLabel,
     required this.spanLabel,
     required this.mapsUrl,
   });
@@ -222,14 +234,29 @@ ItineraryDocument buildItineraryDocument({
       isDone: l.isDone,
       isSkipped: l.isSkipped,
       spanLabel: spans ? labeler.range(start, end) : null,
+      dayLabel: day == null
+          ? null
+          : (labeler.tbd ? labeler(day) : DateFormat('EEE, MMM d').format(day)),
       mapsUrl: googleMapsUrlFor(l),
     );
   }
 
+  // Once the trip has ended, the places never ticked off leave their days:
+  // they get the "Not visited" section instead (same rule as the app's
+  // plan list and map, see unvisited_places.dart).
+  final ended = !trip.isUndated &&
+      tripHasEnded(trip.endDate ?? trip.startDate, today: now);
+  final leftoverIds = <String>{
+    if (ended)
+      for (final l in locations)
+        if (!l.isDone && !l.isSkipped && !l.isAccommodation) l.id,
+  };
+  final planned = locations.where((l) => !leftoverIds.contains(l.id)).toList();
+
   final days = <ItineraryDay>[];
   for (var i = 0; i < axis.length; i++) {
     final day = axis[i];
-    final onDay = locations
+    final onDay = planned
         .where((l) => l.scheduledDate != null && l.isActiveOnDate(day))
         .toList()
       ..sort(_byStatusThenAdded);
@@ -248,10 +275,31 @@ ItineraryDocument buildItineraryDocument({
     ));
   }
 
-  final unscheduled = (locations.where((l) => l.scheduledDate == null).toList()
+  final unscheduled = (planned.where((l) => l.scheduledDate == null).toList()
         ..sort(_byStatusThenAdded))
       .map((l) => stopOf(l, null))
       .toList();
+
+  // Leftovers in reading order: by the day they were meant for, the
+  // Unscheduled ones last, then by name.
+  final leftovers = locations.where((l) => leftoverIds.contains(l.id)).toList()
+    ..sort((a, b) {
+      final da = a.scheduledDate;
+      final db = b.scheduledDate;
+      if (da != null && db != null) {
+        final c = dayKey(da).compareTo(dayKey(db));
+        if (c != 0) return c;
+      } else if (da != null) {
+        return -1;
+      } else if (db != null) {
+        return 1;
+      }
+      return a.name.toLowerCase().compareTo(b.name.toLowerCase());
+    });
+  final unvisited = [
+    for (final l in leftovers)
+      stopOf(l, l.scheduledDate == null ? null : dayKey(l.scheduledDate!)),
+  ];
 
   final String dateLine;
   if (labeler.tbd || axis.isEmpty) {
@@ -277,6 +325,7 @@ ItineraryDocument buildItineraryDocument({
     stayCount: locations.where((l) => l.isAccommodation).length,
     days: days,
     unscheduled: unscheduled,
+    unvisited: unvisited,
     usedTags: PlaceTag.values.where(present.contains).toList(),
     generatedAt: now ?? DateTime.now(),
   );

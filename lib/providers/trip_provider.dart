@@ -14,6 +14,7 @@ import '../models/trip_model.dart';
 import '../models/trip.dart';
 import '../services/google_maps_service.dart';
 import '../services/leg_mode_prefs.dart';
+import '../utils/unvisited_places.dart';
 import '../services/multi_modal_router.dart';
 import '../services/places_service.dart';
 import 'trip_simulation_provider.dart' show effectiveTripStartTimeProvider;
@@ -502,6 +503,125 @@ class TripNotifier extends StateNotifier<TripState> {
     } catch (e) {
       log('Error removing locations from trip: $e');
     }
+  }
+
+  /// Moves [picks] into [targetTripId] — onto [day] when given, else into
+  /// that trip's Unscheduled bucket. [sourceTripId] is the trip they leave;
+  /// null, or the active trip's id, means the plan on screen, which is
+  /// patched in place (an ended trip reviewed from its own page is not).
+  /// Needs write access on BOTH trips: the server's update policy checks
+  /// the row before and after the change. Returns false, rows untouched,
+  /// when a check fails; true once the change is written locally and
+  /// queued to sync.
+  Future<bool> moveLocationsToTrip(
+    List<LocationModel> picks,
+    String targetTripId,
+    DateTime? day, {
+    String? sourceTripId,
+  }) async {
+    if (picks.isEmpty) return false;
+    if (!await _canWriteTrip(sourceTripId)) {
+      debugPrint('moveLocationsToTrip: no write access on the source trip');
+      return false;
+    }
+    if (!await _canWriteTrip(targetTripId)) {
+      debugPrint('moveLocationsToTrip: no write access on trip $targetTripId');
+      return false;
+    }
+
+    // A stay range keeps its length on the new day; unscheduled clears both
+    // ends (the whitelist drops the end with the start).
+    final updates = <String, Map<String, dynamic>>{
+      for (final loc in picks)
+        loc.id: {
+          'trip_id': targetTripId,
+          'scheduled_date': day?.toIso8601String(),
+          'scheduled_end_date': day == null
+              ? null
+              : shiftedSpanEnd(
+                  oldStart: loc.scheduledDate ?? day,
+                  oldEnd: loc.scheduledEndDate,
+                  newStart: day,
+                )?.toIso8601String(),
+        },
+    };
+
+    if (_isActiveTrip(sourceTripId)) {
+      // The rows leave this plan now (the location stream confirms it),
+      // and the route they were part of no longer matches its stops —
+      // cleared the way a delete clears it.
+      final ids = updates.keys.toSet();
+      state = state.copyWith(
+        pinnedLocations:
+            state.pinnedLocations.where((l) => !ids.contains(l.id)).toList(),
+        optimizedLocationsForSelectedDate: [],
+        isRoutePreview: false,
+        optimizedRoute: [],
+        legPolylines: [],
+        legDetails: [],
+        totalTravelTime: Duration.zero,
+        totalDistance: 0.0,
+      );
+      selectLeg(null);
+    }
+
+    try {
+      await _ref.read(locationRepositoryProvider).updateLocationsBatch(updates);
+      return true;
+    } catch (e) {
+      log('Error moving locations to trip $targetTripId: $e');
+      return false;
+    }
+  }
+
+  /// Deletes [locationIds] of [tripId] outright — the ended-trip review's
+  /// "Delete", which may run from a trip page that is not the active plan.
+  /// Returns false when access is refused or any delete failed.
+  Future<bool> deleteLocationsOfTrip(
+    Set<String> locationIds, {
+    required String tripId,
+  }) async {
+    if (locationIds.isEmpty) return false;
+    if (!await _canWriteTrip(tripId)) {
+      debugPrint('deleteLocationsOfTrip: no write access on trip $tripId');
+      return false;
+    }
+    if (_isActiveTrip(tripId)) {
+      state = state.copyWith(
+        optimizedLocationsForSelectedDate: [],
+        isRoutePreview: false,
+        optimizedRoute: [],
+        legPolylines: [],
+        legDetails: [],
+        totalTravelTime: Duration.zero,
+        totalDistance: 0.0,
+      );
+      selectLeg(null);
+    }
+    final repository = _ref.read(locationRepositoryProvider);
+    var ok = true;
+    for (final id in locationIds) {
+      try {
+        await repository.deleteLocation(id);
+      } catch (e) {
+        ok = false;
+        log('Error deleting $id from trip $tripId: $e');
+      }
+    }
+    return ok;
+  }
+
+  /// True when [tripId] is the plan on screen (null stands for it).
+  bool _isActiveTrip(String? tripId) {
+    if (tripId == null) return true;
+    return tripId == _ref.read(realtimeActiveTripProvider).valueOrNull?.id;
+  }
+
+  /// Write access on [tripId]: the active-trip check for the plan on
+  /// screen, the per-trip provider for any other trip.
+  Future<bool> _canWriteTrip(String? tripId) {
+    if (_isActiveTrip(tripId)) return _hasWriteAccess();
+    return _ref.read(hasWriteAccessProvider(tripId!).future);
   }
 
   Future<void> removeLocation(String locationId) async {
@@ -2319,6 +2439,7 @@ class TripNotifier extends StateNotifier<TripState> {
       if (leg.steps != null) 'transitSteps': leg.steps,
       if (leg.departureTime != null) 'departureTime': leg.departureTime,
       if (leg.arrivalTime != null) 'arrivalTime': leg.arrivalTime,
+      if (leg.fare != null) 'fare': leg.fare!.toJson(),
     };
     polys[legIndex] = leg.points;
 
@@ -2441,6 +2562,7 @@ class TripNotifier extends StateNotifier<TripState> {
           if (leg.steps != null) 'transitSteps': leg.steps,
           if (leg.departureTime != null) 'departureTime': leg.departureTime,
           if (leg.arrivalTime != null) 'arrivalTime': leg.arrivalTime,
+          if (leg.fare != null) 'fare': leg.fare!.toJson(),
         }
       ];
       final legPolylines = <List<LatLng>>[leg.points];
@@ -2610,6 +2732,25 @@ final selectedLegDetailsProvider = Provider<Map<String, dynamic>?>((ref) {
 
 // OPTIMIZATION: Cached provider to filter locations based on the selected date
 // Uses keepAlive to prevent unnecessary recomputations during animations
+/// Once the active trip has ended, the places never ticked off leave their
+/// days: they are a decision to make — delete, or move to another trip —
+/// not a stop on the last day. The lists show them in their own "Not
+/// visited" section and the map only when asked (see
+/// unvisited_places_provider.dart). Empty while the trip runs.
+final endedTripUnvisitedProvider = Provider<List<LocationModel>>((ref) {
+  final trip = ref.watch(realtimeActiveTripProvider).valueOrNull;
+  final rows = ref.watch(tripProvider.select((s) => s.pinnedLocations));
+  if (!tripNeedsUnvisitedReview(trip, rows)) return const [];
+  return unvisitedPlaces(rows);
+});
+
+/// Ids of [endedTripUnvisitedProvider], for the filters.
+final endedTripUnvisitedIdsProvider = Provider<Set<String>>(
+    (ref) => {for (final p in ref.watch(endedTripUnvisitedProvider)) p.id});
+
+List<LocationModel> _withoutIds(List<LocationModel> list, Set<String> ids) =>
+    ids.isEmpty ? list : list.where((l) => !ids.contains(l.id)).toList();
+
 final locationsForSelectedDateProvider = Provider<List<LocationModel>>((ref) {
   // PERFORMANCE: Watch only the specific fields we need, not the entire state
   final optimizedLocations = ref
@@ -2620,6 +2761,9 @@ final locationsForSelectedDateProvider = Provider<List<LocationModel>>((ref) {
 
   // OPTIMIZATION: Early return if no locations at all
   if (pinnedLocations.isEmpty) return const [];
+
+  // An ended trip's unvisited places are not on any day any more.
+  final leftovers = ref.watch(endedTripUnvisitedIdsProvider);
 
   // OPTIMIZATION: Cache date components to avoid repeated DateTime object creation
   final selectedYear = selectedDate.year;
@@ -2662,15 +2806,15 @@ final locationsForSelectedDateProvider = Provider<List<LocationModel>>((ref) {
         return loc.isActiveOnDate(selectedDate);
       }).toList();
       // Return the optimized locations first, followed by the skipped ones.
-      return [...optimizedLocations, ...skippedForDate];
+      return _withoutIds([...optimizedLocations, ...skippedForDate], leftovers);
     }
   }
 
   // Fallback: every location active on this date (single-day rows match
   // only their day; range rows match every day in their `[start..end]`).
-  return pinnedLocations
-      .where((loc) => loc.isActiveOnDate(selectedDate))
-      .toList();
+  return _withoutIds(
+      pinnedLocations.where((loc) => loc.isActiveOnDate(selectedDate)).toList(),
+      leftovers);
 });
 
 /// Every date covered by any location's active range. Multi-day stays
@@ -2678,9 +2822,12 @@ final locationsForSelectedDateProvider = Provider<List<LocationModel>>((ref) {
 /// date picker's "has locations" dots show up on every covered day.
 final datesWithLocationsProvider = Provider<Set<DateTime>>((ref) {
   final allLocations = ref.watch(tripProvider.select((s) => s.pinnedLocations));
+  // An ended trip's unvisited places are off their days.
+  final leftovers = ref.watch(endedTripUnvisitedIdsProvider);
   final Set<DateTime> dates = {};
   for (final loc in allLocations) {
     if (loc.scheduledDate == null) continue;
+    if (leftovers.contains(loc.id)) continue;
     final start = DateTime(loc.scheduledDate!.year, loc.scheduledDate!.month,
         loc.scheduledDate!.day);
     final endRaw = loc.scheduledEndDate ?? loc.scheduledDate!;

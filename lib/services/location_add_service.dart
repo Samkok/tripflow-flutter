@@ -26,6 +26,7 @@ import '../widgets/accommodation_prompts.dart';
 import '../widgets/app_toast.dart';
 import '../widgets/place_tag_sheet.dart';
 import '../utils/trip_day_labels.dart';
+import '../utils/move_to_trip_rules.dart';
 import 'analytics_service.dart';
 
 /// Central service for adding locations.
@@ -184,6 +185,46 @@ class LocationAddService {
     final fallback =
         await PlacesService.getPlaceFromCoordinates(LatLng(loc.lat, loc.lng));
     return fallback?.countryCode;
+  }
+
+  /// ISO-2 country of a planned place — Place Details when it has a place
+  /// id, reverse geocoding otherwise; null when neither answers.
+  Future<String?> resolveCountryCodeForModel(LocationModel loc) async {
+    final placeId = loc.placeId;
+    if (placeId != null && placeId.isNotEmpty) {
+      final details = await PlacesService.getPlaceDetails(placeId);
+      if (details?.countryCode != null) return details!.countryCode;
+    }
+    final fallback =
+        await PlacesService.getPlaceFromCoordinates(loc.coordinates);
+    return fallback?.countryCode;
+  }
+
+  /// The country that forbids moving [picks] out of [source] into [target],
+  /// or null when the move may proceed. The trips' tags answer first; only
+  /// an untagged source costs one lookup per place. See
+  /// [moveCountryMismatch] for the rule.
+  Future<String?> countryMismatchForMove(
+    List<LocationModel> picks,
+    Trip target, {
+    Trip? source,
+  }) async {
+    final targetCode = target.countryCode;
+    final sourceCode = source?.countryCode;
+    if (moveCountrySettledByTags(
+        targetCode: targetCode, sourceCode: sourceCode)) {
+      return moveCountryMismatch(
+        targetCode: targetCode,
+        sourceCode: sourceCode,
+        locationCodes: const [],
+      );
+    }
+    final codes = await Future.wait(picks.map(resolveCountryCodeForModel));
+    return moveCountryMismatch(
+      targetCode: targetCode,
+      sourceCode: null,
+      locationCodes: codes,
+    );
   }
 
   /// Google sometimes omits `opening_hours` from a Place Details response

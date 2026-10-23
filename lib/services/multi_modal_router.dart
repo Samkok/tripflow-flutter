@@ -5,6 +5,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 
 import '../models/location_model.dart';
+import '../models/transit_fare.dart';
 import '../utils/routing_place_id.dart';
 import 'google_maps_service.dart';
 
@@ -23,6 +24,7 @@ class LegRoute {
     this.departureTime,
     this.arrivalTime,
     this.description,
+    this.fare,
   });
 
   final List<LatLng> points;
@@ -36,6 +38,9 @@ class LegRoute {
   final List<Map<String, dynamic>>? steps;
   final String? departureTime;
   final String? arrivalTime;
+
+  /// The itinerary's price when Google publishes one (transit only).
+  final TransitFare? fare;
 
   /// Route-options rows: Google's differentiator ("via Tai Po Rd").
   final String? description;
@@ -201,6 +206,7 @@ class MultiModalRouter {
           transit?.isNotEmpty == true ? transit!.first['departureTime'] : null,
       arrivalTime:
           transit?.isNotEmpty == true ? transit!.last['arrivalTime'] : null,
+      fare: TransitFare.fromJson(details.first['fare']),
     );
     return leg;
   }
@@ -292,6 +298,7 @@ class MultiModalRouter {
               ? transit!.last['arrivalTime'] as String?
               : null,
           description: r['description'] as String?,
+          fare: TransitFare.fromJson(r['fare']),
         ));
         if (out.length >= 4) break;
       }
@@ -894,6 +901,7 @@ class MultiModalRouter {
             'fromId': ids[i],
             'toId': ids[i + 1],
             if (resolved[i].transit != null) 'transit': resolved[i].transit,
+            if (resolved[i].fare != null) 'fare': resolved[i].fare!.toJson(),
             if (resolved[i].steps != null) 'transitSteps': resolved[i].steps,
             if (resolved[i].departureTime != null)
               'departureTime': resolved[i].departureTime,

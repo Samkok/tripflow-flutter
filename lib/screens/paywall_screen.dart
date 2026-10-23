@@ -6,6 +6,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:intl/intl.dart';
 import 'dart:io';
 import '../providers/subscription_provider.dart';
+import '../providers/trial_offer_provider.dart';
 import '../providers/user_trip_provider.dart';
 import '../services/analytics_service.dart';
 import '../providers/location_provider.dart';
@@ -485,23 +486,42 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
     return package?.storeProduct.defaultOption?.freePhase;
   }
 
-  /// True when this device can still claim the free trial for [package].
-  /// - iOS: the product has an intro offer AND StoreKit says the user is
-  ///   eligible.
-  /// - Android: the default subscription option has a free phase. Google
-  ///   enforces new-customer eligibility at purchase time, so presence of the
-  ///   free phase is the right signal to surface the trial.
-  bool _packageHasEligibleTrial(Package? package) {
-    if (package == null) return false;
-    if (Platform.isAndroid) {
-      return _androidFreePhase(package) != null;
-    }
-    if (package.storeProduct.introductoryPrice == null) return false;
-    final eligibility = ref.watch(introEligibilityProvider).asData?.value ??
-        const <String, IntroEligibilityStatus>{};
-    return isEligibleForIntroOffer(
-        eligibility, package.storeProduct.identifier);
+  /// Whether [package] carries a FREE introductory period at all — iOS: a
+  /// zero-price intro offer; Android: a free phase on the default option.
+  bool _packageHasFreeIntro(Package package) {
+    if (Platform.isAndroid) return _androidFreePhase(package) != null;
+    final intro = package.storeProduct.introductoryPrice;
+    return intro != null && intro.price == 0;
   }
+
+  /// The trial decision for [package] — see [decideTrialOffer]. Pending
+  /// until StoreKit AND the app's own sources (RevenueCat history, our
+  /// database, this device) have answered; "used" the moment any of them
+  /// says so. The paywall never promises a trial it is not sure of.
+  TrialOffer _trialOfferFor(Package? package) {
+    if (package == null) return TrialOffer.used;
+    final storeAsync = ref.watch(introEligibilityProvider);
+    final IntroEligibilityStatus? storeStatus = storeAsync.hasError
+        ? IntroEligibilityStatus.introEligibilityStatusUnknown
+        : storeAsync.asData?.value[package.storeProduct.identifier] ??
+            // Loaded with no entry for this product = the store had no
+            // answer (Android, or no subscription-group info on iOS).
+            (storeAsync.hasValue
+                ? IntroEligibilityStatus.introEligibilityStatusUnknown
+                : null);
+    final usedAsync = ref.watch(trialUsedProvider);
+    final bool? usedElsewhere =
+        usedAsync.hasError ? false : usedAsync.asData?.value;
+    return decideTrialOffer(
+      hasFreeIntro: _packageHasFreeIntro(package),
+      storeStatus: storeStatus,
+      usedElsewhere: usedElsewhere,
+    );
+  }
+
+  /// True when this device can still claim the free trial for [package].
+  bool _packageHasEligibleTrial(Package? package) =>
+      _trialOfferFor(package) == TrialOffer.available;
 
   /// The subscription packages the paywall can sell, in display priority
   /// order (the preselected annual first). Lifetime is deliberately absent —
@@ -526,20 +546,16 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
     return null;
   }
 
-  /// True when at least one loaded package has an intro offer configured but
-  /// this device is *ineligible* for all of them — i.e. the user has already
-  /// used the trial on this Apple ID / Google account. Used to swap to "trial
-  /// has ended" copy so we don't dangle a benefit they can't actually claim.
+  /// True when the plans do carry a free trial but this person or device
+  /// has already had it — every free plan decides "used" while at least
+  /// one of them is settled, not merely pending. Swaps the hero to "trial
+  /// has ended" copy so no benefit is dangled that cannot be claimed.
   bool _anyPackageHasIntroOfferButIneligible() {
-    final eligibility = ref.watch(introEligibilityProvider).asData?.value;
-    if (eligibility == null) return false;
-    final withOffer = _subscriptionPackages()
-        .where((p) => p.storeProduct.introductoryPrice != null)
-        .toList();
-    if (withOffer.isEmpty) return false;
-    return withOffer.every((p) =>
-        eligibility[p.storeProduct.identifier] ==
-        IntroEligibilityStatus.introEligibilityStatusIneligible);
+    final withFree = _subscriptionPackages().where(_packageHasFreeIntro);
+    if (withFree.isEmpty) return false;
+    final offers = withFree.map(_trialOfferFor).toList();
+    return offers.every((o) => o == TrialOffer.used) &&
+        !offers.contains(TrialOffer.pending);
   }
 
   /// Human-readable label for an intro offer, e.g. "3 days free".
@@ -1378,6 +1394,10 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
             deviceId: deviceId,
           );
           debugPrint('PaywallScreen: ✅ Trial logged to trial_devices table');
+          // This device has had its trial — the paywall never offers
+          // another, whatever the store says while it catches up.
+          await rememberTrialUsed();
+          ref.invalidate(trialUsedProvider);
 
           // Sync trial subscription record as fallback for webhook delays
           final trialExpiryStr = entAfter?.expirationDate;

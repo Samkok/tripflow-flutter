@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:voyza/models/location_model.dart';
+import 'package:voyza/models/transit_fare.dart';
 import 'package:voyza/providers/all_days_route_provider.dart';
 import 'package:voyza/providers/map_ui_state_provider.dart';
 import 'package:voyza/providers/trip_day_labeler_provider.dart';
@@ -15,6 +16,7 @@ import '../providers/trip_listener_provider.dart';
 import '../providers/trip_provider.dart';
 import '../providers/trip_collaborator_provider.dart';
 import '../providers/trip_simulation_provider.dart';
+import '../providers/unvisited_places_provider.dart';
 import '../utils/date_picker_utils.dart';
 import '../utils/geo_utils.dart';
 import '../utils/same_day_place_guard.dart';
@@ -25,10 +27,13 @@ import 'auto_plan_sheet.dart';
 import 'timing_warnings_sheet.dart';
 import '../utils/trip_date_validator.dart';
 import '../utils/trip_dates.dart';
+import '../utils/unvisited_places.dart';
 import '../core/theme.dart';
 import 'accommodation_prompts.dart';
 import 'app_toast.dart';
 import 'leg_rail.dart';
+import 'move_to_trip_sheet.dart';
+import 'unvisited_places_sheet.dart';
 import 'optimized_location_card.dart';
 import 'static_glow.dart';
 import '../utils/search_text.dart';
@@ -664,8 +669,12 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
 
                               // .select keeps the common path rebuilding only
                               // when emptiness actually flips.
+                              // An ended trip's "Not visited" section
+                              // still has to render on a day it emptied.
                               final selectedDateEmpty = onSelectedDateTab &&
                                   ref.watch(locationsForSelectedDateProvider
+                                      .select((l) => l.isEmpty)) &&
+                                  ref.watch(endedTripUnvisitedProvider
                                       .select((l) => l.isEmpty));
 
                               // A search that matches nothing in the CURRENT
@@ -753,8 +762,10 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                                       children: _buildAllLocationsGroupedByDate(
                                           context,
                                           ref,
-                                          ref.watch(tripProvider.select(
-                                              (s) => s.pinnedLocations)),
+                                          _withoutEndedLeftovers(
+                                              ref,
+                                              ref.watch(tripProvider.select(
+                                                  (s) => s.pinnedLocations))),
                                           scrollController,
                                           query: query),
                                     ),
@@ -886,6 +897,51 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                           ),
                           const Icon(Icons.chevron_right_rounded,
                               size: 14, color: amber),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+              }),
+              // Ended trip: the places never ticked off, waiting for a
+              // decision — delete them or move them to another trip.
+              Consumer(builder: (context, ref, _) {
+                final trip = ref.watch(realtimeActiveTripProvider).valueOrNull;
+                final rows =
+                    ref.watch(tripProvider.select((s) => s.pinnedLocations));
+                if (!tripNeedsUnvisitedReview(trip, rows)) {
+                  return const SizedBox.shrink();
+                }
+                final places = unvisitedPlaces(rows);
+                const red = Color(0xFFFF5252);
+                return Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(8),
+                    onTap: () => showUnvisitedPlacesSheet(context,
+                        trip: trip!, places: places),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: red.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.flag_outlined, size: 13, color: red),
+                          const SizedBox(width: 5),
+                          Text(
+                            'Not visited (${places.length})',
+                            style: Theme.of(context)
+                                .textTheme
+                                .labelSmall
+                                ?.copyWith(
+                                    color: red, fontWeight: FontWeight.w700),
+                          ),
+                          const Icon(Icons.chevron_right_rounded,
+                              size: 14, color: red),
                         ],
                       ),
                     ),
@@ -1184,6 +1240,8 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                     _showMultiDeleteConfirmationDialog(context, ref);
                   } else if (value == 'move') {
                     _showMoveLocationsDialog(context, ref);
+                  } else if (value == 'move_trip') {
+                    _showMoveToTripSheet(context, ref);
                   } else if (value == 'copy') {
                     _showCopyLocationsDialog(context, ref);
                   } else if (value == 'skip' && canEdit) {
@@ -1223,6 +1281,17 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                       title: Text('Move to another day',
                           style:
                               TextStyle(color: canEdit ? null : Colors.grey)),
+                    ),
+                  ),
+                  PopupMenuItem<String>(
+                    value: 'move_trip',
+                    enabled: hasWriteAccess,
+                    child: ListTile(
+                      leading: Icon(Icons.luggage_outlined,
+                          color: hasWriteAccess ? null : Colors.grey),
+                      title: Text('Move to another trip',
+                          style: TextStyle(
+                              color: hasWriteAccess ? null : Colors.grey)),
                     ),
                   ),
                   PopupMenuItem<String>(
@@ -1413,6 +1482,10 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
     final theme = Theme.of(context);
     final estimatedArrival = DateTime.now().add(totalTravelTime);
     final etaLabel = DateFormat('h:mm a').format(estimatedArrival);
+    // What the day's rides cost, when Google prices them ("HK$24"; a
+    // trailing "+" when some ride is unpriced).
+    final fareLabel = ref.watch(
+        tripProvider.select((s) => TransitFare.totalLabel(s.legDetails)));
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -1453,6 +1526,13 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                       style: TextStyle(color: theme.dividerColor),
                     ),
                     TextSpan(text: _formatDuration(totalTravelTime)),
+                    if (fareLabel != null) ...[
+                      TextSpan(
+                        text: '  ·  ',
+                        style: TextStyle(color: theme.dividerColor),
+                      ),
+                      TextSpan(text: fareLabel),
+                    ],
                     if (!hideEta) ...[
                       TextSpan(
                         text: '  ·  ',
@@ -1482,6 +1562,10 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
       double totalDistance, int totalStopsForDate,
       {required bool hasRoute, required bool hideEta}) {
     final estimatedArrival = DateTime.now().add(totalTravelTime);
+    // What the day's rides cost, when Google prices them ("HK$24"; a
+    // trailing "+" when some ride is unpriced).
+    final fareLabel = ref.watch(
+        tripProvider.select((s) => TransitFare.totalLabel(s.legDetails)));
 
     // Pre-optimize there is exactly ONE fact (stops planned), so the card
     // is a single quiet row — the old layout kept the full box's height
@@ -1657,6 +1741,8 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                   'ETA',
                   DateFormat('h:mm a').format(estimatedArrival),
                 ),
+              if (hasRoute && fareLabel != null)
+                _summaryItem(context, 'Fares', fareLabel),
               // The story kernel: travel time saved vs the user's original
               // order. Only rendered when the delta is defensible (≥5 min).
               Consumer(builder: (context, ref, _) {
@@ -1808,19 +1894,109 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
     );
   }
 
+  /// [all] minus the ended trip's unvisited places — they have their own
+  /// section (see [_buildUnvisitedSection]).
+  List<LocationModel> _withoutEndedLeftovers(
+      WidgetRef ref, List<LocationModel> all) {
+    final ids = ref.watch(endedTripUnvisitedIdsProvider);
+    return ids.isEmpty ? all : all.where((l) => !ids.contains(l.id)).toList();
+  }
+
+  /// The ended trip's "Not visited" section: the places never ticked off,
+  /// pulled out of their days. A switch puts them on the map (off by
+  /// default) and "Review" opens the delete / move sheet. Empty while the
+  /// trip runs or when nothing is left over.
+  List<Widget> _buildUnvisitedSection(
+      BuildContext context, WidgetRef ref, ScrollController scrollController,
+      {String query = ''}) {
+    final places = ref.watch(endedTripUnvisitedProvider);
+    if (places.isEmpty) return const [];
+    final visible = places.where((l) => _matchesQuery(l, query)).toList();
+    if (visible.isEmpty) return const [];
+    final theme = Theme.of(context);
+    const red = Color(0xFFFF5252);
+    final showOnMap = ref.watch(showUnvisitedOnMapProvider);
+    final trip = ref.watch(realtimeActiveTripProvider).valueOrNull;
+    return [
+      Padding(
+        padding: const EdgeInsets.only(top: 4, bottom: 2, left: 4, right: 4),
+        child: Row(
+          children: [
+            const Icon(Icons.flag_outlined, size: 18, color: red),
+            const SizedBox(width: 8),
+            Text('Not visited',
+                style: theme.textTheme.titleMedium?.copyWith(color: red)),
+            const SizedBox(width: 6),
+            Text(
+              '${places.length}',
+              style: theme.textTheme.labelMedium?.copyWith(
+                color: red.withValues(alpha: 0.7),
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const Spacer(),
+            Text('Map',
+                style: theme.textTheme.labelSmall
+                    ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+            Switch.adaptive(
+              value: showOnMap,
+              onChanged: (v) =>
+                  ref.read(showUnvisitedOnMapProvider.notifier).state = v,
+              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            TextButton(
+              onPressed: trip == null
+                  ? null
+                  : () => showUnvisitedPlacesSheet(context,
+                      trip: trip, places: places),
+              style: TextButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                  padding: const EdgeInsets.symmetric(horizontal: 8)),
+              child: const Text('Review'),
+            ),
+          ],
+        ),
+      ),
+      Padding(
+        padding: const EdgeInsets.only(left: 4, right: 4, bottom: 8),
+        child: Text(
+          'This trip has ended. These never got a visit — delete them, or '
+          'move them to another trip.',
+          style: theme.textTheme.bodySmall
+              ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+        ),
+      ),
+      for (final l in visible)
+        OptimizedLocationCard(
+          key: ValueKey('unvisited_${l.id}'),
+          location: l,
+          number: -3,
+          showNumber: false,
+          scrollController: scrollController,
+          sheetController: sheetController,
+          onLocationTap: onLocationTap,
+        ),
+      const SizedBox(height: 16),
+    ];
+  }
+
   List<Widget> _buildLocationsListWidgets(BuildContext context, WidgetRef ref,
       List<LocationModel> locations, ScrollController scrollController,
       {String query = ''}) {
+    final leftovers =
+        _buildUnvisitedSection(context, ref, scrollController, query: query);
     if (locations.isEmpty) {
-      // Defensive fallback. The selected-date tab routes empty dates through
-      // the centered SliverFillRemaining body in build(), so this path is only
-      // reached if a caller passes an empty list directly.
+      // The ended trip's leftovers still render on a day they emptied;
+      // otherwise this is a defensive fallback (the selected-date tab routes
+      // empty dates through the centered SliverFillRemaining body in build()).
       return [
-        Padding(
-          padding:
-              const EdgeInsets.only(left: 32, right: 32, bottom: 32, top: 16),
-          child: _buildEmptyDateState(context),
-        ),
+        ...leftovers,
+        if (leftovers.isEmpty)
+          Padding(
+            padding:
+                const EdgeInsets.only(left: 32, right: 32, bottom: 32, top: 16),
+            child: _buildEmptyDateState(context),
+          ),
       ];
     }
 
@@ -1874,7 +2050,7 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
     // the active scope and renders the centered empty body instead, so this
     // builder is only reached when something matches.
 
-    final widgets = <Widget>[];
+    final widgets = <Widget>[...leftovers];
 
     // ── Multi-modal timeline rails ─────────────────────────────────────
     // Between consecutive stop cards, the travel segment that connects
@@ -2344,7 +2520,9 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
         ref.watch(tripProvider.select((s) => s.optimizedRoute.isNotEmpty));
 
     final searching = query.trim().isNotEmpty;
-    final widgets = <Widget>[];
+    final widgets = <Widget>[
+      ..._buildUnvisitedSection(context, ref, scrollController, query: query),
+    ];
     for (final date in sortedDates) {
       final locs = grouped[date] ?? const <LocationModel>[];
 
@@ -2911,6 +3089,22 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
         );
       }
     }
+  }
+
+  /// Multi-select → "Move to another trip": the picked places leave this
+  /// trip for one the user chooses (country-guarded, day picked there).
+  Future<void> _showMoveToTripSheet(BuildContext context, WidgetRef ref) async {
+    final selectedIds = ref.read(selectedLocationsProvider);
+    final picks = ref
+        .read(tripProvider)
+        .pinnedLocations
+        .where((l) => selectedIds.contains(l.id))
+        .toList();
+    if (picks.isEmpty) return;
+    final moved = await showMoveToTripSheet(context, ref, picks);
+    if (!moved) return;
+    ref.read(isSelectionModeProvider.notifier).state = false;
+    ref.read(selectedLocationsProvider.notifier).state = {};
   }
 
   void _showMoveLocationsDialog(BuildContext context, WidgetRef ref) async {

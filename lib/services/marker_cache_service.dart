@@ -305,6 +305,28 @@ class MarkerCacheService {
   }
 
   /// The intermediate-stop dot of a ride — one bitmap, used by every dot.
+  Future<MarkerBitmapResult> getStationGateBadge(String label,
+      {required bool isDarkMode}) async {
+    final key = 'gate_badge_v2_${isDarkMode ? 'd' : 'l'}_$label';
+    if (_cache.containsKey(key)) {
+      return _cache[key]!;
+    }
+    final result = await MarkerUtils.getStationGateBadgeMarker(label,
+        isDarkMode: isDarkMode);
+    _addToCache(key, result);
+    return result;
+  }
+
+  Future<MarkerBitmapResult> getStationGateArrow() async {
+    const key = 'gate_arrow_v3';
+    if (_cache.containsKey(key)) {
+      return _cache[key]!;
+    }
+    final result = await MarkerUtils.getStationGateArrowMarker();
+    _addToCache(key, result);
+    return result;
+  }
+
   Future<MarkerBitmapResult> getTransitStopDot() async {
     const key = 'transit_stop_dot';
     if (_cache.containsKey(key)) {
