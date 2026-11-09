@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:purchases_flutter/purchases_flutter.dart';
-import 'package:purchases_ui_flutter/purchases_ui_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:intl/intl.dart';
 import 'dart:io';
@@ -1474,24 +1473,6 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
   }
 }
 
-/// Shows the RevenueCat native paywall
-/// This uses RevenueCat's built-in paywall UI that you can configure in the dashboard
-Future<bool> showRevenueCatPaywall(BuildContext context) async {
-  try {
-    final paywallResult = await RevenueCatUI.presentPaywallIfNeeded(
-      RevenueCatConfig.entitlementVoyZaPro,
-    );
-
-    debugPrint('Paywall result: $paywallResult');
-
-    return paywallResult == PaywallResult.purchased ||
-        paywallResult == PaywallResult.restored;
-  } catch (e) {
-    debugPrint('Error showing RevenueCat paywall: $e');
-    return false;
-  }
-}
-
 /// Shows the custom paywall screen.
 ///
 /// Flips [paywallVisibleProvider] for the duration of the route so app-level
@@ -1519,21 +1500,10 @@ Future<bool?> showCustomPaywall(
   }
 }
 
-/// Helper function to show the appropriate paywall
-/// Defaults to custom paywall (preferNative = false to avoid v2 paywall warning)
+/// The one paywall entry: the custom paywall, never stacked twice.
 Future<bool> showPaywall(
   BuildContext context, {
-  bool preferNative = false,
   PaywallTrigger trigger = PaywallTrigger.upgradePrompt,
 }) async {
-  if (preferNative) {
-    // Try RevenueCat native paywall first
-    final result = await showRevenueCatPaywall(context);
-    if (result) return true;
-
-    // If native paywall couldn't be shown (no offering configured), show custom
-    return await showCustomPaywall(context, trigger: trigger) ?? false;
-  } else {
-    return await showCustomPaywall(context, trigger: trigger) ?? false;
-  }
+  return await showCustomPaywall(context, trigger: trigger) ?? false;
 }

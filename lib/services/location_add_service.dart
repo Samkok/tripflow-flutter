@@ -4,15 +4,16 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:intl/intl.dart';
+import 'package:uuid/uuid.dart';
 import '../models/location_model.dart';
 import '../models/saved_location.dart';
 import '../models/trip.dart';
 import '../providers/auth_provider.dart';
+import '../providers/local_active_trip_provider.dart';
 import '../providers/location_provider.dart';
-import '../providers/map_ui_state_provider.dart';
 import '../providers/subscription_provider.dart';
+import '../providers/trip_collaborator_provider.dart';
 import '../providers/trip_provider.dart';
-import '../providers/trip_listener_provider.dart';
 import '../providers/user_trip_provider.dart';
 import '../services/anonymous_user_service.dart';
 import '../services/onboarding_service.dart';
@@ -31,15 +32,14 @@ import 'analytics_service.dart';
 
 /// Central service for adding locations.
 ///
-/// Every add path in the app — search, long-press, nearby picker,
-/// trip-detail manual add, and the bulk "Add to Trip" flow — funnels
-/// through this service so the gating checks (subscription paywall,
-/// scheduled-date guard, and **strict country guard**) live in one place
-/// and stay consistent.
+/// Every add door in the app — the add-place sheet's search, nearby and
+/// pasted-link segments, and the bulk "Add to Trip" flow — funnels through
+/// this service so the gating checks (subscription paywall, scheduled-date
+/// guard, and **strict country guard**) live in one place and stay
+/// consistent.
 ///
-/// The free-place paywall gate applies only to paths that CREATE a new
-/// saved place ([beforeAddingLocation], [addSavedLocation]). The attach
-/// paths ([attachLocationsToTrip]) only
+/// The free-place paywall gate applies only to the path that CREATES a new
+/// saved place ([addPlace]). The attach paths ([attachLocationsToTrip]) only
 /// re-tag rows that already exist and count against the allowance, so
 /// they are not gated — otherwise a free user at the limit couldn't
 /// organize their own places into trips.
@@ -53,15 +53,6 @@ class LocationAddService {
   final WidgetRef _ref;
 
   LocationAddService(this._ref);
-
-  Trip? _findTripById(String? tripId) {
-    if (tripId == null) return null;
-    final trips = _ref.read(userTripsProvider).asData?.value ?? const [];
-    for (final t in trips) {
-      if (t.id == tripId) return t;
-    }
-    return null;
-  }
 
   /// Goal-gradient feedback after a NEW place is persisted (create paths
   /// only — attach paths don't consume the allowance). Free users get a
@@ -106,13 +97,6 @@ class LocationAddService {
     }
   }
 
-  /// "Sep 14" — or "Day 3" when the row's trip has no dates yet.
-  String _dayLabelFor(DateTime day, String? tripId) {
-    final trip = _findTripById(tripId) ??
-        _ref.read(realtimeActiveTripProvider).valueOrNull;
-    return DayLabeler.forTrip(trip)(day);
-  }
-
   Future<void> _persistTripDateExtension(
     Trip trip,
     TripDateConfirmResult result,
@@ -150,6 +134,25 @@ class LocationAddService {
     final last = end == null ? d : DateTime(end.year, end.month, end.day);
     while (!d.isAfter(last)) {
       if (!pinned.any((l) => l.isActiveOnDate(d))) out.add(d);
+      d = DateTime(d.year, d.month, d.day + 1);
+    }
+    return out;
+  }
+
+  /// [_daysWithoutLocations] for one trip's rows (null = the user's loose
+  /// places), read from the saved rows rather than the map's pins so it is
+  /// right for a trip that is not the one on the map.
+  List<DateTime> _daysWithoutLocationsIn(
+      String? tripId, DateTime start, DateTime? end) {
+    final rows = (_ref.read(savedLocationsProvider).valueOrNull ??
+            const <SavedLocation>[])
+        .where((r) => r.tripId == tripId)
+        .toList();
+    final out = <DateTime>[];
+    var d = DateTime(start.year, start.month, start.day);
+    final last = end == null ? d : DateTime(end.year, end.month, end.day);
+    while (!d.isAfter(last)) {
+      if (!rows.any((l) => l.isActiveOnDate(d))) out.add(d);
       d = DateTime(d.year, d.month, d.day + 1);
     }
     return out;
@@ -267,33 +270,9 @@ class LocationAddService {
     }());
   }
 
-  /// True when [location] is the same place as a stop already active on its
-  /// target day in the active map context — the day it carries, else the
-  /// selected day. Occupants are the map's pinned rows: the active trip's
-  /// places, or the loose places on a trip-less map. Same identity rule as
-  /// every reschedule path ([filterSameDayDuplicates]): place_id, else
-  /// name + coordinates.
-  bool _isDuplicateOnDay(LocationModel location) {
-    final day =
-        dayKey(location.scheduledDate ?? _ref.read(selectedDateProvider));
-    final occupants = _ref
-        .read(tripProvider)
-        .pinnedLocations
-        .where((l) =>
-            l.id != location.id &&
-            l.scheduledDate != null &&
-            l.isActiveOnDate(day))
-        .map(placeKeyOfModel);
-    return filterSameDayDuplicates(
-      moving: [placeKeyOfModel(location)],
-      occupantsOnDay: occupants,
-      samePlace: isLikelySamePlace,
-    ).allowedIds.isEmpty;
-  }
-
-  /// [SavedLocation] twin of [_isDuplicateOnDay] for the trip-page add
-  /// flow: occupants are the rows of the SAME trip (null trip = the user's
-  /// loose places). An unscheduled add has no day to collide on.
+  /// Same-day duplicate rule for a row about to be written: occupants are
+  /// the rows of the SAME trip (null trip = the user's loose places). An
+  /// unscheduled add has no day to collide on.
   bool _isSavedDuplicateOnDay(SavedLocation location) {
     final start = location.scheduledDate;
     if (start == null) return false;
@@ -314,134 +293,125 @@ class LocationAddService {
     ).allowedIds.isEmpty;
   }
 
-  /// Adds a [LocationModel] via the active trip context (map / search flow).
-  /// Returns true if the location was added; false if the paywall blocked
-  /// it, the user cancelled the date confirmation, or the strict country
-  /// guard refused it.
+  /// THE add path: one place, from any door (search, nearby picker, pasted
+  /// link), into [trip] on [day]. Null [trip] = a loose place on a trip-less
+  /// map; null [day] = the trip's Unscheduled bucket (no day to collide on,
+  /// no day to confirm).
   ///
-  /// Pass [locationCountryCode] (e.g. `placeDetails.countryCode`) so the
-  /// guard can compare against the active trip's tagged country. Omit it
-  /// only when the country is genuinely unknown — passing null disables
-  /// the check rather than failing closed.
-  Future<bool> beforeAddingLocation(
+  /// Runs, once each and in this order: the write-access check for that
+  /// trip, the same-day duplicate guard, the free-place paywall (unless the
+  /// caller's batch gate ran, [skipLimitCheck]), the strict country guard,
+  /// the outside-trip-dates confirmation, the tag step (unless the caller's
+  /// UI already confirmed one, [tagConfirmed]), the write, and the
+  /// follow-ups (hours backfill, trip-date extension, goal toast,
+  /// accommodation prompt). The map's route is cleared at once only when
+  /// the place landed on the trip the map shows.
+  ///
+  /// Returns true when a row was written.
+  Future<bool> addPlace(
     BuildContext context,
-    LocationModel location, {
-    String? locationCountryCode,
-
-    /// Batch callers (nearby-places multi-select) run ONE
-    /// [SubscriptionLimitService.canAddPlaces] gate up front and pass true
-    /// here — otherwise every place past the allowance would pop its own
-    /// paywall.
-    bool skipLimitCheck = false,
-
-    /// The tag step: every new place gets a tag suggested from its Google
-    /// types and confirmed (changed, or declined) by the user before the
-    /// write. Callers whose own UI already did that — the nearby picker
-    /// shows the chip per row — pass true.
+    PlaceDetails details, {
+    required Trip? trip,
+    required DateTime? day,
+    String? tag,
     bool tagConfirmed = false,
+    bool skipLimitCheck = false,
+    int stayDurationSeconds = 1800,
   }) async {
-    // Same-day duplicate gate — THE shared rule (a place may repeat across
-    // a trip's days, never within one), applied here so every add path
-    // inherits it. The nearby picker and the inline search had no check of
-    // their own, so a place already on the day could be added twice from
-    // them. Runs before the paywall: a duplicate must never show an
-    // upgrade prompt.
-    if (_isDuplicateOnDay(location)) {
-      if (context.mounted) {
-        final day =
-            dayKey(location.scheduledDate ?? _ref.read(selectedDateProvider));
-        AppToast.warning(
-          context,
-          '"${location.name}" is already planned for ${_dayLabelFor(day, location.tripId)}',
-        );
+    if (trip != null) {
+      var allowed = true;
+      try {
+        allowed = await _ref.read(hasWriteAccessProvider(trip.id).future);
+      } catch (_) {
+        // Unknown (offline): let the write go; the server's rules decide.
       }
+      if (!allowed) {
+        if (context.mounted) {
+          AppToast.warning(context,
+              'You don\'t have permission to add locations to this trip.');
+        }
+        return false;
+      }
+    }
+
+    final row = savedLocationFromPlace(
+      details,
+      id: const Uuid().v4(),
+      tripId: trip?.id,
+      day: day,
+      tag: tagConfirmed ? tag : null,
+      stayDurationSeconds: stayDurationSeconds,
+    );
+
+    // Same-day duplicate gate first: a duplicate must never show an upgrade
+    // prompt.
+    if (_isSavedDuplicateOnDay(row)) {
+      final label = DayLabeler.forTrip(trip)(dayKey(day!));
+      if (!context.mounted) return false;
+      AppToast.warning(context, '"${row.name}" is already planned for $label');
       return false;
     }
 
+    if (!context.mounted) return false;
     if (!skipLimitCheck) {
       final canAdd = await SubscriptionLimitService(_ref).canAddPlace(context);
       if (!canAdd) return false;
     }
 
-    final activeTrip = _ref.read(realtimeActiveTripProvider).valueOrNull;
-
     if (!context.mounted) return false;
-    final countryOk = await assertLocationInTripCountry(
-      context,
-      activeTrip,
-      locationCountryCode,
-    );
+    final countryOk =
+        await assertLocationInTripCountry(context, trip, details.countryCode);
     if (!countryOk) return false;
 
     if (!context.mounted) return false;
     final result = await confirmScheduledDate(
       context,
-      activeTrip,
-      location.scheduledDate,
+      trip,
+      day,
       // An ended trip keeps its dates — no stretching it for a new place.
-      allowExtension:
-          !tripHasEnded(activeTrip?.endDate ?? activeTrip?.startDate),
+      allowExtension: !tripHasEnded(trip?.endDate ?? trip?.startDate),
     );
     if (!result.proceed) return false;
 
     // Captured before the write so the toast count can't race the stream.
-    // Own places only — collaborators' shared-trip rows don't count.
     final usedAfter = SubscriptionLimitService.ownPlaceCount(_ref) + 1;
+    // Captured before the write: the day(s) that had no place yet — if any,
+    // a trip day is materializing and the accommodation prompt should ask.
+    final newDays = day == null
+        ? const <DateTime>[]
+        : _daysWithoutLocationsIn(trip?.id, day, day);
 
-    // Captured before the write: the day(s) this location lands on that had
-    // no locations yet — if any, a new trip day is materializing and the
-    // accommodation prompt should ask about it after the add.
-    final DateTime addStart =
-        location.scheduledDate ?? _ref.read(selectedDateProvider);
-    final newDays =
-        _daysWithoutLocations(addStart, location.scheduledEndDate ?? addStart);
-
-    // Add the location BEFORE persisting any trip-date extension. The
-    // extension invalidates userTripsProvider, which cascades through
-    // localActiveTripProvider into realtimeActiveTripProvider — leaving it
-    // in a loading state momentarily. tripProvider.addLocation reads the
-    // active trip via that provider to assign tripId, so reordering keeps
-    // the new location correctly tagged with its trip.
     if (!context.mounted) return false;
     final toAdd =
-        tagConfirmed ? location : await _withConfirmedTag(context, location);
+        tagConfirmed ? row : await _withConfirmedSavedTag(context, row);
     if (!context.mounted) return false;
 
-    await _ref.read(tripProvider.notifier).addLocation(toAdd);
+    await _ref.read(locationRepositoryProvider).addLocation(toAdd);
+    // The map shows this trip (or these loose places): its route is stale
+    // now, not when the stream catches up.
+    if (trip?.id == _ref.read(localActiveTripIdProvider)) {
+      _ref.read(tripProvider.notifier).clearRouteForEdit();
+    }
+    AnalyticsService.instance.placeAdded(usedAfter);
     _scheduleHoursBackfill(
-      location.id,
-      location.placeId,
-      hasHours: location.googleOpeningHours != null,
+      toAdd.id,
+      toAdd.placeId,
+      hasHours: toAdd.googleOpeningHours != null,
     );
 
-    if (activeTrip != null && result.didExtend) {
-      await _persistTripDateExtension(activeTrip, result);
+    if (trip != null && result.didExtend) {
+      await _persistTripDateExtension(trip, result);
     }
     if (context.mounted) _afterSuccessfulNewPlace(context, usedAfter);
     if (context.mounted) {
-      await _promptAccommodationIfDaysMaterialized(
-          context, activeTrip, newDays);
+      await _promptAccommodationIfDaysMaterialized(context, trip, newDays);
     }
     return true;
   }
 
-  /// The tag step for a map/search add: the sheet opens with the tag
-  /// suggested from the place's Google types; the user confirms it, picks
-  /// another, or adds without one. Dismissing the sheet adds without a tag.
-  Future<LocationModel> _withConfirmedTag(
-      BuildContext context, LocationModel location) async {
-    if (!context.mounted) return location.copyWith(tag: null);
-    final pick = await showPlaceTagSheet(
-      context,
-      placeName: location.name,
-      suggested: suggestPlaceTag(location.placeTypes),
-      current: placeTagFromKey(location.tag),
-      placeTypes: location.placeTypes,
-    );
-    return location.copyWith(tag: pick?.tag?.key);
-  }
-
-  /// [_withConfirmedTag] for the trip-page add.
+  /// The tag step: the sheet opens with the tag suggested from the place's
+  /// Google types; the user confirms it, picks another, or adds without
+  /// one. Dismissing the sheet adds without a tag.
   Future<SavedLocation> _withConfirmedSavedTag(
       BuildContext context, SavedLocation location) async {
     if (!context.mounted) return location.copyWith(tag: null);
@@ -453,90 +423,6 @@ class LocationAddService {
       placeTypes: location.placeTypes,
     );
     return location.copyWith(tag: pick?.tag?.key);
-  }
-
-  /// Adds a [SavedLocation] directly to the repository (trip-detail flow).
-  /// Same gating rules as [addLocation]; see its doc for [locationCountryCode]
-  /// semantics.
-  Future<bool> addSavedLocation(
-    BuildContext context,
-    SavedLocation location, {
-    String? locationCountryCode,
-    bool tagConfirmed = false,
-  }) async {
-    // Same-day duplicate gate (see beforeAddingLocation) — scoped to THIS
-    // row's trip, since the trip page often isn't the active map trip.
-    if (_isSavedDuplicateOnDay(location)) {
-      if (context.mounted) {
-        AppToast.warning(
-          context,
-          '"${location.name}" is already planned for ${_dayLabelFor(dayKey(location.scheduledDate!), location.tripId)}',
-        );
-      }
-      return false;
-    }
-
-    final canAdd = await SubscriptionLimitService(_ref).canAddPlace(context);
-    if (!canAdd) return false;
-
-    final trip = _findTripById(location.tripId);
-
-    if (!context.mounted) return false;
-    final countryOk = await assertLocationInTripCountry(
-      context,
-      trip,
-      locationCountryCode,
-    );
-    if (!countryOk) return false;
-
-    if (!context.mounted) return false;
-    final result = await confirmScheduledDate(
-      context,
-      trip,
-      location.scheduledDate,
-      // An ended trip keeps its dates — no stretching it for a new place.
-      allowExtension: !tripHasEnded(trip?.endDate ?? trip?.startDate),
-    );
-    if (!result.proceed) return false;
-
-    // Captured before the write so the toast count can't race the stream.
-    // Own places only — collaborators' shared-trip rows don't count.
-    final usedAfter = SubscriptionLimitService.ownPlaceCount(_ref) + 1;
-
-    // Captured before the write — see beforeAddingLocation. An unscheduled
-    // add materializes no day, so no accommodation prompt can apply.
-    final addStart = location.scheduledDate;
-    final newDays = addStart == null
-        ? const <DateTime>[]
-        : _daysWithoutLocations(
-            addStart, location.scheduledEndDate ?? addStart);
-
-    // Same ordering rule as [addLocation]: persist the location first so
-    // the subsequent userTripsProvider invalidation can't strand it
-    // mid-write.
-    if (!context.mounted) return false;
-    final toAdd = tagConfirmed
-        ? location
-        : await _withConfirmedSavedTag(context, location);
-    if (!context.mounted) return false;
-    await _ref.read(locationRepositoryProvider).addLocation(toAdd);
-    // Funnel analytics, as in TripNotifier.addLocation for the map flow:
-    // places added from the trip page never reported this before.
-    AnalyticsService.instance.placeAdded(usedAfter);
-    _scheduleHoursBackfill(
-      location.id,
-      location.placeId,
-      hasHours: location.googleOpeningHours != null,
-    );
-
-    if (trip != null && result.didExtend) {
-      await _persistTripDateExtension(trip, result);
-    }
-    if (context.mounted) _afterSuccessfulNewPlace(context, usedAfter);
-    if (context.mounted) {
-      await _promptAccommodationIfDaysMaterialized(context, trip, newDays);
-    }
-    return true;
   }
 
   /// Bulk path used by AddToTripSheet. Resolves each pick's country on the
@@ -730,4 +616,42 @@ class LocationAddService {
           : null,
     );
   }
+}
+
+/// The saved row for a place Google described — the one shape every add
+/// door writes. [day] null leaves the row unscheduled.
+SavedLocation savedLocationFromPlace(
+  PlaceDetails details, {
+  required String id,
+  String? tripId,
+  DateTime? day,
+  String? tag,
+  int stayDurationSeconds = 1800,
+  DateTime? now,
+}) {
+  final at = now ?? DateTime.now();
+  return SavedLocation(
+    id: id,
+    userId: '', // the repository stamps the writer
+    fingerprint: '', // and computes this
+    name: details.name,
+    lat: details.coordinates.latitude,
+    lng: details.coordinates.longitude,
+    isSkipped: false,
+    stayDuration: stayDurationSeconds,
+    scheduledDate: day,
+    createdAt: at,
+    tripId: tripId,
+    photoReference: details.photoReference,
+    photoReferences:
+        details.photoReferences.isEmpty ? null : details.photoReferences,
+    photoAttributions: details.photoAttributions,
+    placeId: details.placeId,
+    originalName: details.name,
+    placeTypes: details.types.isEmpty ? null : details.types,
+    floor: details.floor,
+    tag: tag,
+    googleOpeningHours: details.openingHours,
+    hoursLastRefreshedAt: details.openingHours != null ? at : null,
+  );
 }

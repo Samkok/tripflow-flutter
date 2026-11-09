@@ -1,4 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../services/places_gateway.dart';
 import '../services/places_service.dart';
 
 class PaginatedSearchState {
@@ -34,7 +35,9 @@ class PaginatedSearchState {
 }
 
 class PaginatedSearchNotifier extends StateNotifier<PaginatedSearchState> {
-  PaginatedSearchNotifier() : super(const PaginatedSearchState());
+  PaginatedSearchNotifier(this._places) : super(const PaginatedSearchState());
+
+  final PlacesGateway _places;
 
   static const int _pageSize = 5;
   int _currentOffset = 0;
@@ -67,7 +70,7 @@ class PaginatedSearchNotifier extends StateNotifier<PaginatedSearchState> {
     }
 
     try {
-      final newResults = await PlacesService.searchPlacesPaginated(
+      final newResults = await _places.searchPaginated(
         query,
         offset: _currentOffset,
         limit: _pageSize,
@@ -121,11 +124,5 @@ class PaginatedSearchNotifier extends StateNotifier<PaginatedSearchState> {
 
 final paginatedSearchProvider =
     StateNotifierProvider<PaginatedSearchNotifier, PaginatedSearchState>(
-  (ref) => PaginatedSearchNotifier(),
-);
-
-/// Separate provider for trip detail location search (independent of map search)
-final tripDetailSearchProvider =
-    StateNotifierProvider<PaginatedSearchNotifier, PaginatedSearchState>(
-  (ref) => PaginatedSearchNotifier(),
+  (ref) => PaginatedSearchNotifier(ref.watch(placesGatewayProvider)),
 );

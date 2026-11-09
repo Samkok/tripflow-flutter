@@ -14,36 +14,23 @@ import 'package:voyza/providers/trip_day_labeler_provider.dart';
 import 'package:voyza/widgets/trip_day_picker.dart';
 import '../providers/trip_listener_provider.dart';
 import '../providers/trip_provider.dart';
-import '../providers/trip_collaborator_provider.dart';
 import '../providers/trip_simulation_provider.dart';
-import '../providers/unvisited_places_provider.dart';
 import '../utils/date_picker_utils.dart';
-import '../utils/geo_utils.dart';
-import '../utils/same_day_place_guard.dart';
-import '../services/leg_mode_prefs.dart';
-import '../services/review_prompt_service.dart';
 import '../screens/trip_details_screen.dart';
-import 'auto_plan_sheet.dart';
+import 'plan_sheet.dart';
+import '../providers/day_distribution_provider.dart';
 import 'timing_warnings_sheet.dart';
-import '../utils/trip_date_validator.dart';
-import '../utils/trip_dates.dart';
-import '../utils/unvisited_places.dart';
 import '../core/theme.dart';
-import 'accommodation_prompts.dart';
-import 'app_toast.dart';
 import 'leg_rail.dart';
-import 'move_to_trip_sheet.dart';
 import 'unvisited_places_sheet.dart';
 import 'optimized_location_card.dart';
 import 'static_glow.dart';
 import '../utils/search_text.dart';
-import '../services/csv_service.dart';
-import '../services/places_service.dart';
 
 class TripBottomSheet extends ConsumerStatefulWidget {
   final DraggableScrollableController? sheetController;
   final Function(LatLng)? onLocationTap;
-  final VoidCallback? onShowZoneSettings;
+  final VoidCallback? onShowMapSettings;
   final int? highlightedLocationIndex;
 
   /// Anchor for the map spotlight tour's "Optimize" step. Attached to the
@@ -54,7 +41,7 @@ class TripBottomSheet extends ConsumerStatefulWidget {
     super.key,
     this.sheetController,
     this.onLocationTap,
-    this.onShowZoneSettings,
+    this.onShowMapSettings,
     this.highlightedLocationIndex,
     this.optimizeKey,
   });
@@ -82,13 +69,10 @@ class TripBottomSheet extends ConsumerStatefulWidget {
   ConsumerState<TripBottomSheet> createState() => _TripBottomSheetState();
 }
 
-class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
-    with SingleTickerProviderStateMixin {
-  late final TabController _tabController;
-
-  /// Last seen [mapDayFocusRequestProvider] value — see the watch-and-compare
-  /// block in [build].
-  int? _lastDayFocusReq;
+class _TripBottomSheetState extends ConsumerState<TripBottomSheet> {
+  /// The map trip's id, one narrow select for every card on the sheet.
+  String? get _mapTripId =>
+      ref.watch(realtimeActiveTripProvider.select((a) => a.valueOrNull?.id));
 
   /// Flips to true when the inner list is scrolled past the top, and back
   /// to false when it's at the top again. Used to swap the Route Summary
@@ -146,20 +130,15 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
   DraggableScrollableController? get sheetController => widget.sheetController;
 
   Function(LatLng)? get onLocationTap => widget.onLocationTap;
-  VoidCallback? get onShowZoneSettings => widget.onShowZoneSettings;
+  VoidCallback? get onShowMapSettings => widget.onShowMapSettings;
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 2, vsync: this);
-    // Seed with the current value so a request from BEFORE this sheet
-    // existed doesn't fire a phantom tab flip on first build.
-    _lastDayFocusReq = ref.read(mapDayFocusRequestProvider);
   }
 
   @override
   void dispose() {
-    _tabController.dispose();
     _summaryCompact.dispose();
     _listScrollController.dispose();
     _searchSettleTimer?.cancel();
@@ -168,11 +147,6 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
     _listQuery.dispose();
     super.dispose();
   }
-
-  /// Unoptimized active list order: newest-added first (default) or oldest
-  /// first. Toggled from the "Active stops" header; ignored once a route
-  /// exists (the list then follows the route order).
-  bool _activeNewestFirst = true;
 
   /// Forgiving match over the fields a traveller would search by: case-
   /// and diacritic-insensitive, any word order (see [matchesSearchQuery]),
@@ -304,31 +278,9 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
     // guaranteed alive for every day-switch source (map day picker, Whole
     // trip date headers, external focus requests).
     ref.watch(routeClearerProvider);
-    // OPTIMIZATION: Watch only specific fields to prevent rebuilds during drag
-    // Don't watch entire tripState here since it rebuilds on every state change
+    // Narrow: only flips when the board goes from empty to not (and back).
     final hasPinnedLocations =
         ref.watch(tripProvider.select((s) => s.pinnedLocations.isNotEmpty));
-
-    // A flow (trip card "Go to map") just focused a specific day — flip the
-    // locations toggle back to "Selected Day" so the landing shows that day,
-    // not whatever tab was left selected for the previous trip. Watch-and-
-    // compare (not ref.listen): the sheet lives offstage in the IndexedStack
-    // when the request fires, and this catches up on the next build even if
-    // no listener was live at that moment.
-    final focusReq = ref.watch(mapDayFocusRequestProvider);
-    if (focusReq != _lastDayFocusReq) {
-      _lastDayFocusReq = focusReq;
-      if (_tabController.index != 0) {
-        // Post-frame: mutating the TabController mid-build would rebuild
-        // dependents during this build pass.
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted && _tabController.index != 0) {
-            _tabController.index = 0;
-          }
-        });
-      }
-    }
-
     // NOTE (owner request 2026-08-11): the warnings sheet no longer
     // auto-pops after optimize — the route was already committed, so the
     // modal was a verdict without a verb (dismissing changed nothing).
@@ -493,13 +445,7 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        Consumer(builder: (context, ref, _) {
-                          final isSelectionMode =
-                              ref.watch(isSelectionModeProvider);
-                          return isSelectionMode
-                              ? _buildSelectionModeHeader(context, ref)
-                              : _buildDefaultHeader(context, ref);
-                        }),
+                        _buildDefaultHeader(context, ref),
                         Consumer(builder: (context, ref, _) {
                           final selectedDate = ref.watch(selectedDateProvider);
                           final now = DateTime.now();
@@ -652,140 +598,81 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                     // ListView — drags on the list area expand/collapse
                     // the sheet via the built-in DraggableScrollableSheet
                     // coordination.
-                    child: ListenableBuilder(
-                      listenable: _tabController,
-                      builder: (context, _) {
+                    child: ValueListenableBuilder<String>(
+                      valueListenable: _listQuery,
+                      builder: (context, query, _) {
                         // Query is resolved OUTSIDE the Consumer so every
-                        // ref.watch below runs in the Consumer's own build (a
-                        // watch inside a nested builder callback subscribes the
-                        // wrong element).
-                        return ValueListenableBuilder<String>(
-                          valueListenable: _listQuery,
-                          builder: (context, query, _) {
-                            return Consumer(builder: (context, ref, _) {
-                              final onSelectedDateTab = !hasPinnedLocations ||
-                                  _tabController.index == 0;
-                              final searching = query.trim().isNotEmpty;
-
-                              // .select keeps the common path rebuilding only
-                              // when emptiness actually flips.
-                              // An ended trip's "Not visited" section
-                              // still has to render on a day it emptied.
-                              final selectedDateEmpty = onSelectedDateTab &&
-                                  ref.watch(locationsForSelectedDateProvider
+                        // ref.watch below runs in the Consumer's own build.
+                        return Consumer(builder: (context, ref, _) {
+                          final searching = query.trim().isNotEmpty;
+                          // .select keeps the common path rebuilding only
+                          // when emptiness actually flips. An ended trip's
+                          // leftovers row still renders on an emptied day.
+                          final selectedDateEmpty = ref.watch(
+                                  locationsForSelectedDateProvider
                                       .select((l) => l.isEmpty)) &&
-                                  ref.watch(endedTripUnvisitedProvider
-                                      .select((l) => l.isEmpty));
+                              ref.watch(endedTripUnvisitedProvider
+                                  .select((l) => l.isEmpty));
+                          var noMatches = false;
+                          if (searching && !selectedDateEmpty) {
+                            final scope =
+                                ref.watch(locationsForSelectedDateProvider);
+                            noMatches = scope.isNotEmpty &&
+                                !scope.any((l) => _matchesQuery(l, query));
+                          }
 
-                              // A search that matches nothing in the CURRENT
-                              // scope. Decided here (not deep inside the list
-                              // builders) so it can use the same centered
-                              // body as the empty-day state below — as a plain
-                              // list item the message hugged the top of the
-                              // sheet instead of sitting in the middle.
-                              var noMatches = false;
-                              if (searching && !selectedDateEmpty) {
-                                final scope = onSelectedDateTab
-                                    ? ref
-                                        .watch(locationsForSelectedDateProvider)
-                                    : ref.watch(tripProvider
-                                        .select((s) => s.pinnedLocations));
-                                noMatches = scope.isNotEmpty &&
-                                    !scope.any((l) => _matchesQuery(l, query));
-                              }
-
-                              if (selectedDateEmpty || noMatches) {
-                                return CustomScrollView(
-                                  controller: scrollController,
-                                  physics:
-                                      const AlwaysScrollableScrollPhysics(),
-                                  slivers: [
-                                    SliverPadding(
-                                      padding: const EdgeInsets.fromLTRB(
-                                          20, 8, 20, 0),
-                                      sliver: SliverList(
-                                        delegate: SliverChildListDelegate([
-                                          _buildDatePicker(context, ref),
-                                          if (hasPinnedLocations)
-                                            _buildLocationsTabBar(context),
-                                        ]),
-                                      ),
+                          if (selectedDateEmpty || noMatches) {
+                            return CustomScrollView(
+                              controller: scrollController,
+                              physics: const AlwaysScrollableScrollPhysics(),
+                              slivers: [
+                                SliverPadding(
+                                  padding:
+                                      const EdgeInsets.fromLTRB(20, 8, 20, 0),
+                                  sliver: SliverList(
+                                    delegate: SliverChildListDelegate([
+                                      _buildDatePicker(context, ref),
+                                    ]),
+                                  ),
+                                ),
+                                // Fills the space under the day row so the
+                                // message lands in the middle of it.
+                                SliverFillRemaining(
+                                  hasScrollBody: false,
+                                  child: Padding(
+                                    padding: const EdgeInsets.fromLTRB(
+                                        32, 8, 32, 32),
+                                    child: Center(
+                                      child: searching
+                                          ? _buildNoSearchMatches(
+                                              context, ref, query)
+                                          : _buildEmptyDateState(context),
                                     ),
-                                    // Fills the space under the tab bar so the
-                                    // message lands in the middle of it.
-                                    SliverFillRemaining(
-                                      hasScrollBody: false,
-                                      child: Padding(
-                                        padding: const EdgeInsets.fromLTRB(
-                                            32, 8, 32, 32),
-                                        child: Center(
-                                          // Searching still needs the search
-                                          // copy (+ cross-day hint), not the
-                                          // generic "nothing planned" state.
-                                          child: searching
-                                              ? _buildNoSearchMatches(
-                                                  context, ref, query,
-                                                  dayScope: onSelectedDateTab)
-                                              : _buildEmptyDateState(context),
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                );
-                              }
-                              return ListView(
-                                controller: scrollController,
-                                shrinkWrap: false,
-                                physics: const AlwaysScrollableScrollPhysics(),
-                                padding:
-                                    const EdgeInsets.fromLTRB(20, 8, 20, 20),
-                                children: [
-                                  _buildDatePicker(context, ref),
-                                  if (hasPinnedLocations)
-                                    _buildLocationsTabBar(context),
-                                  if (onSelectedDateTab)
-                                    Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: _buildLocationsListWidgets(
-                                          context,
-                                          ref,
-                                          ref.watch(
-                                              locationsForSelectedDateProvider),
-                                          scrollController,
-                                          query: query),
-                                    )
-                                  else
-                                    Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: _buildAllLocationsGroupedByDate(
-                                          context,
-                                          ref,
-                                          _withoutEndedLeftovers(
-                                              ref,
-                                              ref.watch(tripProvider.select(
-                                                  (s) => s.pinnedLocations))),
-                                          scrollController,
-                                          query: query),
-                                    ),
-                                  if (onSelectedDateTab)
-                                    Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.stretch,
-                                      children: [
-                                        _buildOptimizeButton(
-                                            context, ref, scrollController),
-                                        const SizedBox(height: 12),
-                                        _buildCsvDownloadButton(context, ref),
-                                      ],
-                                    ),
-                                  const SizedBox(height: 130),
-                                ],
-                              );
-                            });
-                          },
-                        );
+                                  ),
+                                ),
+                              ],
+                            );
+                          }
+                          return ListView(
+                            controller: scrollController,
+                            shrinkWrap: false,
+                            physics: const AlwaysScrollableScrollPhysics(),
+                            padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+                            children: [
+                              _buildDatePicker(context, ref),
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: _buildLocationsListWidgets(
+                                    context,
+                                    ref,
+                                    ref.watch(locationsForSelectedDateProvider),
+                                    scrollController,
+                                    query: query),
+                              ),
+                              const SizedBox(height: 130),
+                            ],
+                          );
+                        });
                       },
                     ),
                   ),
@@ -903,51 +790,6 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                   ),
                 );
               }),
-              // Ended trip: the places never ticked off, waiting for a
-              // decision — delete them or move them to another trip.
-              Consumer(builder: (context, ref, _) {
-                final trip = ref.watch(realtimeActiveTripProvider).valueOrNull;
-                final rows =
-                    ref.watch(tripProvider.select((s) => s.pinnedLocations));
-                if (!tripNeedsUnvisitedReview(trip, rows)) {
-                  return const SizedBox.shrink();
-                }
-                final places = unvisitedPlaces(rows);
-                const red = Color(0xFFFF5252);
-                return Padding(
-                  padding: const EdgeInsets.only(top: 6),
-                  child: InkWell(
-                    borderRadius: BorderRadius.circular(8),
-                    onTap: () => showUnvisitedPlacesSheet(context,
-                        trip: trip!, places: places),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: red.withValues(alpha: 0.15),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Icon(Icons.flag_outlined, size: 13, color: red),
-                          const SizedBox(width: 5),
-                          Text(
-                            'Not visited (${places.length})',
-                            style: Theme.of(context)
-                                .textTheme
-                                .labelSmall
-                                ?.copyWith(
-                                    color: red, fontWeight: FontWeight.w700),
-                          ),
-                          const Icon(Icons.chevron_right_rounded,
-                              size: 14, color: red),
-                        ],
-                      ),
-                    ),
-                  ),
-                );
-              }),
             ],
           ),
         ),
@@ -964,35 +806,34 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
             //     );
             //   },
             // ),
-            // Clear is available from the map's FAB column — no duplicate in
-            // the header.
-            // Optimize affordance — ALWAYS rendered (disabled at 0 places)
+            // Clear route lives in the route summary, beside Share.
+            // The one planning verb — ALWAYS rendered (disabled at 0 places)
             // so brand-new users see the goal from the start and the
-            // first-run spotlight tour has an anchor. Formerly inside the
-            // hasPinnedLocations gate, which removed it for empty states.
+            // first-run spotlight tour has an anchor. Opens the Plan sheet
+            // on this day (or the whole trip while All days is on).
             Consumer(builder: (context, ref, _) {
               final isGenerating = ref.watch(isGeneratingRouteProvider);
-              final locationsForDate =
-                  ref.watch(locationsForSelectedDateProvider);
-              final count = locationsForDate.length;
+              final count = ref.watch(
+                  locationsForSelectedDateProvider.select((l) => l.length));
               final hasLocations = count > 0;
-              // Optimization is a per-day operation — disabled while the
-              // All-days overview owns the map (pick a day first).
               final allDaysMode = ref.watch(allDaysModeProvider);
-              final canTap = hasLocations && !isGenerating && !allDaysMode;
+              final needsAttention = ref.watch(tripNeedsPlanAttentionProvider);
               final primaryColor = Theme.of(context).colorScheme.primary;
-              // Past days are read-only (the history banner says so) — never
-              // coach adding places there.
               final nudgeDate = ref.watch(selectedDateProvider);
               final nudgeNow = DateTime.now();
               final isPastDate = nudgeDate.isBefore(
                   DateTime(nudgeNow.year, nudgeNow.month, nudgeNow.day));
 
+              // A past day with a route: seeing it again is the only verb.
+              if (isPastDate && hasOptimizedRoute && !allDaysMode) {
+                return _viewRouteButton(context, ref, primaryColor);
+              }
+
               // Goal-gradient nudge: below [ahaThreshold] stops we coach
               // toward the "aha" instead of offering a trivial optimize.
-              // Re-optimize stays available once a route already exists.
               const ahaThreshold = TripBottomSheet.ahaThreshold;
               if (!isPastDate &&
+                  !allDaysMode &&
                   count > 0 &&
                   count < ahaThreshold &&
                   !hasOptimizedRoute &&
@@ -1026,6 +867,8 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                 );
               }
 
+              final canTap =
+                  (hasLocations || allDaysMode) && !isGenerating && !isPastDate;
               final button = Container(
                 key: widget.optimizeKey,
                 decoration: BoxDecoration(
@@ -1048,8 +891,9 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                   color: Colors.transparent,
                   child: InkWell(
                     onTap: canTap
-                        ? () => _onOptimizePressed(context, ref,
-                            isReoptimizing: hasOptimizedRoute)
+                        ? () => showPlanSheet(context,
+                            initial:
+                                allDaysMode ? PlanScope.trip : PlanScope.day)
                         : null,
                     borderRadius: BorderRadius.circular(24),
                     child: Padding(
@@ -1072,18 +916,31 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                               ),
                             )
                           else
-                            const Icon(
-                              Icons.route_rounded,
-                              color: Colors.white,
-                              size: 20,
+                            Stack(
+                              clipBehavior: Clip.none,
+                              children: [
+                                const Icon(Icons.route_rounded,
+                                    color: Colors.white, size: 20),
+                                // The trip plainly needs planning (bucket
+                                // rows, an overloaded day).
+                                if (needsAttention)
+                                  Positioned(
+                                    right: -3,
+                                    top: -3,
+                                    child: Container(
+                                      width: 9,
+                                      height: 9,
+                                      decoration: const BoxDecoration(
+                                        color: Color(0xFFFFB300),
+                                        shape: BoxShape.circle,
+                                      ),
+                                    ),
+                                  ),
+                              ],
                             ),
                           const SizedBox(width: 8),
                           Text(
-                            isGenerating
-                                ? 'Optimizing…'
-                                : hasOptimizedRoute
-                                    ? 'Re-optimize'
-                                    : 'Optimize',
+                            isGenerating ? 'Optimizing…' : 'Plan',
                             style: const TextStyle(
                               color: Colors.white,
                               fontWeight: FontWeight.bold,
@@ -1113,226 +970,11 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
               child: IconButton(
                 icon: const Icon(Icons.tune, size: 20),
                 padding: EdgeInsets.zero,
-                onPressed: onShowZoneSettings,
+                onPressed: onShowMapSettings,
                 color: Theme.of(context).textTheme.bodyMedium?.color,
-                tooltip: 'Zone settings',
+                tooltip: 'Map settings',
               ),
             ),
-          ],
-        ),
-      ],
-    );
-  }
-
-  Widget _buildSelectionModeHeader(BuildContext context, WidgetRef ref) {
-    final selectedCount =
-        ref.watch(selectedLocationsProvider.select((s) => s.length));
-
-    // Determine if we are on a past date to disable editing actions.
-    final selectedDate = ref.watch(selectedDateProvider);
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    final isPastDate = selectedDate.isBefore(today);
-
-    // Check if user has write access to the active trip
-    final hasWriteAccessAsync = ref.watch(hasActiveTripWriteAccessProvider);
-    final hasWriteAccess = hasWriteAccessAsync.asData?.value ?? false;
-
-    // Can edit only if not past date AND has write access
-    final canEdit = !isPastDate && hasWriteAccess;
-
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Row(
-          children: [
-            IconButton(
-              icon: const Icon(Icons.close),
-              onPressed: () {
-                ref.read(isSelectionModeProvider.notifier).state = false;
-                ref.read(selectedLocationsProvider.notifier).state = {};
-              },
-              color: Theme.of(context).textTheme.bodyMedium?.color,
-              tooltip: 'Cancel selection',
-            ),
-            const SizedBox(width: 8),
-            Text(
-              '$selectedCount selected',
-              style: Theme.of(context).textTheme.titleLarge,
-            ),
-          ],
-        ),
-        Row(
-          children: [
-            // Select All / Deselect All — scope depends on the active tab:
-            //   • Selected Date tab (index 0) → only that date's locations.
-            //   • All tab (index ≠ 0) → every pinned location across all
-            //     dates. The list of IDs and the all-selected check both
-            //     come from the same source so the checkbox tracks the
-            //     visible list, not a snapshot from another tab.
-            ListenableBuilder(
-              listenable: _tabController,
-              builder: (context, _) {
-                final isAllTab = _tabController.index != 0;
-                final scopedLocations = isAllTab
-                    ? ref.watch(tripProvider.select((s) => s.pinnedLocations))
-                    : ref.watch(locationsForSelectedDateProvider);
-                final total = scopedLocations.length;
-                if (total == 0) return const SizedBox.shrink();
-
-                // "All selected" means every scoped id is present in the
-                // selection set (extra ids selected from another tab don't
-                // break this — they're just preserved).
-                final selection = ref.watch(selectedLocationsProvider);
-                final allSelected =
-                    scopedLocations.every((l) => selection.contains(l.id));
-
-                return Row(
-                  children: [
-                    Text(
-                      allSelected
-                          ? (isAllTab ? 'Deselect All' : 'Deselect All')
-                          : (isAllTab ? 'Select All' : 'Select All'),
-                      style: Theme.of(context).textTheme.bodyMedium,
-                    ),
-                    Checkbox(
-                      value: allSelected,
-                      onChanged: (bool? value) {
-                        final notifier =
-                            ref.read(selectedLocationsProvider.notifier);
-                        if (value == true) {
-                          // Add scoped ids to the existing selection so
-                          // the user doesn't lose picks made on another
-                          // tab. On the Selected Date tab this still
-                          // selects only that date.
-                          notifier.state = {
-                            ...notifier.state,
-                            for (final l in scopedLocations) l.id,
-                          };
-                        } else {
-                          // Deselect just the scoped ids — preserves
-                          // selections made elsewhere.
-                          final scopedIds =
-                              scopedLocations.map((l) => l.id).toSet();
-                          notifier.state = notifier.state
-                              .where((id) => !scopedIds.contains(id))
-                              .toSet();
-                        }
-                      },
-                    ),
-                  ],
-                );
-              },
-            ),
-            if (selectedCount > 0) ...[
-              PopupMenuButton<String>(
-                onSelected: (value) {
-                  // Check write access for all write operations
-                  if (!hasWriteAccess && value != 'copy') {
-                    AppToast.warning(
-                      context,
-                      'You don\'t have permission to modify locations in this trip.',
-                    );
-                    return;
-                  }
-
-                  if (value == 'delete') {
-                    _showMultiDeleteConfirmationDialog(context, ref);
-                  } else if (value == 'move') {
-                    _showMoveLocationsDialog(context, ref);
-                  } else if (value == 'move_trip') {
-                    _showMoveToTripSheet(context, ref);
-                  } else if (value == 'copy') {
-                    _showCopyLocationsDialog(context, ref);
-                  } else if (value == 'skip' && canEdit) {
-                    _showSkipConfirmationDialog(context, ref);
-                  } else if (value == 'done' && hasWriteAccess) {
-                    _markSelectedAsDone(context, ref);
-                  }
-                },
-                icon: Icon(Icons.more_vert,
-                    color: Theme.of(context).textTheme.bodyMedium?.color),
-                itemBuilder: (context) => [
-                  PopupMenuItem<String>(
-                    value: 'delete',
-                    enabled: hasWriteAccess,
-                    child: ListTile(
-                      leading: Icon(
-                        Icons.delete_outline,
-                        color: hasWriteAccess
-                            ? Theme.of(context).colorScheme.error
-                            : Colors.grey,
-                      ),
-                      title: Text(
-                        'Delete',
-                        style: TextStyle(
-                            color: hasWriteAccess
-                                ? Theme.of(context).colorScheme.error
-                                : Colors.grey),
-                      ),
-                    ),
-                  ),
-                  PopupMenuItem<String>(
-                    value: 'move',
-                    enabled: canEdit,
-                    child: ListTile(
-                      leading: Icon(Icons.calendar_today_outlined,
-                          color: canEdit ? null : Colors.grey),
-                      title: Text('Move to another day',
-                          style:
-                              TextStyle(color: canEdit ? null : Colors.grey)),
-                    ),
-                  ),
-                  PopupMenuItem<String>(
-                    value: 'move_trip',
-                    enabled: hasWriteAccess,
-                    child: ListTile(
-                      leading: Icon(Icons.luggage_outlined,
-                          color: hasWriteAccess ? null : Colors.grey),
-                      title: Text('Move to another trip',
-                          style: TextStyle(
-                              color: hasWriteAccess ? null : Colors.grey)),
-                    ),
-                  ),
-                  PopupMenuItem<String>(
-                    // Uses theme colors
-                    value: 'skip',
-                    enabled:
-                        canEdit, // Disable skipping for past dates or read-only
-                    child: ListTile(
-                      leading: Icon(
-                        Icons.remove_circle_outline,
-                        color: canEdit
-                            ? Theme.of(context).textTheme.bodyMedium?.color
-                            : Colors.grey,
-                      ),
-                      title: Text('Skip',
-                          style:
-                              TextStyle(color: canEdit ? null : Colors.grey)),
-                    ),
-                  ),
-                  PopupMenuItem<String>(
-                    value: 'done',
-                    enabled: hasWriteAccess,
-                    child: ListTile(
-                      leading: Icon(Icons.check_circle_outline,
-                          color: hasWriteAccess ? Colors.green : Colors.grey),
-                      title: Text('Mark as Done',
-                          style: TextStyle(
-                              color:
-                                  hasWriteAccess ? Colors.green : Colors.grey)),
-                    ),
-                  ),
-                  const PopupMenuItem(
-                    value: 'copy',
-                    child: ListTile(
-                        leading: Icon(Icons.copy),
-                        title: Text('Copy to another day')),
-                  ),
-                ],
-              ),
-            ]
-            // Add other multi-select actions here (e.g., share, group)
           ],
         ),
       ],
@@ -1553,6 +1195,38 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
               overflow: TextOverflow.ellipsis,
             ),
           ),
+          // The same Clear as the full card, small enough not to grow the
+          // strip. Whenever a route exists (as the old map button did).
+          if (hasRoute)
+            Consumer(builder: (context, ref, _) {
+              final generating = ref.watch(isGeneratingRouteProvider);
+              return Padding(
+                padding: const EdgeInsets.only(left: 8),
+                child: Container(
+                  width: 24,
+                  height: 24,
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.errorContainer
+                        .withValues(alpha: generating ? 0.3 : 0.7),
+                    shape: BoxShape.circle,
+                  ),
+                  child: IconButton(
+                    key: const Key('compact-clear-route'),
+                    padding: EdgeInsets.zero,
+                    iconSize: 14,
+                    visualDensity: VisualDensity.compact,
+                    tooltip: 'Clear route',
+                    onPressed: generating
+                        ? null
+                        : () => ref
+                            .read(tripProvider.notifier)
+                            .clearOptimizedRoute(),
+                    icon: Icon(Icons.close_rounded,
+                        color: theme.colorScheme.onErrorContainer),
+                  ),
+                ),
+              );
+            }),
         ],
       ),
     );
@@ -1702,6 +1376,35 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                               padding: const EdgeInsets.all(8),
                             ),
                           ),
+                        // Clear the day's route, whenever one exists (as
+                        // the old map button did). Disabled while optimizing.
+                        if (hasRoute) ...[
+                          const SizedBox(width: 8),
+                          Consumer(builder: (context, ref, _) {
+                            final generating =
+                                ref.watch(isGeneratingRouteProvider);
+                            return IconButton.filledTonal(
+                              key: const Key('summary-clear-route'),
+                              onPressed: generating
+                                  ? null
+                                  : () => ref
+                                      .read(tripProvider.notifier)
+                                      .clearOptimizedRoute(),
+                              icon: const Icon(Icons.close_rounded, size: 20),
+                              tooltip: 'Clear route',
+                              style: IconButton.styleFrom(
+                                backgroundColor: Theme.of(context)
+                                    .colorScheme
+                                    .errorContainer
+                                    .withValues(alpha: 0.6),
+                                foregroundColor: Theme.of(context)
+                                    .colorScheme
+                                    .onErrorContainer,
+                                padding: const EdgeInsets.all(8),
+                              ),
+                            );
+                          }),
+                        ],
                       ],
                     );
                   },
@@ -1894,61 +1597,38 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
     );
   }
 
-  /// [all] minus the ended trip's unvisited places — they have their own
-  /// section (see [_buildUnvisitedSection]).
-  List<LocationModel> _withoutEndedLeftovers(
-      WidgetRef ref, List<LocationModel> all) {
-    final ids = ref.watch(endedTripUnvisitedIdsProvider);
-    return ids.isEmpty ? all : all.where((l) => !ids.contains(l.id)).toList();
-  }
-
-  /// The ended trip's "Not visited" section: the places never ticked off,
-  /// pulled out of their days. A switch puts them on the map (off by
-  /// default) and "Review" opens the delete / move sheet. Empty while the
-  /// trip runs or when nothing is left over.
-  List<Widget> _buildUnvisitedSection(
-      BuildContext context, WidgetRef ref, ScrollController scrollController,
-      {String query = ''}) {
-    final places = ref.watch(endedTripUnvisitedProvider);
-    if (places.isEmpty) return const [];
-    final visible = places.where((l) => _matchesQuery(l, query)).toList();
-    if (visible.isEmpty) return const [];
+  /// The ended trip's leftovers, as one line: how many never got a visit
+  /// and the way to the review sheet (delete or move). The cards live on
+  /// the trip page; the map preview is the Jump sheet's row. Empty while
+  /// the trip runs or when nothing is left over.
+  List<Widget> _buildUnvisitedRow(BuildContext context, WidgetRef ref) {
+    final count = ref.watch(endedTripUnvisitedProvider.select((l) => l.length));
+    if (count == 0) return const [];
     final theme = Theme.of(context);
     const red = Color(0xFFFF5252);
-    final showOnMap = ref.watch(showUnvisitedOnMapProvider);
-    final trip = ref.watch(realtimeActiveTripProvider).valueOrNull;
     return [
       Padding(
-        padding: const EdgeInsets.only(top: 4, bottom: 2, left: 4, right: 4),
+        padding: const EdgeInsets.fromLTRB(4, 4, 4, 10),
         child: Row(
           children: [
             const Icon(Icons.flag_outlined, size: 18, color: red),
             const SizedBox(width: 8),
-            Text('Not visited',
-                style: theme.textTheme.titleMedium?.copyWith(color: red)),
-            const SizedBox(width: 6),
-            Text(
-              '${places.length}',
-              style: theme.textTheme.labelMedium?.copyWith(
-                color: red.withValues(alpha: 0.7),
-                fontWeight: FontWeight.w700,
+            Expanded(
+              child: Text(
+                count == 1
+                    ? '1 place you didn\'t visit'
+                    : '$count places you didn\'t visit',
+                style: theme.textTheme.bodyMedium
+                    ?.copyWith(color: red, fontWeight: FontWeight.w600),
               ),
             ),
-            const Spacer(),
-            Text('Map',
-                style: theme.textTheme.labelSmall
-                    ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
-            Switch.adaptive(
-              value: showOnMap,
-              onChanged: (v) =>
-                  ref.read(showUnvisitedOnMapProvider.notifier).state = v,
-              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-            ),
             TextButton(
-              onPressed: trip == null
-                  ? null
-                  : () => showUnvisitedPlacesSheet(context,
-                      trip: trip, places: places),
+              onPressed: () {
+                final trip = ref.read(realtimeActiveTripProvider).valueOrNull;
+                if (trip == null) return;
+                showUnvisitedPlacesSheet(context,
+                    trip: trip, places: ref.read(endedTripUnvisitedProvider));
+              },
               style: TextButton.styleFrom(
                   visualDensity: VisualDensity.compact,
                   padding: const EdgeInsets.symmetric(horizontal: 8)),
@@ -1957,34 +1637,13 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
           ],
         ),
       ),
-      Padding(
-        padding: const EdgeInsets.only(left: 4, right: 4, bottom: 8),
-        child: Text(
-          'This trip has ended. These never got a visit — delete them, or '
-          'move them to another trip.',
-          style: theme.textTheme.bodySmall
-              ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-        ),
-      ),
-      for (final l in visible)
-        OptimizedLocationCard(
-          key: ValueKey('unvisited_${l.id}'),
-          location: l,
-          number: -3,
-          showNumber: false,
-          scrollController: scrollController,
-          sheetController: sheetController,
-          onLocationTap: onLocationTap,
-        ),
-      const SizedBox(height: 16),
     ];
   }
 
   List<Widget> _buildLocationsListWidgets(BuildContext context, WidgetRef ref,
       List<LocationModel> locations, ScrollController scrollController,
       {String query = ''}) {
-    final leftovers =
-        _buildUnvisitedSection(context, ref, scrollController, query: query);
+    final leftovers = _buildUnvisitedRow(context, ref);
     if (locations.isEmpty) {
       // The ended trip's leftovers still render on a day they emptied;
       // otherwise this is a defensive fallback (the selected-date tab routes
@@ -2012,14 +1671,13 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
         ref.watch(tripProvider.select((s) => s.startLocationId));
     final railStartIsCurrent = railStartId == 'current_location';
 
-    // Unoptimized day: the active list is sorted by when each place was
-    // ADDED (newest first by default; the header toggles it). Once a route
-    // exists the list follows the route order — sorting would break the
-    // map ↔ list numbering.
+    // Unoptimized day: the active list is in the order the places were
+    // ADDED, oldest first, so a new place appends at the bottom and the
+    // list never reflows under the thumb. Once a route exists the list
+    // follows the route order — sorting would break the map ↔ list
+    // numbering.
     if (!railRouteActive) {
-      allNormal.sort((a, b) => _activeNewestFirst
-          ? b.addedAt.compareTo(a.addedAt)
-          : a.addedAt.compareTo(b.addedAt));
+      allNormal.sort((a, b) => a.addedAt.compareTo(b.addedAt));
     }
 
     // When the route starts AT a stop, that stop is the anchor, not stop #1
@@ -2108,23 +1766,10 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
                     ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
               )
             else
-              TextButton.icon(
-                onPressed: () =>
-                    setState(() => _activeNewestFirst = !_activeNewestFirst),
-                icon: Icon(
-                  _activeNewestFirst
-                      ? Icons.arrow_downward_rounded
-                      : Icons.arrow_upward_rounded,
-                  size: 16,
-                ),
-                label:
-                    Text(_activeNewestFirst ? 'Newest first' : 'Oldest first'),
-                style: TextButton.styleFrom(
-                  visualDensity: VisualDensity.compact,
-                  padding: const EdgeInsets.symmetric(horizontal: 8),
-                  foregroundColor: theme.colorScheme.onSurfaceVariant,
-                  textStyle: theme.textTheme.labelMedium,
-                ),
+              Text(
+                'Added order',
+                style: theme.textTheme.labelSmall
+                    ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
               ),
           ],
         ),
@@ -2163,6 +1808,8 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
           scrollController: scrollController,
           sheetController: sheetController,
           onLocationTap: onLocationTap,
+          tripId: _mapTripId,
+          day: ref.watch(selectedDateProvider),
         ),
       );
     }
@@ -2244,6 +1891,8 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
             scrollController: scrollController,
             sheetController: sheetController,
             onLocationTap: onLocationTap,
+            tripId: _mapTripId,
+            day: ref.watch(selectedDateProvider),
           ),
         );
       }
@@ -2281,6 +1930,8 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
             scrollController: scrollController,
             sheetController: sheetController,
             onLocationTap: onLocationTap,
+            tripId: _mapTripId,
+            day: ref.watch(selectedDateProvider),
           ),
         );
       }
@@ -2373,20 +2024,22 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
   /// Shown when a search returns nothing in the current scope. On the
   /// selected-day tab it also reports matches sitting on OTHER days —
   /// otherwise searching a 10-day trip from one day looks broken.
+  /// Nothing on this day matches the query: the matches on other days,
+  /// each a tap away (the day switches and the query stays), and the trip
+  /// page for everything else.
   Widget _buildNoSearchMatches(
     BuildContext context,
     WidgetRef ref,
-    String query, {
-    required bool dayScope,
-  }) {
+    String query,
+  ) {
     final theme = Theme.of(context);
     final muted = theme.textTheme.bodyMedium?.color?.withValues(alpha: 0.7);
-
-    var elsewhere = 0;
-    if (dayScope) {
-      final all = ref.watch(tripProvider.select((s) => s.pinnedLocations));
-      elsewhere = all.where((l) => _matchesQuery(l, query)).length;
-    }
+    // Only in this branch: the whole-trip select is paid for by a search
+    // that found nothing on the day, never by the common path.
+    final all = ref.watch(tripProvider.select((s) => s.pinnedLocations));
+    final hits = all.where((l) => _matchesQuery(l, query)).take(8).toList();
+    final labeler = ref.read(activeTripDayLabelerProvider);
+    final trip = ref.read(realtimeActiveTripProvider).valueOrNull;
 
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
@@ -2399,22 +2052,49 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
           Icon(Icons.search_off_rounded, size: 44, color: muted),
           const SizedBox(height: 12),
           Text(
-            'No places match "${query.trim()}"',
+            'No places match "${query.trim()}" on this day',
             style: theme.textTheme.titleSmall,
             textAlign: TextAlign.center,
           ),
-          if (dayScope && elsewhere > 0) ...[
-            const SizedBox(height: 8),
-            Text(
-              '$elsewhere ${elsewhere == 1 ? 'place matches' : 'places match'} on other days.',
-              style: theme.textTheme.bodySmall?.copyWith(color: muted),
-              textAlign: TextAlign.center,
-            ),
+          if (hits.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            for (final l in hits)
+              ListTile(
+                dense: true,
+                leading: const Icon(Icons.place_outlined),
+                title:
+                    Text(l.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+                subtitle: Text(l.scheduledDate == null
+                    ? 'Unscheduled'
+                    : labeler(l.scheduledDate!)),
+                onTap: () {
+                  final day = l.scheduledDate;
+                  if (day == null) {
+                    if (trip != null) {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                            builder: (_) => TripDetailsScreen(trip: trip)),
+                      );
+                    }
+                    return;
+                  }
+                  ref.read(allDaysModeProvider.notifier).state = false;
+                  ref.read(selectedDateProvider.notifier).state =
+                      DateTime(day.year, day.month, day.day);
+                },
+              ),
+          ],
+          if (trip != null) ...[
             const SizedBox(height: 12),
             OutlinedButton.icon(
-              onPressed: () => _tabController.animateTo(1),
-              icon: const Icon(Icons.travel_explore_rounded, size: 18),
-              label: const Text('Search the whole trip'),
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                    builder: (_) => TripDetailsScreen(trip: trip)),
+              ),
+              icon: const Icon(Icons.list_alt_rounded, size: 18),
+              label: const Text('Open trip page'),
             ),
           ],
         ],
@@ -2422,788 +2102,67 @@ class _TripBottomSheetState extends ConsumerState<TripBottomSheet>
     );
   }
 
-  /// Tab bar that switches between the locations for the selected date
-  /// and a grouped-by-date view of every location in the trip.
-  Widget _buildLocationsTabBar(BuildContext context) {
-    final theme = Theme.of(context);
-    final primary = theme.colorScheme.primary;
-
-    return Padding(
-      padding: const EdgeInsets.only(top: 8, bottom: 4),
-      child: Container(
-        decoration: BoxDecoration(
-          color: primary.withValues(alpha: 0.08),
-          borderRadius: BorderRadius.circular(12),
+  /// A past day's route, seen again: collapses the sheet onto the map and
+  /// draws the day as it was optimized.
+  Widget _viewRouteButton(BuildContext context, WidgetRef ref, Color primary) {
+    return Container(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [primary, primary.withValues(alpha: 0.8)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
         ),
-        child: TabBar(
-          controller: _tabController,
-          labelColor: Colors.black,
-          unselectedLabelColor: theme.textTheme.bodyMedium?.color,
-          indicator: BoxDecoration(
-            color: primary,
-            borderRadius: BorderRadius.circular(12),
-          ),
-          indicatorSize: TabBarIndicatorSize.tab,
-          dividerColor: Colors.transparent,
-          tabs: const [
-            Tab(text: 'Selected Day'),
-            Tab(text: 'Whole trip'),
-          ],
-        ),
+        borderRadius: BorderRadius.circular(24),
       ),
-    );
-  }
-
-  /// Builds the "All" tab — every location in the trip, grouped by their
-  /// scheduledDate. Tapping a date header makes that date the selected date
-  /// and switches the user back to the "Selected Date" tab.
-  List<Widget> _buildAllLocationsGroupedByDate(
-    BuildContext context,
-    WidgetRef ref,
-    List<LocationModel> all,
-    ScrollController scrollController, {
-    String query = '',
-  }) {
-    if (all.isEmpty) {
-      return [
-        Padding(
-          padding: const EdgeInsets.symmetric(vertical: 32, horizontal: 16),
-          child: Column(
-            children: [
-              Icon(Icons.event_note_outlined,
-                  size: 64,
-                  color: Theme.of(context).textTheme.bodyMedium?.color),
-              const SizedBox(height: 16),
-              Text('No locations yet',
-                  style: Theme.of(context).textTheme.titleMedium),
-              const SizedBox(height: 8),
-              Text('Add locations to see them grouped by date here.',
-                  style: Theme.of(context).textTheme.bodyMedium,
-                  textAlign: TextAlign.center),
-            ],
-          ),
-        ),
-      ];
-    }
-
-    // Group by date-only key. Locations without a scheduledDate fall back to
-    // their addedAt date — matches the behavior of locationsForSelectedDateProvider.
-    final Map<DateTime, List<LocationModel>> grouped = {};
-    for (final loc in all) {
-      final raw = loc.scheduledDate ?? loc.addedAt;
-      final key = DateTime(raw.year, raw.month, raw.day);
-      grouped.putIfAbsent(key, () => []).add(loc);
-    }
-
-    // Show every day the trip spans — including empty in-between days — not
-    // only days that already host a location. Union the contiguous trip span
-    // (declared range + scheduled locations, gaps filled) with the group keys
-    // so nothing is orphaned. Same helper as the day-chip strip and the trip
-    // detail page, so all three surfaces show identical days.
-    final trip = ref.watch(realtimeActiveTripProvider).valueOrNull;
-    final span = contiguousTripDates([
-      trip?.startDate,
-      trip?.endDate,
-      for (final loc in all) ...[
-        loc.scheduledDate ?? loc.addedAt,
-        loc.scheduledEndDate ?? loc.scheduledDate ?? loc.addedAt,
-      ],
-    ]);
-    final sortedDates = (<DateTime>{...span, ...grouped.keys}.toList())..sort();
-
-    final selectedDate = ref.watch(selectedDateProvider);
-    final today =
-        DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
-    // Whole-trip list: numbers only on the optimized day (the map does the
-    // same) — an unordered day has no "stop 3".
-    final optimizedActive =
-        ref.watch(tripProvider.select((s) => s.optimizedRoute.isNotEmpty));
-
-    final searching = query.trim().isNotEmpty;
-    final widgets = <Widget>[
-      ..._buildUnvisitedSection(context, ref, scrollController, query: query),
-    ];
-    for (final date in sortedDates) {
-      final locs = grouped[date] ?? const <LocationModel>[];
-
-      // Sort within a date: upcoming first, then done, then skipped.
-      final normal = locs.where((l) => !l.isSkipped && !l.isDone).toList();
-      final done = locs.where((l) => l.isDone).toList();
-      final skipped = locs.where((l) => l.isSkipped).toList();
-      // Number before filtering so a matched card keeps its real stop number.
-      final ordered = <(LocationModel, int)>[
-        for (var i = 0; i < normal.length; i++) (normal[i], i + 1),
-        for (final l in done) (l, -2),
-        for (final l in skipped) (l, -1),
-      ];
-      final visible =
-          ordered.where((entry) => _matchesQuery(entry.$1, query)).toList();
-
-      // While searching, days with no match drop out entirely — otherwise
-      // the results are buried under a wall of empty day headers.
-      if (searching && visible.isEmpty) continue;
-
-      final isSelected = date == selectedDate;
-      widgets.add(_buildDateGroupHeader(
-          context, date, today, searching ? visible.length : locs.length,
-          isSelected: isSelected, onTap: () {
-        ref.read(selectedDateProvider.notifier).state = date;
-        _tabController.animateTo(0);
-      }));
-
-      // Empty in-between day: keep the header (so the day is visible and
-      // tappable to plan it) with a muted placeholder instead of cards.
-      if (visible.isEmpty) {
-        widgets.add(Padding(
-          padding: const EdgeInsets.only(left: 8, top: 2, bottom: 4),
-          child: Text(
-            'No places scheduled yet',
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: Theme.of(context)
-                      .textTheme
-                      .bodyMedium
-                      ?.color
-                      ?.withValues(alpha: 0.5),
-                  fontStyle: FontStyle.italic,
-                ),
-          ),
-        ));
-        continue;
-      }
-
-      for (final (loc, number) in visible) {
-        widgets.add(OptimizedLocationCard(
-          key: ValueKey('all_${date.toIso8601String()}_${loc.id}'),
-          location: loc,
-          number: number,
-          showNumber: optimizedActive && date == selectedDate,
-          scrollController: scrollController,
-          sheetController: sheetController,
-          onLocationTap: onLocationTap,
-        ));
-      }
-    }
-
-    // As above: an all-empty result is handled by build()'s centered body.
-    return widgets;
-  }
-
-  Widget _buildDateGroupHeader(
-    BuildContext context,
-    DateTime date,
-    DateTime today,
-    int count, {
-    required bool isSelected,
-    required VoidCallback onTap,
-  }) {
-    final theme = Theme.of(context);
-    final primary = theme.colorScheme.primary;
-    final isToday = date == today;
-    final isPast = date.isBefore(today);
-
-    final labeler = ref.read(activeTripDayLabelerProvider);
-    String label;
-    if (labeler.tbd) {
-      label = labeler(date);
-    } else if (isToday) {
-      label = 'Today · ${DateFormat.MMMd().format(date)}';
-    } else if (date == today.add(const Duration(days: 1))) {
-      label = 'Tomorrow · ${DateFormat.MMMd().format(date)}';
-    } else {
-      label = DateFormat('EEE, MMM d, y').format(date);
-    }
-
-    return Padding(
-      padding: const EdgeInsets.only(top: 16, bottom: 8),
       child: Material(
         color: Colors.transparent,
         child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(12),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            decoration: BoxDecoration(
-              color: isSelected
-                  ? primary.withValues(alpha: 0.18)
-                  : primary.withValues(alpha: 0.06),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(
-                color: isSelected ? primary : primary.withValues(alpha: 0.2),
-                width: isSelected ? 1.5 : 1,
-              ),
-            ),
+          borderRadius: BorderRadius.circular(24),
+          onTap: () {
+            ref
+                .read(TripBottomSheet.viewHistoricalRouteProvider.notifier)
+                .state = true;
+            final collapse = sheetController?.animateTo(
+              0.12,
+              duration: const Duration(milliseconds: 300),
+              curve: Curves.easeInOut,
+            );
+            // Reset the list to the top after the sheet finishes
+            // collapsing; animating during collapse fights the shrinking
+            // viewport.
+            void resetScroll() {
+              if (_listScrollController.hasClients) {
+                _listScrollController.jumpTo(0);
+              }
+            }
+
+            if (collapse != null) {
+              collapse.then((_) => resetScroll());
+            } else {
+              WidgetsBinding.instance
+                  .addPostFrameCallback((_) => resetScroll());
+            }
+          },
+          child: const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 18, vertical: 11),
             child: Row(
+              mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(
-                  isPast ? Icons.history : Icons.calendar_today_outlined,
-                  size: 18,
-                  color: primary,
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    label,
-                    style: theme.textTheme.titleSmall?.copyWith(
-                      color: isSelected ? primary : null,
-                      fontWeight: FontWeight.w600,
-                    ),
+                Icon(Icons.visibility_outlined, color: Colors.white, size: 20),
+                SizedBox(width: 8),
+                Text(
+                  'View Route',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14,
                   ),
                 ),
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: primary.withValues(alpha: 0.15),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Text(
-                    '$count',
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: primary,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 6),
-                Icon(Icons.chevron_right,
-                    size: 18,
-                    color: theme.textTheme.bodyMedium?.color
-                        ?.withValues(alpha: 0.6)),
               ],
             ),
           ),
         ),
       ),
-    );
-  }
-
-  /// Build optimize and CSV buttons as separate widgets
-  Widget _buildOptimizeButton(
-      BuildContext context, WidgetRef ref, ScrollController scrollController) {
-    return Consumer(builder: (context, ref, _) {
-      final isGenerating = ref.watch(isGeneratingRouteProvider);
-      final hasRoute =
-          ref.watch(tripProvider.select((s) => s.optimizedRoute.isNotEmpty));
-      final selectedDate = ref.watch(selectedDateProvider);
-      final locationsForDate = ref.watch(locationsForSelectedDateProvider);
-
-      final now = DateTime.now();
-      final today = DateTime(now.year, now.month, now.day);
-      final isPastDate = selectedDate.isBefore(today);
-
-      final isViewingHistory = isPastDate && hasRoute;
-      final hasLocations = locationsForDate.isNotEmpty;
-
-      // Same goal-gradient rule as the header button: below [ahaThreshold]
-      // stops we coach toward the "aha" instead of offering a trivial
-      // optimize. Re-optimize stays available once a route already exists.
-      const ahaThreshold = TripBottomSheet.ahaThreshold;
-      final stopCount = locationsForDate.length;
-      if (stopCount > 0 &&
-          stopCount < ahaThreshold &&
-          !hasRoute &&
-          !isGenerating &&
-          // Any past date is read-only — never nudge there (isViewingHistory
-          // alone misses past days that have no route yet).
-          !isPastDate) {
-        final remaining = ahaThreshold - stopCount;
-        final primaryColor = Theme.of(context).colorScheme.primary;
-        return Container(
-          width: double.infinity,
-          decoration: BoxDecoration(
-            color: primaryColor.withValues(alpha: 0.10),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: primaryColor.withValues(alpha: 0.30)),
-          ),
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.add_location_alt_rounded,
-                  color: primaryColor, size: 18),
-              const SizedBox(width: 8),
-              Flexible(
-                child: Text(
-                  'Add $remaining more place${remaining == 1 ? '' : 's'} to optimize',
-                  style: TextStyle(
-                    color: primaryColor,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 14,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        );
-      }
-
-      String buttonText;
-      VoidCallback? onPressedAction;
-
-      final allDaysMode = ref.watch(allDaysModeProvider);
-      if (allDaysMode) {
-        // Optimization is a per-day operation — disabled while the All-days
-        // overview owns the map. Tapping a day chip re-enables it.
-        buttonText = 'Optimize Route';
-        onPressedAction = null;
-      } else if (isGenerating) {
-        buttonText = 'Optimizing...';
-        onPressedAction = null;
-      } else if (isViewingHistory) {
-        buttonText = 'View Route';
-        onPressedAction = () {
-          ref.read(TripBottomSheet.viewHistoricalRouteProvider.notifier).state =
-              true;
-          final collapse = sheetController?.animateTo(
-            0.12,
-            duration: const Duration(milliseconds: 300),
-            curve: Curves.easeInOut,
-          );
-          // Reset the list to the top after the sheet finishes collapsing.
-          // Animating during collapse fights the shrinking viewport (the
-          // DraggableScrollableSheet's scroll controller treats edge-pulls
-          // as drags), and the list is hidden anyway by the time it lands —
-          // so a post-collapse jumpTo is both reliable and invisible.
-          void resetScroll() {
-            if (scrollController.hasClients) scrollController.jumpTo(0);
-          }
-
-          if (collapse != null) {
-            collapse.then((_) => resetScroll());
-          } else {
-            WidgetsBinding.instance.addPostFrameCallback((_) => resetScroll());
-          }
-        };
-      } else if (!hasLocations) {
-        buttonText = 'Optimize Route';
-        onPressedAction = null; // disabled — no locations for this date
-      } else {
-        buttonText = hasRoute ? 'Re-optimize Route' : 'Optimize Route';
-        onPressedAction =
-            () => _onOptimizePressed(context, ref, isReoptimizing: hasRoute);
-      }
-
-      final canGlow = onPressedAction != null && !isGenerating;
-      final primaryColor = Theme.of(context).colorScheme.primary;
-
-      final button = SizedBox(
-        width: double.infinity,
-        child: ElevatedButton.icon(
-          onPressed: onPressedAction,
-          icon: isGenerating
-              ? const SizedBox(
-                  height: 16,
-                  width: 16,
-                  child: CircularProgressIndicator(
-                      strokeWidth: 2, color: Colors.black),
-                )
-              : Icon(
-                  isViewingHistory ? Icons.visibility_outlined : Icons.route),
-          label: Text(buttonText),
-          style: ElevatedButton.styleFrom(
-            padding: const EdgeInsets.symmetric(vertical: 16),
-          ),
-        ),
-      );
-
-      final primary = canGlow
-          ? _sheetStaticGlow(glowColor: primaryColor, child: button)
-          : button;
-
-      // Clear is available from the map's FAB column — no duplicate in the
-      // sheet's action area.
-      return primary;
-    });
-  }
-
-  Widget _buildCsvDownloadButton(BuildContext context, WidgetRef ref) {
-    return Consumer(builder: (context, ref, _) {
-      final locations = ref.watch(locationsForSelectedDateProvider);
-      final isGenerating = ref.watch(isGeneratingRouteProvider);
-
-      if (locations.isEmpty) return const SizedBox.shrink();
-
-      return SizedBox(
-        width: double.infinity,
-        child: OutlinedButton.icon(
-          onPressed: isGenerating
-              ? null
-              : () async {
-                  try {
-                    final csvService = CsvService();
-                    await csvService.generateAndShareTripCsv(
-                      locations,
-                      tripName: ref
-                          .read(realtimeActiveTripProvider)
-                          .valueOrNull
-                          ?.name,
-                      date: ref.read(selectedDateProvider),
-                      dayLabeler: ref.read(activeTripDayLabelerProvider),
-                    );
-                  } on MissingPluginException {
-                    if (context.mounted) {
-                      AppToast.warning(
-                        context,
-                        'Please restart the app to enable CSV download.',
-                      );
-                    }
-                  } catch (e) {
-                    if (context.mounted) {
-                      AppToast.error(
-                        context,
-                        'Failed to download CSV. Please restart the app.',
-                      );
-                    }
-                  }
-                },
-          icon: const Icon(Icons.download),
-          label: const Text('Download Trip CSV'),
-          style: OutlinedButton.styleFrom(
-            padding: const EdgeInsets.symmetric(vertical: 16),
-            side: BorderSide(
-              color: Theme.of(context).colorScheme.primary,
-            ),
-          ),
-        ),
-      );
-    });
-  }
-
-  /// The very first optimize on this install skips the start-point chooser and
-  /// delivers the reward immediately — the reveal IS the product, and gating it
-  /// behind a decision dilutes the aha (Fogg: reduce ability cost before adding
-  /// motivation). The provider's fallback picks a safe start (current location
-  /// only when it's plausibly near the stops — see geo_utils; else the first
-  /// stop). Start-point choice stays discoverable on every re-optimize.
-  Future<void> _onOptimizePressed(BuildContext context, WidgetRef ref,
-      {required bool isReoptimizing}) async {
-    // Defense-in-depth: both optimize buttons are disabled in All-days mode,
-    // but any future caller lands here too. Optimization is per-day — the
-    // user picks a day first.
-    if (ref.read(allDaysModeProvider)) {
-      // All-days view = the whole-trip mindset: per-day optimize can't run
-      // here, but Auto-plan (order the cities, spread across days) is
-      // exactly the whole-trip action — offer it instead of a dead end.
-      final placeCount = ref.read(tripProvider).pinnedLocations.length;
-      if (placeCount >= 2) {
-        showAutoPlanSheet(context);
-      } else {
-        AppToast.info(
-            context, 'Pick a day first — optimization works per day.');
-      }
-      return;
-    }
-    if (!isReoptimizing) {
-      final lifetimeOptimizes =
-          await ReviewPromptService.instance.getSuccessfulOptimizeCount();
-      if (lifetimeOptimizes == 0) {
-        final selectedDate = ref.read(selectedDateProvider);
-        await ref
-            .read(tripProvider.notifier)
-            .generateOptimizedRoute(selectedDate: selectedDate);
-        return;
-      }
-    }
-    if (!context.mounted) return;
-    _showChooseStartPointDialog(context, ref, isReoptimizing: isReoptimizing);
-  }
-
-  void _showChooseStartPointDialog(BuildContext context, WidgetRef ref,
-      {required bool isReoptimizing}) {
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (_) => _StartPointSheet(isReoptimizing: isReoptimizing),
-    );
-  }
-
-  void _showMultiDeleteConfirmationDialog(BuildContext context, WidgetRef ref) {
-    final selectedCount = ref.read(selectedLocationsProvider).length;
-    showDialog(
-      context: context,
-      builder: (dialogContext) {
-        return AlertDialog(
-          backgroundColor: Theme.of(context).cardColor, // Uses theme colors
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: Text('Delete $selectedCount Locations?'),
-          content: const Text(
-              'Are you sure you want to permanently delete the selected locations? This action cannot be undone.'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(),
-              child: Text('Cancel',
-                  style: TextStyle(
-                      color: Theme.of(context).textTheme.bodyMedium?.color)),
-            ),
-            ElevatedButton(
-              onPressed: () {
-                final selectedIds = ref.read(selectedLocationsProvider);
-                // Day-aware: a multi-day row (e.g. a spanning accommodation)
-                // caught in the selection only loses the day being viewed —
-                // its other days survive. Single-day rows delete outright.
-                ref.read(tripProvider.notifier).removeLocationsFromDay(
-                    selectedIds, ref.read(selectedDateProvider));
-                // Exit selection mode after action
-                ref.read(isSelectionModeProvider.notifier).state = false;
-                ref.read(selectedLocationsProvider.notifier).state = {};
-                Navigator.of(dialogContext).pop(); // Close the dialog
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Theme.of(context).colorScheme.error,
-                foregroundColor: Theme.of(context).colorScheme.onError,
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12)),
-              ),
-              child: const Text('Delete'),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  /// Shared same-day gate for the bulk move/copy dialogs — one body so the
-  /// two can't drift. Returns the ids that may proceed (null = everything
-  /// blocked; caller bails), toasting whatever was skipped. [copy] uses
-  /// copy semantics: the source rows COUNT as occupants, so copying a place
-  /// onto the day it already occupies is blocked (move's self-exclusion
-  /// would wave it through and duplicate it). Occupancy counts scheduled
-  /// rows only.
-  Set<String>? _dedupeForDay(
-    BuildContext context,
-    WidgetRef ref,
-    Set<String> selectedIds,
-    DateTime dayKey, {
-    required bool copy,
-    required String verb,
-  }) {
-    final pinned = ref.read(tripProvider).pinnedLocations;
-    final dup = filterSameDayDuplicates(
-      moving:
-          pinned.where((l) => selectedIds.contains(l.id)).map(placeKeyOfModel),
-      occupantsOnDay: pinned
-          .where((l) =>
-              (copy || !selectedIds.contains(l.id)) &&
-              l.scheduledDate != null &&
-              l.isActiveOnDate(dayKey))
-          .map(placeKeyOfModel),
-    );
-    if (dup.allowedIds.isEmpty) {
-      if (context.mounted) {
-        AppToast.warning(
-            context,
-            'Already on ${ref.read(activeTripDayLabelerProvider)(dayKey)} — '
-            'nothing to $verb.');
-      }
-      return null;
-    }
-    if (dup.blockedNames.isNotEmpty && context.mounted) {
-      AppToast.info(
-          context, 'Skipped ${dup.blockedNames.length} already on that day');
-    }
-    return dup.allowedIds;
-  }
-
-  /// Day picker for move/copy: the calendar on a dated trip, the numbered
-  /// day list on a trip without dates yet.
-  Future<DateTime?> _pickPlanDay(
-    BuildContext context,
-    WidgetRef ref, {
-    required Set<DateTime> highlightedDates,
-    required DateTime earliestDate,
-  }) {
-    final labeler = ref.read(activeTripDayLabelerProvider);
-    if (labeler.tbd) {
-      return showTripDayPicker(
-        context,
-        days: ref.read(activeTripDayAxisProvider),
-        labeler: labeler,
-        selected: ref.read(selectedDateProvider),
-        marked: highlightedDates,
-      );
-    }
-    return DatePickerUtils.showCustomDatePicker(
-      context: context,
-      initialDate: ref.read(selectedDateProvider),
-      firstDate: earliestDate,
-      lastDate: DateTime.now().add(const Duration(days: 365 * 5)),
-      highlightedDates: highlightedDates,
-      highlightRange: activeTripDateRange(ref),
-    );
-  }
-
-  void _showCopyLocationsDialog(BuildContext context, WidgetRef ref) async {
-    final highlightedDates = ref.read(datesWithLocationsProvider);
-    final earliestDate = highlightedDates.isNotEmpty
-        ? highlightedDates.reduce((a, b) => a.isBefore(b) ? a : b)
-        : DateTime.now();
-
-    final newDate = await _pickPlanDay(context, ref,
-        highlightedDates: highlightedDates, earliestDate: earliestDate);
-
-    if (newDate != null) {
-      final activeTrip = ref.read(realtimeActiveTripProvider).valueOrNull;
-      if (!context.mounted) return;
-      final allowed = await ensureScheduledDateAllowed(
-        context,
-        activeTrip,
-        newDate,
-        actionLabel: 'Copy anyway',
-      );
-      if (!allowed) return;
-
-      final selectedIds = ref.read(selectedLocationsProvider);
-      // Captured before the write: copying onto a previously-empty day
-      // materializes a new trip day → ask about accommodation after.
-      final dayKey = DateTime(newDate.year, newDate.month, newDate.day);
-      final dayWasEmpty = !ref
-          .read(tripProvider)
-          .pinnedLocations
-          .any((l) => l.isActiveOnDate(dayKey));
-      final allowedIds = _dedupeForDay(context, ref, selectedIds, dayKey,
-          copy: true, verb: 'copy');
-      if (allowedIds == null) return;
-      await ref
-          .read(tripProvider.notifier)
-          .copyMultipleLocationsToDate(allowedIds, newDate);
-
-      // Exit selection mode and clear selections
-      ref.read(isSelectionModeProvider.notifier).state = false;
-      ref.read(selectedLocationsProvider.notifier).state = {};
-
-      // Switch the view to the new date to show the copied items
-      ref.read(selectedDateProvider.notifier).state = newDate;
-
-      // NOTE: use the STATE's context/ref, not the parameters — the caller's
-      // context belongs to the selection action bar, which unmounts when
-      // selection mode exits above, silently skipping the prompt.
-      if (dayWasEmpty && activeTrip != null && mounted) {
-        await maybePromptAccommodationForNewDays(
-          this.context,
-          this.ref,
-          trip: activeTrip,
-          newDays: [dayKey],
-        );
-      }
-    }
-  }
-
-  /// Multi-select → "Move to another trip": the picked places leave this
-  /// trip for one the user chooses (country-guarded, day picked there).
-  Future<void> _showMoveToTripSheet(BuildContext context, WidgetRef ref) async {
-    final selectedIds = ref.read(selectedLocationsProvider);
-    final picks = ref
-        .read(tripProvider)
-        .pinnedLocations
-        .where((l) => selectedIds.contains(l.id))
-        .toList();
-    if (picks.isEmpty) return;
-    final moved = await showMoveToTripSheet(context, ref, picks);
-    if (!moved) return;
-    ref.read(isSelectionModeProvider.notifier).state = false;
-    ref.read(selectedLocationsProvider.notifier).state = {};
-  }
-
-  void _showMoveLocationsDialog(BuildContext context, WidgetRef ref) async {
-    final highlightedDates = ref.read(datesWithLocationsProvider);
-    final earliestDate = highlightedDates.isNotEmpty
-        ? highlightedDates.reduce((a, b) => a.isBefore(b) ? a : b)
-        : DateTime.now();
-
-    final newDate = await _pickPlanDay(context, ref,
-        highlightedDates: highlightedDates, earliestDate: earliestDate);
-
-    if (newDate != null) {
-      final activeTrip = ref.read(realtimeActiveTripProvider).valueOrNull;
-      if (!context.mounted) return;
-      final allowed = await ensureScheduledDateAllowed(
-        context,
-        activeTrip,
-        newDate,
-        actionLabel: 'Move anyway',
-      );
-      if (!allowed) return;
-
-      final selectedIds = ref.read(selectedLocationsProvider);
-      // Captured before the write: moving onto a previously-empty day
-      // materializes a new trip day → ask about accommodation after.
-      final dayKey = DateTime(newDate.year, newDate.month, newDate.day);
-      final dayWasEmpty = !ref
-          .read(tripProvider)
-          .pinnedLocations
-          .any((l) => l.isActiveOnDate(dayKey));
-      final allowedIds = _dedupeForDay(context, ref, selectedIds, dayKey,
-          copy: false, verb: 'move');
-      if (allowedIds == null) return;
-      await ref
-          .read(tripProvider.notifier)
-          .updateMultipleLocationsScheduledDate(allowedIds, newDate);
-
-      // Exit selection mode and clear selections
-      ref.read(isSelectionModeProvider.notifier).state = false;
-      ref.read(selectedLocationsProvider.notifier).state = {};
-
-      // Optionally, switch the view to the new date
-      ref.read(selectedDateProvider.notifier).state = newDate;
-
-      // NOTE: use the STATE's context/ref, not the parameters — the caller's
-      // context belongs to the selection action bar, which unmounts when
-      // selection mode exits above, silently skipping the prompt.
-      if (dayWasEmpty && activeTrip != null && mounted) {
-        await maybePromptAccommodationForNewDays(
-          this.context,
-          this.ref,
-          trip: activeTrip,
-          newDays: [dayKey],
-        );
-      }
-    }
-  }
-
-  void _markSelectedAsDone(BuildContext context, WidgetRef ref) {
-    final selectedIds = ref.read(selectedLocationsProvider);
-    ref.read(tripProvider.notifier).markLocationsAsDone(selectedIds);
-    ref.read(isSelectionModeProvider.notifier).state = false;
-    ref.read(selectedLocationsProvider.notifier).state = {};
-  }
-
-  void _showSkipConfirmationDialog(BuildContext context, WidgetRef ref) {
-    final selectedCount = ref.read(selectedLocationsProvider).length;
-    showDialog(
-      context: context,
-      builder: (dialogContext) {
-        return AlertDialog(
-          backgroundColor: Theme.of(context).cardColor,
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: Text('Skip $selectedCount Locations?'),
-          content: const Text(
-              'Are you sure you want to skip the selected locations? They will be excluded from the route but remain on the map.'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(),
-              child: Text('Cancel',
-                  style: TextStyle(
-                      color: Theme.of(context).textTheme.bodyMedium?.color)),
-            ),
-            ElevatedButton(
-              onPressed: () {
-                final selectedIds = ref.read(selectedLocationsProvider);
-                ref
-                    .read(tripProvider.notifier)
-                    .skipMultipleLocations(selectedIds);
-                ref.read(isSelectionModeProvider.notifier).state = false;
-                ref.read(selectedLocationsProvider.notifier).state = {};
-                Navigator.of(dialogContext).pop();
-              },
-              child: const Text('Skip'),
-            ),
-          ],
-        );
-      },
     );
   }
 
@@ -3243,1021 +2202,3 @@ Widget _sheetStaticGlow({required Color glowColor, required Widget child}) {
     child: child,
   );
 }
-
-/// Bottom-sheet "Choose starting point" UI. Replaces the previous cramped
-/// AlertDialog. Lays out:
-///   - A prominent "Start at" card sourced from [effectiveTripStartTimeProvider].
-///   - "My Location" (when device location is known).
-///   - "Active stops" — the day's stops eligible for optimization.
-///   - "Skipped & done" — usable as a route anchor but excluded from the
-///     optimizer. Lets users start the next leg from a place they already
-///     visited (or one they decided to skip) without re-adding it to the
-///     plan.
-class _StartPointSheet extends ConsumerStatefulWidget {
-  final bool isReoptimizing;
-  const _StartPointSheet({required this.isReoptimizing});
-
-  @override
-  ConsumerState<_StartPointSheet> createState() => _StartPointSheetState();
-}
-
-class _StartPointSheetState extends ConsumerState<_StartPointSheet> {
-  String? _selectedStartId;
-  bool _initialized = false;
-
-  /// Set once the user taps a start tile themselves. The async in-country
-  /// promotion of the device GPS (see build) must never override an
-  /// explicit pick.
-  bool _userPickedStart = false;
-  void _pickStart(String? v) => setState(() {
-        _selectedStartId = v;
-        _userPickedStart = true;
-      });
-
-  /// Optional "end the day at" stop (null = let the optimizer decide).
-  String? _selectedFinalId;
-
-  /// "Return to accommodation" — per-trip pref, default ON. Decides whether
-  /// the day's route ends at the hotel (and whether a start-at-hotel day
-  /// gets a ride home).
-  bool _returnToAcc = true;
-
-  // ── Travel style (multi-modal anchor) ─────────────────────────────────
-  // 'auto' sniffs the trip's scale (compact ⇒ walking city); 'walk'/'drive'
-  // force the anchor mode. Persisted per trip; the optimizer reads it on
-  // every run. Loaded lazily the first time the sheet has the trip id.
-  String _travelProfile = 'auto';
-  bool _profileLoaded = false;
-
-  /// "Max walk between stops" (routed meters) — a GLOBAL preference (the
-  /// traveller's tolerance, not the trip's), fed into the routing ladder.
-  double _maxWalkMeters = LegModePrefs.defaultMaxWalkMeters.toDouble();
-
-  Future<void> _loadTravelProfile(String tripId) async {
-    if (_profileLoaded) return;
-    _profileLoaded = true;
-    final profile = await LegModePrefs.travelProfile(tripId);
-    final maxWalk = await LegModePrefs.maxWalkMeters();
-    final returnToAcc = await LegModePrefs.returnToAccommodation(tripId);
-    if (mounted) {
-      setState(() {
-        _travelProfile = profile;
-        _maxWalkMeters = maxWalk.toDouble();
-        _returnToAcc = returnToAcc;
-      });
-    }
-  }
-
-  String get _maxWalkLabel => _maxWalkMeters < 1000
-      ? '${_maxWalkMeters.round()} m'
-      : '${(_maxWalkMeters / 1000).toStringAsFixed(1)} km';
-
-  Future<void> _setTravelProfile(String tripId, String profile) async {
-    final changed = profile != _travelProfile;
-    setState(() => _travelProfile = profile);
-    await LegModePrefs.setTravelProfile(tripId, profile);
-    // A style switch is "re-plan the trip THIS way" — manual per-leg
-    // overrides from the previous style would silently win over the new
-    // ladder on every leg they touched, which read as the picker doing
-    // nothing. Fresh style, fresh slate.
-    if (changed) await LegModePrefs.clearAllLegModes(tripId);
-  }
-
-  Widget _buildTravelStyleRow(BuildContext context, String tripId) {
-    final theme = Theme.of(context);
-    const options = [
-      ('auto', Icons.auto_awesome_rounded, 'Auto'),
-      ('walk', Icons.directions_walk_rounded, 'Walking city'),
-      ('transit', Icons.directions_transit_rounded, 'Public transport'),
-      ('drive', Icons.directions_car_rounded, 'Road trip'),
-    ];
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _sectionLabel(context, 'Travel style'),
-        Wrap(
-          spacing: 8,
-          children: [
-            for (final (value, icon, label) in options)
-              ChoiceChip(
-                selected: _travelProfile == value,
-                showCheckmark: false,
-                avatar: Icon(icon,
-                    size: 16,
-                    color: _travelProfile == value
-                        ? theme.colorScheme.onPrimary
-                        : theme.colorScheme.primary),
-                label: Text(label),
-                labelStyle: TextStyle(
-                  fontWeight: FontWeight.w700,
-                  color: _travelProfile == value
-                      ? theme.colorScheme.onPrimary
-                      : theme.textTheme.bodyMedium?.color,
-                ),
-                selectedColor: theme.colorScheme.primary,
-                backgroundColor: theme.cardColor.withValues(alpha: 0.6),
-                side: BorderSide(
-                  color: _travelProfile == value
-                      ? theme.colorScheme.primary
-                      : theme.dividerColor.withValues(alpha: 0.5),
-                ),
-                onSelected: (_) => _setTravelProfile(tripId, value),
-              ),
-          ],
-        ),
-        const SizedBox(height: 14),
-        // ── Travel preferences ────────────────────────────────────────
-        _sectionLabel(context, 'Max walk between stops'),
-        Row(
-          children: [
-            Expanded(
-              child: Slider(
-                value: _maxWalkMeters.clamp(
-                    LegModePrefs.minMaxWalkMeters.toDouble(),
-                    LegModePrefs.maxMaxWalkMeters.toDouble()),
-                min: LegModePrefs.minMaxWalkMeters.toDouble(),
-                max: LegModePrefs.maxMaxWalkMeters.toDouble(),
-                divisions: (LegModePrefs.maxMaxWalkMeters -
-                        LegModePrefs.minMaxWalkMeters) ~/
-                    100,
-                label: _maxWalkLabel,
-                onChanged: (v) => setState(() => _maxWalkMeters = v),
-                onChangeEnd: (v) => LegModePrefs.setMaxWalkMeters(v.round()),
-              ),
-            ),
-            SizedBox(
-              width: 56,
-              child: Text(
-                _maxWalkLabel,
-                textAlign: TextAlign.end,
-                style: theme.textTheme.bodyMedium
-                    ?.copyWith(fontWeight: FontWeight.w700),
-              ),
-            ),
-          ],
-        ),
-        Padding(
-          padding: const EdgeInsets.only(left: 4),
-          child: Text(
-            'Longer hops get a ride instead. Ignored when your travel '
-            'style is Walking city.',
-            style: theme.textTheme.bodySmall
-                ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-          ),
-        ),
-      ],
-    );
-  }
-
-  // Country-mismatch gate for the "My current location" anchor.
-  //
-  // Trip has a tagged country and the device is sitting in a different one
-  // (e.g. user planning a Tokyo trip from home in NYC). Anchoring the
-  // optimizer to the device GPS would silently route a leg across the
-  // ocean. We disable the option in that case and tell the user to pick a
-  // stop inside the trip's country.
-  //
-  // Resolution is a single reverse-geocode kicked off the first time the
-  // sheet builds with the data it needs; cached in [_currentCountryCode]
-  // afterward.
-  bool _countryCheckStarted = false;
-  bool _countryCheckInFlight = false;
-  String? _currentCountryCode; // ISO-2 of the device GPS, once resolved.
-
-  Future<void> _resolveCurrentCountry(LatLng coords) async {
-    if (_countryCheckStarted) return;
-    _countryCheckStarted = true;
-    setState(() => _countryCheckInFlight = true);
-    try {
-      final details = await PlacesService.getPlaceFromCoordinates(coords);
-      if (!mounted) return;
-      setState(() {
-        _currentCountryCode = details?.countryCode?.toUpperCase();
-        _countryCheckInFlight = false;
-      });
-    } catch (_) {
-      if (!mounted) return;
-      // On failure, leave _currentCountryCode null so we don't block the
-      // option — the strict country guard at add time still has the user's
-      // back if the chosen anchor is actually wrong.
-      setState(() => _countryCheckInFlight = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final tripState = ref.watch(tripProvider);
-    final selectedDate = ref.watch(selectedDateProvider);
-    final activeTrip = ref.watch(realtimeActiveTripProvider).valueOrNull;
-    final tripCountry = activeTrip?.countryCode?.toUpperCase();
-
-    // Day's stops — including skipped/done, since those can serve as
-    // anchors even though they won't be visited by the optimizer.
-    final dayStops = tripState.pinnedLocations
-        .where((loc) => loc.isActiveOnDate(selectedDate))
-        .toList();
-    // The day's accommodation gets its own section (and is the default
-    // anchor — days naturally start from where you slept).
-    final dayAccommodations = dayStops.where((l) => l.isAccommodation).toList();
-    final activeStops = dayStops
-        .where((l) => !l.isSkipped && !l.isDone && !l.isAccommodation)
-        .toList();
-    final inactiveStops = dayStops
-        .where((l) => (l.isSkipped || l.isDone) && !l.isAccommodation)
-        .toList();
-    final hasCurrentLocation = tripState.currentLocation != null;
-
-    // Kick off a one-shot reverse geocode the moment we know the trip has
-    // a tagged country and the device has a fix. Cheap to call repeatedly
-    // — _resolveCurrentCountry guards itself via [_countryCheckStarted].
-    if (tripCountry != null && tripState.currentLocation != null) {
-      _resolveCurrentCountry(tripState.currentLocation!);
-    }
-
-    // True only once we've confirmed the device is in a DIFFERENT country
-    // than the trip. Null country code (lookup pending or failed) is not
-    // a mismatch — we don't want a flaky geocode to lock out the option.
-    final bool currentLocationMismatch;
-    if (tripCountry != null) {
-      currentLocationMismatch =
-          _currentCountryCode != null && _currentCountryCode != tripCountry;
-    } else {
-      // No trip country (anonymous session / country-less trip): fall back to
-      // proximity — if the device is far from every stop, anchoring the route
-      // to its GPS would route a leg across the world (e.g. optimizing the
-      // Lisbon sample from a phone in Cambodia).
-      currentLocationMismatch = hasCurrentLocation &&
-          dayStops.isNotEmpty &&
-          minMetersToAny(tripState.currentLocation!,
-                  dayStops.map((s) => s.coordinates)) >
-              kForeignFallbackMeters;
-    }
-    final currentLocationDisabled =
-        hasCurrentLocation && currentLocationMismatch;
-
-    // Is the device CONFIRMED to be in the trip's country (or, for a
-    // country-less trip, near the day's stops)? Only a positive answer
-    // promotes the GPS to the default start — "unknown" (lookup pending or
-    // failed) keeps the accommodation-first order below.
-    final bool inTripRegion;
-    if (tripCountry != null) {
-      inTripRegion =
-          _currentCountryCode != null && _currentCountryCode == tripCountry;
-    } else {
-      inTripRegion =
-          hasCurrentLocation && dayStops.isNotEmpty && !currentLocationMismatch;
-    }
-    final preferCurrent =
-        hasCurrentLocation && !currentLocationDisabled && inTripRegion;
-
-    // Default selection. Priority: the device GPS when we KNOW the user is
-    // in the trip's country (they're on the ground — the day starts from
-    // where they stand); else the day's accommodation (routes naturally
-    // start from where you slept); else the GPS unless it's known to be in
-    // the wrong country; then stops. The country lookup is async, so the
-    // GPS promotion is re-applied on later builds until the user picks a
-    // tile themselves ([_userPickedStart]).
-    String? fallbackStart() => dayAccommodations.isNotEmpty
-        ? dayAccommodations.first.id
-        : (hasCurrentLocation && !currentLocationDisabled)
-            ? 'current_location'
-            : (activeStops.isNotEmpty
-                ? activeStops.first.id
-                : (inactiveStops.isNotEmpty ? inactiveStops.first.id : null));
-    if (!_initialized) {
-      _initialized = true;
-      _selectedStartId = preferCurrent ? 'current_location' : fallbackStart();
-    } else if (!_userPickedStart &&
-        preferCurrent &&
-        _selectedStartId != 'current_location') {
-      // The country lookup landed AFTER the first build and confirmed the
-      // user is in the trip's country — promote the GPS now.
-      _selectedStartId = 'current_location';
-    } else if (currentLocationDisabled &&
-        _selectedStartId == 'current_location') {
-      // The country lookup landed AFTER the first build and invalidated
-      // the device-GPS preselection — swap to the accommodation / first
-      // usable stop so the Optimize button doesn't fire with a
-      // now-disabled anchor.
-      _selectedStartId = dayAccommodations.isNotEmpty
-          ? dayAccommodations.first.id
-          : activeStops.isNotEmpty
-              ? activeStops.first.id
-              : (inactiveStops.isNotEmpty ? inactiveStops.first.id : null);
-    }
-
-    return DraggableScrollableSheet(
-      initialChildSize: 0.7,
-      minChildSize: 0.4,
-      maxChildSize: 0.95,
-      expand: false,
-      builder: (context, scrollController) {
-        return Container(
-          decoration: BoxDecoration(
-            color: theme.scaffoldBackgroundColor,
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-          ),
-          child: Column(
-            children: [
-              Center(
-                child: Container(
-                  width: 40,
-                  height: 4,
-                  margin: const EdgeInsets.only(top: 12, bottom: 8),
-                  decoration: BoxDecoration(
-                    color: theme.dividerColor,
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 4, 12, 8),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            widget.isReoptimizing
-                                ? 'Re-optimize from'
-                                : 'Choose starting point',
-                            style: theme.textTheme.titleLarge?.copyWith(
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            'Pick where today\'s route should begin.',
-                            style: theme.textTheme.bodySmall?.copyWith(
-                              color: theme.colorScheme.onSurfaceVariant,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.close),
-                      onPressed: () => Navigator.of(context).pop(),
-                      tooltip: 'Cancel',
-                    ),
-                  ],
-                ),
-              ),
-              Expanded(
-                child: ListView(
-                  controller: scrollController,
-                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
-                  children: [
-                    _buildStartAtCard(context),
-                    const SizedBox(height: 16),
-                    // Travel style: which mode anchors the whole route.
-                    // Loose locations (no active trip) optimize with the SAME
-                    // machinery under the 'no_trip' sentinel — the exact key
-                    // the optimizer reads (`tripId ?? 'no_trip'` in
-                    // trip_provider) — so the picker shows either way instead
-                    // of silently locking tripless users to the defaults.
-                    Builder(builder: (context) {
-                      final tripId = ref
-                              .watch(realtimeActiveTripProvider)
-                              .valueOrNull
-                              ?.id ??
-                          'no_trip';
-                      _loadTravelProfile(tripId);
-                      return Padding(
-                        padding: const EdgeInsets.only(bottom: 16),
-                        child: _buildTravelStyleRow(context, tripId),
-                      );
-                    }),
-                    if (dayAccommodations.isNotEmpty) ...[
-                      _sectionLabel(context, 'Accommodation'),
-                      ...dayAccommodations.map((loc) => _StartPointTile(
-                            leading: Icon(Icons.hotel_outlined,
-                                color: theme.colorScheme.primary),
-                            title: loc.name,
-                            subtitle: 'Your stay — start the day from here',
-                            value: loc.id,
-                            groupValue: _selectedStartId,
-                            onChanged: _pickStart,
-                          )),
-                      // Round trip: does the day END back at the hotel?
-                      // Fed into the optimizer as its fixed destination /
-                      // loop-home leg. Persisted per trip.
-                      Builder(builder: (context) {
-                        final tripId = ref
-                                .read(realtimeActiveTripProvider)
-                                .valueOrNull
-                                ?.id ??
-                            'no_trip';
-                        return Container(
-                          margin: const EdgeInsets.only(top: 6),
-                          decoration: BoxDecoration(
-                            color: theme.cardColor.withValues(alpha: 0.5),
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(
-                                color:
-                                    theme.dividerColor.withValues(alpha: 0.4)),
-                          ),
-                          child: Column(
-                            children: [
-                              SwitchListTile.adaptive(
-                                value: _returnToAcc,
-                                onChanged: (v) {
-                                  setState(() {
-                                    _returnToAcc = v;
-                                    // With the round trip on, the hotel is
-                                    // the end by definition — a final pick
-                                    // of the hotel itself is redundant.
-                                    if (v &&
-                                        dayAccommodations.any(
-                                            (a) => a.id == _selectedFinalId)) {
-                                      _selectedFinalId = null;
-                                    }
-                                  });
-                                  LegModePrefs.setReturnToAccommodation(
-                                      tripId, v);
-                                },
-                                dense: true,
-                                contentPadding:
-                                    const EdgeInsets.symmetric(horizontal: 12),
-                                title: Text('Return to accommodation',
-                                    style: theme.textTheme.bodyMedium?.copyWith(
-                                        fontWeight: FontWeight.w600)),
-                                activeTrackColor: theme.colorScheme.primary,
-                              ),
-                              Padding(
-                                padding:
-                                    const EdgeInsets.fromLTRB(12, 0, 12, 10),
-                                child: Text(
-                                  _returnToAcc
-                                      ? 'The route ends back at your stay — '
-                                          'the optimizer plans the day as a '
-                                          'loop. Pick an end point below and '
-                                          'it becomes the last stop before '
-                                          'heading home.'
-                                      : 'Open-ended day: the route finishes '
-                                          'at its last stop, with no ride '
-                                          'back to your stay.',
-                                  style: theme.textTheme.bodySmall?.copyWith(
-                                    color: theme.colorScheme.onSurfaceVariant,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        );
-                      }),
-                      const SizedBox(height: 16),
-                    ],
-                    if (hasCurrentLocation) ...[
-                      _sectionLabel(context, 'My location'),
-                      _StartPointTile(
-                        leading: Icon(Icons.my_location,
-                            color: currentLocationDisabled
-                                ? theme.colorScheme.onSurfaceVariant
-                                    .withValues(alpha: 0.5)
-                                : theme.colorScheme.primary),
-                        title: 'My current location',
-                        subtitle: currentLocationDisabled
-                            ? (tripCountry != null
-                                ? 'You\'re outside this trip\'s country — pick a stop within ${activeTrip?.countryCode ?? 'the trip\'s region'} to start from instead.'
-                                : 'You\'re far from these stops — pick a stop to start from instead.')
-                            : (_countryCheckInFlight && tripCountry != null
-                                ? 'Checking whether you\'re in the trip\'s country…'
-                                : (inTripRegion && tripCountry != null
-                                    ? 'You\'re in this trip\'s country — start from where you stand'
-                                    : 'Use device GPS as the start anchor')),
-                        value: 'current_location',
-                        groupValue: _selectedStartId,
-                        onChanged: _pickStart,
-                        disabled: currentLocationDisabled,
-                      ),
-                      const SizedBox(height: 16),
-                    ],
-                    _sectionLabel(
-                      context,
-                      'Active stops',
-                      trailing:
-                          activeStops.isEmpty ? null : '${activeStops.length}',
-                    ),
-                    if (activeStops.isEmpty)
-                      _emptyHint(
-                          context, 'No active stops on this day to start from.')
-                    else
-                      ...activeStops.map((loc) => _StartPointTile(
-                            leading: Icon(Icons.place_outlined,
-                                color: theme.colorScheme.primary),
-                            title: loc.name,
-                            subtitle:
-                                loc.address.isNotEmpty ? loc.address : null,
-                            value: loc.id,
-                            groupValue: _selectedStartId,
-                            onChanged: _pickStart,
-                          )),
-                    if (inactiveStops.isNotEmpty) ...[
-                      const SizedBox(height: 16),
-                      _sectionLabel(
-                        context,
-                        'Skipped & done',
-                        trailing: '${inactiveStops.length}',
-                      ),
-                      Padding(
-                        padding:
-                            const EdgeInsets.only(bottom: 8, left: 4, right: 4),
-                        child: Text(
-                          'Selectable as anchor only — these aren\'t '
-                          'included in the optimized route.',
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: theme.colorScheme.onSurfaceVariant,
-                          ),
-                        ),
-                      ),
-                      ...inactiveStops.map((loc) => _StartPointTile(
-                            leading: Icon(
-                              loc.isDone
-                                  ? Icons.check_circle_outline
-                                  : Icons.remove_circle_outline,
-                              color: loc.isDone
-                                  ? Colors.green.shade600
-                                  : theme.colorScheme.onSurfaceVariant,
-                            ),
-                            title: loc.name,
-                            subtitle:
-                                loc.address.isNotEmpty ? loc.address : null,
-                            value: loc.id,
-                            groupValue: _selectedStartId,
-                            onChanged: _pickStart,
-                            statusChip: _StatusChip(
-                              label: loc.isDone ? 'Done' : 'Skipped',
-                              color: loc.isDone
-                                  ? Colors.green.shade600
-                                  : theme.colorScheme.onSurfaceVariant,
-                            ),
-                            mutedTitle: true,
-                          )),
-                    ],
-                    // ── End point (optional) ───────────────────────────
-                    // Candidates: today's active stops minus the chosen
-                    // start, minus the accommodation while the round trip
-                    // is on (it's already the end then).
-                    Builder(builder: (context) {
-                      final hasAcc = dayAccommodations.isNotEmpty;
-                      final roundTrip = hasAcc && _returnToAcc;
-                      final candidates = activeStops
-                          .where((l) =>
-                              l.id != _selectedStartId &&
-                              !(roundTrip && l.isAccommodation))
-                          .toList();
-                      if (_selectedFinalId != null &&
-                          !candidates.any((l) => l.id == _selectedFinalId)) {
-                        _selectedFinalId = null; // start took it / hidden
-                      }
-                      if (candidates.isEmpty) return const SizedBox.shrink();
-                      final chosen = _selectedFinalId == null
-                          ? null
-                          : candidates
-                              .firstWhere((l) => l.id == _selectedFinalId);
-                      final accName =
-                          hasAcc ? dayAccommodations.first.name : '';
-                      final String note;
-                      if (chosen == null) {
-                        note = roundTrip
-                            ? 'Optional. By default the day ends back at '
-                                '$accName.'
-                            : 'Optional. By default the day ends at the '
-                                'stop farthest from your start.';
-                      } else if (roundTrip) {
-                        note = '${chosen.name} will be the last stop, then '
-                            'the route returns to $accName.';
-                      } else {
-                        note = '${chosen.name} will be the last stop of the '
-                            'day.';
-                      }
-                      return Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const SizedBox(height: 16),
-                          _sectionLabel(context, 'End the day at'),
-                          Padding(
-                            padding: const EdgeInsets.only(
-                                bottom: 8, left: 4, right: 4),
-                            child: Text(
-                              note,
-                              style: theme.textTheme.bodySmall?.copyWith(
-                                color: theme.colorScheme.onSurfaceVariant,
-                              ),
-                            ),
-                          ),
-                          _StartPointTile(
-                            leading: Icon(Icons.auto_awesome_rounded,
-                                color: theme.colorScheme.primary),
-                            title: 'Let VoyZa decide',
-                            value: '',
-                            groupValue: _selectedFinalId ?? '',
-                            onChanged: (_) =>
-                                setState(() => _selectedFinalId = null),
-                          ),
-                          ...candidates.map((loc) => _StartPointTile(
-                                leading: Icon(Icons.flag_outlined,
-                                    color: theme.colorScheme.primary),
-                                title: loc.name,
-                                subtitle:
-                                    loc.address.isNotEmpty ? loc.address : null,
-                                value: loc.id,
-                                groupValue: _selectedFinalId ?? '',
-                                onChanged: (v) =>
-                                    setState(() => _selectedFinalId = v),
-                              )),
-                        ],
-                      );
-                    }),
-                  ],
-                ),
-              ),
-              SafeArea(
-                top: false,
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: OutlinedButton(
-                          onPressed: () => Navigator.of(context).pop(),
-                          style: OutlinedButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                            shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12)),
-                          ),
-                          child: const Text('Cancel'),
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        flex: 2,
-                        child: FilledButton(
-                          onPressed: _selectedStartId == null
-                              ? null
-                              : () {
-                                  final id = _selectedStartId!;
-                                  Navigator.of(context).pop();
-                                  // Fresh user-initiated optimize:
-                                  // clear any "Go anyway" acknowledgements
-                                  // from a previous planning attempt so
-                                  // warnings re-surface from scratch.
-                                  ref
-                                      .read(acknowledgedTimingWarningsProvider
-                                          .notifier)
-                                      .state = const {};
-                                  ref
-                                      .read(tripProvider.notifier)
-                                      .generateOptimizedRoute(
-                                          startLocationId: id,
-                                          finalLocationId: _selectedFinalId,
-                                          selectedDate: selectedDate);
-                                },
-                          style: FilledButton.styleFrom(
-                            backgroundColor: theme.colorScheme.primary,
-                            foregroundColor: Colors.black,
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                            shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12)),
-                          ),
-                          child: Text(
-                            widget.isReoptimizing ? 'Re-optimize' : 'Optimize',
-                            style: const TextStyle(
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _buildStartAtCard(BuildContext context) {
-    final theme = Theme.of(context);
-    final start = ref.watch(effectiveTripStartTimeProvider);
-    // Only an explicit user pick needs a way back: with no override the
-    // card already follows the live clock, so Reset would be a no-op.
-    final hasOverride = ref.watch(tripStartTimeOverrideProvider) != null;
-    final timeLabel =
-        '${start.hour.toString().padLeft(2, '0')}:${start.minute.toString().padLeft(2, '0')}';
-
-    return InkWell(
-      borderRadius: BorderRadius.circular(14),
-      onTap: () async {
-        final picked = await showTimePicker(
-          context: context,
-          initialTime: TimeOfDay(hour: start.hour, minute: start.minute),
-          helpText: 'Start at',
-        );
-        if (picked == null) return;
-        ref.read(tripStartTimeOverrideProvider.notifier).state = picked;
-        if (mounted) setState(() {});
-      },
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-        decoration: BoxDecoration(
-          color: theme.colorScheme.primary.withValues(alpha: 0.08),
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-            color: theme.colorScheme.primary.withValues(alpha: 0.35),
-          ),
-        ),
-        child: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: theme.colorScheme.primary.withValues(alpha: 0.18),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Icon(Icons.schedule_rounded,
-                  color: theme.colorScheme.primary, size: 22),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Start at',
-                    style: theme.textTheme.labelMedium?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
-                      letterSpacing: 0.4,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    timeLabel,
-                    style: theme.textTheme.headlineSmall?.copyWith(
-                      color: theme.colorScheme.primary,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            if (hasOverride) ...[
-              TextButton.icon(
-                onPressed: () {
-                  ref.read(tripStartTimeOverrideProvider.notifier).state = null;
-                  if (mounted) setState(() {});
-                },
-                icon: const Icon(Icons.restore_rounded, size: 16),
-                label: const Text('Reset to now'),
-                style: TextButton.styleFrom(
-                  visualDensity: VisualDensity.compact,
-                  padding: const EdgeInsets.symmetric(horizontal: 8),
-                  foregroundColor: theme.colorScheme.primary,
-                  textStyle: theme.textTheme.labelMedium
-                      ?.copyWith(fontWeight: FontWeight.w700),
-                ),
-              ),
-              const SizedBox(width: 4),
-            ],
-            Icon(Icons.edit_outlined,
-                size: 18,
-                color: theme.colorScheme.primary.withValues(alpha: 0.8)),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _sectionLabel(BuildContext context, String text, {String? trailing}) {
-    final theme = Theme.of(context);
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(4, 4, 4, 8),
-      child: Row(
-        children: [
-          Text(
-            text.toUpperCase(),
-            style: theme.textTheme.labelSmall?.copyWith(
-              color: theme.colorScheme.onSurfaceVariant,
-              fontWeight: FontWeight.w700,
-              letterSpacing: 1,
-            ),
-          ),
-          if (trailing != null) ...[
-            const SizedBox(width: 8),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-              decoration: BoxDecoration(
-                color: theme.colorScheme.primary.withValues(alpha: 0.12),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Text(
-                trailing,
-                style: theme.textTheme.labelSmall?.copyWith(
-                  color: theme.colorScheme.primary,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-
-  Widget _emptyHint(BuildContext context, String text) {
-    final theme = Theme.of(context);
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-      decoration: BoxDecoration(
-        color: theme.cardColor,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(
-          color: theme.dividerColor.withValues(alpha: 0.4),
-        ),
-      ),
-      child: Text(
-        text,
-        style: theme.textTheme.bodySmall?.copyWith(
-          color: theme.colorScheme.onSurfaceVariant,
-        ),
-      ),
-    );
-  }
-}
-
-/// Card-style "radio" row used inside [_StartPointSheet]. Larger tap target
-/// than RadioListTile and shows an optional status chip for skipped/done
-/// stops.
-class _StartPointTile extends StatelessWidget {
-  final Widget leading;
-  final String title;
-  final String? subtitle;
-  final String value;
-  final String? groupValue;
-  final ValueChanged<String?> onChanged;
-  final Widget? statusChip;
-  final bool mutedTitle;
-  final bool disabled;
-
-  const _StartPointTile({
-    required this.leading,
-    required this.title,
-    this.subtitle,
-    required this.value,
-    required this.groupValue,
-    required this.onChanged,
-    this.statusChip,
-    this.mutedTitle = false,
-    this.disabled = false,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final isSelected = !disabled && value == groupValue;
-    final fadedTitleColor =
-        theme.textTheme.bodyMedium?.color?.withValues(alpha: 0.45);
-    final fadedSubtitleColor =
-        theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.7);
-    final borderColor = disabled
-        ? theme.dividerColor.withValues(alpha: 0.25)
-        : (isSelected
-            ? theme.colorScheme.primary.withValues(alpha: 0.6)
-            : theme.dividerColor.withValues(alpha: 0.3));
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Opacity(
-        opacity: disabled ? 0.6 : 1.0,
-        child: Material(
-          color: disabled
-              ? theme.cardColor.withValues(alpha: 0.6)
-              : (isSelected
-                  ? theme.colorScheme.primary.withValues(alpha: 0.08)
-                  : theme.cardColor),
-          borderRadius: BorderRadius.circular(12),
-          child: InkWell(
-            borderRadius: BorderRadius.circular(12),
-            onTap: disabled ? null : () => onChanged(value),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                  color: borderColor,
-                  width: isSelected ? 1.5 : 1,
-                ),
-              ),
-              child: Row(
-                children: [
-                  leading,
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          crossAxisAlignment: CrossAxisAlignment.center,
-                          children: [
-                            Expanded(
-                              child: Text(
-                                title,
-                                style: theme.textTheme.titleSmall?.copyWith(
-                                  fontWeight: FontWeight.w600,
-                                  color: disabled
-                                      ? fadedTitleColor
-                                      : (mutedTitle
-                                          ? theme.textTheme.bodyMedium?.color
-                                              ?.withValues(alpha: 0.75)
-                                          : null),
-                                  decoration: mutedTitle
-                                      ? TextDecoration.lineThrough
-                                      : null,
-                                ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                            if (statusChip != null) ...[
-                              const SizedBox(width: 8),
-                              statusChip!,
-                            ],
-                          ],
-                        ),
-                        if (subtitle != null && subtitle!.isNotEmpty) ...[
-                          const SizedBox(height: 2),
-                          Text(
-                            subtitle!,
-                            style: theme.textTheme.bodySmall?.copyWith(
-                              color: disabled
-                                  ? fadedSubtitleColor
-                                  : theme.colorScheme.onSurfaceVariant,
-                            ),
-                            maxLines: 3,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ],
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Icon(
-                    disabled
-                        ? Icons.block
-                        : (isSelected
-                            ? Icons.radio_button_checked
-                            : Icons.radio_button_off),
-                    size: 22,
-                    color: disabled
-                        ? theme.colorScheme.onSurfaceVariant
-                            .withValues(alpha: 0.5)
-                        : (isSelected
-                            ? theme.colorScheme.primary
-                            : theme.colorScheme.onSurfaceVariant
-                                .withValues(alpha: 0.6)),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// Small pill rendered next to a start-point title to indicate skipped/done.
-class _StatusChip extends StatelessWidget {
-  final String label;
-  final Color color;
-
-  const _StatusChip({required this.label, required this.color});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: color.withValues(alpha: 0.4)),
-      ),
-      child: Text(
-        label,
-        style: TextStyle(
-          color: color,
-          fontWeight: FontWeight.w600,
-          fontSize: 11,
-        ),
-      ),
-    );
-  }
-}
-
-/// Dashed rounded-rect outline for the add-day square — Flutter has no
-/// built-in dashed BorderSide.

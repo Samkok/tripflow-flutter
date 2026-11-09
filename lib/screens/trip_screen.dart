@@ -6,7 +6,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:voyza/models/trip.dart';
 import 'package:voyza/models/saved_location.dart';
 import 'package:uuid/uuid.dart';
-import 'package:voyza/providers/trip_provider.dart';
 import 'package:voyza/providers/user_trip_provider.dart';
 import 'package:voyza/providers/auth_provider.dart';
 import 'package:voyza/providers/location_provider.dart';
@@ -33,13 +32,11 @@ import 'package:voyza/providers/onboarding_checklist_provider.dart';
 import 'package:voyza/widgets/onboarding_checklist.dart';
 import 'package:voyza/widgets/app_update_badge.dart';
 import 'package:voyza/widgets/promo_days_card.dart';
+import 'package:voyza/widgets/save_trips_account_card.dart';
 import 'package:voyza/widgets/route_spine.dart';
 import 'package:voyza/widgets/sign_up_required_sheet.dart';
-import 'package:voyza/screens/create_trip_wizard.dart';
+import 'package:voyza/screens/create_trip_screen.dart';
 import 'package:voyza/screens/copy_trip_wizard.dart';
-// DISABLED with the home referral banner (owner request 2026-08-10) — see
-// the commented ReferralHomeBanner sliver below.
-// import 'package:voyza/widgets/referral_prompt.dart';
 import 'package:voyza/widgets/rotating_globe_background.dart';
 import 'package:voyza/widgets/trip_collaborators_row.dart';
 import 'package:voyza/widgets/trip_skeleton.dart';
@@ -49,7 +46,6 @@ import 'package:voyza/utils/search_text.dart';
 /// "No Date" = trips planned without dates yet (numbered days).
 enum _TripFilter {
   all('All'),
-  active('Active'),
   ongoing('On Going'),
   gone('Gone'),
   noDate('No Date');
@@ -72,8 +68,8 @@ class _TripScreenState extends ConsumerState<TripScreen> {
   // section (pinned at the top) is immediately in view.
   final ScrollController _tripsScrollController = ScrollController();
 
-  // Checklist spotlight anchors. GlobalKeys must be unique, so the two
-  // card keys are attached per call site (first list card / active card).
+  // Checklist spotlight anchors. GlobalKeys must be unique, so the card
+  // key is attached to the first card in render order only.
   // Home trip search + start-date sort (toggle asc/desc; dateless trips
   // sink to the end either way).
   final _tripSearchController = TextEditingController();
@@ -85,8 +81,7 @@ class _TripScreenState extends ConsumerState<TripScreen> {
   bool _tripSortAsc = false;
 
   final _newTripBtnKey = GlobalKey();
-  final _cardActivateKey = GlobalKey();
-  final _activeGoToMapKey = GlobalKey();
+  final _cardOpenOnMapKey = GlobalKey();
 
   // Multi-select state
   bool _selectionMode = false;
@@ -224,13 +219,12 @@ class _TripScreenState extends ConsumerState<TripScreen> {
   /// Same search + sort for the shared list, which arrives as raw
   /// collaborator rows ({'trips': {...}, 'permission': ...}) instead of Trip
   /// objects. Rows with a null embed are dropped here so the section can't
-  /// render a blank card, and the active trip is excluded (it has its own
-  /// section above).
+  /// render a blank card.
   List<Map<String, dynamic>> _filterAndSortSharedTrips(
-      List<Map<String, dynamic>> rows, String? activeTripId) {
+      List<Map<String, dynamic>> rows) {
     final out = rows.where((d) {
       final t = d['trips'] as Map<String, dynamic>?;
-      if (t == null || t['id'] == activeTripId) return false;
+      if (t == null) return false;
       return _matchesTripQuery((t['name'] as String?) ?? '');
     }).toList();
     DateTime? startOf(Map<String, dynamic> d) {
@@ -284,7 +278,7 @@ class _TripScreenState extends ConsumerState<TripScreen> {
   }
 
   /// Checklist tap → set the guide bus and put the right screen on stage.
-  /// This screen fulfils createTrip / activateTrip / goToMap itself; trip
+  /// This screen fulfils createTrip / activateTrip itself; trip
   /// details fulfils addLocations; the map fulfils optimizeRoute.
   void _onChecklistStep(ChecklistStep step) {
     final guide = ref.read(checklistGuideRequestProvider.notifier);
@@ -312,7 +306,7 @@ class _TripScreenState extends ConsumerState<TripScreen> {
   /// settle, then run the coach mark. This used to blanket-scroll to the
   /// top ("where every spotlight target lives") — no longer true: the page
   /// grew (active-trip section, copy-trip button, search row), and on small
-  /// screens the first card's Activate button sat below the fold at
+  /// screens the first card's primary button sat below the fold at
   /// scroll-top, so the ring drew clipped or skipped entirely.
   void _coachAfterScroll(GlobalKey key, String title, String body,
       {int settleMs = 400}) {
@@ -416,64 +410,19 @@ class _TripScreenState extends ConsumerState<TripScreen> {
     );
   }
 
-  void _openCreateWizard() {
+  void _openCreateTrip() {
     // Guests create trips too — stored on-device (TripRepository's local
     // branch) and offered for sync at sign-in.
     Navigator.push(
       context,
-      MaterialPageRoute(builder: (_) => const CreateTripWizard()),
+      MaterialPageRoute(builder: (_) => const CreateTripScreen()),
     );
   }
 
-  /// Activation stays on the current screen — the active card's "Go to map"
-  /// button is the explicit way over to the Map tab.
-  Future<void> _setActiveTrip(Trip trip) async {
-    try {
-      // Clear cached locations on the map before activating a new trip
-      ref.read(tripProvider.notifier).clearTrip();
-
-      // Set active trip locally (no database update)
-      await ref.read(localActiveTripIdProvider.notifier).setActiveTrip(trip.id);
-
-      if (mounted) {
-        // The list follows the tap: the Active chip shows the trip that was
-        // just activated (and nothing else), with the section at the top.
-        if (_tripFilter != _TripFilter.active) {
-          setState(() => _tripFilter = _TripFilter.active);
-        }
-        AppToast.success(context, '${trip.name} is now active');
-        // Checklist: first-ever activation completes step 3 and chains the
-        // "Go to map" spotlight on the just-revealed active card.
-        final wasFirstActivation =
-            !ref.read(checklistProvider).isDone(ChecklistStep.activateTrip);
-        ref.read(checklistProvider.notifier).mark(ChecklistStep.activateTrip);
-        if (wasFirstActivation) {
-          ref.read(checklistGuideRequestProvider.notifier).state =
-              ChecklistGuide.goToMap;
-        }
-        // Bring the Active Trip section (top of the page) into view so the
-        // just-activated trip is immediately visible and actionable.
-        if (_tripsScrollController.hasClients) {
-          _tripsScrollController.animateTo(
-            0,
-            duration: const Duration(milliseconds: 450),
-            curve: Curves.easeOutCubic,
-          );
-        }
-      }
-    } catch (e) {
-      debugPrint('Error setting active trip: $e');
-      if (mounted) {
-        AppToast.error(context, 'Could not activate trip. Please try again.');
-      }
-    }
-  }
-
-  /// "Go to map" on the active trip card: pre-select the day the map should
-  /// open on, then jump tabs. An ONGOING trip (today inside its date range)
-  /// lands on today — the day the traveller is actually living — while a
-  /// trip that hasn't started yet (or has no end date) lands on day one.
-  void _goToMapForTrip(Trip trip) => requestMapForTrip(ref, trip);
+  /// "Open on map" on a trip card: this trip becomes the one the map draws,
+  /// the map lands on the day that matters (today while the trip is
+  /// underway, day one otherwise) and the Map tab comes forward.
+  Future<void> _openTripOnMap(Trip trip) => openTripOnMap(ref, trip);
 
   /// Activation lever: drops the user into a pre-built, editable sample trip
   /// (Lisbon, 5 stops) so they can tap Optimize and reach the route "aha" in
@@ -549,7 +498,7 @@ class _TripScreenState extends ConsumerState<TripScreen> {
       AnalyticsService.instance
           .sampleTripSeeded(anonymous: false, placeCount: places.length);
       if (!mounted) return;
-      await _setActiveTrip(trip);
+      await setMapTrip(ref, trip);
       if (!mounted) return;
       Navigator.push(
         context,
@@ -732,11 +681,11 @@ class _TripScreenState extends ConsumerState<TripScreen> {
       if (code == null) return;
       ref.read(tripFormPrefillProvider.notifier).state = null; // consume
       // '' = "start without a country" (user skipped the question) — the
-      // wizard shows its country step either way so they can revise.
+      // form shows its country row either way so they can revise.
       Navigator.push(
         context,
         MaterialPageRoute(
-          builder: (_) => CreateTripWizard(initialCountryCode: code),
+          builder: (_) => CreateTripScreen(initialCountryCode: code),
         ),
       );
     });
@@ -764,22 +713,16 @@ class _TripScreenState extends ConsumerState<TripScreen> {
         case ChecklistGuide.createTrip:
           guide.state = null;
           _coachAfterScroll(_newTripBtnKey, 'Create your first trip',
-              'Tap New Trip — pick a country, dates, and a name. About 30 seconds.');
+              'Tap New Trip — a name is all it needs; country and dates are optional. About 10 seconds.');
         case ChecklistGuide.activateTrip:
           guide.state = null;
-          _coachAfterScroll(_cardActivateKey, 'Activate your trip',
-              'Activating puts this trip on your map so you can navigate it day by day.');
-        case ChecklistGuide.goToMap:
-          guide.state = null;
-          _coachAfterScroll(_activeGoToMapKey, 'See it on the map',
-              'Your trip is live! Go to the map to see your places and plan the route.',
-              settleMs: 700);
+          _coachAfterScroll(_cardOpenOnMapKey, 'Open your trip on the map',
+              'Tap Open on map — the map draws this trip day by day, and that is where the route planning lives.');
         case ChecklistGuide.addLocations:
         case ChecklistGuide.optimizeRoute:
           break; // consumed by trip details / map screen
       }
     });
-    final activeTripAsync = ref.watch(localActiveTripProvider);
     final sharedTripsAsync = ref.watch(sharedTripsProvider);
 
     final ownedTrips = tripsAsync.asData?.value ?? [];
@@ -790,17 +733,12 @@ class _TripScreenState extends ConsumerState<TripScreen> {
     final selectedTrips =
         ownedTrips.where((t) => _selectedTripIds.contains(t.id)).toList();
 
-    // The active trip is pulled OUT of the lists below and pinned in its own
-    // "Active Trip" section at the top.
-    final activeTrip = activeTripAsync.valueOrNull;
-    final activeTripId = activeTrip?.id;
     // Search/sort results for BOTH sections, computed once: the sections
     // need to know about each other so the "no matches" message appears
     // exactly once, and never above a section that does have results.
-    final ownedMatches = _filterAndSortTrips(
-        ownedTrips.where((t) => t.id != activeTripId).toList());
-    final sharedMatches = _filterAndSortSharedTrips(
-        sharedTripsAsync.valueOrNull ?? const [], activeTripId);
+    final ownedMatches = _filterAndSortTrips(ownedTrips);
+    final sharedMatches =
+        _filterAndSortSharedTrips(sharedTripsAsync.valueOrNull ?? const []);
     final searching = _tripQuery.trim().isNotEmpty;
 
     // ── Filter chips + On Going section ──────────────────────────────────
@@ -850,15 +788,11 @@ class _TripScreenState extends ConsumerState<TripScreen> {
           final (s, e) = _rowDates(d);
           return _isGone(s, e, today);
         }).toList();
-      case _TripFilter.active:
       case _TripFilter.ongoing:
       case _TripFilter.noDate:
         listOwn = const [];
         listShared = const [];
     }
-    final showActiveSection =
-        (filter == _TripFilter.all || filter == _TripFilter.active) &&
-            activeTrip != null;
     final showOngoingSection =
         (filter == _TripFilter.all || filter == _TripFilter.ongoing) &&
             (ongoingOwn.isNotEmpty || ongoingShared.isNotEmpty);
@@ -867,16 +801,14 @@ class _TripScreenState extends ConsumerState<TripScreen> {
             (tbdOwn.isNotEmpty || tbdShared.isNotEmpty);
     final showLists = filter == _TripFilter.all || filter == _TripFilter.gone;
 
-    // The activate-trip coach spotlights ONE Activate button. Trips whose
+    // The open-on-map coach spotlights ONE "Open on map" button. Trips whose
     // dates include today live in the On Going section ABOVE the list, so
-    // the first inactive card in render order wins: On Going first, then
-    // the list. (Keying only `index == 0` of the list left the coach with no
-    // target whenever the user's only trip was ongoing — "Show me" did
-    // nothing.)
-    final String? spotlightActivateTripId =
-        showOngoingSection && ongoingOwn.isNotEmpty
-            ? ongoingOwn.first.id
-            : (showLists && listOwn.isNotEmpty ? listOwn.first.id : null);
+    // the first card in render order wins: On Going first, then the list.
+    // (Keying only `index == 0` of the list left the coach with no target
+    // whenever the user's only trip was ongoing — "Show me" did nothing.)
+    final String? spotlightTripId = showOngoingSection && ongoingOwn.isNotEmpty
+        ? ongoingOwn.first.id
+        : (showLists && listOwn.isNotEmpty ? listOwn.first.id : null);
 
     final hideYourTripsHeader = !showLists ||
         listOwn.isEmpty ||
@@ -1044,43 +976,6 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                         : null,
                   ),
 
-                // Persistent referral banner — self-suppresses for signed-out
-                // users and advocates (already shared / have referrals).
-                // DISABLED (owner request 2026-08-10): the banner resolves
-                // asynchronously and pushed the whole page down AFTER the
-                // checklist tutorial had measured its spotlight target, so
-                // the ring pointed at the wrong spot. Re-enable only with a
-                // layout-stable slot (reserved height, or placed below the
-                // tutorial's targets). Restore the referral_prompt import
-                // at the top of this file together with this line.
-                // if (!_selectionMode)
-                //   const SliverToBoxAdapter(child: ReferralHomeBanner()),
-
-                // Active Trip Section
-                SliverToBoxAdapter(
-                  child: activeTripAsync.when(
-                    data: (activeTrip) {
-                      if (activeTrip == null) {
-                        return Padding(
-                          padding: const EdgeInsets.all(16),
-                          child: _buildEmptyActiveTrip(context),
-                        );
-                      }
-                      return Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: _buildActiveTrip(context, activeTrip),
-                      );
-                    },
-                    loading: () => const Padding(
-                      padding: EdgeInsets.all(16),
-                      child: ActiveTripSkeleton(),
-                    ),
-                    error: (_, __) => const SizedBox.shrink(),
-                  ),
-                ),
-
-                const SliverPadding(padding: EdgeInsets.symmetric(vertical: 2)),
-
                 // Create Trip Button or Form (hidden during multi-select)
                 if (!_selectionMode)
                   SliverToBoxAdapter(
@@ -1111,7 +1006,7 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                                   Expanded(
                                     child: FilledButton(
                                       key: _newTripBtnKey,
-                                      onPressed: _openCreateWizard,
+                                      onPressed: _openCreateTrip,
                                       style: FilledButton.styleFrom(
                                         padding: const EdgeInsets.symmetric(
                                             vertical: 18),
@@ -1145,8 +1040,11 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                 // trial banner). BELOW the New Trip cluster on purpose: it
                 // resolves asynchronously (RevenueCat + prefs), and async
                 // content must never sit above the checklist spotlight
-                // targets — see the ReferralHomeBanner note above.
+                // targets (the ring would point at the wrong spot).
                 const SliverToBoxAdapter(child: PromoDaysCard()),
+                // Guests with a trip: the soft sign-up ask that replaced the
+                // Sign-up screen after onboarding. Same slot rule.
+                const SliverToBoxAdapter(child: SaveTripsAccountCard()),
 
                 // Breathing room so the big New Trip button and the
                 // search field can't be mis-tapped for each other.
@@ -1285,59 +1183,6 @@ class _TripScreenState extends ConsumerState<TripScreen> {
 
                 const SliverPadding(padding: EdgeInsets.symmetric(vertical: 8)),
 
-                // Active trip section — its full card, pinned above the
-                // lists (and excluded from them so it never shows twice).
-                if (showActiveSection) ...[
-                  SliverToBoxAdapter(
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
-                      child: Row(
-                        children: [
-                          Icon(
-                            Icons.navigation_rounded,
-                            size: 20,
-                            color: Theme.of(context).colorScheme.primary,
-                          ),
-                          const SizedBox(width: 8),
-                          Text(
-                            'Active Trip',
-                            style: Theme.of(context)
-                                .textTheme
-                                .titleLarge
-                                ?.copyWith(fontWeight: FontWeight.w600),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                  SliverPadding(
-                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-                    sliver: SliverToBoxAdapter(
-                      child: Builder(builder: (context) {
-                        // A shared trip can be active too — render it with
-                        // the shared card so its actions match the user's
-                        // permission; owned (or still-loading) trips get the
-                        // regular card.
-                        String? sharedPermission;
-                        for (final row
-                            in sharedTripsAsync.valueOrNull ?? const []) {
-                          final t = row['trips'] as Map<String, dynamic>?;
-                          if (t != null && t['id'] == activeTrip.id) {
-                            sharedPermission = row['permission'] as String?;
-                            break;
-                          }
-                        }
-                        if (sharedPermission != null) {
-                          return _buildSharedTripCard(
-                              context, activeTrip, sharedPermission);
-                        }
-                        return _buildTripCard(context, activeTrip,
-                            spotlightGoToMap: true);
-                      }),
-                    ),
-                  ),
-                ],
-
                 // On Going section — own AND shared trips whose dates
                 // include today. Mixed list; shared rows keep their
                 // permission badge via the shared card.
@@ -1373,8 +1218,7 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                             if (index < ongoingOwn.length) {
                               final t = ongoingOwn[index];
                               card = _buildTripCard(context, t,
-                                  spotlightActivate:
-                                      t.id == spotlightActivateTripId);
+                                  spotlightOpenOnMap: t.id == spotlightTripId);
                             } else {
                               final data =
                                   ongoingShared[index - ongoingOwn.length];
@@ -1432,8 +1276,7 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                             if (index < tbdOwn.length) {
                               final t = tbdOwn[index];
                               card = _buildTripCard(context, t,
-                                  spotlightActivate:
-                                      t.id == spotlightActivateTripId);
+                                  spotlightOpenOnMap: t.id == spotlightTripId);
                             } else {
                               final data = tbdShared[index - tbdOwn.length];
                               final tripData =
@@ -1457,8 +1300,7 @@ class _TripScreenState extends ConsumerState<TripScreen> {
 
                 // Filter empty states — the chip picked something that has
                 // no trips right now. One line, never a bare heading.
-                if ((filter == _TripFilter.active && activeTrip == null) ||
-                    (filter == _TripFilter.ongoing && !showOngoingSection) ||
+                if ((filter == _TripFilter.ongoing && !showOngoingSection) ||
                     (filter == _TripFilter.noDate && !showTbdSection) ||
                     (filter == _TripFilter.gone &&
                         listOwn.isEmpty &&
@@ -1470,14 +1312,12 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                       child: Center(
                         child: Text(
                           switch (filter) {
-                            _TripFilter.active => 'No active trip right now.',
                             _TripFilter.ongoing =>
                               'No trip is happening today.',
                             _TripFilter.gone => 'No past trips yet.',
                             _TripFilter.noDate =>
-                              'No trips without dates — create one from '
-                                  'the wizard with "I don\'t know the dates '
-                                  'yet".',
+                              'No trips without dates — pick "No dates yet" '
+                                  'when you create one.',
                             _TripFilter.all => '',
                           },
                           style: Theme.of(context)
@@ -1575,8 +1415,8 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                             return Padding(
                               padding: const EdgeInsets.only(bottom: 12),
                               child: _buildTripCard(context, trip,
-                                  spotlightActivate:
-                                      trip.id == spotlightActivateTripId),
+                                  spotlightOpenOnMap:
+                                      trip.id == spotlightTripId),
                             );
                           },
                           childCount: listTrips.length,
@@ -1733,142 +1573,8 @@ class _TripScreenState extends ConsumerState<TripScreen> {
     );
   }
 
-  Widget _buildEmptyActiveTrip(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(20),
-      // Transparent body — the ambient globe shows through; only the border
-      // defines the card.
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: Theme.of(context).colorScheme.primary.withOpacity(0.25),
-          width: 1,
-        ),
-      ),
-      child: Column(
-        children: [
-          Icon(
-            Icons.trip_origin_rounded,
-            size: 48,
-            color: Theme.of(context).colorScheme.primary,
-          ),
-          const SizedBox(height: 12),
-          Text(
-            'No Active Trip',
-            style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                  fontWeight: FontWeight.bold,
-                ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'Select or create a trip to get started',
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  color: Theme.of(context)
-                      .textTheme
-                      .bodyMedium
-                      ?.color
-                      ?.withOpacity(0.7),
-                ),
-            textAlign: TextAlign.center,
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildActiveTrip(BuildContext context, Trip trip) {
-    return Container(
-      padding: const EdgeInsets.all(20),
-      // Transparent body (matches the empty-state card) — border only.
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: Theme.of(context).colorScheme.primary.withOpacity(0.35),
-          width: 1,
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Icon(
-                          Icons.navigation_rounded,
-                          color: Theme.of(context).colorScheme.primary,
-                          size: 20,
-                        ),
-                        const SizedBox(width: 8),
-                        Text(
-                          'Active Trip',
-                          style: Theme.of(context)
-                              .textTheme
-                              .bodySmall
-                              ?.copyWith(
-                                color: Theme.of(context).colorScheme.primary,
-                              ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      trip.name,
-                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                            fontWeight: FontWeight.bold,
-                          ),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ],
-                ),
-              ),
-              GestureDetector(
-                onTap: () => _deactivateTrip(trip),
-                child: Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: Theme.of(context)
-                        .colorScheme
-                        .secondary
-                        .withOpacity(0.2),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Icon(
-                    Icons.close_rounded,
-                    color: Theme.of(context).colorScheme.secondary,
-                    size: 20,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          if (trip.description != null && trip.description!.isNotEmpty) ...[
-            const SizedBox(height: 12),
-            Text(
-              trip.description!,
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: Theme.of(context)
-                        .textTheme
-                        .bodyMedium
-                        ?.color
-                        ?.withOpacity(0.7),
-                  ),
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-
   Widget _buildTripCard(BuildContext context, Trip trip,
-      {bool spotlightActivate = false, bool spotlightGoToMap = false}) {
+      {bool spotlightOpenOnMap = false}) {
     // Narrow per-trip stats instead of the raw locations list: the raw
     // watch meant EVERY locations emission rebuilt EVERY card. select() on
     // this trip's own record (records compare structurally) rebuilds this
@@ -1893,8 +1599,7 @@ class _TripScreenState extends ConsumerState<TripScreen> {
       startDate,
       endDate,
       isSelected: isSelected,
-      spotlightActivate: spotlightActivate,
-      spotlightGoToMap: spotlightGoToMap,
+      spotlightOpenOnMap: spotlightOpenOnMap,
     );
 
     return GestureDetector(
@@ -1909,9 +1614,7 @@ class _TripScreenState extends ConsumerState<TripScreen> {
     final theme = Theme.of(context);
     final primary = theme.colorScheme.primary;
     final isWriteAccess = permission == 'write';
-
-    final localActiveTripId = ref.watch(localActiveTripIdProvider);
-    final isActive = localActiveTripId == trip.id;
+    final onMap = ref.watch(localActiveTripIdProvider) == trip.id;
 
     // Same metadata derivation as the owner card — via the narrow per-trip
     // stats record, not the raw locations list (see _buildTripCard).
@@ -1950,13 +1653,12 @@ class _TripScreenState extends ConsumerState<TripScreen> {
     final country =
         trip.countryCode == null ? null : findCountryByCode(trip.countryCode);
 
-    // The eyebrow carries BOTH facts on one quiet line: activation state
-    // and permission — replacing the old orange/blue permission chip.
-    final eyebrow = isActive
-        ? 'ACTIVE NOW · ${isWriteAccess ? 'CAN EDIT' : 'VIEW ONLY'}'
+    // The eyebrow carries BOTH facts on one quiet line: whether the trip is
+    // on the map, and permission — replacing the old permission chip.
+    final eyebrow = onMap
+        ? 'ON THE MAP · ${isWriteAccess ? 'CAN EDIT' : 'VIEW ONLY'}'
         : 'SHARED · ${isWriteAccess ? 'CAN EDIT' : 'VIEW ONLY'}';
-    final eyebrowColor =
-        isActive ? primary : theme.colorScheme.onSurfaceVariant;
+    final eyebrowColor = onMap ? primary : theme.colorScheme.onSurfaceVariant;
 
     return GestureDetector(
       onTap: () => Navigator.push(
@@ -1970,18 +1672,18 @@ class _TripScreenState extends ConsumerState<TripScreen> {
           color: theme.cardColor.withValues(alpha: 0.55),
           borderRadius: BorderRadius.circular(16),
           border: Border.all(
-            color: isActive
+            color: onMap
                 ? primary.withValues(alpha: 0.45)
                 : theme.dividerColor.withValues(alpha: 0.2),
-            width: isActive ? 1.4 : 1.0,
+            width: onMap ? 1.4 : 1.0,
           ),
           boxShadow: [
             BoxShadow(
-              color: isActive
+              color: onMap
                   ? primary.withValues(alpha: 0.12)
                   : Colors.black.withValues(alpha: 0.05),
-              blurRadius: isActive ? 10 : 4,
-              offset: Offset(0, isActive ? 4 : 2),
+              blurRadius: onMap ? 10 : 4,
+              offset: Offset(0, onMap ? 4 : 2),
             ),
           ],
         ),
@@ -2071,7 +1773,7 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                 width: double.infinity,
                 child: CustomPaint(
                   painter: RouteSpinePainter(
-                    color: isActive
+                    color: onMap
                         ? primary
                         : theme.colorScheme.onSurfaceVariant
                             .withValues(alpha: 0.35),
@@ -2099,51 +1801,21 @@ class _TripScreenState extends ConsumerState<TripScreen> {
             const SizedBox(height: 12),
             Padding(
               padding: const EdgeInsets.only(right: 8),
-              child: isActive
-                  ? Row(
-                      children: [
-                        Expanded(
-                          child: SizedBox(
-                            height: 42,
-                            child: FilledButton.icon(
-                              onPressed: () => _goToMapForTrip(trip),
-                              icon: const Icon(Icons.map_rounded, size: 18),
-                              label: const Text('Go to map'),
-                              style: FilledButton.styleFrom(
-                                textStyle: theme.textTheme.labelLarge
-                                    ?.copyWith(fontWeight: FontWeight.w700),
-                                shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(12)),
-                              ),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        _cardIconSquare(
-                          theme,
-                          icon: Icons.stop_circle_outlined,
-                          tooltip: 'Deactivate',
-                          onPressed: () => _deactivateTrip(trip),
-                        ),
-                      ],
-                    )
-                  : SizedBox(
-                      width: double.infinity,
-                      height: 42,
-                      child: FilledButton.tonalIcon(
-                        onPressed: () => _setActiveTrip(trip),
-                        icon: const Icon(Icons.play_circle_outline, size: 18),
-                        label: const Text('Activate'),
-                        style: FilledButton.styleFrom(
-                          backgroundColor: primary.withValues(alpha: 0.14),
-                          foregroundColor: primary,
-                          textStyle: theme.textTheme.labelLarge
-                              ?.copyWith(fontWeight: FontWeight.w700),
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12)),
-                        ),
-                      ),
-                    ),
+              child: SizedBox(
+                width: double.infinity,
+                height: 42,
+                child: FilledButton.icon(
+                  onPressed: () => _openTripOnMap(trip),
+                  icon: const Icon(Icons.map_rounded, size: 18),
+                  label: const Text('Open on map'),
+                  style: FilledButton.styleFrom(
+                    textStyle: theme.textTheme.labelLarge
+                        ?.copyWith(fontWeight: FontWeight.w700),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12)),
+                  ),
+                ),
+              ),
             ),
           ],
         ),
@@ -2317,29 +1989,6 @@ class _TripScreenState extends ConsumerState<TripScreen> {
 
   /// 46×42 quiet square for the card's secondary actions (share,
   /// deactivate) — outlined ghost, never competing with the primary.
-  Widget _cardIconSquare(
-    ThemeData theme, {
-    required IconData icon,
-    required String tooltip,
-    required VoidCallback onPressed,
-  }) {
-    return SizedBox(
-      height: 42,
-      width: 46,
-      child: OutlinedButton(
-        onPressed: onPressed,
-        style: OutlinedButton.styleFrom(
-          padding: EdgeInsets.zero,
-          foregroundColor: theme.colorScheme.onSurfaceVariant,
-          side: BorderSide(color: theme.dividerColor.withValues(alpha: 0.4)),
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        ),
-        child: Tooltip(message: tooltip, child: Icon(icon, size: 20)),
-      ),
-    );
-  }
-
   Widget _buildTripCardContent(
     BuildContext context,
     Trip trip,
@@ -2347,13 +1996,11 @@ class _TripScreenState extends ConsumerState<TripScreen> {
     DateTime? startDate,
     DateTime? endDate, {
     bool isSelected = false,
-    bool spotlightActivate = false,
-    bool spotlightGoToMap = false,
+    bool spotlightOpenOnMap = false,
   }) {
     final theme = Theme.of(context);
     final primary = theme.colorScheme.primary;
-    final localActiveTripId = ref.watch(localActiveTripIdProvider);
-    final isActive = localActiveTripId == trip.id;
+    final onMap = ref.watch(localActiveTripIdProvider) == trip.id;
     final signedIn = ref.watch(currentUserIdProvider) != null;
 
     // Active/selected state lives on the SHELL (border + glow) and the
@@ -2361,12 +2008,12 @@ class _TripScreenState extends ConsumerState<TripScreen> {
     // accent; green/orange are gone from this card.
     final borderColor = isSelected
         ? primary
-        : isActive
+        : onMap
             ? primary.withValues(alpha: 0.45)
             : theme.dividerColor.withValues(alpha: 0.2);
     final borderWidth = isSelected
         ? 2.0
-        : isActive
+        : onMap
             ? 1.4
             : 1.0;
 
@@ -2433,11 +2080,11 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                 border: Border.all(color: borderColor, width: borderWidth),
                 boxShadow: [
                   BoxShadow(
-                    color: (isSelected || isActive)
+                    color: (isSelected || onMap)
                         ? primary.withValues(alpha: 0.12)
                         : Colors.black.withValues(alpha: 0.05),
-                    blurRadius: (isSelected || isActive) ? 10 : 4,
-                    offset: Offset(0, (isSelected || isActive) ? 4 : 2),
+                    blurRadius: (isSelected || onMap) ? 10 : 4,
+                    offset: Offset(0, (isSelected || onMap) ? 4 : 2),
                   ),
                 ],
               ),
@@ -2470,9 +2117,9 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             // Eyebrow exists ONLY when the state exists.
-                            if (isActive)
+                            if (onMap)
                               Text(
-                                'ACTIVE NOW',
+                                'ON THE MAP',
                                 style: theme.textTheme.labelSmall?.copyWith(
                                   color: primary,
                                   fontWeight: FontWeight.w800,
@@ -2606,7 +2253,7 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                       width: double.infinity,
                       child: CustomPaint(
                         painter: RouteSpinePainter(
-                          color: isActive
+                          color: onMap
                               ? primary
                               : theme.colorScheme.onSurfaceVariant
                                   .withValues(alpha: 0.35),
@@ -2648,44 +2295,19 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                         Expanded(
                           child: SizedBox(
                             height: 42,
-                            child: isActive
-                                ? FilledButton.icon(
-                                    key: spotlightGoToMap
-                                        ? _activeGoToMapKey
-                                        : null,
-                                    onPressed: () => _goToMapForTrip(trip),
-                                    icon:
-                                        const Icon(Icons.map_rounded, size: 18),
-                                    label: const Text('Go to map'),
-                                    style: FilledButton.styleFrom(
-                                      textStyle: theme.textTheme.labelLarge
-                                          ?.copyWith(
-                                              fontWeight: FontWeight.w700),
-                                      shape: RoundedRectangleBorder(
-                                          borderRadius:
-                                              BorderRadius.circular(12)),
-                                    ),
-                                  )
-                                : FilledButton.tonalIcon(
-                                    key: spotlightActivate
-                                        ? _cardActivateKey
-                                        : null,
-                                    onPressed: () => _setActiveTrip(trip),
-                                    icon: const Icon(Icons.play_circle_outline,
-                                        size: 18),
-                                    label: const Text('Activate'),
-                                    style: FilledButton.styleFrom(
-                                      backgroundColor:
-                                          primary.withValues(alpha: 0.14),
-                                      foregroundColor: primary,
-                                      textStyle: theme.textTheme.labelLarge
-                                          ?.copyWith(
-                                              fontWeight: FontWeight.w700),
-                                      shape: RoundedRectangleBorder(
-                                          borderRadius:
-                                              BorderRadius.circular(12)),
-                                    ),
-                                  ),
+                            child: FilledButton.icon(
+                              key:
+                                  spotlightOpenOnMap ? _cardOpenOnMapKey : null,
+                              onPressed: () => _openTripOnMap(trip),
+                              icon: const Icon(Icons.map_rounded, size: 18),
+                              label: const Text('Open on map'),
+                              style: FilledButton.styleFrom(
+                                textStyle: theme.textTheme.labelLarge
+                                    ?.copyWith(fontWeight: FontWeight.w700),
+                                shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12)),
+                              ),
+                            ),
                           ),
                         ),
                         // Publish toggle — the LABEL states what the tap
@@ -2716,15 +2338,6 @@ class _TripScreenState extends ConsumerState<TripScreen> {
                               child: Text(
                                   trip.isPublic ? 'Go private' : 'Go public'),
                             ),
-                          ),
-                        ],
-                        if (isActive) ...[
-                          const SizedBox(width: 8),
-                          _cardIconSquare(
-                            theme,
-                            icon: Icons.stop_circle_outlined,
-                            tooltip: 'Deactivate',
-                            onPressed: () => _deactivateTrip(trip),
                           ),
                         ],
                       ],
@@ -2821,22 +2434,6 @@ class _TripScreenState extends ConsumerState<TripScreen> {
         ),
       ),
     );
-  }
-
-  Future<void> _deactivateTrip(Trip trip) async {
-    try {
-      // Deactivate trip locally (no database update)
-      await ref.read(localActiveTripIdProvider.notifier).deactivateTrip();
-
-      if (mounted) {
-        AppToast.info(context, 'Trip deactivated');
-      }
-    } catch (e) {
-      debugPrint('Error deactivating trip: $e');
-      if (mounted) {
-        AppToast.error(context, 'Could not deactivate trip. Please try again.');
-      }
-    }
   }
 
   void _showDeleteConfirmation(BuildContext context, Trip trip) {

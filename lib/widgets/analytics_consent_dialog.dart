@@ -5,9 +5,11 @@ import '../services/analytics_consent_service.dart';
 /// Shows the one-time analytics opt-in prompt to consent-required (EU/UK/CH)
 /// users who haven't chosen yet, then records their choice. No-op otherwise.
 /// Safe to call fire-and-forget from a post-frame callback.
-Future<void> maybeShowAnalyticsConsent(BuildContext context) async {
-  if (!await AnalyticsConsentService.instance.shouldAskForConsent()) return;
-  if (!context.mounted) return;
+Future<bool> maybeShowAnalyticsConsent(BuildContext context) async {
+  if (!await AnalyticsConsentService.instance.shouldAskForConsent()) {
+    return false;
+  }
+  if (!context.mounted) return false;
 
   final granted = await showDialog<bool>(
     context: context,
@@ -46,4 +48,5 @@ Future<void> maybeShowAnalyticsConsent(BuildContext context) async {
   );
 
   await AnalyticsConsentService.instance.setConsent(granted ?? false);
+  return true;
 }

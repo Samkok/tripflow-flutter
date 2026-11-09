@@ -56,6 +56,23 @@ class NearbyPlacesPickerSheet extends StatefulWidget {
   final Future<List<NearbyPlace>> Function(String query, int radiusMeters)?
       onSearchText;
 
+  /// Hosted inside another sheet (the add-place sheet's Nearby segment):
+  /// no frosted shell or drag handle of its own, it scrolls with
+  /// [scrollController], and Cancel / Add report through [onCancel] /
+  /// [onConfirm] instead of popping a route.
+  final bool embedded;
+  final ScrollController? scrollController;
+  final void Function(List<NearbyPlace> picked)? onConfirm;
+  final VoidCallback? onCancel;
+
+  /// Fetch the first list on open (with [radiusMeters], through
+  /// [onRequery]) instead of taking a ready-made [places] list.
+  final bool loadOnOpen;
+
+  /// What the radius is measured from, for the subtitle: "where you
+  /// tapped" on the map, "your first stop that day" from a trip page.
+  final String aroundLabel;
+
   const NearbyPlacesPickerSheet({
     super.key,
     required this.places,
@@ -64,6 +81,12 @@ class NearbyPlacesPickerSheet extends StatefulWidget {
     this.occupantsOnDay = const [],
     this.initialError,
     this.onSearchText,
+    this.embedded = false,
+    this.scrollController,
+    this.onConfirm,
+    this.onCancel,
+    this.loadOnOpen = false,
+    this.aroundLabel = 'where you tapped',
   });
 
   @override
@@ -87,8 +110,9 @@ class _NearbyPlacesPickerSheetState extends State<NearbyPlacesPickerSheet> {
   /// Radius the shown list was fetched with, vs. the slider's live value.
   late int _appliedRadius = widget.radiusMeters;
   late double _pendingRadius = widget.radiusMeters.toDouble();
-  bool _loading = false;
+  late bool _loading = widget.loadOnOpen;
   late String? _error = widget.initialError;
+  ScrollController? _ownController;
 
   /// Google name-search hits for the current query (deduped against the
   /// loaded list at render time) and that request's state. Reset whenever
@@ -173,10 +197,39 @@ class _NearbyPlacesPickerSheetState extends State<NearbyPlacesPickerSheet> {
   }
 
   @override
+  void initState() {
+    super.initState();
+    if (widget.loadOnOpen) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _requery(widget.radiusMeters);
+      });
+    }
+  }
+
+  @override
   void dispose() {
     _debounce?.cancel();
     _searchController.dispose();
+    _ownController?.dispose();
     super.dispose();
+  }
+
+  void _cancel() {
+    final cb = widget.onCancel;
+    if (cb != null) {
+      cb();
+    } else {
+      Navigator.of(context).pop();
+    }
+  }
+
+  void _confirm(List<NearbyPlace> picked) {
+    final cb = widget.onConfirm;
+    if (cb != null) {
+      cb(picked);
+    } else {
+      Navigator.of(context).pop(picked);
+    }
   }
 
   /// Apply: re-query for the slider's radius and swap the list in place.
@@ -373,7 +426,10 @@ class _NearbyPlacesPickerSheetState extends State<NearbyPlacesPickerSheet> {
         : const <NearbyPlace>[];
     final String title;
     final String subtitle;
-    if (places.isEmpty && _error != null) {
+    if (_loading && places.isEmpty) {
+      title = 'Nearby places';
+      subtitle = 'Looking around ${widget.aroundLabel}…';
+    } else if (places.isEmpty && _error != null) {
       title = 'Couldn\'t load places';
       subtitle = 'Check your connection, then try again.';
     } else if (places.isEmpty && _query.isEmpty) {
@@ -382,7 +438,130 @@ class _NearbyPlacesPickerSheetState extends State<NearbyPlacesPickerSheet> {
           'Nothing within ${_formatRadius(_appliedRadius)} — widen the radius below and apply.';
     } else {
       title = 'Nearby places';
-      subtitle = 'Within ${_formatRadius(_appliedRadius)} of where you tapped';
+      subtitle =
+          'Within ${_formatRadius(_appliedRadius)} of ${widget.aroundLabel}';
+    }
+
+    Widget body(ScrollController scrollController, {required bool handle}) {
+      return Column(
+        children: [
+          if (handle)
+            Center(
+              child: Container(
+                width: 40,
+                height: 4,
+                margin: const EdgeInsets.only(top: 12, bottom: 12),
+                decoration: BoxDecoration(
+                  color: theme.dividerColor,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        style: theme.textTheme.titleLarge?.copyWith(
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        subtitle,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                // Search the same spot again — for the transient
+                // failures and the odd empty answer from Google.
+                IconButton(
+                  icon: const Icon(Icons.refresh_rounded),
+                  onPressed: _loading ? null : () => _requery(_appliedRadius),
+                  tooltip: 'Search again',
+                ),
+                IconButton(
+                  icon: const Icon(Icons.close),
+                  onPressed: _cancel,
+                  tooltip: 'Cancel',
+                ),
+              ],
+            ),
+          ),
+          _buildRadiusControl(context),
+          if (places.isNotEmpty || (_error == null && _canSearchText))
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
+              child: TextField(
+                cursorOpacityAnimates: false,
+                controller: _searchController,
+                onChanged: _onQueryChanged,
+                decoration: InputDecoration(
+                  isDense: true,
+                  hintText: _canSearchText
+                      ? 'Find a place near here…'
+                      : 'Search this list…',
+                  prefixIcon: const Icon(Icons.search, size: 20),
+                  suffixIcon: _query.isEmpty
+                      ? null
+                      : IconButton(
+                          tooltip: 'Clear',
+                          icon: const Icon(Icons.clear, size: 18),
+                          onPressed: () {
+                            _searchController.clear();
+                            _onQueryChanged('');
+                          },
+                        ),
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(
+                      color: theme.dividerColor.withValues(alpha: 0.4),
+                    ),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(
+                      color: theme.dividerColor.withValues(alpha: 0.4),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          if (_loading || _searching)
+            const LinearProgressIndicator(minHeight: 2)
+          else
+            const Divider(height: 1),
+          Expanded(
+            child: _loading && places.isEmpty && _query.isEmpty
+                ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
+                : _query.isEmpty && places.isEmpty
+                    ? _buildEmpty(context)
+                    : visible.isEmpty && extra.isEmpty
+                        ? _buildNoMatches(context)
+                        : _buildList(scrollController, visible, extra),
+          ),
+          if (places.isNotEmpty || extra.isNotEmpty)
+            _buildBottomBar(context, scrollController),
+        ],
+      );
+    }
+
+    if (widget.embedded) {
+      return body(
+        widget.scrollController ?? (_ownController ??= ScrollController()),
+        handle: false,
+      );
     }
     return ClipRRect(
       borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
@@ -404,118 +583,8 @@ class _NearbyPlacesPickerSheetState extends State<NearbyPlacesPickerSheet> {
             minChildSize: 0.4,
             maxChildSize: 0.92,
             expand: false,
-            builder: (context, scrollController) {
-              return Column(
-                children: [
-                  Center(
-                    child: Container(
-                      width: 40,
-                      height: 4,
-                      margin: const EdgeInsets.only(top: 12, bottom: 12),
-                      decoration: BoxDecoration(
-                        color: theme.dividerColor,
-                        borderRadius: BorderRadius.circular(2),
-                      ),
-                    ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                title,
-                                style: theme.textTheme.titleLarge?.copyWith(
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                              const SizedBox(height: 2),
-                              Text(
-                                subtitle,
-                                style: theme.textTheme.bodySmall?.copyWith(
-                                  color: theme.colorScheme.onSurfaceVariant,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        // Search the same spot again — for the transient
-                        // failures and the odd empty answer from Google.
-                        IconButton(
-                          icon: const Icon(Icons.refresh_rounded),
-                          onPressed:
-                              _loading ? null : () => _requery(_appliedRadius),
-                          tooltip: 'Search again',
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.close),
-                          onPressed: () => Navigator.of(context).pop(),
-                          tooltip: 'Cancel',
-                        ),
-                      ],
-                    ),
-                  ),
-                  _buildRadiusControl(context),
-                  if (places.isNotEmpty || (_error == null && _canSearchText))
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
-                      child: TextField(
-                        cursorOpacityAnimates: false,
-                        controller: _searchController,
-                        onChanged: _onQueryChanged,
-                        decoration: InputDecoration(
-                          isDense: true,
-                          hintText: _canSearchText
-                              ? 'Find a place near here…'
-                              : 'Search this list…',
-                          prefixIcon: const Icon(Icons.search, size: 20),
-                          suffixIcon: _query.isEmpty
-                              ? null
-                              : IconButton(
-                                  tooltip: 'Clear',
-                                  icon: const Icon(Icons.clear, size: 18),
-                                  onPressed: () {
-                                    _searchController.clear();
-                                    _onQueryChanged('');
-                                  },
-                                ),
-                          contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 12, vertical: 10),
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
-                            borderSide: BorderSide(
-                              color: theme.dividerColor.withValues(alpha: 0.4),
-                            ),
-                          ),
-                          enabledBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
-                            borderSide: BorderSide(
-                              color: theme.dividerColor.withValues(alpha: 0.4),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  if (_loading || _searching)
-                    const LinearProgressIndicator(minHeight: 2)
-                  else
-                    const Divider(height: 1),
-                  Expanded(
-                    child: _query.isEmpty && places.isEmpty
-                        ? _buildEmpty(context)
-                        : visible.isEmpty && extra.isEmpty
-                            ? _buildNoMatches(context)
-                            : _buildList(scrollController, visible, extra),
-                  ),
-                  if (places.isNotEmpty || extra.isNotEmpty)
-                    _buildBottomBar(context, scrollController),
-                ],
-              );
-            },
+            builder: (context, scrollController) =>
+                body(scrollController, handle: true),
           ),
         ),
       ),
@@ -825,7 +894,7 @@ class _NearbyPlacesPickerSheetState extends State<NearbyPlacesPickerSheet> {
           children: [
             Expanded(
               child: OutlinedButton(
-                onPressed: () => Navigator.of(context).pop(),
+                onPressed: _cancel,
                 child: const Text('Cancel'),
               ),
             ),
@@ -840,7 +909,7 @@ class _NearbyPlacesPickerSheetState extends State<NearbyPlacesPickerSheet> {
                             .where((p) => _selected.contains(p.placeId))
                             .map((p) => p.withTag(_tagFor(p)?.key))
                             .toList();
-                        Navigator.of(context).pop(picked);
+                        _confirm(picked);
                       },
                 icon: const Icon(Icons.add_location_alt_outlined, size: 18),
                 label: Text(count == 0
@@ -885,36 +954,4 @@ String _formatDistance(double meters) {
 String _formatRadius(int meters) {
   if (meters < 1000) return '${meters}m';
   return '${(meters / 1000).toStringAsFixed(meters % 1000 == 0 ? 0 : 1)}km';
-}
-
-/// Convenience wrapper that presents the picker and returns the chosen
-/// [NearbyPlace]s, or an empty list on cancel/dismiss.
-Future<List<NearbyPlace>> showNearbyPlacesPicker(
-  BuildContext context, {
-  required List<NearbyPlace> places,
-  required int radiusMeters,
-  required Future<List<NearbyPlace>> Function(int radiusMeters) onRequery,
-  List<PlaceKey> occupantsOnDay = const [],
-  String? initialError,
-  Future<List<NearbyPlace>> Function(String query, int radiusMeters)?
-      onSearchText,
-}) async {
-  final result = await showModalBottomSheet<List<NearbyPlace>>(
-    context: context,
-    isScrollControlled: true,
-    // Glass: the sheet paints its own frosted pane (see build), so the
-    // modal itself stays transparent with a light barrier — same treatment
-    // as the trip plan / search / collaborators sheets.
-    backgroundColor: Colors.transparent,
-    barrierColor: AppTheme.sheetBarrierColor(context),
-    builder: (_) => NearbyPlacesPickerSheet(
-      places: places,
-      radiusMeters: radiusMeters,
-      onRequery: onRequery,
-      occupantsOnDay: occupantsOnDay,
-      initialError: initialError,
-      onSearchText: onSearchText,
-    ),
-  );
-  return result ?? const [];
 }

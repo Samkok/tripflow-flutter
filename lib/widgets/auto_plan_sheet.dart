@@ -32,55 +32,14 @@ Future<void> showAutoPlanSheet(BuildContext context) {
   );
 }
 
-class AutoPlanSheet extends ConsumerStatefulWidget {
+/// The Auto-plan sheet as its own modal: the frosted shell, handle and
+/// "Plan my days" header around [AutoPlanPanel].
+class AutoPlanSheet extends StatelessWidget {
   const AutoPlanSheet({super.key});
-
-  @override
-  ConsumerState<AutoPlanSheet> createState() => _AutoPlanSheetState();
-}
-
-class _AutoPlanSheetState extends ConsumerState<AutoPlanSheet> {
-  bool _applying = false;
-  bool _previewLogged = false;
-
-  @override
-  void initState() {
-    super.initState();
-    // A previous sheet's "Add a day" override / fresh-arrangement intent
-    // must not leak into this one.
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      ref.read(autoPlanRangeOverrideProvider.notifier).state = null;
-      ref.read(autoPlanTimesOverrideProvider.notifier).state = null;
-      ref.read(autoPlanKeepCurrentProvider.notifier).state = true;
-    });
-    // Seed the live cap + fill style from the saved preferences. If the
-    // user already tapped a chip before the read resolved, their tap wins
-    // (compare against the value at open, not the current one).
-    final capAtOpen = ref.read(autoPlanMaxStopsProvider);
-    LegModePrefs.autoPlanMaxStops().then((saved) {
-      if (!mounted) return;
-      if (ref.read(autoPlanMaxStopsProvider) == capAtOpen &&
-          saved != capAtOpen) {
-        ref.read(autoPlanMaxStopsProvider.notifier).state = saved;
-      }
-    });
-    final styleAtOpen = ref.read(autoPlanFillStyleProvider);
-    LegModePrefs.autoPlanFillStyle().then((saved) {
-      if (!mounted) return;
-      final style = saved == 'pack' ? FillStyle.pack : FillStyle.balanced;
-      if (ref.read(autoPlanFillStyleProvider) == styleAtOpen &&
-          style != styleAtOpen) {
-        ref.read(autoPlanFillStyleProvider.notifier).state = style;
-      }
-    });
-  }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final planAsync = ref.watch(autoPlanProvider);
-
     return DraggableScrollableSheet(
       initialChildSize: 0.65,
       minChildSize: 0.4,
@@ -123,19 +82,81 @@ class _AutoPlanSheetState extends ConsumerState<AutoPlanSheet> {
                 ],
               ),
             ),
-            Expanded(
-              child: planAsync.when(
-                loading: () => const Center(child: CircularProgressIndicator()),
-                error: (e, _) => const _Message(
-                  icon: Icons.error_outline_rounded,
-                  text: "Couldn't compute a plan. Try again.",
-                ),
-                data: (plan) => _buildForPlan(context, plan, scrollController),
-              ),
-            ),
+            Expanded(child: AutoPlanPanel(scrollController: scrollController)),
           ],
         ),
       ),
+    );
+  }
+}
+
+/// The whole-trip planner's body: the proposal, its controls, Apply with
+/// its Pro gate and Undo. Hosted by [AutoPlanSheet] on its own and by the
+/// Plan sheet's "Whole trip" segment.
+class AutoPlanPanel extends ConsumerStatefulWidget {
+  const AutoPlanPanel({
+    super.key,
+    required this.scrollController,
+    this.onBusyChanged,
+  });
+
+  /// The host sheet's controller, so the proposal list drags the sheet.
+  final ScrollController scrollController;
+
+  /// Fires while a plan is being applied, so a host can show it.
+  final ValueChanged<bool>? onBusyChanged;
+
+  @override
+  ConsumerState<AutoPlanPanel> createState() => _AutoPlanPanelState();
+}
+
+class _AutoPlanPanelState extends ConsumerState<AutoPlanPanel> {
+  bool _applying = false;
+  bool _previewLogged = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // A previous sheet's "Add a day" override / fresh-arrangement intent
+    // must not leak into this one.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ref.read(autoPlanRangeOverrideProvider.notifier).state = null;
+      ref.read(autoPlanTimesOverrideProvider.notifier).state = null;
+      ref.read(autoPlanKeepCurrentProvider.notifier).state = true;
+    });
+    // Seed the live cap + fill style from the saved preferences. If the
+    // user already tapped a chip before the read resolved, their tap wins
+    // (compare against the value at open, not the current one).
+    final capAtOpen = ref.read(autoPlanMaxStopsProvider);
+    LegModePrefs.autoPlanMaxStops().then((saved) {
+      if (!mounted) return;
+      if (ref.read(autoPlanMaxStopsProvider) == capAtOpen &&
+          saved != capAtOpen) {
+        ref.read(autoPlanMaxStopsProvider.notifier).state = saved;
+      }
+    });
+    final styleAtOpen = ref.read(autoPlanFillStyleProvider);
+    LegModePrefs.autoPlanFillStyle().then((saved) {
+      if (!mounted) return;
+      final style = saved == 'pack' ? FillStyle.pack : FillStyle.balanced;
+      if (ref.read(autoPlanFillStyleProvider) == styleAtOpen &&
+          style != styleAtOpen) {
+        ref.read(autoPlanFillStyleProvider.notifier).state = style;
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final planAsync = ref.watch(autoPlanProvider);
+    return planAsync.when(
+      loading: () => const Center(child: CircularProgressIndicator()),
+      error: (e, _) => const _Message(
+        icon: Icons.error_outline_rounded,
+        text: "Couldn't compute a plan. Try again.",
+      ),
+      data: (plan) => _buildForPlan(context, plan, widget.scrollController),
     );
   }
 
@@ -417,6 +438,7 @@ class _AutoPlanSheetState extends ConsumerState<AutoPlanSheet> {
 
   Future<void> _apply(DistributionPlan plan) async {
     setState(() => _applying = true);
+    widget.onBusyChanged?.call(true);
     try {
       // Preview is free; APPLY is the Pro gate — with copy that speaks to
       // the plan they're already looking at.
@@ -467,7 +489,10 @@ class _AutoPlanSheetState extends ConsumerState<AutoPlanSheet> {
           Navigator.of(context).pop();
       }
     } finally {
-      if (mounted) setState(() => _applying = false);
+      if (mounted) {
+        setState(() => _applying = false);
+        widget.onBusyChanged?.call(false);
+      }
     }
   }
 }

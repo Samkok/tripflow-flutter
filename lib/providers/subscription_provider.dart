@@ -5,6 +5,7 @@ import 'package:purchases_flutter/purchases_flutter.dart';
 import '../services/revenuecat_service.dart';
 import '../services/subscription_realtime_service.dart';
 import '../services/supabase_service.dart';
+import '../utils/pro_status_copy.dart';
 
 /// Provider for the RevenueCat service singleton
 final revenueCatServiceProvider = Provider<RevenueCatService>((ref) {
@@ -1095,5 +1096,32 @@ final isYearlyPlanProvider = FutureProvider<bool>((ref) async {
     data: (productId) => productId?.contains('yearly') ?? false,
     loading: () => false,
     error: (_, __) => false,
+  );
+});
+
+/// The one answer for the subscription surfaces: free, in the trial, or
+/// Pro, with the dates the copy needs. Synchronous and database-first like
+/// [isProProvider], so a RevenueCat cold start never flashes "Unlock" at a
+/// paying user; the entitlement adds the trial and the exact dates once
+/// it is in.
+final proStatusProvider = Provider<ProStatus>((ref) {
+  if (!ref.watch(isProProvider)) return ProStatus.free;
+  final state = ref.watch(subscriptionProvider);
+  final ent = state
+      .customerInfo?.entitlements.active[RevenueCatConfig.entitlementVoyZaPro];
+  if (ent != null) {
+    return ProStatus(
+      tier: ent.periodType == PeriodType.trial ? ProTier.trial : ProTier.pro,
+      expiresAt: DateTime.tryParse(ent.expirationDate ?? ''),
+      startedAt: DateTime.tryParse(ent.latestPurchaseDate),
+      willRenew: ent.willRenew,
+      productId: ent.productIdentifier,
+    );
+  }
+  return ProStatus(
+    tier: ProTier.pro,
+    expiresAt: state.databaseExpiresAt,
+    willRenew: state.databaseWillRenew,
+    productId: state.databaseProductId,
   );
 });

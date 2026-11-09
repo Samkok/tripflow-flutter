@@ -6,7 +6,7 @@ import '../models/trip.dart';
 import '../providers/map_ui_state_provider.dart';
 import '../providers/trip_listener_provider.dart';
 import '../providers/trip_provider.dart';
-import '../screens/location_search_screen.dart';
+import 'add_place_sheet.dart';
 import 'app_toast.dart';
 import '../utils/trip_day_labels.dart';
 
@@ -116,12 +116,9 @@ Future<void> maybePromptAccommodationForNewDays(
   if (choice == null || !context.mounted) return;
 
   if (choice == '__different__') {
-    // Pre-schedule the search to the first new day; the add flow stamps the
-    // ambient selected date onto the new place.
+    // The map lands on the first new day, and the add sheet is bound to it.
     ref.read(selectedDateProvider.notifier).state = firstNewDay;
-    Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => const LocationSearchScreen()),
-    );
+    showAddPlaceSheet(context, trip: trip, day: firstNewDay);
     return;
   }
 

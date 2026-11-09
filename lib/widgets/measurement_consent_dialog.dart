@@ -24,17 +24,17 @@ typedef MeasurementConsentAnswer = ({bool analytics, bool ads});
 /// opt-in prompt in consent regions, the one-time notice elsewhere, nothing
 /// when they have already chosen or we cannot yet tell where they are.
 /// Records the answer. Safe to call on every launch.
-Future<void> maybeShowMeasurementPrompts(
+Future<bool> maybeShowMeasurementPrompts(
   BuildContext context, {
   MeasurementConsentService? service,
 }) async {
   final measurement = service ?? MeasurementConsentService.instance;
   final decision = await measurement.whenRegionSettled();
-  if (!context.mounted) return;
+  if (!context.mounted) return false;
 
   switch (decision.ask) {
     case MeasurementAsk.nothing:
-      return;
+      return false;
     case MeasurementAsk.consent:
       final answer = await showMeasurementConsentDialog(
         context,
@@ -46,9 +46,11 @@ Future<void> maybeShowMeasurementPrompts(
         analytics: answer.analytics,
         ads: answer.ads,
       );
+      return true;
     case MeasurementAsk.notice:
       final keepOn = await showMeasurementNotice(context);
       await measurement.acknowledgeNotice(keepOn: keepOn);
+      return true;
   }
 }
 

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
@@ -25,11 +27,12 @@ import 'package:voyza/utils/trip_date_validator.dart';
 import 'package:voyza/widgets/app_toast.dart';
 import 'package:voyza/core/theme.dart';
 
-/// Location card displayed inside the trip-plan bottom sheet.
+/// The place card — one widget for the map's plan sheet and the trip page.
 ///
 /// Visual structure (collapsed):
 ///   [cover thumb] [index-led title + hours + "Stay" text button + actions row]
-/// When expanded a horizontal photo strip is revealed below.
+/// When expanded a horizontal photo strip is revealed below. The action row
+/// is Done · Options · Map; the Options menu holds what the row lacks.
 class OptimizedLocationCard extends ConsumerStatefulWidget {
   final LocationModel location;
   final int number;
@@ -42,6 +45,39 @@ class OptimizedLocationCard extends ConsumerStatefulWidget {
   /// still show.
   final bool showNumber;
 
+  /// The trip this row belongs to; gating reads THAT trip's write access.
+  /// Null = the map's loose places (the map trip's access, as before).
+  final String? tripId;
+
+  /// The day the row is shown under; past days are read-only. Null with a
+  /// [tripId] = a bucket row (Unscheduled, Not visited): never past.
+  final DateTime? day;
+
+  /// Day labels; defaults to the map trip's.
+  final DayLabeler? labeler;
+
+  /// Long-press and the checkbox take part in multi-select.
+  final bool selectable;
+
+  /// Inline gallery open from the start (the trip page's habit).
+  final bool photosExpandedInitially;
+
+  /// One quiet line under the hours ("Added 5 Nov 2026, 3:12 PM").
+  final String? footnote;
+
+  /// Trailing slot in the header row (the trip page's drag handle).
+  final Widget? trailing;
+
+  /// The other stops of the same day, for the detail sheet's From / To.
+  final List<LocationModel>? siblings;
+
+  /// Replaces the map button's default (zoom the map to this stop).
+  final VoidCallback? onMapPressed;
+
+  /// Awaited before any action (opening the sheet, Done, a menu item): the
+  /// trip page makes its trip the map trip here.
+  final Future<void> Function()? beforeAction;
+
   const OptimizedLocationCard({
     super.key,
     required this.location,
@@ -50,6 +86,16 @@ class OptimizedLocationCard extends ConsumerStatefulWidget {
     required this.sheetController,
     required this.onLocationTap,
     this.showNumber = true,
+    this.tripId,
+    this.day,
+    this.labeler,
+    this.selectable = true,
+    this.photosExpandedInitially = false,
+    this.footnote,
+    this.trailing,
+    this.siblings,
+    this.onMapPressed,
+    this.beforeAction,
   });
 
   @override
@@ -58,21 +104,22 @@ class OptimizedLocationCard extends ConsumerStatefulWidget {
 }
 
 class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
-  bool _isExpanded = false;
+  late bool _isExpanded = widget.photosExpandedInitially;
 
   LocationModel get location => widget.location;
   int get number => widget.number;
 
   @override
   Widget build(BuildContext context) {
-    final pinnedLocations =
-        ref.watch(tripProvider.select((s) => s.pinnedLocations));
-    final index = pinnedLocations.indexOf(location);
-
-    final isHighlighted = ref.watch(highlightedLocationIndexProvider) == index;
-    final isSelectionMode = ref.watch(isSelectionModeProvider);
-    final isSelected = ref.watch(
-        selectedLocationsProvider.select((s) => s.contains(location.id)));
+    final isHighlighted = ref
+        .watch(highlightedLocationIdProvider.select((id) => id == location.id));
+    final selectable = widget.selectable;
+    final isSelectionMode = selectable && ref.watch(isSelectionModeProvider);
+    final isSelected = selectable &&
+        ref.watch(
+            selectedLocationsProvider.select((s) => s.contains(location.id)));
+    final hasWriteAccess = _watchWriteAccess();
+    final canEdit = hasWriteAccess && !_isPastDay();
 
     final photoRefs = location.photoReferences;
     final hasPhotos = photoRefs.isNotEmpty;
@@ -123,7 +170,9 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
             child: InkWell(
               onTap: () =>
                   _handleTap(context, ref, isSelectionMode, isSelected),
-              onLongPress: () => _handleLongPress(ref, isSelectionMode),
+              onLongPress: selectable
+                  ? () => _handleLongPress(ref, isSelectionMode)
+                  : null,
               // Stack instead of IntrinsicHeight: the bar is positioned to
               // fill the card vertically, so it naturally extends with the
               // photo gallery. IntrinsicHeight here would query the new
@@ -141,6 +190,8 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
                       isSelectionMode: isSelectionMode,
                       isSelected: isSelected,
                       accent: accent,
+                      hasWriteAccess: hasWriteAccess,
+                      canEdit: canEdit,
                     ),
                   ),
                   AnimatedSize(
@@ -165,6 +216,45 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
       ),
     );
   }
+
+  /// One bool select: this trip's write access, or the map trip's for a
+  /// loose place. Retained through reloads (`valueOrNull`), so a refresh
+  /// never blinks the controls.
+  bool _watchWriteAccess() {
+    final tripId = widget.tripId;
+    if (tripId != null) {
+      return ref.watch(
+          hasWriteAccessProvider(tripId).select((a) => a.valueOrNull ?? false));
+    }
+    return ref.watch(
+        hasActiveTripWriteAccessProvider.select((a) => a.valueOrNull ?? false));
+  }
+
+  /// The gating day: the row's own; the map's selected day for a loose
+  /// place; none (never past) for a trip's bucket row.
+  DateTime? _gateDay() {
+    if (widget.day != null) return widget.day;
+    if (widget.tripId != null) return null;
+    return ref.watch(selectedDateProvider);
+  }
+
+  bool _isPastDay() {
+    final day = _gateDay();
+    if (day == null) return false;
+    final now = DateTime.now();
+    return day.isBefore(DateTime(now.year, now.month, now.day));
+  }
+
+  /// Every action first waits for [OptimizedLocationCard.beforeAction].
+  Future<void> _run(FutureOr<void> Function() action) async {
+    final before = widget.beforeAction;
+    if (before != null) await before();
+    if (!mounted) return;
+    await action();
+  }
+
+  static bool _sameDay(DateTime a, DateTime b) =>
+      a.year == b.year && a.month == b.month && a.day == b.day;
 
   /// Hours-line text for a weekday Google lists no opening period on.
   static const String kMightBeClosedLabel = 'Might be closed on this date';
@@ -224,6 +314,8 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
     required bool isSelectionMode,
     required bool isSelected,
     required Color accent,
+    required bool hasWriteAccess,
+    required bool canEdit,
   }) {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -252,16 +344,20 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              _buildTitleBlock(context, accent),
+              _buildTitleBlock(context, accent, hasPhotos: hasPhotos),
               if (!isSelectionMode) ...[
                 const SizedBox(height: 2),
-                _buildStayButton(context),
+                _buildStayButton(context, canEdit),
                 const SizedBox(height: 6),
-                _buildActions(context, hasPhotos),
+                _buildActions(context, hasWriteAccess, canEdit),
               ],
             ],
           ),
         ),
+        if (widget.trailing != null) ...[
+          const SizedBox(width: 2),
+          widget.trailing!,
+        ],
         if (isSelectionMode) ...[
           const SizedBox(width: 4),
           _buildCheckbox(ref, isSelected),
@@ -270,10 +366,10 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
     );
   }
 
-  /// The attachment's two-button row. Labels follow this app's FUNCTIONS:
-  /// the left button expands the inline photo gallery, the right one opens
-  /// the per-stop menu that used to hide behind a three-dot icon.
-  Widget _buildActions(BuildContext context, bool hasPhotos) {
+  /// Done · Options · Map. Done is the one-tap action on the road; the
+  /// menu holds the rest; the square flies the map to this stop.
+  Widget _buildActions(
+      BuildContext context, bool hasWriteAccess, bool canEdit) {
     final theme = Theme.of(context);
     final primary = theme.colorScheme.primary;
 
@@ -288,51 +384,63 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
               theme.textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w600),
         );
 
+    final done = location.isDone;
     return Row(
       children: [
-        if (hasPhotos) ...[
-          Expanded(
-            child: FilledButton(
-              onPressed: () => setState(() => _isExpanded = !_isExpanded),
-              style: style(primary.withValues(alpha: 0.30)),
-              child: Text(
-                _isExpanded ? 'Hide' : 'Photos',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
+        Expanded(
+          child: FilledButton.icon(
+            onPressed: !hasWriteAccess
+                ? null
+                : () => _run(() {
+                      final notifier = ref.read(tripProvider.notifier);
+                      return done
+                          ? notifier.unmarkLocationsAsDone({location.id})
+                          : notifier.markLocationsAsDone({location.id});
+                    }),
+            style: style(done
+                ? theme.colorScheme.onSurface.withValues(alpha: 0.10)
+                : Colors.green.withValues(alpha: 0.22)),
+            icon: Icon(done ? Icons.undo_rounded : Icons.check_rounded,
+                size: 18,
+                color: done ? theme.colorScheme.onSurface : Colors.green),
+            label: Text(done ? 'Undo' : 'Done',
+                maxLines: 1, overflow: TextOverflow.ellipsis),
           ),
-          const SizedBox(width: 10),
-        ],
+        ),
+        const SizedBox(width: 10),
         Expanded(
           child: _buildOptionsButton(
             context,
             ref,
             style(theme.colorScheme.onSurface.withValues(alpha: 0.10)),
+            hasWriteAccess: hasWriteAccess,
+            canEdit: canEdit,
           ),
         ),
         const SizedBox(width: 10),
         // Square map button: collapses the plan sheet and flies the camera
-        // to this stop (request consumed by MapScreen).
+        // to this stop (request consumed by MapScreen); the trip page
+        // hands in its own.
         SizedBox(
           width: 44,
           child: FilledButton(
-            onPressed: () {
-              // The camera must land on a day where this stop's pin exists.
-              // If the selected day doesn't include it (and we're not in
-              // All-days view, which shows everything), jump the day strip
-              // to the stop's scheduled day first.
-              final sched = widget.location.scheduledDate;
-              if (sched != null &&
-                  !ref.read(allDaysModeProvider) &&
-                  !widget.location
-                      .isActiveOnDate(ref.read(selectedDateProvider))) {
-                ref.read(selectedDateProvider.notifier).state =
-                    DateTime(sched.year, sched.month, sched.day);
-              }
-              ref.read(mapZoomToLocationRequestProvider.notifier).state =
-                  MapZoomToLocationRequest(widget.location.coordinates);
-            },
+            onPressed: widget.onMapPressed ??
+                () {
+                  // The camera must land on a day where this stop's pin exists.
+                  // If the selected day doesn't include it (and we're not in
+                  // All-days view, which shows everything), jump the day strip
+                  // to the stop's scheduled day first.
+                  final sched = widget.location.scheduledDate;
+                  if (sched != null &&
+                      !ref.read(allDaysModeProvider) &&
+                      !widget.location
+                          .isActiveOnDate(ref.read(selectedDateProvider))) {
+                    ref.read(selectedDateProvider.notifier).state =
+                        DateTime(sched.year, sched.month, sched.day);
+                  }
+                  ref.read(mapZoomToLocationRequestProvider.notifier).state =
+                      MapZoomToLocationRequest(widget.location.coordinates);
+                },
             style: style(primary.withValues(alpha: 0.18)).copyWith(
               padding: const WidgetStatePropertyAll(EdgeInsets.zero),
             ),
@@ -343,7 +451,8 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
     );
   }
 
-  Widget _buildTitleBlock(BuildContext context, Color accent) {
+  Widget _buildTitleBlock(BuildContext context, Color accent,
+      {required bool hasPhotos}) {
     final theme = Theme.of(context);
     final mutedColor =
         theme.textTheme.bodyMedium?.color?.withValues(alpha: 0.7);
@@ -414,6 +523,24 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
               const SizedBox(width: 6),
               _buildStayChip(context),
             ],
+            if (hasPhotos) ...[
+              const SizedBox(width: 2),
+              SizedBox(
+                width: 28,
+                height: 28,
+                child: IconButton(
+                  padding: EdgeInsets.zero,
+                  visualDensity: VisualDensity.compact,
+                  tooltip: _isExpanded ? 'Hide photos' : 'Show photos',
+                  icon: AnimatedRotation(
+                    turns: _isExpanded ? 0.5 : 0,
+                    duration: const Duration(milliseconds: 200),
+                    child: const Icon(Icons.expand_more, size: 20),
+                  ),
+                  onPressed: () => setState(() => _isExpanded = !_isExpanded),
+                ),
+              ),
+            ],
           ],
         ),
         const SizedBox(height: 4),
@@ -452,6 +579,15 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
             }),
           ],
         ),
+        if (widget.footnote != null) ...[
+          const SizedBox(height: 2),
+          Text(
+            widget.footnote!,
+            style: theme.textTheme.labelSmall?.copyWith(color: mutedColor),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ],
       ],
     );
   }
@@ -460,19 +596,13 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
   /// affordance for editing how long the user plans to spend at this stop
   /// (the detail modal's old "Set Stay" button now lives here, visible at a
   /// glance in the plan list).
-  Widget _buildStayButton(BuildContext context) {
+  Widget _buildStayButton(BuildContext context, bool canEdit) {
     final theme = Theme.of(context);
-    final hasWriteAccess =
-        ref.watch(hasActiveTripWriteAccessProvider).asData?.value ?? false;
-    final selectedDate = ref.watch(selectedDateProvider);
-    final now = DateTime.now();
-    final isPastDate =
-        selectedDate.isBefore(DateTime(now.year, now.month, now.day));
-    final canEdit = hasWriteAccess && !isPastDate;
 
     return TextButton.icon(
-      onPressed:
-          canEdit ? () => showStayDurationDialog(context, ref, location) : null,
+      onPressed: canEdit
+          ? () => _run(() => showStayDurationDialog(context, ref, location))
+          : null,
       icon: const Icon(Icons.timer_outlined, size: 14),
       label: Text('Stay: ${_formatDuration(location.stayDuration)}'),
       style: TextButton.styleFrom(
@@ -487,8 +617,9 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
     );
   }
 
-  /// Day labels for the active trip ("Day N" while it has no dates).
-  DayLabeler get _labeler => ref.read(activeTripDayLabelerProvider);
+  /// Day labels for this row's trip ("Day N" while it has no dates).
+  DayLabeler get _labeler =>
+      widget.labeler ?? ref.read(activeTripDayLabelerProvider);
 
   /// Hours line when the trip has no weekday to look up: one line when
   /// every weekday shares the same periods, otherwise a nudge to set dates.
@@ -546,8 +677,8 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
     );
   }
 
-  void _handleTap(BuildContext context, WidgetRef ref, bool isSelectionMode,
-      bool isSelected) {
+  Future<void> _handleTap(BuildContext context, WidgetRef ref,
+      bool isSelectionMode, bool isSelected) async {
     if (isSelectionMode) {
       final selectedNotifier = ref.read(selectedLocationsProvider.notifier);
       if (isSelected) {
@@ -555,7 +686,10 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
       } else {
         selectedNotifier.update((state) => state.union({location.id}));
       }
-    } else {
+      return;
+    }
+    await _run(() {
+      if (!context.mounted) return;
       showModalBottomSheet(
         context: context,
         backgroundColor: Colors.transparent,
@@ -569,9 +703,11 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
           parentScrollController: widget.scrollController,
           parentSheetController: widget.sheetController,
           onLocationTap: widget.onLocationTap,
+          locationsForDate: widget.siblings,
+          tripId: widget.tripId,
         ),
       );
-    }
+    });
   }
 
   void _handleLongPress(WidgetRef ref, bool isSelectionMode) {
@@ -601,10 +737,17 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
   /// as the mockup's labeled button. [style] comes from the actions row so
   /// both buttons share one shape.
   Widget _buildOptionsButton(
-      BuildContext context, WidgetRef ref, ButtonStyle style) {
+    BuildContext context,
+    WidgetRef ref,
+    ButtonStyle style, {
+    required bool hasWriteAccess,
+    required bool canEdit,
+  }) {
     return _buildPopupMenu(
       context,
       ref,
+      hasWriteAccess: hasWriteAccess,
+      canEdit: canEdit,
       child: FilledButton(
         // The PopupMenuButton wrapper owns the gesture; this button just
         // draws and forwards the tap to it.
@@ -621,14 +764,18 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
     );
   }
 
-  Widget _buildPopupMenu(BuildContext context, WidgetRef ref, {Widget? child}) {
-    final hasWriteAccessAsync = ref.watch(hasActiveTripWriteAccessProvider);
-    final hasWriteAccess = hasWriteAccessAsync.asData?.value ?? false;
-    // "Remove from trip" only makes sense when this location is actually
-    // attached to a trip — i.e. there's an active trip in this view. When
-    // there isn't (loose locations on the map), the option is hidden.
-    final activeTrip = ref.watch(realtimeActiveTripProvider).valueOrNull;
-    final canRemoveFromTrip = activeTrip != null && hasWriteAccess;
+  Widget _buildPopupMenu(
+    BuildContext context,
+    WidgetRef ref, {
+    required bool hasWriteAccess,
+    required bool canEdit,
+    Widget? child,
+  }) {
+    // "Move to another trip" and "Remove from trip" only make sense for a
+    // place that is IN a trip; loose places on the map use the detail
+    // sheet's "Add to trip" instead.
+    final tripId = widget.tripId;
+    final canRemoveFromTrip = tripId != null && hasWriteAccess;
 
     return PopupMenuButton<String>(
       padding: EdgeInsets.zero,
@@ -647,13 +794,9 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
           );
           return;
         }
-        _handleMenuSelection(context, value, ref, activeTrip?.id);
+        _run(() => _handleMenuSelection(context, value, ref, tripId));
       },
       itemBuilder: (context) {
-        final isPastDate = ref.read(selectedDateProvider).isBefore(DateTime(
-            DateTime.now().year, DateTime.now().month, DateTime.now().day));
-        final canEdit = !isPastDate && hasWriteAccess;
-
         return [
           if (location.isSkipped)
             PopupMenuItem<String>(
@@ -676,23 +819,6 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
                       style: TextStyle(color: canEdit ? null : Colors.grey))),
             ),
           PopupMenuItem<String>(
-            value: location.isDone ? 'undone' : 'done',
-            enabled: hasWriteAccess,
-            child: ListTile(
-              leading: Icon(
-                location.isDone
-                    ? Icons.cancel_outlined
-                    : Icons.check_circle_outline,
-                color: hasWriteAccess ? Colors.green : Colors.grey,
-              ),
-              title: Text(
-                location.isDone ? 'Unmark as Done' : 'Mark as Done',
-                style: TextStyle(
-                    color: hasWriteAccess ? Colors.green : Colors.grey),
-              ),
-            ),
-          ),
-          PopupMenuItem<String>(
             value: 'move',
             enabled: canEdit,
             child: ListTile(
@@ -703,7 +829,7 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
           ),
           // Only a place that is IN a trip can move to another one; loose
           // places use "Add to trip" from the detail sheet instead.
-          if (activeTrip != null)
+          if (tripId != null)
             PopupMenuItem<String>(
               value: 'move_trip',
               enabled: hasWriteAccess,
@@ -759,10 +885,6 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
       showMoveToTripSheet(context, ref, [location]);
     } else if (value == 'copy') {
       _showMoveCopyDialog(context, ref, isCopy: true);
-    } else if (value == 'done') {
-      ref.read(tripProvider.notifier).markLocationsAsDone({location.id});
-    } else if (value == 'undone') {
-      ref.read(tripProvider.notifier).unmarkLocationsAsDone({location.id});
     } else if (value == 'remove_from_trip') {
       _showRemoveFromTripDialog(context, ref, activeTripId);
     }
@@ -825,13 +947,13 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
         context,
         days: ref.read(activeTripDayAxisProvider),
         labeler: labeler,
-        selected: ref.read(selectedDateProvider),
+        selected: widget.day ?? ref.read(selectedDateProvider),
         marked: highlightedDates,
       );
     } else {
       newDate = await DatePickerUtils.showCustomDatePicker(
         context: context,
-        initialDate: ref.read(selectedDateProvider),
+        initialDate: widget.day ?? ref.read(selectedDateProvider),
         firstDate: earliestDate,
         lastDate: DateTime.now().add(const Duration(days: 365 * 5)),
         highlightedDates: highlightedDates,
@@ -860,6 +982,11 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
       // still complete.
       final tripNotifier = ref.read(tripProvider.notifier);
       final dateNotifier = ref.read(selectedDateProvider.notifier);
+      // The plan sheet follows the move to its new day; the trip page shows
+      // every day and never yanks the map's day. Decided now: the card may
+      // be gone by the time the write lands.
+      final followsDay = widget.day == null ||
+          _sameDay(widget.day!, ref.read(selectedDateProvider));
       final dayKey = DateTime(newDate.year, newDate.month, newDate.day);
       // Shared same-day duplicate rule: the place may repeat across days,
       // never within one day. COPY keeps the source row as an occupant
@@ -903,7 +1030,7 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
         await tripNotifier.updateMultipleLocationsScheduledDate(
             selectedIds, newDate);
       }
-      dateNotifier.state = newDate;
+      if (followsDay) dateNotifier.state = newDate;
     }
   }
 
@@ -912,7 +1039,7 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
     // one of its days: deleting must NOT wipe the whole span. Offer
     // "remove from this day" (shrinks/splits the range) as the primary
     // action, with delete-everywhere as the explicit destructive choice.
-    final selectedDate = ref.read(selectedDateProvider);
+    final DateTime selectedDate = widget.day ?? ref.read(selectedDateProvider);
     final day =
         DateTime(selectedDate.year, selectedDate.month, selectedDate.day);
     // Unscheduled rows have no span; a plain delete is the only option.

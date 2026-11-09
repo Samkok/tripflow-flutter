@@ -5,7 +5,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:voyza/main.dart' show navigatorKey;
 
 import '../providers/subscription_provider.dart';
-import '../screens/paywall_screen.dart';
+import '../screens/paywall_screen.dart' show paywallVisibleProvider;
+import '../screens/subscription_management_screen.dart';
+import '../utils/pro_status_copy.dart';
 
 /// Session-scoped dismissal flag for the top-of-app countdown banner.
 /// Resets on app launch — the always-visible source of truth lives on the
@@ -71,22 +73,6 @@ class _TrialBannerView extends StatelessWidget {
 
   const _TrialBannerView({required this.remaining, required this.onDismiss});
 
-  String _format(Duration d) {
-    final days = d.inDays;
-    if (days >= 1) {
-      final hours = d.inHours.remainder(24);
-      return hours > 0
-          ? '$days day${days == 1 ? '' : 's'}, $hours hr left'
-          : '$days day${days == 1 ? '' : 's'} left';
-    }
-    if (d.inHours >= 1) {
-      final hours = d.inHours;
-      return '$hours hour${hours == 1 ? '' : 's'} left';
-    }
-    final minutes = d.inMinutes;
-    return '$minutes min${minutes == 1 ? '' : 's'} left';
-  }
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -99,10 +85,11 @@ class _TrialBannerView extends StatelessWidget {
       child: SafeArea(
         bottom: false,
         child: InkWell(
-          onTap: () {
-            final ctx = navigatorKey.currentContext;
-            if (ctx != null) showPaywall(ctx);
-          },
+          // The subscription screen, not the paywall: this is a status
+          // surface, and that screen holds the trial's facts and actions.
+          onTap: () => navigatorKey.currentState?.push(MaterialPageRoute<void>(
+            builder: (_) => const SubscriptionManagementScreen(),
+          )),
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             decoration: BoxDecoration(
@@ -131,7 +118,7 @@ class _TrialBannerView extends StatelessWidget {
                           ),
                         ),
                         TextSpan(
-                          text: _format(remaining),
+                          text: formatRemaining(remaining),
                           style: theme.textTheme.bodyMedium?.copyWith(
                             color: accent,
                             fontWeight: FontWeight.w600,

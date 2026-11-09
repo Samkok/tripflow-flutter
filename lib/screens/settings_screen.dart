@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
@@ -26,18 +24,16 @@ import '../providers/trip_collaborator_provider.dart';
 import '../providers/user_trip_provider.dart';
 import '../providers/trip_provider.dart';
 import '../providers/subscription_provider.dart';
-import '../screens/paywall_screen.dart';
 import '../widgets/email_verify_banner.dart';
 import '../widgets/logout_confirmation_dialog.dart';
 import '../widgets/delete_account_dialog.dart';
-import '../widgets/pro_feature_gate.dart';
+import '../widgets/pro_status_row.dart';
 import 'change_email_screen.dart';
 import 'login_screen.dart';
 import 'profile_screen.dart';
 import 'referral_screen.dart';
 import 'security_screen.dart';
 import 'signup_screen.dart';
-import 'subscription_management_screen.dart';
 
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
@@ -45,7 +41,6 @@ class SettingsScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final themeMode = ref.watch(themeProvider);
-    final subscriptionState = ref.watch(subscriptionProvider);
 
     return Stack(
       children: [
@@ -70,10 +65,8 @@ class SettingsScreen extends ConsumerWidget {
           body: ListView(
             padding: const EdgeInsets.all(16.0),
             children: [
-              // Pro upgrade banner for non-Pro users
-              !subscriptionState.isPro
-                  ? const ProUpgradeBanner()
-                  : const SizedBox.shrink(),
+              // The one subscription surface: free, trial or Pro, one row.
+              const ProStatusRow(),
               const SizedBox(height: 16),
 
               // Profile Section
@@ -91,19 +84,6 @@ class SettingsScreen extends ConsumerWidget {
                 _buildInviteFriendsTile(context, ref),
                 const SizedBox(height: 24),
               ],
-
-              // Free Trial Section — visible only while a native intro free
-              // trial is active (RevenueCat reports periodType == trial).
-              if (ref.watch(isInTrialProvider)) ...[
-                _buildSectionHeader(context, 'Free Trial'),
-                const _TrialStatusTile(),
-                const SizedBox(height: 24),
-              ],
-
-              // Subscription Section
-              _buildSectionHeader(context, 'Subscription'),
-              _buildSubscriptionTile(context, ref),
-              const SizedBox(height: 24),
 
               // Security Section (only for signed-in users)
               if (ref.watch(currentUserProvider) != null) ...[
@@ -358,7 +338,6 @@ class SettingsScreen extends ConsumerWidget {
                     // doesn't re-render stale trip/location data.
                     ref.invalidate(sharedTripsProvider);
                     ref.invalidate(userTripsProvider);
-                    ref.invalidate(activeTripsProvider);
                     ref.invalidate(tripProvider);
 
                     // Kick off subscription reinit in parallel — it
@@ -415,65 +394,6 @@ class SettingsScreen extends ConsumerWidget {
         onChanged: (value) {
           ref.read(themeProvider.notifier).toggleTheme();
         },
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(20),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildSubscriptionTile(BuildContext context, WidgetRef ref) {
-    final isPro = ref.watch(isProProvider);
-
-    return Container(
-      decoration: BoxDecoration(
-        color: Theme.of(context).cardColor.withValues(alpha: 0.55),
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.05),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: ListTile(
-        onTap: () async {
-          // Navigate to subscription management and wait for return
-          await navigateToSubscriptionManagement(context);
-
-          // Refresh subscription state when user returns
-          if (context.mounted) {
-            debugPrint(
-                'SettingsScreen: User returned, refreshing subscription state');
-            await ref.read(subscriptionProvider.notifier).refresh();
-            debugPrint(
-                'SettingsScreen: Current isPro state: ${ref.read(isProProvider)}');
-          }
-        },
-        leading: Container(
-          padding: const EdgeInsets.all(8),
-          decoration: BoxDecoration(
-            color: isPro
-                ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.1)
-                : Theme.of(context)
-                    .colorScheme
-                    .secondary
-                    .withValues(alpha: 0.1),
-            borderRadius: BorderRadius.circular(10),
-          ),
-          child: Icon(
-            isPro ? Icons.star_rounded : Icons.star_outline_rounded,
-            color: isPro
-                ? Theme.of(context).colorScheme.primary
-                : Theme.of(context).colorScheme.secondary,
-          ),
-        ),
-        title: Text(isPro ? 'VoyZa Pro' : 'Upgrade to Pro'),
-        subtitle: Text(
-          isPro ? 'Manage your subscription' : 'Unlock all premium features',
-        ),
-        trailing: const Icon(Icons.arrow_forward_ios, size: 16),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(20),
         ),
@@ -1311,162 +1231,6 @@ class _IncludeCurrentInFitTile extends ConsumerWidget {
         value: value,
         onChanged: (v) => ref.read(includeCurrentInFitProvider.notifier).set(v),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-      ),
-    );
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Trial status tile — countdown card for the settings page. Visible only
-// while the user is in the store-managed introductory free trial; outside
-// that window the entire "Free Trial" section is hidden by the parent.
-// ---------------------------------------------------------------------------
-
-class _TrialStatusTile extends ConsumerStatefulWidget {
-  const _TrialStatusTile();
-
-  @override
-  ConsumerState<_TrialStatusTile> createState() => _TrialStatusTileState();
-}
-
-class _TrialStatusTileState extends ConsumerState<_TrialStatusTile> {
-  Timer? _ticker;
-
-  @override
-  void initState() {
-    super.initState();
-    // Re-render once a minute so the "X hours left" copy stays accurate
-    // without depending on provider invalidation.
-    _ticker = Timer.periodic(const Duration(minutes: 1), (_) {
-      if (mounted) setState(() {});
-    });
-  }
-
-  @override
-  void dispose() {
-    _ticker?.cancel();
-    super.dispose();
-  }
-
-  String _format(Duration d) {
-    final days = d.inDays;
-    if (days >= 1) {
-      final hours = d.inHours.remainder(24);
-      return hours > 0
-          ? '$days day${days == 1 ? '' : 's'}, $hours hr left'
-          : '$days day${days == 1 ? '' : 's'} left';
-    }
-    if (d.inHours >= 1) {
-      final hours = d.inHours;
-      return '$hours hour${hours == 1 ? '' : 's'} left';
-    }
-    final minutes = d.inMinutes;
-    return '$minutes min${minutes == 1 ? '' : 's'} left';
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final entitlement = ref.watch(activeTrialEntitlementProvider);
-
-    // Parent's `if (isInTrialProvider)` guard usually prevents this, but
-    // keep the defensive null-return in case state flips between frames.
-    if (entitlement == null) return const SizedBox.shrink();
-    final expiresAt = DateTime.tryParse(entitlement.expirationDate ?? '');
-    if (expiresAt == null) return const SizedBox.shrink();
-    final remaining = expiresAt.difference(DateTime.now());
-    if (remaining <= Duration.zero) return const SizedBox.shrink();
-
-    final isUrgent = remaining < const Duration(hours: 24);
-    final accent =
-        isUrgent ? theme.colorScheme.error : theme.colorScheme.primary;
-    final progress = 1 -
-        (remaining.inSeconds / const Duration(days: 3).inSeconds)
-            .clamp(0.0, 1.0);
-
-    return Container(
-      decoration: BoxDecoration(
-        color: theme.cardColor,
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.05),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      padding: const EdgeInsets.all(20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: accent.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Icon(
-                  isUrgent ? Icons.access_time_filled : Icons.access_time,
-                  color: accent,
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Free trial active',
-                      style: theme.textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      _format(remaining),
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                        color: accent,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(8),
-            child: LinearProgressIndicator(
-              value: progress,
-              minHeight: 6,
-              backgroundColor: accent.withValues(alpha: 0.15),
-              valueColor: AlwaysStoppedAnimation<Color>(accent),
-            ),
-          ),
-          const SizedBox(height: 16),
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton(
-              onPressed: () => showPaywall(context),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: accent,
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                padding: const EdgeInsets.symmetric(vertical: 12),
-              ),
-              child: const Text(
-                'Manage subscription',
-                style: TextStyle(fontWeight: FontWeight.w600),
-              ),
-            ),
-          ),
-        ],
       ),
     );
   }

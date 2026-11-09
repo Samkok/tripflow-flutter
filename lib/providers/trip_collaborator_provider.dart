@@ -5,6 +5,7 @@ import '../models/trip_collaborator.dart';
 import '../repositories/trip_collaborator_repository.dart';
 import '../services/collaborator_realtime_service.dart';
 import '../services/supabase_service.dart';
+import 'connectivity_provider.dart';
 import 'trip_listener_provider.dart';
 import 'local_active_trip_provider.dart';
 import 'auth_provider.dart';
@@ -280,29 +281,72 @@ final hasWriteAccessProvider =
 ///
 /// CRITICAL: This is a FutureProvider that re-fetches permissions on every change
 /// to ensure permissions are always up-to-date, preventing RLS bypass issues
+///
+/// A check that FAILS (offline, timeout, a transient 5xx) is unknown, not a
+/// denial: the previous answer for this trip stands, failing that the
+/// ownership the trip row itself states, and the check is re-asked when the
+/// network returns and once more after a pause. A denial locked every
+/// write control of a shared trip until the next cold start.
 final hasActiveTripWriteAccessProvider = FutureProvider<bool>((ref) async {
   // Watch refresh counter to trigger rebuild on permission changes
   ref.watch(_collaboratorRefreshCounterProvider);
 
   final activeTripAsync = ref.watch(realtimeActiveTripProvider);
+  final activeTrip = activeTripAsync.valueOrNull;
+  final previous = _lastActiveTripWriteAnswer;
+  final remembered = previous != null && previous.tripId == activeTrip?.id
+      ? previous.answer
+      : null;
 
   // RETAIN through reloads: `when(loading:)` resolved to false on every
   // realtimeActiveTripProvider reload (which every add/remove-day
   // invalidation triggers), momentarily hiding write-gated controls — the
   // half-reload flicker on the very button just pressed. Only a true first
   // load (no previous value) denies access defensively.
-  if (activeTripAsync.hasError) return false;
-  if (activeTripAsync.isLoading && !activeTripAsync.hasValue) return false;
-  final activeTrip = activeTripAsync.valueOrNull;
+  if (activeTripAsync.hasError) return remembered ?? false;
+  if (activeTripAsync.isLoading && !activeTripAsync.hasValue) {
+    return remembered ?? false;
+  }
   if (activeTrip == null) {
     // No active trip - user can edit their own non-trip locations
     return true;
   }
 
-  // Fetch the LATEST write access for the active trip
-  // This ensures we always have fresh permission data from Supabase
-  return await ref.watch(hasWriteAccessProvider(activeTrip.id).future);
+  try {
+    // Fetch the LATEST write access for the active trip
+    // This ensures we always have fresh permission data from Supabase
+    final answer =
+        await ref.watch(hasWriteAccessProvider(activeTrip.id).future);
+    _lastActiveTripWriteAnswer = (tripId: activeTrip.id, answer: answer);
+    return answer;
+  } catch (e) {
+    debugPrint('hasActiveTripWriteAccessProvider: check failed, keeping the '
+        'last answer: $e');
+    final owned = activeTrip.userId == ref.read(currentUserIdProvider);
+    _retryWriteAccessWhenPossible(ref, activeTrip.id);
+    return remembered ?? owned;
+  }
 });
+
+/// The last successful answer, per trip, for the fallback above.
+({String tripId, bool answer})? _lastActiveTripWriteAnswer;
+
+/// Re-asks the write check once the network is back, and once more after a
+/// pause in case nothing flaps. Both hooks die with the provider instance.
+void _retryWriteAccessWhenPossible(Ref ref, String tripId) {
+  final sub =
+      ref.listen<ConnectivityStatus>(connectivityProvider, (prev, next) {
+    if (next == ConnectivityStatus.isConnected && prev != next) {
+      ref.invalidate(hasWriteAccessProvider(tripId));
+    }
+  });
+  final timer = Timer(const Duration(seconds: 15),
+      () => ref.invalidate(hasWriteAccessProvider(tripId)));
+  ref.onDispose(() {
+    sub.close();
+    timer.cancel();
+  });
+}
 
 /// Provider to check if user is still a collaborator on the active trip
 /// Used to detect when user has been removed and should deactivate the trip

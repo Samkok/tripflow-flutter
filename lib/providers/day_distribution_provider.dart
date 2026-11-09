@@ -84,3 +84,20 @@ final autoPlanProvider =
 final clusterLabelProvider =
     FutureProvider.family<String?, ({double lat, double lng})>(
         (ref, c) => CityLabelService.instance.labelFor(c.lat, c.lng));
+
+/// The trip plainly needs planning: places still in the Unscheduled
+/// bucket, or a day with clearly too many stops. One copy of the rule; the
+/// Plan button and the trip page's planning action both show the dot.
+final tripNeedsPlanAttentionProvider = Provider<bool>((ref) {
+  if (ref.watch(unscheduledCountProvider) > 0) return true;
+  return ref.watch(tripProvider.select((s) {
+    final perDay = <DateTime, int>{};
+    for (final l in s.pinnedLocations) {
+      final d = l.scheduledDate;
+      if (d == null) continue;
+      final k = DateTime(d.year, d.month, d.day);
+      perDay[k] = (perDay[k] ?? 0) + 1;
+    }
+    return perDay.values.any((c) => c > 12); // clearly too many
+  }));
+});

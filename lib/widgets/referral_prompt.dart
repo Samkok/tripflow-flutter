@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../providers/auth_provider.dart';
 import '../providers/referral_provider.dart';
 import '../services/analytics_service.dart';
 import '../services/referral_service.dart';
@@ -88,92 +87,4 @@ Future<void> showReferralAfterPurchase(
       );
     },
   );
-}
-
-/// Persistent, dismissible "invite friends" card for the Trips home.
-/// Self-suppresses for signed-out users and for advocates (already shared,
-/// or already have referrals) so it never nags.
-class ReferralHomeBanner extends ConsumerWidget {
-  const ReferralHomeBanner({super.key});
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    if (ref.watch(currentUserIdProvider) == null) {
-      return const SizedBox.shrink();
-    }
-    if (ref.watch(referralBannerDismissedProvider)) {
-      return const SizedBox.shrink();
-    }
-    // Advocates: already shared, or already have at least one referral.
-    if (ref.watch(referralHasSharedProvider).asData?.value == true) {
-      return const SizedBox.shrink();
-    }
-    if ((ref.watch(myReferralsProvider).asData?.value ?? const []).isNotEmpty) {
-      return const SizedBox.shrink();
-    }
-
-    final theme = Theme.of(context);
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-      child: Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            colors: [
-              theme.colorScheme.primary.withValues(alpha: 0.14),
-              theme.colorScheme.secondary.withValues(alpha: 0.14),
-            ],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          ),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-              color: theme.colorScheme.primary.withValues(alpha: 0.25)),
-        ),
-        child: Material(
-          color: Colors.transparent,
-          child: InkWell(
-            borderRadius: BorderRadius.circular(16),
-            onTap: () => inviteFriends(context, ref, source: 'home_banner'),
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(14, 12, 6, 12),
-              child: Row(
-                children: [
-                  Text('🎁', style: TextStyle(fontSize: 24)),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Give a month, get a month',
-                          style: theme.textTheme.titleSmall
-                              ?.copyWith(fontWeight: FontWeight.w700),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          'They get a month free today — yours unlocks '
-                          'when they go Pro.',
-                          style: theme.textTheme.bodySmall?.copyWith(
-                              color: theme.colorScheme.onSurfaceVariant),
-                        ),
-                      ],
-                    ),
-                  ),
-                  IconButton(
-                    tooltip: 'Dismiss',
-                    icon: Icon(Icons.close,
-                        size: 18, color: theme.colorScheme.onSurfaceVariant),
-                    visualDensity: VisualDensity.compact,
-                    onPressed: () => ref
-                        .read(referralBannerDismissedProvider.notifier)
-                        .state = true,
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
 }

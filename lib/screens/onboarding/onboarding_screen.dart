@@ -12,7 +12,6 @@ import '../../services/subscription_limit_service.dart';
 import '../../utils/countries.dart';
 import '../../widgets/country_picker_sheet.dart';
 import '../../widgets/rotating_globe_background.dart';
-import '../signup_screen.dart';
 
 /// One-time first-run onboarding: two quick questions (traveler type, next
 /// destination) + a "how VoyZa works" page that funnels straight into
@@ -23,40 +22,32 @@ import '../signup_screen.dart';
 /// inside [maybeShowOnboarding], safe to fire-and-forget post-frame.
 bool _onboardingInFlight = false;
 
-Future<void> maybeShowOnboarding(BuildContext context, WidgetRef ref) async {
-  if (_onboardingInFlight) return;
+Future<bool> maybeShowOnboarding(BuildContext context, WidgetRef ref) async {
+  if (_onboardingInFlight) return false;
   _onboardingInFlight = true;
   try {
     final service = OnboardingService.instance;
     final authUserId = ref.read(currentUserIdProvider);
     final anonId = await AnonymousUserService.id;
 
-    // ── Anonymous: onboard on the device identity. No trips to check
-    // (anonymous users can't create trips) and no sample-trip CTA (it
-    // requires login) — the flow funnels them to the map instead.
+    // ── Anonymous: onboard on the device identity. Guests create trips
+    // like everyone else; the account comes later, from the "Save your
+    // trips" card on the trips list once there is something to save.
     if (authUserId == null) {
-      if (!await service.shouldShowOnboarding(anonId)) return;
-      if (!context.mounted) return;
+      if (!await service.shouldShowOnboarding(anonId)) return false;
+      if (!context.mounted) return false;
       await Navigator.of(context).push(
         MaterialPageRoute(
           fullscreenDialog: true,
           builder: (_) => OnboardingScreen(userId: anonId, isAnonymous: true),
         ),
       );
-      // Fresh install, no account: offer sign-up straight after onboarding —
-      // it's the moment intent is highest, and an account is what unlocks
-      // trips + sync. Its "Continue as guest" button drops them on the map
-      // instead, so this is an offer, not a wall.
-      if (!context.mounted) return;
-      await Navigator.of(context).push(
-        MaterialPageRoute(builder: (_) => const SignupScreen()),
-      );
-      return;
+      return true;
     }
 
     // ── Authenticated.
     final userId = authUserId;
-    if (!await service.shouldShowOnboarding(userId)) return;
+    if (!await service.shouldShowOnboarding(userId)) return false;
 
     // Zero-trips check. On timeout/error do nothing — never block the app;
     // we'll simply try again next session.
@@ -66,7 +57,7 @@ Future<void> maybeShowOnboarding(BuildContext context, WidgetRef ref) async {
           .read(userTripsProvider.future)
           .timeout(const Duration(seconds: 5));
     } catch (_) {
-      return;
+      return false;
     }
 
     // Seed flags before any onboarding decision. hasTrips suppresses
@@ -81,26 +72,27 @@ Future<void> maybeShowOnboarding(BuildContext context, WidgetRef ref) async {
       hasTrips: trips.isNotEmpty,
       lifetimeOptimizes: optimizes,
     );
-    if (trips.isNotEmpty) return; // existing user — onboarding suppressed
+    if (trips.isNotEmpty) return false; // existing user — onboarding suppressed
 
     // A device that already onboarded ANONYMOUSLY shouldn't repeat the
     // questions right after signup — carry the completion over.
     if (!await service.shouldShowOnboarding(anonId)) {
       await service.markOnboardingSuppressed(userId, 'auto_from_anonymous');
-      return;
+      return false;
     }
 
     // Re-check: seeding a trip-less user does NOT set onboarding_done, so
     // this only guards against a concurrent completion elsewhere.
-    if (!await service.shouldShowOnboarding(userId)) return;
+    if (!await service.shouldShowOnboarding(userId)) return false;
 
-    if (!context.mounted) return;
+    if (!context.mounted) return false;
     await Navigator.of(context).push(
       MaterialPageRoute(
         fullscreenDialog: true,
         builder: (_) => OnboardingScreen(userId: userId),
       ),
     );
+    return true;
   } finally {
     _onboardingInFlight = false;
   }
@@ -195,15 +187,9 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     _finishing = true;
     await _complete();
     AnalyticsService.instance.onboardingCta('plan');
-    if (widget.isAnonymous) {
-      // No trip form without an account — land them on the map where the
-      // search bar is, ready to add their first place.
-      ref.read(mainTabRequestProvider.notifier).state = 1; // Map tab
-    } else {
-      // TripScreen listens and opens the create form with this country.
-      ref.read(tripFormPrefillProvider.notifier).state =
-          _destination?.code ?? '';
-    }
+    // TripScreen listens and opens the create form with this country —
+    // guests included, their trips live on the device until they sign in.
+    ref.read(tripFormPrefillProvider.notifier).state = _destination?.code ?? '';
     if (mounted) Navigator.of(context).pop();
   }
 

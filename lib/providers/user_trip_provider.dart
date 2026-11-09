@@ -1,30 +1,11 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/trip.dart';
 import '../repositories/trip_repository.dart';
-import '../services/trip_event_service.dart';
-import '../repositories/trip_repository_with_events.dart';
 import '../services/anonymous_user_service.dart';
 import 'auth_provider.dart';
 
 final tripRepositoryProvider = Provider<TripRepository>((ref) {
   return TripRepository();
-});
-
-/// Provides a singleton instance of the TripEventService.
-final tripEventServiceProvider = Provider<TripEventService>((ref) {
-  return TripEventService();
-});
-
-/// Trip repository with event emission
-/// Use this when you need trip state changes to be broadcast to subscribers
-final tripRepositoryWithEventsProvider =
-    Provider<TripRepositoryWithEvents>((ref) {
-  final repository = ref.watch(tripRepositoryProvider);
-  final eventService = ref.watch(tripEventServiceProvider);
-  return TripRepositoryWithEvents(
-    repository: repository,
-    eventService: eventService,
-  );
 });
 
 /// Get all user trips
@@ -41,20 +22,5 @@ final userTripsProvider = FutureProvider<List<Trip>>((ref) async {
     },
     loading: () => [],
     error: (_, __) => [],
-  );
-});
-
-/// Get active trip
-final activeTripsProvider = FutureProvider<Trip?>((ref) async {
-  final authState = ref.watch(authStateProvider);
-  final tripRepository = ref.watch(tripRepositoryProvider);
-
-  return authState.when(
-    data: (state) async {
-      final userId = state.session?.user.id ?? await AnonymousUserService.id;
-      return tripRepository.getActiveTrip(userId);
-    },
-    loading: () => null,
-    error: (_, __) => null,
   );
 });

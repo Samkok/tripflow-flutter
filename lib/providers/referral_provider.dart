@@ -49,10 +49,6 @@ final referralMonthsEarnedProvider = Provider<int>((ref) {
 final referralHasSharedProvider =
     FutureProvider<bool>((ref) => ReferralService.instance.hasEverShared());
 
-/// Session-scoped dismissal for the persistent home referral banner.
-/// Resets on app launch — Settings → Invite friends is the always-on entry.
-final referralBannerDismissedProvider = StateProvider<bool>((_) => false);
-
 /// Permanent bonus place slots earned from successful referrals (+2 per
 /// redemption, capped at +10 server-side). Granted by the redeem-referral
 /// edge function; this is a plain read of the profile row. Guests: 0.

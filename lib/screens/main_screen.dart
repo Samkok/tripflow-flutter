@@ -16,6 +16,8 @@ import 'package:voyza/screens/map_screen.dart';
 import 'package:voyza/screens/settings_screen.dart';
 import 'package:voyza/screens/onboarding/onboarding_screen.dart';
 import 'package:voyza/core/measurement_config.dart';
+import 'package:voyza/models/trip.dart';
+import 'package:voyza/services/first_run_coordinator.dart';
 import 'package:voyza/providers/user_trip_provider.dart';
 import 'package:voyza/widgets/analytics_consent_dialog.dart';
 import 'package:voyza/widgets/measurement_consent_dialog.dart';
@@ -76,35 +78,39 @@ class _MainScreenState extends ConsumerState<MainScreen> {
       // Ongoing trips with "carry unvisited places forward" on: move what
       // wasn't visited on past days to today (once per trip per day).
       if (mounted) unawaited(TripRolloverService.runIfDue(ref));
-      // One-time analytics consent prompt for EU/UK/CH users (no-op
-      // elsewhere). Builds with ads measurement ask about both purposes
-      // there, and show a one-time notice everywhere else.
-      if (mounted) {
-        if (MeasurementConfig.adsMeasurement) {
-          await maybeShowMeasurementPrompts(context);
+      // Who goes first — see FirstRunCoordinator. Onboarding before
+      // anything else (skipped for someone who arrived through a trip
+      // link: the copy wizard is already up). Then the consent/notice,
+      // but only once there is a trip; on an empty home it waits for the
+      // first one (the listener in build). Then, on ads builds, Apple's
+      // tracking question — never in the session that just asked consent,
+      // and never before a trip exists.
+      final firstRun = FirstRunCoordinator.instance;
+      if (mounted && !TripLinkService.instance.linkSeen) {
+        final shown = await maybeShowOnboarding(context, ref);
+        firstRun.onboardingShown = firstRun.onboardingShown || shown;
+      }
+      final hasTrip =
+          ref.read(userTripsProvider).valueOrNull?.isNotEmpty ?? false;
+      if (mounted && context.mounted) {
+        if (hasTrip) {
+          final shown = await _askConsent();
+          firstRun.consentShown = firstRun.consentShown || shown;
         } else {
-          await maybeShowAnalyticsConsent(context);
+          firstRun.consentArmedForFirstTrip = true;
         }
       }
-      // One-time first-run onboarding for fresh users with zero trips
-      // (no-op for everyone else). Sequenced AFTER consent so the two
-      // full-screen surfaces never stack. Skipped for someone who arrived
-      // through a trip link: the copy wizard is already up, and the trip
-      // they were sent is their first screen.
-      if (mounted && !TripLinkService.instance.linkSeen) {
-        await maybeShowOnboarding(context, ref);
+      if (mounted &&
+          context.mounted &&
+          FirstRunCoordinator.shouldAskTracking(
+            adsMeasurement: MeasurementConfig.adsMeasurement,
+            hasTrip: hasTrip,
+            consentShownThisSession: firstRun.consentShown,
+          )) {
+        await maybeAskTrackingPermission(context);
       }
-      // Apple's tracking question — only where ads measurement is on, and
-      // only for someone who already has a trip: never the first thing a
-      // new person sees. Asked once; a no-op on Android.
-      if (mounted && MeasurementConfig.adsMeasurement) {
-        final hasTrip =
-            ref.read(userTripsProvider).valueOrNull?.isNotEmpty ?? false;
-        if (hasTrip) await maybeAskTrackingPermission(context);
-      }
-      // Onboarding resolved (shown, skipped, or not needed) — let the map
-      // tutorial re-evaluate in case the user is already on the map tab
-      // (e.g. switched there while onboarding was up).
+      // Startup chrome resolved — let the map tutorial re-evaluate in case
+      // the user is already on the map tab.
       if (mounted) {
         ref.read(mapTutorialRecheckProvider.notifier).state++;
       }
@@ -114,6 +120,16 @@ class _MainScreenState extends ConsumerState<MainScreen> {
   /// Whether this screen has told the trip-link service it is mounted, so
   /// dispose only takes back what was given.
   bool _registeredWithTripLinks = false;
+
+  /// The one-time measurement prompt for this build: consent in the EEA,
+  /// the UK and Switzerland, a notice elsewhere (ads builds), or the
+  /// analytics opt-in (legacy builds). True when something was shown.
+  Future<bool> _askConsent() async {
+    if (MeasurementConfig.adsMeasurement) {
+      return maybeShowMeasurementPrompts(context);
+    }
+    return maybeShowAnalyticsConsent(context);
+  }
 
   @override
   void dispose() {
@@ -184,6 +200,31 @@ class _MainScreenState extends ConsumerState<MainScreen> {
     // Consumed on show so nothing re-fires on rebuild.
     ref.listen<RolloverNotice?>(rolloverNoticeProvider, (prev, next) {
       if (next != null) _showRolloverNotice(next);
+    });
+
+    // The consent/notice that startup deferred (no trip then): ~0.6 s
+    // after the trips list turns non-empty, once per session. MainScreen
+    // is always on stage, so a plain listen is safe here.
+    ref.listen<AsyncValue<List<Trip>>>(userTripsProvider, (prev, next) {
+      final firstRun = FirstRunCoordinator.instance;
+      final wasEmpty = !(prev?.valueOrNull?.isNotEmpty ?? false);
+      final isNonEmpty = next.valueOrNull?.isNotEmpty ?? false;
+      if (!FirstRunCoordinator.shouldAskConsentOnTrips(
+        armed: firstRun.consentArmedForFirstTrip,
+        wasEmpty: wasEmpty,
+        isNonEmpty: isNonEmpty,
+        alreadyAsked: firstRun.firstTripConsentAsked,
+      )) {
+        return;
+      }
+      firstRun.firstTripConsentAsked = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        Future.delayed(const Duration(milliseconds: 600), () async {
+          if (!mounted || !context.mounted) return;
+          final shown = await _askConsent();
+          firstRun.consentShown = firstRun.consentShown || shown;
+        });
+      });
     });
 
     // One-shot tab-switch requests (e.g. trip activated → jump to Map).

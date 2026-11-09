@@ -19,8 +19,6 @@ import '../services/multi_modal_router.dart';
 import '../services/places_service.dart';
 import 'trip_simulation_provider.dart' show effectiveTripStartTimeProvider;
 import '../services/analytics_service.dart';
-// import '../services/anonymous_user_service.dart'; // DISABLED with first-optimize celebration (2026-08-07)
-// import '../services/onboarding_service.dart'; // DISABLED with first-optimize celebration (2026-08-07)
 import '../services/review_prompt_service.dart';
 import '../services/storage_service.dart';
 import '../services/time_saved_ledger_service.dart';
@@ -28,7 +26,6 @@ import '../providers/debounced_settings_provider.dart';
 import '../utils/geo_utils.dart';
 import '../utils/isolate_utils.dart';
 import '../models/saved_location.dart';
-// import 'auth_provider.dart'; // DISABLED with first-optimize celebration (2026-08-07)
 import 'location_provider.dart';
 import 'trip_listener_provider.dart';
 import '../utils/same_day_place_guard.dart';
@@ -371,88 +368,20 @@ class TripNotifier extends StateNotifier<TripState> {
     });
   }
 
-  Future<void> addLocation(LocationModel location) async {
-    // Permission check at function level
-    final hasAccess = await _hasWriteAccess();
-    if (!hasAccess) {
-      debugPrint(
-          'addLocation: Permission denied - user does not have write access');
-      return;
-    }
-
-    final selectedDate = _ref.read(selectedDateProvider);
-
-    // Ensure the new location has the currently selected date if it doesn't have one.
-    final locationWithDate = location.scheduledDate == null
-        ? location.copyWith(scheduledDate: selectedDate)
-        : location;
-
-    // Note: pinnedLocations is synced from filteredLocationsForMapProvider
-    // When we add the location, the filter will automatically update
-    // So we don't update state here - it will be updated by _initSyncListener
-
-    try {
-      // Get the REALTIME active trip to associate this location with it.
-      // valueOrNull, not asData: during a provider reload (refresh, day
-      // edit) asData is null while the trip is retained — adding a place in
-      // that window would have silently saved it OUTSIDE the trip.
-      final activeTripAsync = _ref.read(realtimeActiveTripProvider);
-      final activeTrip = activeTripAsync.valueOrNull;
-
-      final savedLoc = SavedLocation(
-        id: locationWithDate.id,
-        name: locationWithDate.name,
-        lat: locationWithDate.coordinates.latitude,
-        lng: locationWithDate.coordinates.longitude,
-        createdAt: locationWithDate.addedAt,
-        scheduledDate: locationWithDate.scheduledDate,
-        stayDuration: locationWithDate.stayDuration.inSeconds,
-        isSkipped: locationWithDate.isSkipped,
-        isDone: locationWithDate.isDone,
-        isAccommodation: locationWithDate.isAccommodation,
-        tag: locationWithDate.tag,
-        placeTypes: locationWithDate.placeTypes.isEmpty
-            ? null
-            : locationWithDate.placeTypes,
-        // IMPORTANT: Set tripId if a trip is active, null if no trip is active
-        tripId: activeTrip?.id,
-        // userId and fingerprint will be handled by repository based on auth state
-        userId: '',
-        fingerprint: '',
-        photoReference: locationWithDate.photoReference,
-        photoReferences: locationWithDate.photoReferences.isEmpty
-            ? null
-            : locationWithDate.photoReferences,
-        photoAttributions: locationWithDate.photoAttributions,
-        placeId: locationWithDate.placeId,
-        originalName: locationWithDate.originalName,
-        googleOpeningHours: locationWithDate.googleOpeningHours,
-        userClosingMinuteOverride: locationWithDate.userClosingMinuteOverride,
-        hoursLastRefreshedAt: locationWithDate.hoursLastRefreshedAt,
-        scheduledEndDate: locationWithDate.scheduledEndDate,
-      );
-
-      debugPrint(
-          'addLocation: Adding location "${savedLoc.name}" with tripId=${savedLoc.tripId ?? "null (no trip)"}');
-      await _ref.read(locationRepositoryProvider).addLocation(savedLoc);
-
-      // Funnel analytics: a place was saved (drives the 3–5 "aha" threshold).
-      AnalyticsService.instance.placeAdded(state.pinnedLocations.length + 1);
-
-      // Clear optimized route when location is added
-      state = state.copyWith(
-        optimizedLocationsForSelectedDate: [],
-        isRoutePreview: false,
-        optimizedRoute: [],
-        legPolylines: [],
-        legDetails: [],
-        totalTravelTime: Duration.zero,
-        totalDistance: 0.0,
-      );
-      selectLeg(null);
-    } catch (e) {
-      log('Error saving to repository: $e');
-    }
+  /// A place was just added to (or removed from) the trip on the map: the
+  /// day's optimized route no longer describes it. Drops the route and the
+  /// leg selection at once; the pins themselves arrive through the stream.
+  void clearRouteForEdit() {
+    state = state.copyWith(
+      optimizedLocationsForSelectedDate: [],
+      isRoutePreview: false,
+      optimizedRoute: [],
+      legPolylines: [],
+      legDetails: [],
+      totalTravelTime: Duration.zero,
+      totalDistance: 0.0,
+    );
+    selectLeg(null);
   }
 
   /// Associates existing locations with a trip
@@ -2218,46 +2147,19 @@ class TripNotifier extends StateNotifier<TripState> {
       // (if all engagement/cooldown gates pass) signal the UI to run the
       // sentiment-gated review flow. The OS prompt is only ever reached after
       // the user confirms they're happy.
-      //
-      // The FIRST-ever optimize gets the one-time celebration instead (via
-      // [firstOptimizeCelebrationTrigger]); it IS that run's delight moment,
-      // so the review-prompt signal is skipped to guarantee the two dialogs
-      // can never stack. The map_screen listener owns the celebrated flag —
-      // it re-checks, defers to the timing-warnings sheet when one is due,
-      // and only marks the flag when the celebration actually shows.
       unawaited(() async {
-        var celebrationPending = false;
         if (optimizeSucceeded) {
           // Checklist step 4. If this completes the list, the notifier
-          // marks the firstOptimize milestone celebrated itself, so the
-          // generic celebration below is skipped in favor of the
-          // checklist one — never two dialogs for one optimize.
+          // celebrates that itself.
           await _ref
               .read(checklistProvider.notifier)
               .mark(ChecklistStep.optimizeRoute);
-          // FIRST-OPTIMIZE CELEBRATION DISABLED (owner request 2026-08-07).
-          // celebrationPending stays false so the review-prompt cadence
-          // below is unaffected. To revive, uncomment this block and the
-          // firstOptimizeCelebrationTrigger listener in map_screen.dart.
-          // final userId =
-          //     _ref.read(currentUserIdProvider) ?? await AnonymousUserService.id;
-          // if (!await OnboardingService.instance
-          //     .hasCelebrated(userId, OnboardingMilestone.firstOptimize)) {
-          //   celebrationPending = true;
-          //   _ref
-          //       .read(firstOptimizeCelebrationTrigger.notifier)
-          //       .update((s) => s + 1);
-          // }
         }
         await ReviewPromptService.instance.recordSuccessfulOptimize();
-        if (!celebrationPending) {
-          await _maybeSignalReviewPrompt();
-        }
+        await _maybeSignalReviewPrompt();
         // Plan Card: once EVERY day of the active trip has been optimized,
-        // the plan is "done" — the pre-trip social-currency moment. Never
-        // stacked on the first-optimize celebration (skipped this run; a
-        // later optimize re-checks and fires it).
-        if (optimizeSucceeded && !celebrationPending) {
+        // the plan is "done" — the pre-trip social-currency moment.
+        if (optimizeSucceeded) {
           await _maybeSignalPlanComplete(selectedDate);
         }
       }());
@@ -2685,13 +2587,6 @@ final zoomToFitRouteTrigger = StateProvider<int>((ref) => 0);
 /// has already passed, so the listener can show the dialog immediately.
 final reviewPromptTriggerProvider = StateProvider<int>((ref) => 0);
 
-/// Signals the UI (map screen) that a just-finished optimize is the user's
-/// FIRST ever, so it can show the one-time celebration. The listener owns
-/// the per-user "celebrated" flag: it re-checks it, defers to the
-/// timing-warnings sheet when one is due (leaving the flag unset so the
-/// next optimize celebrates instead), and marks it only on actual show.
-final firstOptimizeCelebrationTrigger = StateProvider<int>((ref) => 0);
-
 /// Bumped when the active trip's plan becomes fully optimized (every day
 /// with places has a route) — map_screen listens and shows the Plan Card
 /// dialog once per trip.
@@ -2841,4 +2736,14 @@ final datesWithLocationsProvider = Provider<Set<DateTime>>((ref) {
     }
   }
   return dates;
+});
+
+/// The id of the highlighted stop — index → id resolved once here, so a
+/// card compares one string instead of searching the pins list on every
+/// trip-state change.
+final highlightedLocationIdProvider = Provider<String?>((ref) {
+  final index = ref.watch(highlightedLocationIndexProvider);
+  if (index == null || index < 0) return null;
+  final pins = ref.watch(tripProvider.select((s) => s.pinnedLocations));
+  return index < pins.length ? pins[index].id : null;
 });

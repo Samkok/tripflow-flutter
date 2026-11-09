@@ -6,19 +6,13 @@ import '../models/trip.dart';
 import '../services/anonymous_user_service.dart';
 import '../services/onboarding_service.dart';
 import 'auth_provider.dart';
+import 'local_active_trip_provider.dart';
 
 /// The four getting-started steps, in order.
 enum ChecklistStep { createTrip, addLocations, activateTrip, optimizeRoute }
 
-/// Spotlight requests that screens fulfil (a superset of the steps:
-/// goToMap is the follow-on hint after the first activation, not a step).
-enum ChecklistGuide {
-  createTrip,
-  addLocations,
-  activateTrip,
-  goToMap,
-  optimizeRoute
-}
+/// Spotlight requests that screens fulfil, one per step.
+enum ChecklistGuide { createTrip, addLocations, activateTrip, optimizeRoute }
 
 /// Cross-screen guide bus. Set by the checklist (or a flow hook), consumed
 /// by the screen that owns the target widget. Offstage IndexedStack tabs
@@ -54,8 +48,8 @@ class ChecklistState {
   bool get isComplete => done.length == ChecklistStep.values.length;
   double get progress => done.length / ChecklistStep.values.length;
 
-  /// Steps unlock in order: 2 and 3 open once a trip exists; 4 needs an
-  /// active trip (its spotlight targets the map sheet, which only renders
+  /// Steps unlock in order: 2 and 3 open once a trip exists; 4 needs a trip
+  /// on the map (its spotlight targets the map sheet, which only renders
   /// with one). A step that's already done never needs its guide.
   bool isEnabled(ChecklistStep s) {
     if (isDone(s)) return false;
@@ -230,7 +224,10 @@ class ChecklistNotifier extends StateNotifier<ChecklistState> {
       return;
     }
     await mark(ChecklistStep.createTrip, silent: true);
-    if (trips.any((t) => t.isActive)) {
+    // Step 3 is "a trip is on the map"; the device-local map trip is the
+    // only truth for that (the server's is_active column is never written
+    // by the client any more).
+    if (_ref.read(localActiveTripIdProvider) != null) {
       await mark(ChecklistStep.activateTrip, silent: true);
     }
   }

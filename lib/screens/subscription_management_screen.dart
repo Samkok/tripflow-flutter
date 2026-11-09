@@ -1,9 +1,13 @@
+import 'dart:async';
 import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../providers/subscription_provider.dart';
+import '../services/subscription_limit_service.dart';
+import '../utils/pro_status_copy.dart';
 import '../widgets/app_toast.dart';
 import 'paywall_screen.dart';
 import 'package:voyza/widgets/rotating_globe_background.dart';
@@ -20,6 +24,23 @@ class SubscriptionManagementScreen extends ConsumerStatefulWidget {
 class _SubscriptionManagementScreenState
     extends ConsumerState<SubscriptionManagementScreen> {
   bool _isLoading = false;
+
+  /// Keeps a trial's "N hours left" honest while the screen is open.
+  Timer? _ticker;
+
+  @override
+  void initState() {
+    super.initState();
+    _ticker = Timer.periodic(const Duration(minutes: 1), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _ticker?.cancel();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -84,6 +105,14 @@ class _SubscriptionManagementScreenState
     final theme = Theme.of(context);
     final expirationAsync = ref.watch(subscriptionExpirationProvider);
     final willRenewAsync = ref.watch(willRenewProvider);
+    // The trial, when there is one: time left, how far along, and what
+    // happens at the end — sized from the real trial, not a constant.
+    final status = ref.watch(proStatusProvider);
+    final now = DateTime.now();
+    final trialLeft =
+        status.tier == ProTier.trial ? status.expiresAt?.difference(now) : null;
+    final progress = trialLeft == null ? null : trialProgress(status, now: now);
+    String fmt(DateTime d) => DateFormat('d MMM yyyy').format(d);
 
     return Container(
       padding: const EdgeInsets.all(24),
@@ -110,7 +139,11 @@ class _SubscriptionManagementScreenState
           ),
           const SizedBox(height: 16),
           Text(
-            state.isPro ? 'VoyZa Pro' : 'Free Plan',
+            trialLeft != null
+                ? 'VoyZa Pro trial'
+                : state.isPro
+                    ? 'VoyZa Pro'
+                    : 'Free Plan',
             style: theme.textTheme.headlineSmall?.copyWith(
               fontWeight: FontWeight.bold,
               color: state.isPro ? Colors.white : null,
@@ -118,9 +151,11 @@ class _SubscriptionManagementScreenState
           ),
           const SizedBox(height: 8),
           Text(
-            state.isPro
-                ? 'You have access to all premium features'
-                : 'Upgrade to unlock all features',
+            trialLeft != null
+                ? formatRemaining(trialLeft)
+                : state.isPro
+                    ? 'You have access to all premium features'
+                    : 'Upgrade to unlock all features',
             style: theme.textTheme.bodyMedium?.copyWith(
               color: state.isPro
                   ? Colors.white.withValues(alpha: 0.9)
@@ -128,7 +163,32 @@ class _SubscriptionManagementScreenState
             ),
             textAlign: TextAlign.center,
           ),
-          if (state.isPro) ...[
+          if (trialLeft != null) ...[
+            const SizedBox(height: 16),
+            if (progress != null)
+              ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: LinearProgressIndicator(
+                  value: progress,
+                  minHeight: 6,
+                  backgroundColor: Colors.white.withValues(alpha: 0.25),
+                  valueColor: const AlwaysStoppedAnimation<Color>(Colors.white),
+                ),
+              ),
+            const SizedBox(height: 12),
+            Text(
+              trialEndsSentence(
+                status,
+                freePlaces: SubscriptionLimitService.freePlaceAllowance,
+                now: now,
+                formatDate: fmt,
+              ),
+              textAlign: TextAlign.center,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: Colors.white.withValues(alpha: 0.9),
+              ),
+            ),
+          ] else if (state.isPro) ...[
             const SizedBox(height: 16),
             expirationAsync.when(
               data: (expiration) {

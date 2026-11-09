@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:voyza/main.dart' show SharedPrefsCache;
 
 class MapUIState {
   final bool isFabMenuOpen;
@@ -108,7 +109,16 @@ final mapUIStateProvider =
   return MapUIStateNotifier();
 });
 
-final showPlaceNamesProvider = StateProvider<bool>((ref) => true);
+/// Whether pins carry their names. Remembered across launches; read
+/// synchronously so the first frame is already right, and never before the
+/// prefs cache exists (a bare container in a test just gets the default).
+const _showPlaceNamesKey = 'map_show_place_names';
+final showPlaceNamesProvider = StateProvider<bool>((ref) {
+  ref.listenSelf((_, next) {
+    SharedPrefsCache.maybeInstance?.setBool(_showPlaceNamesKey, next);
+  });
+  return SharedPrefsCache.maybeInstance?.getBool(_showPlaceNamesKey) ?? true;
+});
 
 final fabMenuOpenProvider = Provider<bool>((ref) {
   return ref.watch(mapUIStateProvider.select((state) => state.isFabMenuOpen));
@@ -134,13 +144,6 @@ final selectedDateProvider = StateProvider<DateTime>((ref) {
   // Default to today at midnight to ignore time component
   return DateTime(now.year, now.month, now.day);
 });
-
-/// One-shot signal (bumped counter) that a flow just focused the map on a
-/// specific day — e.g. the trip card's "Go to map" sets [selectedDateProvider]
-/// to the trip's first day and bumps this. The trip sheet listens and flips
-/// its locations toggle back to "Selected Day", which otherwise retains
-/// whatever the user last used and made the landing look un-focused.
-final mapDayFocusRequestProvider = StateProvider<int>((ref) => 0);
 
 /// Device compass heading in degrees clockwise from north, or null when no
 /// reliable heading exists (no magnetometer, simulator, uncalibrated).

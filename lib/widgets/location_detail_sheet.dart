@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:voyza/providers/detail_sheet_ui_provider.dart';
+import 'package:voyza/widgets/stay_duration_dialog.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -74,11 +76,35 @@ class LocationDetailSheet extends ConsumerWidget {
         .pinnedLocations
         .firstWhere((l) => l.id == location.id, orElse: () => location)));
 
-    // Determine if the location is on a past date to disable editing.
+    // One access answer for the whole sheet: the row's trip when the sheet
+    // was opened for one, else the map trip's. Retained through reloads.
+    final hasWriteAccess = tripId != null
+        ? ref.watch(hasWriteAccessProvider(tripId!)
+            .select((a) => a.valueOrNull ?? false))
+        : ref.watch(hasActiveTripWriteAccessProvider
+            .select((a) => a.valueOrNull ?? false));
+
+    // The gating day: the row's own day when the sheet knows its trip (a
+    // bucket row — no day — is never past); the map's selected day for a
+    // loose place on the map.
     final selectedDate = ref.watch(selectedDateProvider);
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
-    final isPastDate = selectedDate.isBefore(today);
+    final DateTime gateDay;
+    final bool isPastDate;
+    if (tripId != null) {
+      final own = updatedLocation.scheduledDate;
+      gateDay = own ?? selectedDate;
+      isPastDate =
+          own != null && DateTime(own.year, own.month, own.day).isBefore(today);
+    } else {
+      gateDay = selectedDate;
+      isPastDate = selectedDate.isBefore(today);
+    }
+    final canEdit = hasWriteAccess && !isPastDate;
+    final detailsOpen = ref.watch(detailSheetDetailsOpenProvider);
+    final photosOpen = ref.watch(detailSheetPhotosOpenProvider);
+    final hoursOpen = ref.watch(detailSheetHoursOpenProvider);
 
     return Container(
       margin: const EdgeInsets.all(16),
@@ -111,54 +137,73 @@ class LocationDetailSheet extends ConsumerWidget {
           // showModalBottomSheet's own drag handling and dismisses the sheet
           // with the native follow-and-spring. Spans the top of the modal
           // down through the location name.
-          _buildHeader(context, ref, updatedLocation, isPastDate),
+          _buildHeader(context, ref, updatedLocation,
+              hasWriteAccess: hasWriteAccess, canEdit: canEdit),
           Flexible(
             child: SingleChildScrollView(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _buildHeaderBody(context, ref, updatedLocation, isPastDate),
+                  _buildHeaderBody(context, ref, updatedLocation),
 
-                  // Accommodation section — flag this place as the stay for a day
-                  // or the whole trip (one accommodation per day, DB-enforced).
-                  // Sits above the photos so the flag is reachable without
-                  // scrolling past the strip.
-                  // Tag — one of the fixed set; the day map paints the pin
-                  // in its colour. Chips right here so it's a one-tap edit.
-                  const Divider(height: 32),
-                  _buildTagSection(context, ref, updatedLocation),
-                  const Divider(height: 32),
-                  _buildAccommodationSection(context, ref, updatedLocation),
-
-                  // Photos section — Google Places photos for this stop. The strip is
-                  // bounded on both axes (fixed-height SizedBox hosting a horizontal
-                  // ListView), so it cannot introduce unbounded-constraint errors in
-                  // this intrinsically-sized Column. Tapping a photo opens the
-                  // full-screen swipe-to-dismiss gallery viewer.
-                  if (updatedLocation.photoReferences.isNotEmpty) ...[
-                    const Divider(height: 32),
-                    _buildPhotosSection(context, ref, updatedLocation),
-                  ],
-
-                  // Hours section — Google's hours for the planned day + user override
-                  // for the closing-time-aware optimizer. Only shown when there's
-                  // something to show (Google data, user override, or a placeId that
-                  // makes refresh actionable) so empty manual-coord rows don't get a
-                  // dead section.
-                  if (_hasAnyHoursAffordance(updatedLocation)) ...[
-                    const Divider(height: 32),
-                    _buildHoursSection(
-                        context, ref, updatedLocation, isPastDate),
-                  ],
-
-                  // Multi-day stay section — lets the user mark this location as an
-                  // accommodation that spans multiple days, with quick actions for
-                  // single-day / pick-range / entire-trip. Shown for any editable
-                  // stop (no extra gating; useful for hotels, residencies, etc.).
-                  const Divider(height: 32),
-                  _buildMultiDaySection(
-                      context, ref, updatedLocation, isPastDate),
+                  // The rest, folded: what a place IS (tag, stay, hotel,
+                  // range, floor) under one row, photos and hours under
+                  // theirs. Opened sections stay open for the session.
+                  const SizedBox(height: 8),
+                  _SectionExpander(
+                    icon: Icons.tune_rounded,
+                    title: 'Details',
+                    subtitle: _detailsSummary(updatedLocation),
+                    open: detailsOpen,
+                    onToggle: () => ref
+                        .read(detailSheetDetailsOpenProvider.notifier)
+                        .state = !detailsOpen,
+                    children: [
+                      _buildTagSection(context, ref, updatedLocation,
+                          hasWriteAccess: hasWriteAccess),
+                      const Divider(height: 28),
+                      _buildStayDurationRow(context, ref, updatedLocation,
+                          canEdit: canEdit),
+                      const Divider(height: 28),
+                      _buildAccommodationSection(context, ref, updatedLocation,
+                          hasWriteAccess: hasWriteAccess),
+                      const Divider(height: 28),
+                      _buildMultiDaySection(context, ref, updatedLocation,
+                          hasWriteAccess: hasWriteAccess,
+                          isPastDate: isPastDate),
+                      _buildFloorLine(context, ref, updatedLocation),
+                    ],
+                  ),
+                  if (updatedLocation.photoReferences.isNotEmpty)
+                    _SectionExpander(
+                      icon: Icons.photo_library_outlined,
+                      title: 'Photos',
+                      subtitle:
+                          '${updatedLocation.photoReferences.length} from Google',
+                      open: photosOpen,
+                      onToggle: () => ref
+                          .read(detailSheetPhotosOpenProvider.notifier)
+                          .state = !photosOpen,
+                      children: [
+                        _buildPhotosSection(context, ref, updatedLocation),
+                      ],
+                    ),
+                  if (_hasAnyHoursAffordance(updatedLocation))
+                    _SectionExpander(
+                      icon: Icons.schedule_rounded,
+                      title: 'Hours',
+                      open: hoursOpen,
+                      onToggle: () => ref
+                          .read(detailSheetHoursOpenProvider.notifier)
+                          .state = !hoursOpen,
+                      children: [
+                        _buildHoursSection(context, ref, updatedLocation,
+                            hasWriteAccess: hasWriteAccess,
+                            isPastDate: isPastDate,
+                            gateDay: gateDay),
+                      ],
+                    ),
 
                   // Travel info (if available)
                   if (updatedLocation.travelTimeFromPrevious != null &&
@@ -169,6 +214,11 @@ class LocationDetailSheet extends ConsumerWidget {
 
                   // Who put this place in the trip (signed-in, trip places).
                   ..._buildAddedBySection(context, ref, updatedLocation),
+
+                  const Divider(height: 32),
+                  _buildDangerZone(context, ref, updatedLocation,
+                      hasWriteAccess: hasWriteAccess, canEdit: canEdit),
+                  const SizedBox(height: 8),
                 ],
               ),
             ),
@@ -209,13 +259,9 @@ class LocationDetailSheet extends ConsumerWidget {
   /// Tag chips: the current tag is filled, the Google-type suggestion (for
   /// an untagged stop) is outlined; tapping the current tag clears it.
   Widget _buildTagSection(
-      BuildContext context, WidgetRef ref, LocationModel loc) {
+      BuildContext context, WidgetRef ref, LocationModel loc,
+      {required bool hasWriteAccess}) {
     final theme = Theme.of(context);
-    final hasWriteAccessAsync = tripId != null
-        ? ref.watch(hasWriteAccessProvider(tripId!))
-        : ref.watch(hasActiveTripWriteAccessProvider);
-    final hasWriteAccess =
-        hasWriteAccessAsync.whenOrNull(data: (v) => v) ?? false;
     final current = placeTagFromKey(loc.tag);
     final suggested = current == null ? suggestPlaceTag(loc.placeTypes) : null;
     return Column(
@@ -344,13 +390,9 @@ class LocationDetailSheet extends ConsumerWidget {
   }
 
   Widget _buildAccommodationSection(
-      BuildContext context, WidgetRef ref, LocationModel loc) {
+      BuildContext context, WidgetRef ref, LocationModel loc,
+      {required bool hasWriteAccess}) {
     final theme = Theme.of(context);
-    final hasWriteAccessAsync = tripId != null
-        ? ref.watch(hasWriteAccessProvider(tripId!))
-        : ref.watch(hasActiveTripWriteAccessProvider);
-    final hasWriteAccess =
-        hasWriteAccessAsync.whenOrNull(data: (v) => v) ?? false;
 
     String rangeLabel = '';
     if (loc.isAccommodation) {
@@ -683,16 +725,9 @@ class LocationDetailSheet extends ConsumerWidget {
     }
   }
 
-  Widget _buildHeader(BuildContext context, WidgetRef ref,
-      LocationModel updatedLocation, bool isPastDate) {
-    // Check if user has write access to the active trip
-    // OPTIMIZATION: Watch only when permission data is ready to avoid unnecessary rebuilds
-    // The widget will rebuild ONLY when permission actually changes, not on every event
-    final hasWriteAccessAsync = ref.watch(hasActiveTripWriteAccessProvider);
-    final hasWriteAccess =
-        hasWriteAccessAsync.whenOrNull(data: (value) => value) ?? false;
-
-    final canEdit = !isPastDate && hasWriteAccess;
+  Widget _buildHeader(
+      BuildContext context, WidgetRef ref, LocationModel updatedLocation,
+      {required bool hasWriteAccess, required bool canEdit}) {
     final accent = updatedLocation.isDone
         ? Colors.green.shade500
         : updatedLocation.isSkipped
@@ -705,26 +740,30 @@ class LocationDetailSheet extends ConsumerWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Action buttons — one row, each labelled. The index now leads the
-        // location name below (mirroring the trip-plan card), so the old
-        // number avatar is gone and the full width goes to the labels.
+        // The top row: what a traveller does to a place on the road. Done
+        // and Skip act at once; Route and Schedule open their small sheets.
+        // Equal widths so the four never overflow at large text scales.
         Row(
           children: [
-            // Equal-width so the three never overflow, whatever the labels
-            // become at large text scales.
             Expanded(
               child: _LabeledAction(
-                icon: Icons.delete_outline,
-                label: 'Delete',
-                color: Colors.red[600]!,
+                icon: updatedLocation.isDone ? Icons.close : Icons.check,
+                label: updatedLocation.isDone ? 'Undo' : 'Done',
+                color: updatedLocation.isDone
+                    ? Colors.grey[700]!
+                    : Colors.green[600]!,
                 enabled: hasWriteAccess,
-                onTap: () => _showDeleteConfirmationDialog(
-                    context, ref, updatedLocation),
+                onTap: () {
+                  final notifier = ref.read(tripProvider.notifier);
+                  if (updatedLocation.isDone) {
+                    notifier.unmarkLocationsAsDone({updatedLocation.id});
+                  } else {
+                    notifier.markLocationsAsDone({updatedLocation.id});
+                  }
+                },
               ),
             ),
             const SizedBox(width: 8),
-            // Skip / Unskip — a skipped stop stays pinned but drops out of
-            // the optimized route.
             Expanded(
               child: _LabeledAction(
                 icon: updatedLocation.isSkipped
@@ -748,20 +787,21 @@ class LocationDetailSheet extends ConsumerWidget {
             const SizedBox(width: 8),
             Expanded(
               child: _LabeledAction(
-                icon: updatedLocation.isDone ? Icons.close : Icons.check,
-                label: updatedLocation.isDone ? 'Undo' : 'Done',
-                color: updatedLocation.isDone
-                    ? Colors.grey[700]!
-                    : Colors.green[600]!,
-                enabled: hasWriteAccess,
-                onTap: () {
-                  final notifier = ref.read(tripProvider.notifier);
-                  if (updatedLocation.isDone) {
-                    notifier.unmarkLocationsAsDone({updatedLocation.id});
-                  } else {
-                    notifier.markLocationsAsDone({updatedLocation.id});
-                  }
-                },
+                icon: Icons.alt_route_rounded,
+                label: 'Route',
+                color: Theme.of(context).colorScheme.primary,
+                enabled: true,
+                onTap: () => _showRouteActions(context, ref, updatedLocation),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: _LabeledAction(
+                icon: Icons.calendar_today_outlined,
+                label: 'Schedule',
+                color: Theme.of(context).colorScheme.primary,
+                enabled: canEdit,
+                onTap: () => _reschedule(context, ref, updatedLocation),
               ),
             ),
           ],
@@ -850,7 +890,6 @@ class LocationDetailSheet extends ConsumerWidget {
             ),
           ],
         ),
-        _buildFloorLine(context, ref, updatedLocation),
       ],
     );
   }
@@ -903,24 +942,16 @@ class LocationDetailSheet extends ConsumerWidget {
   /// Rows whose looked-up floor was handed to the repository this run.
   static final Set<String> _floorPersisted = {};
 
-  /// Everything below the drag zone: the 2×2 action grid and the rows that
-  /// follow. Lives INSIDE the sheet's scroll view.
-  Widget _buildHeaderBody(BuildContext context, WidgetRef ref,
-      LocationModel updatedLocation, bool isPastDate) {
-    final hasWriteAccessAsync = ref.watch(hasActiveTripWriteAccessProvider);
-    final hasWriteAccess =
-        hasWriteAccessAsync.whenOrNull(data: (value) => value) ?? false;
-    final canEdit = !isPastDate && hasWriteAccess;
-
+  /// Below the drag zone, inside the scroll view: only the step that leads
+  /// for a LOOSE place (not in any trip) — adding it to one.
+  Widget _buildHeaderBody(
+      BuildContext context, WidgetRef ref, LocationModel updatedLocation) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Breathing room between the name row (up in the drag zone) and the
-        // button row.
         const SizedBox(height: 12),
         // Loose saved location (not attached to any trip): adding it to a
-        // trip is THE next step, so it leads the actions. Replaces the old
-        // map-corner "Add Locations to Trip" FAB — same AddToTripSheet
+        // trip is THE next step, so it leads the actions. Same AddToTripSheet
         // (write-access + country guard live inside), scoped to this one
         // location and preselected.
         if (updatedLocation.tripId == null) ...[
@@ -958,283 +989,294 @@ class LocationDetailSheet extends ConsumerWidget {
           ),
           const SizedBox(height: 8),
         ],
-        // Action buttons — one row: Schedule + Google Map. Name editing
-        // moved to the icon beside the name; stay duration is edited from
-        // the trip-plan card's "Stay" text button.
-        Row(
-          children: [
-            // Schedule (move this stop to another date)
-            Expanded(
-              child: OutlinedButton.icon(
-                icon: Icon(Icons.calendar_today_outlined,
-                    size: 18,
-                    color: canEdit
-                        ? Theme.of(context).colorScheme.primary
-                        : Colors.grey),
-                label: const Text('Schedule'),
-                onPressed: canEdit
-                    ? () async {
-                        final datesWithLocations =
-                            ref.read(datesWithLocationsProvider);
-                        final now = DateTime.now();
-                        final today = DateTime(now.year, now.month, now.day);
-                        final pickerTrip = _scopedTrip(ref);
-                        final lab = DayLabeler.forTrip(pickerTrip);
-                        // Past days of the trip stay pickable (logging
-                        // where you actually went).
-                        final tripStart = pickerTrip?.startDate;
-                        final firstPickable = tripStart != null &&
-                                tripStart.isBefore(today)
-                            ? DateTime(
-                                tripStart.year, tripStart.month, tripStart.day)
-                            : today;
-                        final DateTime? newDate;
-                        if (lab.tbd) {
-                          newDate = await showTripDayPicker(
-                            context,
-                            days: _effectiveTripDays(ref, pickerTrip),
-                            labeler: lab,
-                            selected: updatedLocation.scheduledDate,
-                            marked: datesWithLocations,
-                          );
-                        } else {
-                          newDate = await DatePickerUtils.showCustomDatePicker(
-                            context: context,
-                            initialDate: updatedLocation.scheduledDate ?? now,
-                            firstDate: firstPickable,
-                            lastDate: DateTime(now.year + 5),
-                            highlightedDates: datesWithLocations,
-                          );
-                        }
-                        if (newDate == null) return;
-                        final normalized =
-                            DateTime(newDate.year, newDate.month, newDate.day);
-                        final activeTrip =
-                            ref.read(realtimeActiveTripProvider).valueOrNull;
-                        if (!context.mounted) return;
-                        final allowed = await ensureScheduledDateAllowed(
-                          context,
-                          activeTrip,
-                          normalized,
-                          actionLabel: 'Save anyway',
-                        );
-                        if (!allowed) return;
-                        // The confirm dialog above awaited — the sheet may
-                        // have been popped/replaced from under it.
-                        if (!context.mounted) return;
-                        // Shared same-day duplicate rule. Occupants come
-                        // from THIS location's trip: pinned state only
-                        // covers the ACTIVE trip, and checking another
-                        // trip's day both false-blocks and false-passes.
-                        final sheetTripId = tripId;
-                        final Iterable<PlaceKey> occupants;
-                        if (sheetTripId == null) {
-                          occupants = ref
-                              .read(tripProvider)
-                              .pinnedLocations
-                              .where((l) =>
-                                  l.id != updatedLocation.id &&
-                                  l.scheduledDate != null &&
-                                  l.isActiveOnDate(normalized))
-                              .map(placeKeyOfModel);
-                        } else {
-                          occupants =
-                              (ref.read(savedLocationsProvider).valueOrNull ??
-                                      const <SavedLocation>[])
-                                  .where((l) =>
-                                      l.tripId == sheetTripId &&
-                                      l.id != updatedLocation.id &&
-                                      l.scheduledDate != null &&
-                                      l.isActiveOnDate(normalized))
-                                  .map(placeKeyOfSaved);
-                        }
-                        final dup = filterSameDayDuplicates(
-                          moving: [placeKeyOfModel(updatedLocation)],
-                          occupantsOnDay: occupants,
-                        );
-                        if (dup.allowedIds.isEmpty) {
-                          AppToast.warning(context,
-                              '"${updatedLocation.name}" is already on ${_labelerOf(ref)(normalized)}');
-                          return;
-                        }
-                        final dayWasEmpty = !ref
-                            .read(tripProvider)
-                            .pinnedLocations
-                            .any((l) => l.isActiveOnDate(normalized));
-                        await ref
-                            .read(tripProvider.notifier)
-                            .updateLocationScheduledDate(
-                                updatedLocation.id, normalized);
-                        final scoped = _scopedTrip(ref);
-                        if (dayWasEmpty && scoped != null && context.mounted) {
-                          await maybePromptAccommodationForNewDays(
-                            context,
-                            ref,
-                            trip: scoped,
-                            newDays: [normalized],
-                          );
-                        }
-                      }
-                    : null,
-                style: OutlinedButton.styleFrom(
-                  padding:
-                      const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
-                  side: BorderSide(
-                    color: canEdit
-                        ? Theme.of(context)
-                            .colorScheme
-                            .primary
-                            .withValues(alpha: 0.3)
-                        : Colors.grey.withValues(alpha: 0.3),
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(width: 8),
-            // Google Map
-            Expanded(
-              child: OutlinedButton.icon(
-                icon: Icon(Icons.map_outlined,
-                    size: 18, color: Theme.of(context).colorScheme.primary),
-                label: const Text('Google Map'),
-                onPressed: () => _openGoogleMaps(updatedLocation),
-                style: OutlinedButton.styleFrom(
-                  padding:
-                      const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
-                  side: BorderSide(
-                    color: Theme.of(context)
-                        .colorScheme
-                        .primary
-                        .withValues(alpha: 0.3),
-                  ),
-                ),
-              ),
-            ),
-          ],
+      ],
+    );
+  }
+
+  /// "Schedule": move this stop to another day of its trip (past days of
+  /// the trip stay pickable — logging where you actually went).
+  Future<void> _reschedule(BuildContext context, WidgetRef ref,
+      LocationModel updatedLocation) async {
+    final datesWithLocations = ref.read(datesWithLocationsProvider);
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final pickerTrip = _scopedTrip(ref);
+    final lab = DayLabeler.forTrip(pickerTrip);
+    // Past days of the trip stay pickable (logging
+    // where you actually went).
+    final tripStart = pickerTrip?.startDate;
+    final firstPickable = tripStart != null && tripStart.isBefore(today)
+        ? DateTime(tripStart.year, tripStart.month, tripStart.day)
+        : today;
+    final DateTime? newDate;
+    if (lab.tbd) {
+      newDate = await showTripDayPicker(
+        context,
+        days: _effectiveTripDays(ref, pickerTrip),
+        labeler: lab,
+        selected: updatedLocation.scheduledDate,
+        marked: datesWithLocations,
+      );
+    } else {
+      newDate = await DatePickerUtils.showCustomDatePicker(
+        context: context,
+        initialDate: updatedLocation.scheduledDate ?? now,
+        firstDate: firstPickable,
+        lastDate: DateTime(now.year + 5),
+        highlightedDates: datesWithLocations,
+      );
+    }
+    if (newDate == null) return;
+    final normalized = DateTime(newDate.year, newDate.month, newDate.day);
+    final activeTrip = ref.read(realtimeActiveTripProvider).valueOrNull;
+    if (!context.mounted) return;
+    final allowed = await ensureScheduledDateAllowed(
+      context,
+      activeTrip,
+      normalized,
+      actionLabel: 'Save anyway',
+    );
+    if (!allowed) return;
+    // The confirm dialog above awaited — the sheet may
+    // have been popped/replaced from under it.
+    if (!context.mounted) return;
+    // Shared same-day duplicate rule. Occupants come
+    // from THIS location's trip: pinned state only
+    // covers the ACTIVE trip, and checking another
+    // trip's day both false-blocks and false-passes.
+    final sheetTripId = tripId;
+    final Iterable<PlaceKey> occupants;
+    if (sheetTripId == null) {
+      occupants = ref
+          .read(tripProvider)
+          .pinnedLocations
+          .where((l) =>
+              l.id != updatedLocation.id &&
+              l.scheduledDate != null &&
+              l.isActiveOnDate(normalized))
+          .map(placeKeyOfModel);
+    } else {
+      occupants = (ref.read(savedLocationsProvider).valueOrNull ??
+              const <SavedLocation>[])
+          .where((l) =>
+              l.tripId == sheetTripId &&
+              l.id != updatedLocation.id &&
+              l.scheduledDate != null &&
+              l.isActiveOnDate(normalized))
+          .map(placeKeyOfSaved);
+    }
+    final dup = filterSameDayDuplicates(
+      moving: [placeKeyOfModel(updatedLocation)],
+      occupantsOnDay: occupants,
+    );
+    if (dup.allowedIds.isEmpty) {
+      AppToast.warning(context,
+          '"${updatedLocation.name}" is already on ${_labelerOf(ref)(normalized)}');
+      return;
+    }
+    final dayWasEmpty = !ref
+        .read(tripProvider)
+        .pinnedLocations
+        .any((l) => l.isActiveOnDate(normalized));
+    await ref
+        .read(tripProvider.notifier)
+        .updateLocationScheduledDate(updatedLocation.id, normalized);
+    final scoped = _scopedTrip(ref);
+    if (dayWasEmpty && scoped != null && context.mounted) {
+      await maybePromptAccommodationForNewDays(
+        context,
+        ref,
+        trip: scoped,
+        newDays: [normalized],
+      );
+    }
+  }
+
+  /// "Route": the ways to draw a leg to or from this stop, in one small
+  /// sheet — from where the device is (map context only), from or to
+  /// another stop of the day, or hand off to Google Maps.
+  Future<void> _showRouteActions(
+      BuildContext context, WidgetRef ref, LocationModel loc) {
+    final theme = Theme.of(context);
+    final List<LocationModel> siblings =
+        locationsForDate ?? ref.read(locationsForSelectedDateProvider);
+    final others = siblings.where((l) => l.id != loc.id).toList();
+    final canRoute = others.isNotEmpty;
+    return showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => Container(
+        margin: const EdgeInsets.all(12),
+        padding: const EdgeInsets.fromLTRB(8, 12, 8, 8),
+        decoration: BoxDecoration(
+          color: theme.cardColor,
+          borderRadius: BorderRadius.circular(20),
         ),
-        // Route here from wherever the user is right now, drawn IN the app
-        // (same leg engine as From/To, origin = the blue dot). Map context
-        // only: from the trip page there's no map under this sheet to draw
-        // on, and the location may belong to a trip that isn't the active
-        // one. Disabled when the device is known to be in a different
-        // country from the place — a leg from abroad is never what was
-        // meant (see [_RouteFromHereButton]).
-        if (locationsForDate == null) ...[
-          const SizedBox(height: 8),
-          _RouteFromHereButton(
-            location: updatedLocation,
-            knownCountry: _knownCountryOf(ref, updatedLocation),
-            device: ref.read(tripProvider).currentLocation,
-            onPressed: () =>
-                _previewFromCurrentLocation(context, ref, updatedLocation),
+        child: SafeArea(
+          top: false,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                child: Text('Route · ${loc.name}',
+                    style: theme.textTheme.titleMedium
+                        ?.copyWith(fontWeight: FontWeight.bold),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis),
+              ),
+              if (locationsForDate == null)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+                  child: _RouteFromHereButton(
+                    location: loc,
+                    knownCountry: _knownCountryOf(ref, loc),
+                    device: ref.read(tripProvider).currentLocation,
+                    onPressed: () {
+                      Navigator.of(ctx).pop();
+                      _previewFromCurrentLocation(context, ref, loc);
+                    },
+                  ),
+                ),
+              ListTile(
+                leading: const Icon(Icons.flag_outlined),
+                title: const Text('From here to another stop'),
+                subtitle:
+                    canRoute ? null : const Text('No other stop that day'),
+                enabled: canRoute,
+                onTap: () {
+                  Navigator.of(ctx).pop();
+                  _pickAndPreviewRoute(
+                    context: context,
+                    ref: ref,
+                    current: loc,
+                    others: others,
+                    role: _RouteEndpoint.from,
+                  );
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.place_outlined),
+                title: const Text('From another stop to here'),
+                enabled: canRoute,
+                onTap: () {
+                  Navigator.of(ctx).pop();
+                  _pickAndPreviewRoute(
+                    context: context,
+                    ref: ref,
+                    current: loc,
+                    others: others,
+                    role: _RouteEndpoint.to,
+                  );
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.map_outlined),
+                title: const Text('Open in Google Maps'),
+                onTap: () {
+                  Navigator.of(ctx).pop();
+                  _openGoogleMaps(loc);
+                },
+              ),
+            ],
           ),
-        ],
-        // Route preview row — pick another stop to use as the start ("From")
-        // or end ("To") of a single-leg route drawn on the map. Disabled
-        // when there's no other location on the selected date to pair with.
-        //
-        // `locationsForDate` (field) is set by callers outside the active-trip
-        // context (e.g. trip details screen) so the picker shows the correct
-        // sibling list rather than the active-map-trip list.
-        Builder(builder: (context) {
-          final List<LocationModel> effectiveLocations =
-              locationsForDate ?? ref.watch(locationsForSelectedDateProvider);
-          final others = effectiveLocations
-              .where((l) => l.id != updatedLocation.id)
-              .toList();
-          final canRoute = others.isNotEmpty;
-          final primary = Theme.of(context).colorScheme.primary;
-          OutlinedButton btn({
-            required IconData icon,
-            required String label,
-            required VoidCallback? onPressed,
-          }) {
-            return OutlinedButton.icon(
-              icon:
-                  Icon(icon, size: 18, color: canRoute ? primary : Colors.grey),
-              label: Text(label),
-              onPressed: onPressed,
+        ),
+      ),
+    );
+  }
+
+  /// How long the traveller plans to spend here; edited in the same dialog
+  /// the plan card's "Stay" button opens.
+  Widget _buildStayDurationRow(
+      BuildContext context, WidgetRef ref, LocationModel loc,
+      {required bool canEdit}) {
+    final theme = Theme.of(context);
+    final d = loc.stayDuration;
+    final h = d.inHours;
+    final m = d.inMinutes % 60;
+    final text = h > 0 ? '${h}h ${m}m' : '${m}m';
+    return Row(
+      children: [
+        Icon(Icons.timer_outlined,
+            size: 18, color: theme.colorScheme.onSurfaceVariant),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text('Stay · $text',
+              style: theme.textTheme.bodyMedium
+                  ?.copyWith(fontWeight: FontWeight.w600)),
+        ),
+        TextButton(
+          onPressed:
+              canEdit ? () => showStayDurationDialog(context, ref, loc) : null,
+          child: const Text('Edit'),
+        ),
+      ],
+    );
+  }
+
+  /// One line under "Details" while it is folded: the tag, the stay, the
+  /// hotel flag — so the fold hides nothing a glance needs.
+  String? _detailsSummary(LocationModel loc) {
+    final parts = <String>[];
+    final tag = placeTagFromKey(loc.tag);
+    if (tag != null) parts.add(placeTagLabel(tag, loc.placeTypes));
+    final d = loc.stayDuration;
+    parts.add(d.inHours > 0
+        ? 'Stay ${d.inHours}h ${d.inMinutes % 60}m'
+        : 'Stay ${d.inMinutes}m');
+    if (loc.isAccommodation) parts.add('Accommodation');
+    if (loc.isMultiDay) parts.add('Multi-day');
+    return parts.isEmpty ? null : parts.join(' · ');
+  }
+
+  /// The destructive actions, last: leave the trip (keeps the place), or
+  /// delete it.
+  Widget _buildDangerZone(
+      BuildContext context, WidgetRef ref, LocationModel updatedLocation,
+      {required bool hasWriteAccess, required bool canEdit}) {
+    final removable = canEdit && updatedLocation.tripId != null;
+    return Row(
+      children: [
+        if (removable) ...[
+          Expanded(
+            child: OutlinedButton.icon(
+              icon: Icon(Icons.link_off_rounded,
+                  size: 18, color: Colors.orange.shade700),
+              label: Text('Remove from trip',
+                  style: TextStyle(color: Colors.orange.shade700)),
+              onPressed: () =>
+                  _confirmRemoveFromTrip(context, ref, updatedLocation),
               style: OutlinedButton.styleFrom(
                 padding:
                     const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
                 side: BorderSide(
-                  color: canRoute
-                      ? primary.withValues(alpha: 0.3)
-                      : Colors.grey.withValues(alpha: 0.3),
-                ),
-              ),
-            );
-          }
-
-          return Padding(
-            padding: const EdgeInsets.only(top: 8),
-            child: Row(
-              children: [
-                Expanded(
-                  child: btn(
-                    icon: Icons.flag_outlined,
-                    label: 'From',
-                    onPressed: !canRoute
-                        ? null
-                        : () => _pickAndPreviewRoute(
-                              context: context,
-                              ref: ref,
-                              current: updatedLocation,
-                              others: others,
-                              role: _RouteEndpoint.from,
-                            ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: btn(
-                    icon: Icons.place_outlined,
-                    label: 'To',
-                    onPressed: !canRoute
-                        ? null
-                        : () => _pickAndPreviewRoute(
-                              context: context,
-                              ref: ref,
-                              current: updatedLocation,
-                              others: others,
-                              role: _RouteEndpoint.to,
-                            ),
-                  ),
-                ),
-              ],
-            ),
-          );
-        }),
-        // "Remove from trip" — unlinks the location from its trip (sets
-        // trip_id to null) without deleting it. Hidden when the location
-        // isn't currently in a trip. The repository write goes through
-        // directly (mirroring the delete bypass in trip details) so it
-        // works regardless of whether the location's trip is the active
-        // map trip — RLS still enforces real permissions.
-        if (canEdit && updatedLocation.tripId != null)
-          Padding(
-            padding: const EdgeInsets.only(top: 8),
-            child: SizedBox(
-              width: double.infinity,
-              child: OutlinedButton.icon(
-                icon: Icon(Icons.link_off_rounded,
-                    size: 18, color: Colors.orange.shade700),
-                label: Text(
-                  'Remove from trip',
-                  style: TextStyle(color: Colors.orange.shade700),
-                ),
-                onPressed: () =>
-                    _confirmRemoveFromTrip(context, ref, updatedLocation),
-                style: OutlinedButton.styleFrom(
-                  padding:
-                      const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
-                  side: BorderSide(
-                    color: Colors.orange.shade700.withValues(alpha: 0.4),
-                  ),
-                ),
+                    color: Colors.orange.shade700.withValues(alpha: 0.4)),
               ),
             ),
           ),
+          const SizedBox(width: 8),
+        ],
+        Expanded(
+          child: OutlinedButton.icon(
+            icon: Icon(Icons.delete_outline,
+                size: 18,
+                color: hasWriteAccess ? Colors.red[600] : Colors.grey),
+            label: Text('Delete',
+                style: TextStyle(
+                    color: hasWriteAccess ? Colors.red[600] : Colors.grey)),
+            onPressed: hasWriteAccess
+                ? () =>
+                    _showDeleteConfirmationDialog(context, ref, updatedLocation)
+                : null,
+            style: OutlinedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+              side: BorderSide(
+                  color: (hasWriteAccess ? Colors.red[600]! : Colors.grey)
+                      .withValues(alpha: 0.4)),
+            ),
+          ),
+        ),
       ],
     );
   }
@@ -1597,16 +1639,16 @@ class LocationDetailSheet extends ConsumerWidget {
   Widget _buildHoursSection(
     BuildContext context,
     WidgetRef ref,
-    LocationModel loc,
-    bool isPastDate,
-  ) {
+    LocationModel loc, {
+    required bool hasWriteAccess,
+    required bool isPastDate,
+    required DateTime gateDay,
+  }) {
     final theme = Theme.of(context);
-    final hasWriteAccessAsync = ref.watch(hasActiveTripWriteAccessProvider);
-    final hasWriteAccess =
-        hasWriteAccessAsync.whenOrNull(data: (v) => v) ?? false;
     final canEdit = !isPastDate && hasWriteAccess;
 
-    final selectedDate = ref.watch(selectedDateProvider);
+    // The row's own day (the map's selected day for a loose place).
+    final selectedDate = gateDay;
     final googleDay = _googleDayFor(selectedDate);
     // No dates yet → no weekday to look up.
     final undated = _labelerOf(ref).tbd;
@@ -1828,19 +1870,11 @@ class LocationDetailSheet extends ConsumerWidget {
   Widget _buildMultiDaySection(
     BuildContext context,
     WidgetRef ref,
-    LocationModel loc,
-    bool isPastDate,
-  ) {
+    LocationModel loc, {
+    required bool hasWriteAccess,
+    required bool isPastDate,
+  }) {
     final theme = Theme.of(context);
-    // When the sheet was opened with an explicit [tripId] (trip details
-    // screen for a non-active trip), check write access against THAT trip
-    // — otherwise the gate uses the active-trip permission and the button
-    // gets disabled for any non-active trip even when the user owns it.
-    final hasWriteAccessAsync = tripId != null
-        ? ref.watch(hasWriteAccessProvider(tripId!))
-        : ref.watch(hasActiveTripWriteAccessProvider);
-    final hasWriteAccess =
-        hasWriteAccessAsync.whenOrNull(data: (v) => v) ?? false;
     final canEdit = !isPastDate && hasWriteAccess;
 
     final start = loc.scheduledDate;
@@ -2788,6 +2822,80 @@ class _RouteEndpointPickerState extends State<_RouteEndpointPicker> {
 /// One of the three primary stop actions (Delete / Skip / Done) in the
 /// detail sheet header. Icon + word label, sized to fill an [Expanded] slot
 /// so all three stay on one row at any text scale.
+/// A folded section: one tappable row (icon, title, a one-line summary
+/// while closed, a chevron) and its content when open. Plain conditional
+/// child — no AnimatedSize in this intrinsically sized column.
+class _SectionExpander extends StatelessWidget {
+  const _SectionExpander({
+    required this.icon,
+    required this.title,
+    required this.open,
+    required this.onToggle,
+    required this.children,
+    this.subtitle,
+  });
+
+  final IconData icon;
+  final String title;
+  final String? subtitle;
+  final bool open;
+  final VoidCallback onToggle;
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        InkWell(
+          onTap: onToggle,
+          borderRadius: BorderRadius.circular(10),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 10),
+            child: Row(
+              children: [
+                Icon(icon, size: 18, color: theme.colorScheme.primary),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(title,
+                          style: theme.textTheme.titleSmall
+                              ?.copyWith(fontWeight: FontWeight.w700)),
+                      if (!open && subtitle != null)
+                        Text(subtitle!,
+                            style: theme.textTheme.bodySmall?.copyWith(
+                                color: theme.colorScheme.onSurfaceVariant),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis),
+                    ],
+                  ),
+                ),
+                AnimatedRotation(
+                  turns: open ? 0.5 : 0,
+                  duration: const Duration(milliseconds: 200),
+                  child: Icon(Icons.expand_more,
+                      color: theme.colorScheme.onSurfaceVariant),
+                ),
+              ],
+            ),
+          ),
+        ),
+        if (open)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(0, 4, 0, 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: children,
+            ),
+          ),
+      ],
+    );
+  }
+}
+
 class _LabeledAction extends StatelessWidget {
   const _LabeledAction({
     required this.icon,
@@ -2813,25 +2921,22 @@ class _LabeledAction extends StatelessWidget {
         borderRadius: BorderRadius.circular(12),
         onTap: enabled ? onTap : null,
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+          // Icon over label: four of these share one row, so side by side
+          // the labels truncated ("Sc…").
+          child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(icon, color: Colors.white, size: 18),
-              const SizedBox(width: 6),
-              // Flexible + ellipsis: a longer label ("Unskip") at a large
-              // accessibility text scale shrinks rather than overflowing.
-              Flexible(
-                child: Text(
-                  label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700,
-                  ),
+              Icon(icon, color: Colors.white, size: 20),
+              const SizedBox(height: 3),
+              Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
                 ),
               ),
             ],

@@ -58,10 +58,10 @@ class TripRepository {
   /// when LocationRepository.syncOnLogin uploads afterwards. MUST run before
   /// syncOnLogin — locations.trip_id is a foreign key onto these rows.
   ///
-  /// is_active is stripped: the account may already have an active trip, and
-  /// getActiveTrip's maybeSingle() would throw on two. The device-side
-  /// active-trip id (localActiveTripIdProvider) is untouched, so the trip
-  /// the guest was using stays selected on this device.
+  /// is_active is stripped: the column is legacy (the client never reads
+  /// it; the trip the map shows is the device-side localActiveTripIdProvider,
+  /// which is untouched here, so the trip the guest was using stays on the
+  /// map on this device).
   ///
   /// Returns how many synced. Failed rows stay local for a later retry.
   Future<int> syncLocalTripsToAccount(String newUserId) async {
@@ -256,124 +256,6 @@ class TripRepository {
           .maybeSingle();
 
       if (response == null) return null;
-      return Trip.fromJson(response);
-    } catch (e) {
-      rethrow;
-    }
-  }
-
-  /// Get active trip for a user
-  Future<Trip?> getActiveTrip(String userId) async {
-    try {
-      if (_isAnonymous) {
-        final locals = await _readLocalTrips();
-        for (final t in locals) {
-          if (t.userId == userId && t.isActive) return t;
-        }
-        return null;
-      }
-
-      final response = await _supabase
-          .from(_tableName)
-          .select()
-          .eq('user_id', userId)
-          .eq('is_active', true)
-          .maybeSingle();
-
-      if (response == null) return null;
-      return Trip.fromJson(response);
-    } catch (e) {
-      rethrow;
-    }
-  }
-
-  /// Set a trip as active (and deactivate others)
-  Future<Trip> setActiveTrip(String userId, String tripId) async {
-    try {
-      if (_isAnonymous) {
-        final now = DateTime.now().toIso8601String();
-        final locals = await _readLocalTrips();
-        Trip? activated;
-        final updated = locals.map((t) {
-          if (t.id == tripId) {
-            activated = Trip.fromJson(t.toJson()
-              ..['is_active'] = true
-              ..['status'] = 'active'
-              ..['updated_at'] = now);
-            return activated!;
-          }
-          if (t.isActive) {
-            return Trip.fromJson(t.toJson()..['is_active'] = false);
-          }
-          return t;
-        }).toList();
-        if (activated == null) {
-          throw StateError('Local trip $tripId not found');
-        }
-        await _writeLocalTrips(updated);
-        return activated!;
-      }
-
-      // Deactivate all other trips
-      await _supabase
-          .from(_tableName)
-          .update({'is_active': false})
-          .eq('user_id', userId)
-          .neq('id', tripId);
-
-      // Activate the selected trip
-      final response = await _supabase
-          .from(_tableName)
-          .update({
-            'is_active': true,
-            'status': 'active',
-            'updated_at': DateTime.now().toIso8601String(),
-          })
-          .eq('id', tripId)
-          .select()
-          .single();
-
-      return Trip.fromJson(response);
-    } catch (e) {
-      rethrow;
-    }
-  }
-
-  /// Deactivate the active trip
-  Future<Trip> deactivateTrip(String tripId) async {
-    try {
-      if (_isAnonymous) {
-        final now = DateTime.now().toIso8601String();
-        final locals = await _readLocalTrips();
-        Trip? deactivated;
-        final updated = locals.map((t) {
-          if (t.id == tripId) {
-            deactivated = Trip.fromJson(t.toJson()
-              ..['is_active'] = false
-              ..['status'] = 'planning'
-              ..['updated_at'] = now);
-            return deactivated!;
-          }
-          return t;
-        }).toList();
-        if (deactivated == null) {
-          throw StateError('Local trip $tripId not found');
-        }
-        await _writeLocalTrips(updated);
-        return deactivated!;
-      }
-
-      final response = await _supabase
-          .from(_tableName)
-          .update({
-            'is_active': false,
-            'status': 'planning',
-            'updated_at': DateTime.now().toIso8601String(),
-          })
-          .eq('id', tripId)
-          .select()
-          .single();
-
       return Trip.fromJson(response);
     } catch (e) {
       rethrow;

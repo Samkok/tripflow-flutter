@@ -16,6 +16,7 @@ import 'core/theme.dart';
 import 'providers/theme_provider.dart';
 import 'providers/onboarding_checklist_provider.dart';
 import 'providers/trip_collaborator_provider.dart';
+import 'providers/local_active_trip_provider.dart';
 import 'providers/subscription_provider.dart';
 import 'providers/auth_provider.dart';
 
@@ -67,6 +68,11 @@ class SharedPrefsCache {
 
   /// True once [_initSharedPrefs] has populated the cache.
   static bool get isReady => _instance != null;
+
+  /// Test seam: seeds the cache without running [_bootstrap], so widgets
+  /// that read prefs synchronously in `build` can be pumped in a test.
+  @visibleForTesting
+  static void debugSetInstance(SharedPreferences prefs) => _instance = prefs;
 }
 
 /// ANR-driven startup model.
@@ -401,6 +407,16 @@ class _MyAppState extends ConsumerState<MyApp> with WidgetsBindingObserver {
       // diff-fetch — members' edits and deletes land now, not at the next
       // cold start. No-op for guests.
       unawaited(_reconcileLocationsOnResume());
+      // Write access for the trip on the map may have been decided while
+      // offline; ask again now. Cold start delivers a 'resumed' before the
+      // prefs cache exists — nothing to re-ask then.
+      if (SharedPrefsCache.isReady) {
+        final mapTripId = ref.read(localActiveTripIdProvider);
+        if (mapTripId != null && ref.read(currentUserIdProvider) != null) {
+          ref.invalidate(hasWriteAccessProvider(mapTripId));
+          ref.invalidate(userTripPermissionProvider(mapTripId));
+        }
+      }
     }
   }
 

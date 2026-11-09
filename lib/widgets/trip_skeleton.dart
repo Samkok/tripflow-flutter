@@ -102,8 +102,7 @@ class _SkeletonBox extends StatelessWidget {
 /// blurring through behind a thin translucent fill.
 class _GlassCardShell extends StatelessWidget {
   final Widget child;
-  final Color? tint;
-  const _GlassCardShell({required this.child, this.tint});
+  const _GlassCardShell({required this.child});
 
   @override
   Widget build(BuildContext context) {
@@ -115,7 +114,7 @@ class _GlassCardShell extends StatelessWidget {
         child: Container(
           padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
           decoration: BoxDecoration(
-            color: tint ?? theme.cardColor.withValues(alpha: 0.4),
+            color: theme.cardColor.withValues(alpha: 0.4),
             borderRadius: BorderRadius.circular(16),
             border: Border.all(
               color: theme.dividerColor.withValues(alpha: 0.2),
@@ -167,51 +166,6 @@ class TripCardSkeleton extends StatelessWidget {
             const _SkeletonBox(width: 210, height: 12),
             const SizedBox(height: 16),
             const _SkeletonBox(height: 42, radius: 12),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// Skeleton for the "Active Trip" hero card — same frosted shell with the
-/// faint cyan tint the real active card carries.
-class ActiveTripSkeleton extends StatelessWidget {
-  const ActiveTripSkeleton({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return _Shimmer(
-      child: _GlassCardShell(
-        tint: theme.colorScheme.primary.withValues(alpha: 0.07),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const _SkeletonBox(width: 76, height: 9, radius: 4), // eyebrow
-            const SizedBox(height: 8),
-            const _SkeletonBox(width: 220, height: 20, radius: 7),
-            const SizedBox(height: 10),
-            SizedBox(
-              height: 12,
-              width: double.infinity,
-              child: CustomPaint(
-                painter: RouteSpinePainter(
-                  color: theme.colorScheme.primary.withValues(alpha: 0.30),
-                  stops: 4,
-                ),
-              ),
-            ),
-            const SizedBox(height: 10),
-            const _SkeletonBox(width: 180, height: 12),
-            const SizedBox(height: 16),
-            const Row(
-              children: [
-                Expanded(child: _SkeletonBox(height: 42, radius: 12)),
-                SizedBox(width: 8),
-                _SkeletonBox(width: 46, height: 42, radius: 12),
-              ],
-            ),
           ],
         ),
       ),

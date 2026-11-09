@@ -10,8 +10,7 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:intl/intl.dart';
 import 'package:tutorial_coach_mark/tutorial_coach_mark.dart';
 import 'package:voyza/core/theme.dart';
-import 'package:voyza/screens/location_search_screen.dart';
-// import 'package:voyza/screens/login_screen.dart'; // DISABLED with first-optimize celebration (2026-08-07)
+import '../widgets/add_place_sheet.dart';
 import 'package:voyza/widgets/static_glow.dart';
 import 'package:voyza/widgets/route_leg_sheet.dart';
 import 'package:voyza/widgets/day_legend.dart';
@@ -20,7 +19,6 @@ import 'package:voyza/providers/onboarding_checklist_provider.dart';
 import 'package:voyza/widgets/onboarding_checklist.dart';
 import 'package:voyza/widgets/review_sentiment_dialog.dart';
 import 'package:voyza/widgets/location_detail_sheet.dart';
-import 'package:uuid/uuid.dart';
 import '../models/location_model.dart';
 import '../models/trip.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -28,7 +26,6 @@ import '../services/route_share_card_service.dart';
 import '../services/trip_day_service.dart';
 import '../providers/trip_day_labeler_provider.dart';
 import '../utils/trip_dates.dart';
-import '../utils/same_day_place_guard.dart';
 import '../services/time_saved_ledger_service.dart';
 import '../utils/geo_utils.dart';
 import '../utils/marker_utils.dart';
@@ -36,40 +33,34 @@ import '../providers/location_provider.dart';
 import '../providers/optimized_map_overlay_provider.dart';
 import '../providers/pin_clock_provider.dart';
 import '../providers/trip_provider.dart';
-// import '../providers/trip_simulation_provider.dart'; // DISABLED with first-optimize celebration (2026-08-07)
 import '../providers/theme_provider.dart';
 import '../providers/all_days_route_provider.dart';
 import '../providers/map_ui_state_provider.dart';
 import '../providers/unvisited_places_provider.dart';
 import '../widgets/unvisited_preview_banner.dart';
 import '../providers/building_outline_provider.dart';
-import '../providers/debounced_settings_provider.dart';
 import '../providers/trip_collaborator_provider.dart';
 import '../providers/user_trip_provider.dart';
 import '../providers/trip_listener_provider.dart';
 import '../providers/local_active_trip_provider.dart';
+import '../widgets/map_settings_sheet.dart';
+import '../widgets/switch_trip_sheet.dart';
 import '../providers/onboarding_provider.dart';
 import '../providers/auth_provider.dart';
 import '../services/location_service.dart';
-import '../services/places_service.dart';
 import '../services/anonymous_user_service.dart';
-import '../services/location_add_service.dart';
-import '../services/subscription_limit_service.dart';
 import '../services/onboarding_service.dart';
-import '../providers/nearby_radius_provider.dart';
 import '../providers/arrival_radius_provider.dart';
 import '../providers/zoom_fit_settings_provider.dart';
 import '../utils/countries.dart';
 import '../widgets/app_toast.dart';
 import '../providers/subscription_provider.dart';
 import '../services/analytics_service.dart';
+import '../services/first_run_coordinator.dart';
 import '../widgets/celebration_dialogs.dart';
 import '../widgets/free_places_meter.dart';
-import '../widgets/auto_plan_sheet.dart';
 import '../widgets/map_tutorial.dart';
-// import '../widgets/referral_prompt.dart'; // DISABLED with first-optimize celebration (2026-08-07)
 import '../widgets/map_widget.dart';
-import '../widgets/nearby_places_picker_sheet.dart';
 import '../widgets/trip_bottom_sheet.dart';
 
 class MapScreen extends ConsumerStatefulWidget {
@@ -87,8 +78,8 @@ class _MapScreenState extends ConsumerState<MapScreen>
   bool _isTrackingLocation = false;
   int? _highlightedLocationIndex;
 
-  /// Set when [localActiveTripIdProvider] changes (activate / switch /
-  /// deactivate). The actual camera move waits until [pinnedLocations]
+  /// Set when [localActiveTripIdProvider] changes (the map trip switched
+  /// or was dropped). The actual camera move waits until [pinnedLocations]
   /// next emits, so we operate on the locations of the new trip rather
   /// than the old one (the sync listener that swaps locations is async).
   bool _pendingTripCameraMove = false;
@@ -316,6 +307,9 @@ class _MapScreenState extends ConsumerState<MapScreen>
   ///  the correct failure direction).
   Future<void> _maybeStartMapTutorial() async {
     if (_tutorialCheckInFlight || _activeTutorial != null) return;
+    // A session that opened with onboarding or the consent prompt gets no
+    // tour on top of them: next launch.
+    if (FirstRunCoordinator.instance.anyPromptShown) return;
     _tutorialCheckInFlight = true;
     try {
       if (ref.read(selectedTabIndexProvider) != 1) return;
@@ -409,6 +403,9 @@ class _MapScreenState extends ConsumerState<MapScreen>
   /// that: startup chrome (consent + onboarding + sign-up) having fully
   /// resolved, and the user tapping over to the Map tab.
   void _openLocationGate() {
+    // Same rule as the tour: no automatic location prompt in the session
+    // that showed onboarding or consent (My location still asks).
+    if (FirstRunCoordinator.instance.anyPromptShown) return;
     _locationGateOpen = true;
     // From here on the OS dialog is allowed — the map is what the user is
     // looking at, so the request finally has context.
@@ -1140,171 +1137,15 @@ class _MapScreenState extends ConsumerState<MapScreen>
       return;
     }
 
-    try {
-      final radius = ref.read(nearbyRadiusProvider).round();
-
-      AppToast.info(
-        context,
-        'Looking up places within ${_formatRadius(radius)}...',
-        duration: const Duration(seconds: 3),
-      );
-
-      List<NearbyPlace> nearby = const [];
-      String? initialError;
-      try {
-        nearby = await PlacesService.searchNearbyPlaces(
-          coordinates,
-          radiusMeters: radius,
-        );
-      } on NearbySearchException {
-        // Open the sheet anyway, in its error state: the user retries from
-        // there. A failed request used to render as "No places found".
-        initialError =
-            'Couldn\'t load nearby places — check your connection and try again.';
-      }
-      if (!mounted) return;
-      AppToast.dismiss();
-      final selectedDate = ref.read(selectedDateProvider);
-
-      // Places already on the selected day can't be added again (same-day
-      // rule, enforced in LocationAddService) — hand the picker the day's
-      // stops so it marks matching results instead of letting the user
-      // tick them and get a refusal after the fact.
-      final day = dayKey(selectedDate);
-      final occupantsOnDay = <PlaceKey>[
-        for (final l in ref.read(tripProvider).pinnedLocations)
-          if (l.scheduledDate != null && l.isActiveOnDate(day))
-            placeKeyOfModel(l),
-      ];
-
-      final picked = await showNearbyPlacesPicker(
-        context,
-        places: nearby,
-        radiusMeters: radius,
-        occupantsOnDay: occupantsOnDay,
-        initialError: initialError,
-        // Apply in the sheet: the new radius becomes the default for the
-        // next long-press, then the same spot is searched again.
-        onRequery: (r) async {
-          await ref.read(nearbyRadiusProvider.notifier).set(r.toDouble());
-          return PlacesService.searchNearbyPlaces(coordinates, radiusMeters: r);
-        },
-        // Typing in the sheet: the loaded list is capped at 20 prominent
-        // places per category, so a specific place can be missing from it
-        // even though the search bar finds it by name — ask Google for
-        // that name around the same spot.
-        onSearchText: (q, r) =>
-            PlacesService.searchNearbyByText(q, coordinates, radiusMeters: r),
-      );
-      if (picked.isEmpty || !mounted) return;
-
-      await _addNearbyPlaces(picked);
-    } catch (e) {
-      debugPrint('Error adding location from map: $e');
-      if (mounted) {
-        AppToast.error(context, 'Failed to add location. Please try again.');
-      }
-    }
-  }
-
-  /// Adds each picked nearby place to the trip. Each pick is first enriched
-  /// via [PlacesService.getPlaceDetails] so it carries the full photo list
-  /// and the parsed country code — Nearby Search alone returns only the
-  /// cover photo and no `address_components`, which is why a manual-search
-  /// add ends up with more photos than a long-press add did before.
-  ///
-  /// The strict country guard inside [LocationAddService.addLocation]
-  /// runs once per pick. Picks within the same radius are essentially
-  /// always in the same country as each other, so in practice the first
-  /// mismatch dialog (if any) covers the whole batch.
-  Future<void> _addNearbyPlaces(List<NearbyPlace> pickedAll) async {
-    // ONE allowance decision for the whole batch. Without this, every
-    // selected place past the free limit re-opened its own paywall — pick
-    // 4 places with the allowance full and 4 paywalls stacked up.
-    final allowed = await SubscriptionLimitService(ref)
-        .canAddPlaces(context, pickedAll.length);
-    if (!mounted) return;
-    if (allowed == 0) return; // paywall declined, nothing fits
-    final picked = pickedAll.take(allowed).toList();
-
-    final enriched = await Future.wait(
-      picked.map((p) => PlacesService.getPlaceDetails(p.placeId)),
-    );
-    if (!mounted) return;
-
-    final scheduledDate = ref.read(selectedDateProvider);
-    final addedLocations = <LocationModel>[];
-    for (var i = 0; i < picked.length; i++) {
-      final fallback = picked[i];
-      final details = enriched[i];
-      final resolvedName =
-          details?.name.isNotEmpty == true ? details!.name : fallback.name;
-      final location = LocationModel(
-        id: const Uuid().v4(),
-        name: resolvedName,
-        address: details?.address.isNotEmpty == true
-            ? details!.address
-            : fallback.vicinity,
-        coordinates: details?.coordinates ?? fallback.coordinates,
-        addedAt: DateTime.now(),
-        scheduledDate: scheduledDate,
-        photoReference: details?.photoReference ?? fallback.photoReference,
-        photoReferences: details?.photoReferences.isNotEmpty == true
-            ? details!.photoReferences
-            : fallback.photoReferences,
-        photoAttributions:
-            details?.photoAttributions ?? fallback.photoAttributions,
-        placeId: details?.placeId ?? fallback.placeId,
-        originalName: resolvedName,
-        googleOpeningHours: details?.openingHours,
-        hoursLastRefreshedAt:
-            details?.openingHours != null ? DateTime.now() : null,
-        // The picker showed the tag per row (suggested from Google's
-        // types, editable there) — that was the confirmation.
-        tag: fallback.tag,
-        placeTypes:
-            details?.types.isNotEmpty == true ? details!.types : fallback.types,
-        floor: details?.floor,
-      );
-      final added = await LocationAddService(ref).beforeAddingLocation(
-        context,
-        location,
-        locationCountryCode: details?.countryCode,
-        skipLimitCheck: true, // batch gate ran once above
-        tagConfirmed: true,
-      );
-      if (!mounted) return;
-      if (added) addedLocations.add(location);
-    }
-
-    // Partial batch: tell the user why the rest didn't make it.
-    if (allowed < pickedAll.length && addedLocations.isNotEmpty && mounted) {
-      AppToast.info(
-        context,
-        'Added $allowed of ${pickedAll.length} — your free allowance is '
-        '${SubscriptionLimitService.effectiveAllowanceOf(ref)} places.',
-      );
-    }
-
-    if (!mounted || addedLocations.isEmpty) return;
-
-    final count = addedLocations.length;
-    AppToast.success(
+    // The add-place sheet on its Nearby segment, looking around the
+    // pressed point; the picks go through the one add path from there.
+    showAddPlaceSheet(
       context,
-      count == 1
-          ? 'Added ${addedLocations.first.name} to your trip'
-          : 'Added $count locations to your trip',
+      trip: ref.read(realtimeActiveTripProvider).valueOrNull,
+      day: ref.read(selectedDateProvider),
+      initial: AddPlaceSegment.nearby,
+      nearbyCenter: coordinates,
     );
-
-    setState(() {
-      _highlightedLocationIndex = null;
-    });
-    ref.read(mapUIStateProvider.notifier).clearHighlights();
-  }
-
-  String _formatRadius(int meters) {
-    if (meters < 1000) return '${meters}m';
-    return '${(meters / 1000).toStringAsFixed(meters % 1000 == 0 ? 0 : 1)}km';
   }
 
   /// The camera settled: remember its centre for the leg chip (see
@@ -1380,224 +1221,6 @@ class _MapScreenState extends ConsumerState<MapScreen>
 
     // Clean up the dummy controller after use.
     dummyScrollController.dispose();
-  }
-
-  void _showProximitySliderBottomSheet() {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      builder: (context) => Consumer(
-        builder: (context, ref, child) {
-          final proximityThreshold =
-              ref.watch(proximityThresholdPreviewProvider);
-
-          return Container(
-            // Uses theme colors
-            margin: const EdgeInsets.all(16),
-            padding: const EdgeInsets.all(20),
-            decoration: BoxDecoration(
-              color: Theme.of(context).cardColor,
-              borderRadius: BorderRadius.circular(20),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.3),
-                  blurRadius: 20,
-                  offset: const Offset(0, -5),
-                ),
-              ],
-              border: Border.all(
-                color: Theme.of(context).colorScheme.primary.withOpacity(0.3),
-                width: 1,
-              ),
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Icon(
-                      Icons.tune,
-                      color: Theme.of(context).colorScheme.primary,
-                      size: 24,
-                    ),
-                    const SizedBox(width: 12),
-                    Text(
-                      'Zone Distance',
-                      style:
-                          Theme.of(context).textTheme.headlineSmall?.copyWith(
-                                color: Theme.of(context).colorScheme.primary,
-                                fontWeight: FontWeight.bold,
-                              ),
-                    ),
-                    const Spacer(),
-                    GestureDetector(
-                      onTap: () {
-                        Navigator.of(context).pop();
-                        _showManualZoneDistanceInputDialog();
-                      },
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 6),
-                        decoration: BoxDecoration(
-                          // Uses theme colors
-                          color: Theme.of(context)
-                              .colorScheme
-                              .primary
-                              .withOpacity(0.2),
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(
-                            color: Theme.of(context).colorScheme.primary,
-                            width: 1,
-                          ),
-                        ),
-                        child: Text(
-                          _formatDistance(proximityThreshold),
-                          style: Theme.of(context)
-                              .textTheme
-                              .titleMedium
-                              ?.copyWith(
-                                // Uses theme colors
-                                color: Theme.of(context).colorScheme.primary,
-                                fontWeight: FontWeight.bold,
-                              ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 20),
-                SliderTheme(
-                  data: SliderTheme.of(context).copyWith(
-                    activeTrackColor: Theme.of(context).colorScheme.primary,
-                    inactiveTrackColor:
-                        Theme.of(context).colorScheme.primary.withOpacity(0.3),
-                    thumbColor: Theme.of(context).colorScheme.primary,
-                    overlayColor:
-                        Theme.of(context).colorScheme.primary.withOpacity(0.2),
-                    trackHeight: 6,
-                    thumbShape:
-                        const RoundSliderThumbShape(enabledThumbRadius: 12),
-                  ),
-                  child: Slider(
-                    value: proximityThreshold,
-                    min: 100.0,
-                    max: 5000.0,
-                    divisions: 49,
-                    onChanged: (value) {
-                      ref
-                          .read(debouncedProximityThresholdProvider.notifier)
-                          .updatePreviewValue(value);
-                    },
-                    onChangeEnd: (value) {
-                      ref
-                          .read(debouncedProximityThresholdProvider.notifier)
-                          .setValueImmediately(value);
-                    },
-                  ),
-                ),
-                const SizedBox(height: 12),
-                Text(
-                  'Adjust how close locations need to be to form a zone. Smaller values create tighter zones, larger values group more distant locations together.',
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        // Uses theme colors
-                        fontStyle: FontStyle.italic, // Uses theme colors
-                      ),
-                ),
-                const SizedBox(height: 20),
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                    style: ElevatedButton.styleFrom(
-                      // Uses theme colors
-                      padding: const EdgeInsets.symmetric(vertical: 16),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                    ),
-                    child: const Text('Done'),
-                  ),
-                ),
-              ],
-            ),
-          );
-        },
-      ),
-    );
-  }
-
-  void _showManualZoneDistanceInputDialog() {
-    final textController = TextEditingController();
-    final currentThreshold = ref.read(proximityThresholdPreviewProvider);
-    textController.text = currentThreshold.toInt().toString();
-
-    showDialog(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          backgroundColor: Theme.of(context).cardColor, // Uses theme colors
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: const Text('Set Zone Distance'),
-          content: TextField(
-            cursorOpacityAnimates: false,
-            controller: textController,
-            autofocus: true,
-            keyboardType: const TextInputType.numberWithOptions(decimal: false),
-            decoration: InputDecoration(
-              hintText: 'Enter distance in meters', // Uses theme colors
-              filled: true,
-              fillColor: Theme.of(context).colorScheme.surface,
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: BorderSide.none,
-              ),
-            ),
-            onSubmitted: (newValue) {
-              final distance = double.tryParse(newValue);
-              if (distance != null && distance >= 100 && distance <= 5000) {
-                ref
-                    .read(debouncedProximityThresholdProvider.notifier)
-                    .setValueImmediately(distance);
-              }
-              Navigator.of(context).pop();
-            },
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: Text('Cancel',
-                  style: TextStyle(
-                      color: Theme.of(context)
-                          .textTheme
-                          .bodyMedium
-                          ?.color)), // Uses theme colors
-            ),
-            TextButton(
-              onPressed: () {
-                final distance = double.tryParse(textController.text);
-                if (distance != null && distance >= 100 && distance <= 5000) {
-                  ref
-                      .read(debouncedProximityThresholdProvider.notifier)
-                      .setValueImmediately(distance);
-                }
-                Navigator.of(context).pop();
-              },
-              style: TextButton.styleFrom(
-                  backgroundColor: Theme.of(context)
-                      .colorScheme
-                      .primary), // Uses theme colors
-              child: const Text(
-                'Set', // Uses theme colors
-                style:
-                    TextStyle(color: Colors.black, fontWeight: FontWeight.bold),
-              ),
-            ),
-          ],
-        );
-      },
-    );
   }
 
   @override
@@ -1719,11 +1342,6 @@ class _MapScreenState extends ConsumerState<MapScreen>
       });
     });
 
-    // One-time FIRST-optimize celebration. Delayed so the zoom-to-fit
-    // settles first (mirrors the review flow's beat). Defers to the
-    // timing-warnings sheet when one is due — the flag stays unset in that
-    // case, so the next successful optimize celebrates instead. This
-    // listener owns the per-user celebrated flag: re-check → mark → show.
     // One-time map spotlight tour re-evaluation points: the tab becoming
     // visible, and MainScreen's "onboarding resolved" bump (the anonymous
     // flow is already ON the map tab when onboarding pops, so no tab event
@@ -1822,63 +1440,6 @@ class _MapScreenState extends ConsumerState<MapScreen>
         _openLocationGate();
       }
     });
-
-    // FIRST-OPTIMIZE CELEBRATION DISABLED (owner request 2026-08-07).
-    // The trigger side in trip_provider is commented out too; revive
-    // both together.
-    // ref.listen<int>(firstOptimizeCelebrationTrigger, (previous, next) {
-    // if (next <= (previous ?? 0)) return;
-    // Future.delayed(const Duration(milliseconds: 1200), () async {
-    // if (!mounted) return;
-    // // Anonymous users celebrate too — flags keyed to the persistent
-    // // device UUID. Their dialog carries a signup nudge: local places
-    // // merge into the account on login (syncOnLogin), so "keep your
-    // // places" is a true promise and this is the conversion moment.
-    // final authUserId = ref.read(currentUserIdProvider);
-    // final isAnonymous = authUserId == null;
-    // final userId = authUserId ?? await AnonymousUserService.id;
-    // if (!mounted) return;
-    // final service = OnboardingService.instance;
-    // if (await service.hasCelebrated(
-    // userId, OnboardingMilestone.firstOptimize)) {
-    // return;
-    // }
-    // // Same condition as the TimingWarningsSheet listener in
-    // // trip_bottom_sheet — if the warnings sheet is up/imminent, don't
-    // // stack the celebration on top of it.
-    // final sim = ref.read(tripSimulationProvider);
-    // if (sim != null && !sim.fullyFeasible) {
-    // final acked = ref.read(acknowledgedTimingWarningsProvider);
-    // final hasUnacked = sim.stops.any(
-    // (s) => s.warnings.isNotEmpty && !acked.contains(s.locationId));
-    // if (hasUnacked) return;
-    // }
-    // if (!mounted) return;
-    // final tripState = ref.read(tripProvider);
-    // await service.markCelebrated(userId, OnboardingMilestone.firstOptimize);
-    // if (!mounted || !context.mounted) return;
-    // await showFirstOptimizeCelebration(
-    // context,
-    // stops: tripState.optimizedLocationsForSelectedDate.length,
-    // totalTime: tripState.totalTravelTime,
-    // timeSaved: tripState.timeSaved,
-    // onSignUp: isAnonymous
-    // ? () => Navigator.of(context).push(
-    // MaterialPageRoute(builder: (_) => const LoginScreen()),
-    // )
-    // : null,
-    // // Authenticated users get the referral CTA instead — the aha
-    // // moment is the single highest-converting referral surface.
-    // onInvite: isAnonymous
-    // ? null
-    // : () => inviteFriends(context, ref, source: 'celebration'),
-    // // Everyone can carry the aha out of the app — as the realistic
-    // // map image (route + markers), falling back to the silhouette card
-    // // if the snapshot isn't available.
-    // onShare: _shareRouteMapImage,
-    // );
-    // });
-    // });
 
     // Plan Card: the active trip's plan just became fully optimized — the
     // pre-trip "my plan is ready" social-currency moment. Shown once per
@@ -2016,7 +1577,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
       });
     });
 
-    // Trip activation / switch / deactivation. The locations list refreshes
+    // The map trip switched (or was dropped). The locations list refreshes
     // asynchronously via _initSyncListener, so we mark a pending camera
     // move here and execute it once pinnedLocations next emits below —
     // that way we always frame the *new* trip's locations, never the old
@@ -2024,10 +1585,10 @@ class _MapScreenState extends ConsumerState<MapScreen>
     ref.listen<String?>(localActiveTripIdProvider, (previous, next) {
       if (previous == next) return;
       _pendingTripCameraMove = true;
-      // All-days mode belongs to the trip it was opened for. On switch or
-      // deactivation the day chips (its only exit affordance) change or
-      // vanish, so drop back to single-day mode rather than stranding the
-      // map in a stale overlay.
+      // All-days mode belongs to the trip it was opened for. On a switch
+      // the day chips (its only exit affordance) change or vanish, so drop
+      // back to single-day mode rather than stranding the map in a stale
+      // overlay.
       ref.read(allDaysModeProvider.notifier).state = false;
     });
 
@@ -2125,163 +1686,190 @@ class _MapScreenState extends ConsumerState<MapScreen>
                       // "page reloaded" flash. Keep drawing the previous trip.
                       skipLoadingOnReload: true,
                       data: (activeTrip) {
-                        if (activeTrip == null) return child!;
+                        if (activeTrip == null) {
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const _PickTripPill(),
+                              const SizedBox(height: 12),
+                              child!,
+                            ],
+                          );
+                        }
 
                         return Column(
                           children: [
-                            // Active Trip Name Banner
-                            ClipRRect(
-                              borderRadius: BorderRadius.circular(16),
-                              child: BackdropFilter(
-                                filter: ImageFilter.blur(
-                                    sigmaX: 15.0, sigmaY: 15.0),
-                                child: Container(
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 20, vertical: 14),
-                                  decoration: BoxDecoration(
-                                    gradient: LinearGradient(
-                                      colors: [
-                                        Theme.of(context)
-                                            .colorScheme
-                                            .primary
-                                            .withValues(alpha: 0.95),
-                                        Theme.of(context)
-                                            .colorScheme
-                                            .primary
-                                            .withValues(alpha: 0.85),
+                            // The trip on the map — tap to switch.
+                            GestureDetector(
+                              behavior: HitTestBehavior.opaque,
+                              onTap: () => showSwitchTripSheet(context),
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(16),
+                                child: BackdropFilter(
+                                  filter: ImageFilter.blur(
+                                      sigmaX: 15.0, sigmaY: 15.0),
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 20, vertical: 14),
+                                    decoration: BoxDecoration(
+                                      gradient: LinearGradient(
+                                        colors: [
+                                          Theme.of(context)
+                                              .colorScheme
+                                              .primary
+                                              .withValues(alpha: 0.95),
+                                          Theme.of(context)
+                                              .colorScheme
+                                              .primary
+                                              .withValues(alpha: 0.85),
+                                        ],
+                                      ),
+                                      borderRadius: BorderRadius.circular(16),
+                                      border: Border.all(
+                                        color:
+                                            Colors.white.withValues(alpha: 0.3),
+                                        width: 1.5,
+                                      ),
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: Theme.of(context)
+                                              .colorScheme
+                                              .primary
+                                              .withValues(alpha: 0.3),
+                                          blurRadius: 20,
+                                          offset: const Offset(0, 8),
+                                        ),
+                                        BoxShadow(
+                                          color: Colors.black
+                                              .withValues(alpha: 0.15),
+                                          blurRadius: 10,
+                                          offset: const Offset(0, 4),
+                                        ),
                                       ],
                                     ),
-                                    borderRadius: BorderRadius.circular(16),
-                                    border: Border.all(
-                                      color:
-                                          Colors.white.withValues(alpha: 0.3),
-                                      width: 1.5,
-                                    ),
-                                    boxShadow: [
-                                      BoxShadow(
-                                        color: Theme.of(context)
-                                            .colorScheme
-                                            .primary
-                                            .withValues(alpha: 0.3),
-                                        blurRadius: 20,
-                                        offset: const Offset(0, 8),
-                                      ),
-                                      BoxShadow(
-                                        color: Colors.black
-                                            .withValues(alpha: 0.15),
-                                        blurRadius: 10,
-                                        offset: const Offset(0, 4),
-                                      ),
-                                    ],
-                                  ),
-                                  child: Row(
-                                    children: [
-                                      Container(
-                                        padding: const EdgeInsets.all(8),
-                                        decoration: BoxDecoration(
-                                          color: Colors.white
-                                              .withValues(alpha: 0.2),
-                                          borderRadius:
-                                              BorderRadius.circular(10),
+                                    child: Row(
+                                      children: [
+                                        Container(
+                                          padding: const EdgeInsets.all(8),
+                                          decoration: BoxDecoration(
+                                            color: Colors.white
+                                                .withValues(alpha: 0.2),
+                                            borderRadius:
+                                                BorderRadius.circular(10),
+                                          ),
+                                          child: const Icon(
+                                            Icons.navigation_rounded,
+                                            color: Colors.white,
+                                            size: 22,
+                                          ),
                                         ),
-                                        child: const Icon(
-                                          Icons.navigation_rounded,
-                                          color: Colors.white,
-                                          size: 22,
-                                        ),
-                                      ),
-                                      const SizedBox(width: 12),
-                                      Expanded(
-                                        child: Column(
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.start,
-                                          children: [
-                                            Text(
-                                              'Active Trip',
-                                              style: TextStyle(
-                                                color: Colors.white
-                                                    .withValues(alpha: 0.9),
-                                                fontSize: 11,
-                                                fontWeight: FontWeight.w500,
-                                                letterSpacing: 0.5,
-                                              ),
-                                            ),
-                                            const SizedBox(height: 2),
-                                            Text(
-                                              activeTrip.name,
-                                              style: const TextStyle(
-                                                color: Colors.white,
-                                                fontSize: 17,
-                                                fontWeight: FontWeight.bold,
-                                                letterSpacing: 0.3,
-                                              ),
-                                              maxLines: 1,
-                                              overflow: TextOverflow.ellipsis,
-                                            ),
-                                            // Date-range + inclusive day count.
-                                            // Rendered as a small subtitle so
-                                            // the badge stays compact; only
-                                            // shows when the trip actually has
-                                            // both endpoints set.
-                                            if (activeTrip.startDate != null &&
-                                                activeTrip.endDate != null)
-                                              Builder(builder: (context) {
-                                                final s = DateTime(
-                                                    activeTrip.startDate!.year,
-                                                    activeTrip.startDate!.month,
-                                                    activeTrip.startDate!.day);
-                                                final e = DateTime(
-                                                    activeTrip.endDate!.year,
-                                                    activeTrip.endDate!.month,
-                                                    activeTrip.endDate!.day);
-                                                final dayCount =
-                                                    e.difference(s).inDays + 1;
-                                                final dateText = activeTrip
-                                                        .isUndated
-                                                    ? 'No dates yet'
-                                                    : activeTrip.startDate ==
-                                                            activeTrip.endDate
-                                                        ? DateFormat('MMM d, y')
-                                                            .format(activeTrip
-                                                                .startDate!)
-                                                        : '${DateFormat('MMM d').format(activeTrip.startDate!)} - ${DateFormat('MMM d').format(activeTrip.endDate!)}';
-                                                return Padding(
-                                                  padding:
-                                                      const EdgeInsets.only(
-                                                          top: 2),
-                                                  child: Text(
-                                                    '$dateText  ·  $dayCount day${dayCount == 1 ? '' : 's'}',
+                                        const SizedBox(width: 12),
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              Row(
+                                                mainAxisSize: MainAxisSize.min,
+                                                children: [
+                                                  Text(
+                                                    'On the map',
                                                     style: TextStyle(
                                                       color: Colors.white
                                                           .withValues(
-                                                              alpha: 0.85),
+                                                              alpha: 0.9),
                                                       fontSize: 11,
                                                       fontWeight:
                                                           FontWeight.w500,
-                                                      letterSpacing: 0.2,
+                                                      letterSpacing: 0.5,
                                                     ),
-                                                    maxLines: 1,
-                                                    overflow:
-                                                        TextOverflow.ellipsis,
                                                   ),
-                                                );
-                                              }),
-                                          ],
+                                                  const SizedBox(width: 4),
+                                                  Icon(
+                                                    Icons.swap_horiz_rounded,
+                                                    size: 13,
+                                                    color: Colors.white
+                                                        .withValues(alpha: 0.9),
+                                                  ),
+                                                ],
+                                              ),
+                                              const SizedBox(height: 2),
+                                              Text(
+                                                activeTrip.name,
+                                                style: const TextStyle(
+                                                  color: Colors.white,
+                                                  fontSize: 17,
+                                                  fontWeight: FontWeight.bold,
+                                                  letterSpacing: 0.3,
+                                                ),
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                              ),
+                                              // Date-range + inclusive day count.
+                                              // Rendered as a small subtitle so
+                                              // the badge stays compact; only
+                                              // shows when the trip actually has
+                                              // both endpoints set.
+                                              if (activeTrip.startDate !=
+                                                      null &&
+                                                  activeTrip.endDate != null)
+                                                Builder(builder: (context) {
+                                                  final s = DateTime(
+                                                      activeTrip
+                                                          .startDate!.year,
+                                                      activeTrip
+                                                          .startDate!.month,
+                                                      activeTrip
+                                                          .startDate!.day);
+                                                  final e = DateTime(
+                                                      activeTrip.endDate!.year,
+                                                      activeTrip.endDate!.month,
+                                                      activeTrip.endDate!.day);
+                                                  final dayCount =
+                                                      e.difference(s).inDays +
+                                                          1;
+                                                  final dateText = activeTrip
+                                                          .isUndated
+                                                      ? 'No dates yet'
+                                                      : activeTrip.startDate ==
+                                                              activeTrip.endDate
+                                                          ? DateFormat(
+                                                                  'MMM d, y')
+                                                              .format(activeTrip
+                                                                  .startDate!)
+                                                          : '${DateFormat('MMM d').format(activeTrip.startDate!)} - ${DateFormat('MMM d').format(activeTrip.endDate!)}';
+                                                  return Padding(
+                                                    padding:
+                                                        const EdgeInsets.only(
+                                                            top: 2),
+                                                    child: Text(
+                                                      '$dateText  ·  $dayCount day${dayCount == 1 ? '' : 's'}',
+                                                      style: TextStyle(
+                                                        color: Colors.white
+                                                            .withValues(
+                                                                alpha: 0.85),
+                                                        fontSize: 11,
+                                                        fontWeight:
+                                                            FontWeight.w500,
+                                                        letterSpacing: 0.2,
+                                                      ),
+                                                      maxLines: 1,
+                                                      overflow:
+                                                          TextOverflow.ellipsis,
+                                                    ),
+                                                  );
+                                                }),
+                                            ],
+                                          ),
                                         ),
-                                      ),
-                                      const SizedBox(width: 10),
-                                      // Auto-plan — the whole-trip action,
-                                      // right where the trip is named: cluster
-                                      // places into cities, order them, spread
-                                      // across days. Sits before the day pill.
-                                      const _AutoPlanPill(),
-                                      const SizedBox(width: 6),
-                                      // Day selector — replaces the old owner
-                                      // pill and shows for EVERY trip (owned or
-                                      // shared): selected date + "Day N", tap
-                                      // for the day-picker sheet.
-                                      const _DayPill(),
-                                    ],
+                                        const SizedBox(width: 10),
+                                        // Day selector — replaces the old owner
+                                        // pill and shows for EVERY trip (owned or
+                                        // shared): selected date + "Day N", tap
+                                        // for the day-picker sheet.
+                                        const _DayPill(),
+                                      ],
+                                    ),
                                   ),
                                 ),
                               ),
@@ -2307,14 +1895,12 @@ class _MapScreenState extends ConsumerState<MapScreen>
                       Row(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          // Fake search bar — pushes [LocationSearchScreen]
-                          // instead of focusing an inline TextField. This
-                          // sidesteps every keyboard-driven layout shift that
-                          // an inline TextField caused on this screen (the map
-                          // getting "pulled down" on focus). The chrome
-                          // (rounded, translucent, blurred, with a search icon
-                          // and hint text) is preserved so it still reads as a
-                          // search bar at a glance.
+                          // Fake search bar — opens the add-place sheet
+                          // instead of focusing an inline TextField, which
+                          // caused keyboard-driven layout shifts on this
+                          // screen (the map "pulled down" on focus). The
+                          // chrome (rounded, translucent, blurred, search
+                          // icon, hint) still reads as a search bar.
                           Expanded(
                             child: ClipRRect(
                               borderRadius: BorderRadius.circular(30),
@@ -2325,29 +1911,13 @@ class _MapScreenState extends ConsumerState<MapScreen>
                                   color: Colors.transparent,
                                   child: InkWell(
                                     borderRadius: BorderRadius.circular(30),
-                                    onTap: () {
-                                      // Zero-duration page transition: the new
-                                      // screen appears instantly instead of
-                                      // sliding in. The standard slide-in left
-                                      // a window (~300ms on iOS) during which
-                                      // the map screen was still visible — any
-                                      // MediaQuery / keyboard event from the
-                                      // mounting screen propagated back to the
-                                      // map and visibly shifted it before the
-                                      // transition finished. With Duration.zero,
-                                      // the new screen fully covers the map
-                                      // before the next frame paints.
-                                      Navigator.of(context).push(
-                                        PageRouteBuilder(
-                                          pageBuilder: (context, _, __) =>
-                                              const LocationSearchScreen(),
-                                          transitionDuration: Duration.zero,
-                                          reverseTransitionDuration:
-                                              Duration.zero,
-                                          opaque: true,
-                                        ),
-                                      );
-                                    },
+                                    onTap: () => showAddPlaceSheet(
+                                      context,
+                                      trip: ref
+                                          .read(realtimeActiveTripProvider)
+                                          .valueOrNull,
+                                      day: ref.read(selectedDateProvider),
+                                    ),
                                     child: Container(
                                       key:
                                           _searchBarKey, // spotlight-tour anchor
@@ -2582,8 +2152,6 @@ class _MapScreenState extends ConsumerState<MapScreen>
                         final hasRoute = hasSelectedDayRoute || allDaysActive;
                         final isGenerating =
                             ref.watch(isGeneratingRouteProvider);
-                        final showPlaceNames =
-                            ref.watch(showPlaceNamesProvider);
 
                         final fabs = <Widget>[
                           FloatingActionButton(
@@ -2626,42 +2194,6 @@ class _MapScreenState extends ConsumerState<MapScreen>
                                     : const Icon(Icons.ios_share_rounded),
                               ),
                             ),
-                          // Clearing operates on the SELECTED day's optimized
-                          // route — in pure All-days viewing there's nothing to
-                          // clear, so key this off the day route only.
-                          if (hasSelectedDayRoute && !isGenerating)
-                            FloatingActionButton(
-                              heroTag: 'clearRouteFab',
-                              mini: true,
-                              backgroundColor:
-                                  Theme.of(context).colorScheme.errorContainer,
-                              foregroundColor: Theme.of(context)
-                                  .colorScheme
-                                  .onErrorContainer,
-                              onPressed: () => ref
-                                  .read(tripProvider.notifier)
-                                  .clearOptimizedRoute(),
-                              tooltip: 'Clear Route',
-                              child: const Icon(Icons.clear_outlined),
-                            ),
-                          // (The bulk "Add Locations to Trip" FAB lived here.
-                          // Removed: adding now happens per-location from the
-                          // pin's detail sheet, which shows "Add to trip" for
-                          // any location not attached to a trip.)
-                          FloatingActionButton(
-                            heroTag: 'togglePlaceNamesFab',
-                            mini: true,
-                            onPressed: () {
-                              ref.read(showPlaceNamesProvider.notifier).state =
-                                  !showPlaceNames;
-                            },
-                            tooltip: 'Toggle Place Names',
-                            child: Icon(
-                              showPlaceNames
-                                  ? Icons.visibility_off_outlined
-                                  : Icons.visibility_outlined,
-                            ),
-                          ),
                         ];
 
                         // Always vertical now — the inline search bar
@@ -2697,7 +2229,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
             onLocationTap: _zoomToLocation,
             optimizeKey: _optimizeButtonKey, // spotlight-tour anchor
             // onGoToCurrentLocation is now handled by the FAB
-            onShowZoneSettings: _showProximitySliderBottomSheet,
+            onShowMapSettings: () => showMapSettingsSheet(context),
             // onZoomToFitTrip is now handled by the FAB
             highlightedLocationIndex: _highlightedLocationIndex,
           ),
@@ -3319,7 +2851,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
     final hasActiveTrip =
         ref.read(realtimeActiveTripProvider).valueOrNull != null;
     const topMargin = 50.0;
-    final bannerH = hasActiveTrip ? 72.0 + 12.0 : 0.0;
+    final bannerH = hasActiveTrip ? 72.0 + 12.0 : 44.0 + 12.0;
     const filterBarH = 46.0;
     const searchBarHeight = 60.0;
     const allowanceChipH = 40.0;
@@ -3654,103 +3186,6 @@ class _MapScreenState extends ConsumerState<MapScreen>
     _mapController!
         .animateCamera(CameraUpdate.newLatLngBounds(bounds, padding));
   }
-
-  String _formatDistance(double distanceInMeters) {
-    if (distanceInMeters < 1000) {
-      return '${distanceInMeters.toInt()}m';
-    } else {
-      final kilometers = distanceInMeters / 1000;
-      return '${kilometers.toStringAsFixed(1)}km';
-    }
-  }
-}
-
-/// Frosted "Plan my days" pill in the active-trip badge, left of the day
-/// pill — the map-screen entry to Auto-plan. Same glass styling as
-/// [_DayPill] so the badge reads as one control strip. Shows once the trip
-/// has 2+ places (nothing to arrange before that); an amber dot flags a
-/// trip that clearly needs it (Unscheduled places, or a day with 12+).
-class _AutoPlanPill extends ConsumerWidget {
-  const _AutoPlanPill();
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final placeCount =
-        ref.watch(tripProvider.select((s) => s.pinnedLocations.length));
-    if (placeCount < 2) return const SizedBox.shrink();
-    final unscheduled = ref.watch(unscheduledCountProvider);
-    final overloaded = ref.watch(tripProvider.select((s) {
-      final perDay = <DateTime, int>{};
-      for (final l in s.pinnedLocations) {
-        final d = l.scheduledDate;
-        if (d == null) continue;
-        final k = DateTime(d.year, d.month, d.day);
-        perDay[k] = (perDay[k] ?? 0) + 1;
-      }
-      return perDay.values.any((c) => c > 12);
-    }));
-    final needsAttention = unscheduled > 0 || overloaded;
-
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        borderRadius: BorderRadius.circular(12),
-        onTap: () => showAutoPlanSheet(context),
-        child: Tooltip(
-          message: 'Plan my days',
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-            decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.18),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(
-                color: Colors.white.withValues(alpha: 0.45),
-                width: 1.2,
-              ),
-            ),
-            child: Stack(
-              clipBehavior: Clip.none,
-              children: [
-                Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(Icons.auto_awesome_rounded,
-                        size: 16, color: Colors.white),
-                    const SizedBox(height: 1),
-                    Text(
-                      'Plan',
-                      style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.92),
-                        fontSize: 10.5,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: 0.3,
-                      ),
-                    ),
-                  ],
-                ),
-                if (needsAttention)
-                  Positioned(
-                    right: -4,
-                    top: -3,
-                    child: Container(
-                      width: 8,
-                      height: 8,
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFFFB300),
-                        shape: BoxShape.circle,
-                        border: Border.all(
-                            color: Colors.white.withValues(alpha: 0.8),
-                            width: 1),
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
 }
 
 /// Status filter for the map's pins — All / Active / Skipped / Done — sitting
@@ -3933,6 +3368,52 @@ class _PinFilterChip extends StatelessWidget {
                   ),
                 ),
               ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Where the trip banner sits when nothing is on the map yet: one tap
+/// opens the switch sheet (which points to the Trips tab when there is no
+/// trip to pick).
+class _PickTripPill extends StatelessWidget {
+  const _PickTripPill();
+
+  @override
+  Widget build(BuildContext context) {
+    final primary = Theme.of(context).colorScheme.primary;
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(14),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 15.0, sigmaY: 15.0),
+          child: Material(
+            color: primary.withValues(alpha: 0.92),
+            child: InkWell(
+              onTap: () => showSwitchTripSheet(context),
+              child: const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.swap_horiz_rounded,
+                        color: Colors.white, size: 18),
+                    SizedBox(width: 8),
+                    Text(
+                      'Pick a trip to show',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ),
           ),
         ),

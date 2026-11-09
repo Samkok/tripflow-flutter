@@ -1,45 +1,42 @@
 import 'dart:async';
 import 'dart:math' as math;
-import 'dart:ui' show ImageFilter;
 
 import 'package:voyza/core/theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:google_maps_flutter/google_maps_flutter.dart';
-import 'package:google_maps_url_extractor/google_maps_url_extractor.dart';
 import 'package:intl/intl.dart';
 import 'package:share_plus/share_plus.dart';
-import 'package:uuid/uuid.dart';
 import 'package:voyza/models/trip.dart';
 import 'package:voyza/providers/location_provider.dart';
-import 'package:voyza/providers/paginated_search_provider.dart';
 import 'package:voyza/providers/trip_collaborator_provider.dart';
 import 'package:voyza/models/saved_location.dart';
-import 'package:voyza/services/places_service.dart';
 import 'package:voyza/providers/auth_provider.dart';
 import 'package:voyza/widgets/app_toast.dart';
 import 'package:voyza/widgets/collaborators_sheet.dart';
 import 'package:voyza/widgets/sign_up_required_sheet.dart';
 import 'package:voyza/providers/onboarding_checklist_provider.dart';
 import 'package:voyza/widgets/onboarding_checklist.dart';
-import 'package:voyza/widgets/google_maps_url_dialog.dart';
-import 'package:voyza/services/location_add_service.dart';
 import 'package:voyza/services/onboarding_service.dart';
 import 'package:voyza/services/subscription_limit_service.dart';
 import 'package:voyza/models/location_model.dart';
 import 'package:voyza/widgets/celebration_dialogs.dart';
 import 'package:voyza/widgets/location_detail_sheet.dart';
-import 'package:voyza/widgets/auto_plan_sheet.dart';
-import 'package:voyza/providers/trip_listener_provider.dart';
+import 'package:voyza/providers/day_distribution_provider.dart';
+import 'package:voyza/widgets/buddy_nudge_row.dart';
+import 'package:voyza/widgets/plan_sheet.dart';
 import 'package:voyza/providers/user_trip_provider.dart';
 import 'package:voyza/utils/date_picker_utils.dart';
 import 'package:voyza/widgets/location_photo_gallery.dart';
-import 'package:voyza/providers/place_photo_refresh_provider.dart';
-import 'package:voyza/services/place_photo_refresh_service.dart';
 import 'package:voyza/providers/local_active_trip_provider.dart';
 import 'package:voyza/providers/trip_provider.dart';
 import 'package:voyza/widgets/accommodation_prompts.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:voyza/providers/map_ui_state_provider.dart';
+import 'package:voyza/widgets/add_place_sheet.dart';
+import 'package:voyza/widgets/optimized_location_card.dart';
+import 'package:voyza/widgets/place_selection_actions.dart';
+import 'package:voyza/services/csv_service.dart';
 import 'package:voyza/utils/location_order.dart';
 import 'package:voyza/utils/open_trip_on_map.dart';
 import 'package:voyza/utils/same_day_place_guard.dart';
@@ -114,6 +111,39 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
   /// place with its tag, planned time and hours) as a PDF and opens the
   /// share sheet. Always the full plan — a search filter on this page
   /// doesn't narrow it.
+  /// Every place of the trip as a spreadsheet, day by day (unscheduled
+  /// rows last).
+  Future<void> _exportCsv() async {
+    final all = ref.read(savedLocationsProvider).valueOrNull;
+    if (all == null) {
+      AppToast.info(context, 'Still loading your places — try again.');
+      return;
+    }
+    final rows = all.where((l) => l.tripId == widget.trip.id).toList()
+      ..sort((a, b) {
+        final x = a.scheduledDate, y = b.scheduledDate;
+        if (x == null || y == null) return x == null ? (y == null ? 0 : 1) : -1;
+        return x.compareTo(y);
+      });
+    if (rows.isEmpty) {
+      AppToast.info(context, 'Nothing to export yet.');
+      return;
+    }
+    String coordAddress(SavedLocation l) =>
+        '${l.lat.toStringAsFixed(5)}, ${l.lng.toStringAsFixed(5)}';
+    try {
+      await CsvService().generateAndShareTripCsv(
+        [for (final l in rows) l.toLocationModel(address: coordAddress(l))],
+        tripName: _trip.name,
+        dayLabeler: _labeler,
+      );
+    } on MissingPluginException {
+      if (mounted) AppToast.error(context, 'Sharing is not available here.');
+    } catch (e) {
+      if (mounted) AppToast.error(context, 'Could not export: $e');
+    }
+  }
+
   Future<void> _exportItinerary() async {
     final all = ref.read(savedLocationsProvider).valueOrNull;
     if (all == null) {
@@ -157,8 +187,13 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
   final _addLocationFabKey = GlobalKey();
 
   // ─── Multi-select state ────────────────────────────────────────────────
-  bool _selectionMode = false;
-  final Set<String> _selectedIds = {};
+  /// Multi-select lives in the shared providers the card reads; captured
+  /// notifiers reset them on dispose, so leaving the page never leaves
+  /// cards half-selected elsewhere.
+  bool get _selectionMode => ref.watch(isSelectionModeProvider);
+  Set<String> get _selectedIds => ref.watch(selectedLocationsProvider);
+  late final StateController<bool> _selectionModeNotifier;
+  late final StateController<Set<String>> _selectedNotifier;
   List<SavedLocation> _currentTripLocations = [];
 
   /// Last count handed to the checklist from the stream builder — so a
@@ -181,7 +216,6 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
   // expanded by default. (Previously this tracked expanded ids, so the
   // default was collapsed — flipping the polarity here is the whole
   // change needed to show photos out of the box.)
-  final Set<String> _photoCollapsedIds = {};
 
   /// Days the user flipped to OLDEST added first with the header's sort
   /// toggle, keyed by the day's normalized midnight. Every other day shows
@@ -210,66 +244,26 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
   /// Collapse state of the Unscheduled-bucket section (session-scoped).
   bool _unscheduledCollapsed = false;
 
-  void _enterSelectionMode(String id) {
-    setState(() {
-      _selectionMode = true;
-      _selectedIds.add(id);
-    });
-  }
-
   void _exitSelectionMode() {
-    setState(() {
-      _selectionMode = false;
-      _selectedIds.clear();
-    });
+    _selectionModeNotifier.state = false;
+    _selectedNotifier.state = {};
   }
 
-  void _toggleSelection(String id) {
-    setState(() {
-      if (_selectedIds.contains(id)) {
-        _selectedIds.remove(id);
-        if (_selectedIds.isEmpty) _selectionMode = false;
-      } else {
-        _selectedIds.add(id);
-      }
-    });
-  }
-
+  /// The selection bar's Delete: the rows go entirely (no day scope on
+  /// the trip page). Through the map trip, like every other action.
   Future<void> _deleteSelected() async {
-    final count = _selectedIds.length;
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('Delete locations?'),
-        content: Text(
-            'Delete $count location${count == 1 ? '' : 's'}? This cannot be undone.'),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel')),
-          FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: Colors.red),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Delete'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true || !mounted) return;
-
-    final repo = ref.read(locationRepositoryProvider);
-    for (final id in _selectedIds.toList()) {
-      await repo.deleteLocation(id);
-    }
-    _exitSelectionMode();
+    await _ensureMapTrip();
+    if (!mounted) return;
+    await deleteSelectedPlaces(context, ref);
   }
 
-  void _showLocationDetail(
+  Future<void> _showLocationDetail(
     SavedLocation location,
     int indexInList,
     List<SavedLocation> dateGroup,
-  ) {
+  ) async {
+    await _ensureMapTrip();
+    if (!mounted) return;
     String coordAddress(SavedLocation l) =>
         '${l.lat.toStringAsFixed(5)}, ${l.lng.toStringAsFixed(5)}';
 
@@ -303,6 +297,8 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
   @override
   void initState() {
     super.initState();
+    _selectionModeNotifier = ref.read(isSelectionModeProvider.notifier);
+    _selectedNotifier = ref.read(selectedLocationsProvider.notifier);
     // Ongoing trip with "carry unvisited places forward" on: catch up now
     // (once per trip per day) so the page shows today's real plan.
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -427,72 +423,40 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
     _stopDragAutoScroll();
     _listScrollController.dispose();
     _searchController.dispose();
+    // Not synchronously: a state change here notifies elements that are
+    // mid-dispose. The notifiers outlive the page (app-lifetime providers).
+    final mode = _selectionModeNotifier;
+    final selected = _selectedNotifier;
+    Future.microtask(() {
+      mode.state = false;
+      selected.state = {};
+    });
     super.dispose();
   }
 
-  Future<void> _setActiveTrip() async {
-    try {
-      ref.read(tripProvider.notifier).clearTrip();
-      await ref
-          .read(localActiveTripIdProvider.notifier)
-          .setActiveTrip(widget.trip.id);
-      // Checklist step 3 completes on ANY activation path, not only the home
-      // card's button — guests activate here and the trips-list reconcile
-      // only sees server-side `isActive`, so without this the step stayed
-      // pending while the trip was plainly active. No guide chaining from
-      // here: the "Go to map" spotlight lives on the home card.
-      await ref
-          .read(checklistProvider.notifier)
-          .mark(ChecklistStep.activateTrip, silent: true);
-      if (mounted) {
-        AppToast.success(context, '${widget.trip.name} is now active');
-      }
-    } catch (e) {
-      if (mounted) {
-        AppToast.error(context, 'Could not activate trip. Please try again.');
-      }
-    }
+  /// The whole-trip planner, through the one Plan sheet (the planner works
+  /// on the map trip's state, so this trip becomes it first).
+  Future<void> _openAutoPlan() async {
+    await _ensureMapTrip();
+    if (!mounted) return;
+    showPlanSheet(context, initial: PlanScope.trip);
   }
 
-  Future<void> _deactivateTrip() async {
-    try {
-      await ref.read(localActiveTripIdProvider.notifier).deactivateTrip();
-      if (mounted) {
-        AppToast.info(context, 'Trip deactivated');
-      }
-    } catch (e) {
-      if (mounted) {
-        AppToast.error(context, 'Could not deactivate trip. Please try again.');
-      }
-    }
-  }
+  /// Every place action on this page goes through `TripNotifier`, which
+  /// holds the trip on the map. Viewing the page never moves the map; the
+  /// first action does, and waits for this trip's pins (see ensureMapTrip).
+  Future<void> _ensureMapTrip() => ensureMapTrip(ref, _trip);
 
   /// The map button: this trip on the Map tab, on the day that matters —
-  /// today while the trip is underway, day one otherwise. The map draws the
-  /// ACTIVE trip, so a trip that isn't active yet is made active first.
+  /// today while the trip is underway, day one otherwise. The map draws one
+  /// trip at a time, so this becomes it.
   Future<void> _openOnMap() async {
     if (_openingMap) return;
     final trip = _trip;
     setState(() => _openingMap = true);
     try {
-      if (ref.read(localActiveTripIdProvider) != trip.id) {
-        ref.read(tripProvider.notifier).clearTrip();
-        await ref
-            .read(localActiveTripIdProvider.notifier)
-            .setActiveTrip(trip.id);
-        // Same as the Activate button: any activation path completes the
-        // checklist step.
-        await ref
-            .read(checklistProvider.notifier)
-            .mark(ChecklistStep.activateTrip, silent: true);
-        if (!mounted) return;
-        // Said out loud: another trip may just have stopped being the
-        // active one. The toast lives on the root overlay, so it is still
-        // there on the map.
-        AppToast.success(context, '${trip.name} is now active');
-      }
+      await openTripOnMap(ref, trip);
       if (!mounted) return;
-      requestMapForTrip(ref, trip);
       // Back to the home screen, which is switching to its Map tab.
       Navigator.of(context).popUntil((route) => route.isFirst);
     } catch (e) {
@@ -695,22 +659,33 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
                               ? true
                               : null,
                       onChanged: (_) {
-                        setState(() {
-                          if (_selectedIds.length ==
-                              _currentTripLocations.length) {
-                            _selectedIds.clear();
-                          } else {
-                            _selectedIds
-                                .addAll(_currentTripLocations.map((l) => l.id));
-                          }
-                        });
+                        if (_selectedNotifier.state.length ==
+                            _currentTripLocations.length) {
+                          _selectedNotifier.state = {};
+                        } else {
+                          _selectedNotifier.state = {
+                            for (final l in _currentTripLocations) l.id,
+                          };
+                        }
                       },
                     ),
-                    IconButton(
-                      icon: const Icon(Icons.delete_outline, color: Colors.red),
-                      tooltip: 'Delete selected',
-                      onPressed: _selectedIds.isEmpty ? null : _deleteSelected,
-                    ),
+                    if (_selectedIds.isNotEmpty)
+                      Consumer(builder: (context, ref, _) {
+                        final hasWriteAccess = ref.watch(
+                            hasWriteAccessProvider(widget.trip.id)
+                                .select((a) => a.valueOrNull ?? false));
+                        return buildPlaceSelectionMenu(
+                          context,
+                          ref,
+                          hasWriteAccess: hasWriteAccess,
+                          // Per-row past-day rules live on the cards; a
+                          // bulk edit of an ended trip's leftovers must
+                          // stay possible.
+                          canEdit: hasWriteAccess,
+                          promptContext: this.context,
+                          beforeAction: _ensureMapTrip,
+                        );
+                      }),
                   ],
                 )
               : AppBar(
@@ -729,12 +704,12 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
                     overflow: TextOverflow.ellipsis,
                   ),
                   actions: [
-                    // Export the whole itinerary as a PDF (every member can;
-                    // it only reads the plan).
-                    IconButton(
+                    // Export the whole itinerary — a PDF to read, a CSV to
+                    // work with (every member can; both only read the plan).
+                    PopupMenuButton<String>(
                       key: _exportButtonKey,
-                      tooltip: 'Export itinerary (PDF)',
-                      onPressed: _exportingItinerary ? null : _exportItinerary,
+                      tooltip: 'Export',
+                      enabled: !_exportingItinerary,
                       icon: _exportingItinerary
                           ? const SizedBox(
                               width: 20,
@@ -742,38 +717,43 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
                               child:
                                   CircularProgressIndicator(strokeWidth: 2.2),
                             )
-                          : const Icon(Icons.picture_as_pdf_outlined),
+                          : const Icon(Icons.ios_share_outlined),
+                      onSelected: (value) =>
+                          value == 'pdf' ? _exportItinerary() : _exportCsv(),
+                      itemBuilder: (_) => const [
+                        PopupMenuItem(
+                          value: 'pdf',
+                          child: ListTile(
+                            leading: Icon(Icons.picture_as_pdf_outlined),
+                            title: Text('Itinerary PDF'),
+                          ),
+                        ),
+                        PopupMenuItem(
+                          value: 'csv',
+                          child: ListTile(
+                            leading: Icon(Icons.table_chart_outlined),
+                            title: Text('Trip CSV'),
+                          ),
+                        ),
+                      ],
                     ),
                     // Auto-plan: cluster → order cities → spread across
-                    // days. Operates on the ACTIVE trip's state, so it only
-                    // shows when THIS trip is the active one, with 2+
-                    // places to arrange. Badge dot when the trip clearly
-                    // needs it (bucket rows, or an overloaded day).
+                    // days, for any trip with 2+ places (the planner works
+                    // on the map trip's state, so opening it makes this the
+                    // map trip first). Badge dot when the trip clearly
+                    // needs it (bucket rows, or an overloaded day) — known
+                    // only for the trip on the map.
                     Consumer(builder: (context, ref, _) {
-                      final activeId =
-                          ref.watch(realtimeActiveTripProvider).valueOrNull?.id;
-                      if (activeId != widget.trip.id) {
-                        return const SizedBox.shrink();
-                      }
-                      final placeCount = ref.watch(
-                          tripProvider.select((s) => s.pinnedLocations.length));
+                      final placeCount = ref.watch(tripCardStatsProvider
+                          .select((m) => m[widget.trip.id]?.count ?? 0));
                       if (placeCount < 2) return const SizedBox.shrink();
-                      final unscheduled = ref.watch(unscheduledCountProvider);
-                      final overloaded = ref.watch(tripProvider.select((s) {
-                        final perDay = <DateTime, int>{};
-                        for (final l in s.pinnedLocations) {
-                          final d = l.scheduledDate;
-                          if (d == null) continue;
-                          final k = DateTime(d.year, d.month, d.day);
-                          perDay[k] = (perDay[k] ?? 0) + 1;
-                        }
-                        return perDay.values
-                            .any((c) => c > 12); // clearly too many
-                      }));
-                      final needsAttention = unscheduled > 0 || overloaded;
+                      final isMapTrip = ref.watch(localActiveTripIdProvider) ==
+                          widget.trip.id;
+                      final needsAttention = isMapTrip &&
+                          ref.watch(tripNeedsPlanAttentionProvider);
                       return IconButton(
-                        tooltip: 'Auto-plan my days',
-                        onPressed: () => showAutoPlanSheet(context),
+                        tooltip: 'Plan',
+                        onPressed: _openAutoPlan,
                         icon: Stack(
                           clipBehavior: Clip.none,
                           children: [
@@ -1723,10 +1703,22 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
     }
   }
 
+  /// The info card, then (signed-in owner, nobody invited yet) the
+  /// travel-buddy nudge — the wizard's buddies step lives here now.
   Widget _buildTripInfoSection() {
-    final localActiveTripId = ref.watch(localActiveTripIdProvider);
-    final isActive = localActiveTripId == widget.trip.id;
+    return Column(
+      children: [
+        _buildTripInfoCard(),
+        BuddyNudgeRow(
+          tripId: widget.trip.id,
+          ownerId: widget.trip.userId,
+          onInvite: _showCollaboratorsSheet,
+        ),
+      ],
+    );
+  }
 
+  Widget _buildTripInfoCard() {
     return Padding(
       padding: const EdgeInsets.all(16),
       child: Container(
@@ -1759,52 +1751,6 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
                         ),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                // Activate / Deactivate button
-                FilledButton.tonal(
-                  onPressed: isActive ? _deactivateTrip : _setActiveTrip,
-                  style: FilledButton.styleFrom(
-                    backgroundColor: isActive
-                        ? Colors.green.withValues(alpha: 0.15)
-                        : Theme.of(context)
-                            .colorScheme
-                            .primary
-                            .withValues(alpha: 0.15),
-                    foregroundColor: isActive
-                        ? Colors.green
-                        : Theme.of(context).colorScheme.primary,
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                    minimumSize: Size.zero,
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      if (isActive) ...[
-                        Container(
-                          width: 6,
-                          height: 6,
-                          decoration: BoxDecoration(
-                            color: Colors.green,
-                            borderRadius: BorderRadius.circular(3),
-                          ),
-                        ),
-                        const SizedBox(width: 5),
-                      ],
-                      Text(
-                        isActive ? 'Active' : 'Activate',
-                        style: const TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ],
                   ),
                 ),
               ],
@@ -2359,18 +2305,11 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
                             tooltip: 'Put all on one day',
                           ),
                         // One-tap fix for the whole bucket — Auto-plan
-                        // spreads these onto days. Active trip only (the
-                        // planner works on active-trip state).
-                        Consumer(builder: (context, ref, _) {
-                          final activeId = ref
-                              .watch(realtimeActiveTripProvider)
-                              .valueOrNull
-                              ?.id;
-                          if (activeId != widget.trip.id || !hasWriteAccess) {
-                            return const SizedBox.shrink();
-                          }
-                          return TextButton.icon(
-                            onPressed: () => showAutoPlanSheet(context),
+                        // spreads these onto days (it makes this the map
+                        // trip first; the planner works on that state).
+                        if (hasWriteAccess)
+                          TextButton.icon(
+                            onPressed: _openAutoPlan,
                             icon: const Icon(Icons.auto_awesome_rounded,
                                 size: 15),
                             label: const Text('Plan'),
@@ -2380,8 +2319,7 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
                               padding:
                                   const EdgeInsets.symmetric(horizontal: 8),
                             ),
-                          );
-                        }),
+                          ),
                         IconButton(
                           onPressed: () => setState(() =>
                               _unscheduledCollapsed = !_unscheduledCollapsed),
@@ -2801,6 +2739,7 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
                         displayLocations[index],
                         index,
                         displayLocations,
+                        day: day,
                         hasWriteAccess: hasWriteAccess,
                       ),
                     ),
@@ -3111,802 +3050,110 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
     int index,
     List<SavedLocation> dateGroup, {
     required bool hasWriteAccess,
+    DateTime? day,
   }) {
-    final isSelected = _selectedIds.contains(location.id);
-    final photoRefs = location.effectivePhotoReferences;
-    final hasPhotos = photoRefs.isNotEmpty;
-    // Renew old Google photo references while the card is on screen; a
-    // tile that fails to load asks for a renewal right away.
-    final photoTarget = PhotoRefreshTarget.fromSaved(location);
-    if (hasPhotos) {
-      ref.read(placePhotoRefreshProvider).noteShown(photoTarget);
-    }
-    // Expanded by default — collapse only if the user explicitly
-    // hides the gallery (their id ends up in [_photoCollapsedIds]).
-    final isExpanded = !_photoCollapsedIds.contains(location.id);
+    String coordAddress(SavedLocation l) =>
+        '${l.lat.toStringAsFixed(5)}, ${l.lng.toStringAsFixed(5)}';
     final showDragHandle = hasWriteAccess && !_selectionMode;
+    return OptimizedLocationCard(
+      key: ValueKey('${day?.toIso8601String() ?? 'bucket'}_${location.id}'),
+      location: location.toLocationModel(address: coordAddress(location)),
+      number: index + 1,
+      showNumber: false,
+      scrollController: _listScrollController,
+      sheetController: null,
+      onLocationTap: null,
+      tripId: widget.trip.id,
+      day: day,
+      labeler: _labeler,
+      photosExpandedInitially: true,
+      // NOTE: `locations` has no updated_at column, so this is the ADD
+      // time — labelled honestly rather than passed off as a modification.
+      footnote:
+          'Added ${DateFormat('d MMM yyyy, h:mm a').format(location.createdAt.toLocal())}',
+      trailing: showDragHandle ? _buildDragHandle(location) : null,
+      siblings: [
+        for (final l in dateGroup) l.toLocationModel(address: coordAddress(l)),
+      ],
+      beforeAction: _ensureMapTrip,
+      onMapPressed: () => _showOnMap(location, day),
+    );
+  }
 
-    void togglePhotos() {
-      setState(() {
-        if (isExpanded) {
-          _photoCollapsedIds.add(location.id);
-        } else {
-          _photoCollapsedIds.remove(location.id);
-        }
-      });
+  /// The card's map square: this trip on the Map tab, framed on this stop.
+  Future<void> _showOnMap(SavedLocation location, DateTime? day) async {
+    await openTripOnMap(ref, _trip);
+    if (!mounted) return;
+    if (day != null) {
+      ref.read(selectedDateProvider.notifier).state = day;
     }
+    ref.read(mapZoomToLocationRequestProvider.notifier).state =
+        MapZoomToLocationRequest(LatLng(location.lat, location.lng));
+    Navigator.of(context).popUntil((route) => route.isFirst);
+  }
 
-    return GestureDetector(
-      onLongPress: () => _enterSelectionMode(location.id),
-      onTap: () {
-        if (_selectionMode) {
-          _toggleSelection(location.id);
-        } else {
-          _showLocationDetail(location, index, dateGroup);
-        }
+  /// Dedicated drag handle — a handle (vs. wrapping the whole card in
+  /// LongPressDraggable) avoids fighting the long-press → selection
+  /// gesture.
+  Widget _buildDragHandle(SavedLocation location) {
+    return Draggable<SavedLocation>(
+      data: location,
+      // Centre the card horizontally on the finger with the
+      // finger just below its top edge, so the card is
+      // carried rather than trailing off to one side.
+      dragAnchorStrategy: (_, __, ___) => const Offset(_dragCardWidth / 2, 26),
+      onDragStarted: () {
+        HapticFeedback.mediumImpact();
+        _startDragAutoScroll();
       },
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 180),
-        decoration: BoxDecoration(
-          // Translucent so the ambient globe stays visible behind the list.
-          color: isSelected
-              ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.1)
-              : Theme.of(context).cardColor.withValues(alpha: 0.55),
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(
-            color: isSelected
-                ? Theme.of(context).colorScheme.primary
-                : Theme.of(context).dividerColor.withValues(alpha: 0.1),
-            width: isSelected ? 1.5 : 1,
-          ),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.03),
-              blurRadius: 4,
-              offset: const Offset(0, 2),
-            ),
-          ],
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Padding(
-              padding: const EdgeInsets.all(12),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Checkbox in selection mode, icon otherwise
-                  AnimatedSwitcher(
-                    duration: const Duration(milliseconds: 150),
-                    child: _selectionMode
-                        ? Checkbox(
-                            key: ValueKey('${location.id}_checkbox'),
-                            value: isSelected,
-                            onChanged: (_) => _toggleSelection(location.id),
-                            visualDensity: VisualDensity.compact,
-                          )
-                        : Container(
-                            key: ValueKey('${location.id}_icon'),
-                            padding: const EdgeInsets.all(8),
-                            decoration: BoxDecoration(
-                              color: Theme.of(context)
-                                  .colorScheme
-                                  .primary
-                                  .withValues(alpha: 0.15),
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: Icon(
-                              location.isMultiDay
-                                  ? Icons.hotel_rounded
-                                  : Icons.location_on_rounded,
-                              size: 18,
-                              color: Theme.of(context).colorScheme.primary,
-                            ),
-                          ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          location.name,
-                          style:
-                              Theme.of(context).textTheme.titleSmall?.copyWith(
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        const SizedBox(height: 4),
-                        if (location.isMultiDay)
-                          Padding(
-                            padding: const EdgeInsets.only(bottom: 2),
-                            child: Text(
-                              '${_labeler(location.scheduledDate!)} → '
-                              '${_labeler(location.scheduledEndDate!)}',
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .labelSmall
-                                  ?.copyWith(
-                                    color:
-                                        Theme.of(context).colorScheme.primary,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                        // Raw lat/lng told the user nothing; the timestamp
-                        // does. NOTE: `locations` has no updated_at column
-                        // (last_synced_at is populated on ~6% of rows), so
-                        // this is the ADD time — labelled honestly rather
-                        // than passed off as a modification date.
-                        Text(
-                          'Added ${DateFormat('d MMM yyyy, h:mm a').format(location.createdAt.toLocal())}',
-                          style:
-                              Theme.of(context).textTheme.labelSmall?.copyWith(
-                                    color: Theme.of(context)
-                                        .textTheme
-                                        .bodyMedium
-                                        ?.color
-                                        ?.withValues(alpha: 0.6),
-                                  ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ],
-                    ),
-                  ),
-                  // (The added-time + "Xm stay" column lived here — removed:
-                  // the "Added …" line under the name already carries the
-                  // timestamp, and stay is edited from the plan sheet.)
-                  if (hasPhotos && !_selectionMode) ...[
-                    const SizedBox(width: 4),
-                    IconButton(
-                      visualDensity: VisualDensity.compact,
-                      padding: EdgeInsets.zero,
-                      constraints:
-                          const BoxConstraints(minWidth: 32, minHeight: 32),
-                      tooltip: isExpanded ? 'Hide photos' : 'Show photos',
-                      icon: AnimatedRotation(
-                        turns: isExpanded ? 0.5 : 0,
-                        duration: const Duration(milliseconds: 200),
-                        child: const Icon(Icons.expand_more),
-                      ),
-                      onPressed: togglePhotos,
-                    ),
-                  ],
-                  // Dedicated drag handle — using a handle (vs. wrapping the
-                  // whole card in LongPressDraggable) avoids fighting the
-                  // existing long-press → enter selection mode gesture.
-                  if (showDragHandle) ...[
-                    const SizedBox(width: 2),
-                    Draggable<SavedLocation>(
-                      data: location,
-                      // Centre the card horizontally on the finger with the
-                      // finger just below its top edge, so the card is
-                      // carried rather than trailing off to one side.
-                      dragAnchorStrategy: (_, __, ___) =>
-                          const Offset(_dragCardWidth / 2, 26),
-                      onDragStarted: () {
-                        HapticFeedback.mediumImpact();
-                        _startDragAutoScroll();
-                      },
-                      onDragUpdate: (d) => _dragPointerY = d.globalPosition.dy,
-                      onDragEnd: (_) => _stopDragAutoScroll(),
-                      onDragCompleted: _stopDragAutoScroll,
-                      onDraggableCanceled: (_, __) => _stopDragAutoScroll(),
-                      feedback: _buildDragFeedback(location),
-                      childWhenDragging: Opacity(
-                        opacity: 0.35,
-                        child: Icon(
-                          Icons.drag_indicator,
-                          size: 22,
-                          color: Theme.of(context)
-                              .textTheme
-                              .bodyMedium
-                              ?.color
-                              ?.withValues(alpha: 0.5),
-                        ),
-                      ),
-                      child: Tooltip(
-                        message: 'Drag to another day',
-                        child: MouseRegion(
-                          cursor: SystemMouseCursors.grab,
-                          child: Padding(
-                            // Roomier target: a 22px glyph is a hard thing
-                            // to land a thumb on mid-scroll.
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 6, vertical: 8),
-                            child: Icon(
-                              Icons.drag_indicator,
-                              size: 22,
-                              color: Theme.of(context)
-                                  .textTheme
-                                  .bodyMedium
-                                  ?.color
-                                  ?.withValues(alpha: 0.5),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-            ),
-            AnimatedSize(
-              duration: const Duration(milliseconds: 200),
-              curve: Curves.easeOut,
-              alignment: Alignment.topCenter,
-              child: hasPhotos && isExpanded
-                  ? LocationPhotoGallery(
-                      photoRefs: photoRefs,
-                      heroTagPrefix: '${location.id}_trip_detail_photo',
-                      title: location.name,
-                      onLoadFailed: () => ref
-                          .read(placePhotoRefreshProvider)
-                          .noteLoadFailed(photoTarget),
-                    )
-                  : const SizedBox(width: double.infinity, height: 0),
-            ),
-          ],
+      onDragUpdate: (d) => _dragPointerY = d.globalPosition.dy,
+      onDragEnd: (_) => _stopDragAutoScroll(),
+      onDragCompleted: _stopDragAutoScroll,
+      onDraggableCanceled: (_, __) => _stopDragAutoScroll(),
+      feedback: _buildDragFeedback(location),
+      childWhenDragging: Opacity(
+        opacity: 0.35,
+        child: Icon(
+          Icons.drag_indicator,
+          size: 22,
+          color: Theme.of(context)
+              .textTheme
+              .bodyMedium
+              ?.color
+              ?.withValues(alpha: 0.5),
         ),
       ),
-    );
-  }
-
-  void _showAddLocationDialog() {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      // Light barrier: the page (and its globe) stays visible behind the
-      // frosted sheet instead of going near-black.
-      barrierColor: AppTheme.sheetBarrierColor(context),
-      builder: (context) => _LocationSearchSheet(
-        trip: _trip,
-      ),
-    );
-  }
-
-  /// Opens the place-search sheet pre-scheduled to [day], so a place picked
-  /// there lands on that specific date instead of today. Wired to the
-  /// per-date add button and the empty-day placeholder.
-  void _showAddLocationForDate(DateTime day) {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      // Light barrier: the page (and its globe) stays visible behind the
-      // frosted sheet instead of going near-black.
-      barrierColor: AppTheme.sheetBarrierColor(context),
-      builder: (context) => _LocationSearchSheet(
-        trip: _trip,
-        scheduledDate: day,
-      ),
-    );
-  }
-}
-
-class _LocationSearchSheet extends ConsumerStatefulWidget {
-  final Trip trip;
-
-  /// When set, a place added through this sheet is scheduled to this day
-  /// instead of today — used by the per-date "add to this day" affordances.
-  final DateTime? scheduledDate;
-
-  const _LocationSearchSheet({
-    required this.trip,
-    this.scheduledDate,
-  });
-
-  String get tripId => trip.id;
-  String? get tripCountryCode => trip.countryCode;
-
-  @override
-  ConsumerState<_LocationSearchSheet> createState() =>
-      _LocationSearchSheetState();
-}
-
-class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
-  final TextEditingController _searchController = TextEditingController();
-  final FocusNode _searchFocusNode = FocusNode();
-  Timer? _debounceTimer;
-  bool _isAddingPlace = false;
-
-  /// Captured in initState because Riverpod forbids touching `ref` from
-  /// dispose (it threw "Cannot use ref after the widget was disposed" on
-  /// every sheet close). The provider is app-lifetime (not autoDispose),
-  /// so calling clear() on the captured notifier after unmount is safe.
-  late final PaginatedSearchNotifier _searchStateNotifier;
-
-  @override
-  void initState() {
-    super.initState();
-    _searchStateNotifier = ref.read(tripDetailSearchProvider.notifier);
-  }
-
-  @override
-  void dispose() {
-    _searchController.dispose();
-    _searchFocusNode.dispose();
-    _debounceTimer?.cancel();
-    // Clear search state when sheet is closed.
-    Future.microtask(_searchStateNotifier.clear);
-    super.dispose();
-  }
-
-  void _onSearchChanged(String value) {
-    _debounceTimer?.cancel();
-    _debounceTimer = Timer(const Duration(milliseconds: 300), () {
-      if (value.isEmpty) {
-        ref.read(tripDetailSearchProvider.notifier).clear();
-      } else {
-        ref.read(tripDetailSearchProvider.notifier).search(
-              value,
-              countryCodeOverride: widget.tripCountryCode,
-            );
-      }
-    });
-    setState(() {}); // Update clear button visibility
-  }
-
-  /// True iff [placeId] is already attached to THIS trip (the sheet is
-  /// scoped to widget.trip, so we filter by trip_id rather than using a
-  /// global pinned list — the trip being viewed in trip-details is often
-  /// not the user's active trip).
-  /// Same-day duplicate check for the add flow — the same shared rule as
-  /// every reschedule path: the place may already exist elsewhere in the
-  /// trip, just not on the day this sheet adds to.
-  bool _isAlreadyOnTargetDay({
-    String? placeId,
-    String? name,
-    double? lat,
-    double? lng,
-  }) {
-    final target = _effectiveScheduledDate();
-    final day = DateTime(target.year, target.month, target.day);
-    final saved =
-        ref.read(savedLocationsProvider).valueOrNull ?? const <SavedLocation>[];
-    final candidate = (
-      id: '',
-      placeId: placeId,
-      name: name ?? '',
-      lat: lat ?? double.nan,
-      lng: lng ?? double.nan,
-    );
-    return filterSameDayDuplicates(
-      moving: [candidate],
-      occupantsOnDay: saved
-          .where((l) =>
-              l.tripId == widget.tripId &&
-              l.scheduledDate != null &&
-              l.isActiveOnDate(day))
-          .map(placeKeyOfSaved),
-      samePlace: isLikelySamePlace,
-    ).allowedIds.isEmpty;
-  }
-
-  /// Reset the sheet back to its "ready for the next search" state after
-  /// a successful add or a duplicate hit. Keeps the sheet open so the
-  /// user can chain adds without re-opening it each time, and refocuses
-  /// the TextField so the keyboard stays up.
-  void _resetSearchForNextAdd() {
-    _debounceTimer?.cancel();
-    _searchController.clear();
-    ref.read(tripDetailSearchProvider.notifier).clear();
-    if (mounted) {
-      setState(() {}); // Update suffix-icon visibility
-      _searchFocusNode.requestFocus();
-    }
-  }
-
-  void _onScroll(ScrollController scrollController) {
-    if (scrollController.position.pixels >=
-        scrollController.position.maxScrollExtent * 0.8) {
-      ref.read(tripDetailSearchProvider.notifier).loadMore();
-    }
-  }
-
-  String _formatDistance(int distanceMeters) {
-    if (distanceMeters < 1000) return '${distanceMeters}m away';
-    return '${(distanceMeters / 1000).toStringAsFixed(1)}km away';
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    ref.watch(collaboratorRealtimeInitProvider);
-    return DraggableScrollableSheet(
-      initialChildSize: 0.9,
-      minChildSize: 0.5,
-      maxChildSize: 0.95,
-      builder: (context, scrollController) {
-        scrollController.addListener(() => _onScroll(scrollController));
-        // Frosted glass: the trip page (and its ambient globe) stays visible
-        // through the sheet while the blur keeps the modal content readable.
-        return ClipRRect(
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-          child: BackdropFilter(
-            filter: ImageFilter.blur(
-                sigmaX: AppTheme.sheetBlurSigma,
-                sigmaY: AppTheme.sheetBlurSigma),
-            child: Container(
-              decoration: BoxDecoration(
-                color: Theme.of(context)
-                    .scaffoldBackgroundColor
-                    .withValues(alpha: AppTheme.sheetFillAlpha(context)),
-                borderRadius:
-                    const BorderRadius.vertical(top: Radius.circular(20)),
-                border: Border.all(
-                  color: AppTheme.sheetBorderColor(context),
-                  width: 0.8,
-                ),
-              ),
-              // Stack so the busy overlay can cover the whole sheet (close
-              // button, drag handle, results) while a request is in flight —
-              // prevents the user from queuing a second tap mid-add.
-              child: Stack(
-                children: [
-                  Column(
-                    children: [
-                      // Drag handle
-                      Container(
-                        margin: const EdgeInsets.only(top: 12, bottom: 8),
-                        height: 4,
-                        width: 40,
-                        decoration: BoxDecoration(
-                          color: Colors.grey[400],
-                          borderRadius: BorderRadius.circular(2),
-                        ),
-                      ),
-
-                      // Header
-                      Padding(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 16, vertical: 8),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: Text(
-                                'Search for Location',
-                                style: Theme.of(context)
-                                    .textTheme
-                                    .titleLarge
-                                    ?.copyWith(
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                              ),
-                            ),
-                            IconButton(
-                              icon: const Icon(Icons.close),
-                              onPressed: () => Navigator.pop(context),
-                            ),
-                          ],
-                        ),
-                      ),
-
-                      // Search bar
-                      Padding(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 16, vertical: 8),
-                        child: TextField(
-                          cursorOpacityAnimates: false,
-                          controller: _searchController,
-                          focusNode: _searchFocusNode,
-                          autofocus: true,
-                          decoration: InputDecoration(
-                            hintText: 'Search for a place...',
-                            prefixIcon: const Icon(Icons.search),
-                            suffixIcon: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                IconButton(
-                                  icon: const Icon(Icons.link),
-                                  tooltip: 'Paste Google Maps link',
-                                  onPressed: _showUrlInputDialog,
-                                ),
-                                if (_searchController.text.isNotEmpty)
-                                  IconButton(
-                                    icon: const Icon(Icons.clear),
-                                    onPressed: () {
-                                      _searchController.clear();
-                                      ref
-                                          .read(
-                                              tripDetailSearchProvider.notifier)
-                                          .clear();
-                                      setState(() {});
-                                    },
-                                  ),
-                              ],
-                            ),
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            filled: true,
-                            fillColor: Theme.of(context).cardColor,
-                          ),
-                          onChanged: _onSearchChanged,
-                        ),
-                      ),
-
-                      const Divider(),
-
-                      // Search results
-                      Expanded(
-                        child: _buildSearchResults(scrollController),
-                      ),
-                    ],
-                  ),
-                  // Busy overlay shown during either add path. AbsorbPointer
-                  // blocks taps so a second _addLocationToTrip can't queue
-                  // up before the first round trip finishes — and gives the
-                  // user clear "the tap took" feedback.
-                  if (_isAddingPlace || _isPastingUrl)
-                    Positioned.fill(
-                      child: AbsorbPointer(
-                        child: ColoredBox(
-                          color: Colors.black.withValues(alpha: 0.25),
-                          child: Center(
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 24, vertical: 20),
-                              decoration: BoxDecoration(
-                                color: Theme.of(context).colorScheme.surface,
-                                borderRadius: BorderRadius.circular(16),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: Colors.black.withValues(alpha: 0.2),
-                                    blurRadius: 16,
-                                    offset: const Offset(0, 4),
-                                  ),
-                                ],
-                              ),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  const SizedBox(
-                                    width: 22,
-                                    height: 22,
-                                    child: CircularProgressIndicator(
-                                        strokeWidth: 2.4),
-                                  ),
-                                  const SizedBox(width: 14),
-                                  Text(
-                                    _isPastingUrl
-                                        ? 'Decoding link…'
-                                        : 'Adding location…',
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .bodyMedium
-                                        ?.copyWith(fontWeight: FontWeight.w600),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _buildSearchResults(ScrollController scrollController) {
-    if (_searchController.text.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              Icons.search,
-              size: 64,
-              color:
-                  Theme.of(context).colorScheme.primary.withValues(alpha: 0.3),
-            ),
-            const SizedBox(height: 16),
-            Text(
-              'Search for places to add',
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    color: Theme.of(context)
-                        .textTheme
-                        .bodyMedium
-                        ?.color
-                        ?.withValues(alpha: 0.6),
-                  ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Results will be filtered by your country',
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: Theme.of(context)
-                        .textTheme
-                        .bodyMedium
-                        ?.color
-                        ?.withValues(alpha: 0.5),
-                  ),
-            ),
-          ],
-        ),
-      );
-    }
-
-    final searchState = ref.watch(tripDetailSearchProvider);
-
-    // Initial loading
-    if (searchState.isLoading && searchState.results.isEmpty) {
-      return const Center(child: CircularProgressIndicator());
-    }
-
-    // Error state
-    if (searchState.error != null && searchState.results.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(Icons.error_outline, size: 64, color: Colors.red),
-            const SizedBox(height: 16),
-            Text('Error: ${searchState.error}'),
-          ],
-        ),
-      );
-    }
-
-    // No results
-    if (searchState.results.isEmpty && !searchState.isLoading) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              Icons.location_off,
-              size: 64,
-              color:
-                  Theme.of(context).colorScheme.primary.withValues(alpha: 0.3),
-            ),
-            const SizedBox(height: 16),
-            Text(
-              'No places found',
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Try a different search term',
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: Theme.of(context)
-                        .textTheme
-                        .bodyMedium
-                        ?.color
-                        ?.withValues(alpha: 0.6),
-                  ),
-            ),
-          ],
-        ),
-      );
-    }
-
-    // Results with infinite scroll
-    return ListView.separated(
-      controller: scrollController,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      itemCount: searchState.results.length + (searchState.hasMore ? 1 : 0),
-      separatorBuilder: (context, index) => const Divider(height: 1),
-      itemBuilder: (context, index) {
-        // Loading indicator at the end
-        if (index == searchState.results.length) {
-          return Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: Center(
-              child: searchState.isLoading
-                  ? const SizedBox(
-                      height: 24,
-                      width: 24,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const SizedBox.shrink(),
-            ),
-          );
-        }
-
-        final prediction = searchState.results[index];
-        return ListTile(
-          leading: Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color:
-                  Theme.of(context).colorScheme.primary.withValues(alpha: 0.15),
-              borderRadius: BorderRadius.circular(8),
-            ),
+      child: Tooltip(
+        message: 'Drag to another day',
+        child: MouseRegion(
+          cursor: SystemMouseCursors.grab,
+          child: Padding(
+            // Roomier target: a 22px glyph is a hard thing
+            // to land a thumb on mid-scroll.
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
             child: Icon(
-              Icons.location_on,
-              color: Theme.of(context).colorScheme.primary,
+              Icons.drag_indicator,
+              size: 22,
+              color: Theme.of(context)
+                  .textTheme
+                  .bodyMedium
+                  ?.color
+                  ?.withValues(alpha: 0.5),
             ),
           ),
-          title: Text(
-            prediction.mainText,
-            style: const TextStyle(fontWeight: FontWeight.w600),
-          ),
-          subtitle: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                prediction.secondaryText,
-                style: TextStyle(
-                  color: Theme.of(context)
-                      .textTheme
-                      .bodyMedium
-                      ?.color
-                      ?.withValues(alpha: 0.6),
-                ),
-              ),
-              // Distance from the device — same "Xkm away" line the map's
-              // search screen shows, so both add paths read identically.
-              // Null when the device has no fix (search still works).
-              if (prediction.distanceMeters != null) ...[
-                const SizedBox(height: 4),
-                Row(
-                  children: [
-                    Icon(
-                      Icons.near_me,
-                      size: 12,
-                      color: Theme.of(context).colorScheme.primary,
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      _formatDistance(prediction.distanceMeters!),
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: Theme.of(context).colorScheme.primary,
-                            fontWeight: FontWeight.w600,
-                          ),
-                    ),
-                  ],
-                ),
-              ],
-            ],
-          ),
-          onTap: () => _addLocationToTrip(prediction),
-        );
-      },
+        ),
+      ),
     );
   }
 
-  bool _isPastingUrl = false;
-
-  Future<void> _showUrlInputDialog() async {
-    final url = await showDialog<String>(
-      context: context,
-      builder: (context) => const GoogleMapsUrlDialog(),
-    );
-    if (url != null && url.isNotEmpty) {
-      _processGoogleMapsUrl(url);
-    }
-  }
-
-  /// Backstop for the per-date add flow. The sheet can carry a preselected
-  /// [scheduledDate] (from a day slot's add button); refuse to schedule a new
-
-  /// The day a place added through this sheet lands on.
-  ///
-  /// Per-date adds use their explicit day. The general add defaults to
-  /// today — but unlike the map screen, the trip-details flow does NOT
-  /// bother the user with the "Outside trip dates" dialog: when today is
-  /// before the trip's range even starts, the place simply lands on the
-  /// trip's FIRST day. (Today after the range is left to the existing
-  /// confirm dialog, which offers extending the trip — silently dropping
-  /// the place on a past first day would collide with the past-date lock.)
-  DateTime _effectiveScheduledDate() {
-    final explicit = widget.scheduledDate;
-    if (explicit != null) return explicit;
+  /// The day a place added from the page's button lands on: Day 1 of an
+  /// undated trip; the first day while today is before the trip; else
+  /// today (today after the trip is left to the add flow's confirmation,
+  /// which offers to extend the trip).
+  DateTime _defaultAddDay() {
     final now = DateTime.now();
-    final start = widget.trip.startDate;
-    // No dates yet: "today" means nothing on a numbered trip — Day 1.
-    if (widget.trip.isUndated && start != null) {
+    final start = _trip.startDate;
+    if (_trip.isUndated && start != null) {
       return DateTime(start.year, start.month, start.day);
     }
     if (start != null) {
@@ -3917,243 +3164,10 @@ class _LocationSearchSheetState extends ConsumerState<_LocationSearchSheet> {
     return now;
   }
 
-  Future<void> _processGoogleMapsUrl(String text) async {
-    if (_isPastingUrl || _isAddingPlace) return;
+  void _showAddLocationDialog() =>
+      showAddPlaceSheet(context, trip: _trip, day: _defaultAddDay());
 
-    if (!GoogleMapsUrlExtractor.isValidGoogleMapsUrl(text)) {
-      if (mounted) {
-        AppToast.warning(context, 'Not a valid Google Maps link');
-      }
-      return;
-    }
-
-    if (!mounted) return;
-
-    // Inline overlay (see Stack in build()) handles the busy visual, so
-    // no modal-dialog spinner is needed here. This also keeps the sheet
-    // open so consecutive adds chain naturally.
-    setState(() => _isPastingUrl = true);
-
-    try {
-      PlaceDetails? placeDetails;
-
-      // Try extracting coordinates from the URL
-      try {
-        final coordinates =
-            await GoogleMapsUrlExtractor.processGoogleMapsUrl(text);
-        if (coordinates != null &&
-            coordinates['latitude'] != null &&
-            coordinates['longitude'] != null) {
-          final lat = coordinates['latitude'] as double;
-          final lng = coordinates['longitude'] as double;
-          placeDetails =
-              await PlacesService.getPlaceFromCoordinates(LatLng(lat, lng));
-        }
-      } catch (_) {}
-
-      // Fallback: expand short URL and geocode the q parameter
-      if (placeDetails == null) {
-        String? expandedUrl;
-        try {
-          expandedUrl = await GoogleMapsUrlExtractor.expandShortUrl(text);
-        } catch (_) {}
-        final urlToParse = expandedUrl ?? text;
-        final uri = Uri.tryParse(urlToParse);
-        final query = uri?.queryParameters['q'];
-        if (query != null && query.isNotEmpty) {
-          placeDetails = await PlacesService.getPlaceFromAddress(query);
-        }
-      }
-
-      if (placeDetails == null) {
-        if (mounted) {
-          AppToast.error(context, 'Could not decode location from URL');
-        }
-        return;
-      }
-
-      // Permission check
-      final hasWriteAccess =
-          await ref.read(hasWriteAccessProvider(widget.tripId).future);
-      if (!hasWriteAccess) {
-        if (mounted) {
-          AppToast.warning(
-            context,
-            'You don\'t have permission to add locations to this trip.',
-          );
-        }
-        return;
-      }
-
-      if (!mounted) return;
-
-      // Reject the paste if the decoded place is already on this trip —
-      // mirrors the tap-to-add path so both entry points behave the same.
-      if (_isAlreadyOnTargetDay(
-        placeId: placeDetails.placeId,
-        name: placeDetails.name,
-        lat: placeDetails.coordinates.latitude,
-        lng: placeDetails.coordinates.longitude,
-      )) {
-        AppToast.warning(
-          context,
-          '"${placeDetails.name}" is already planned for this day',
-        );
-        _resetSearchForNextAdd();
-        return;
-      }
-
-      final newLocation = SavedLocation(
-        id: const Uuid().v4(),
-        userId: '',
-        fingerprint: '',
-        name: placeDetails.name,
-        lat: placeDetails.coordinates.latitude,
-        lng: placeDetails.coordinates.longitude,
-        isSkipped: false,
-        stayDuration: 1800,
-        scheduledDate: _effectiveScheduledDate(),
-        createdAt: DateTime.now(),
-        tripId: widget.tripId,
-        photoReference: placeDetails.photoReference,
-        photoReferences: placeDetails.photoReferences.isEmpty
-            ? null
-            : placeDetails.photoReferences,
-        photoAttributions: placeDetails.photoAttributions,
-        placeId: placeDetails.placeId,
-        originalName: placeDetails.name,
-        placeTypes: placeDetails.types.isEmpty ? null : placeDetails.types,
-        floor: placeDetails.floor,
-        googleOpeningHours: placeDetails.openingHours,
-        hoursLastRefreshedAt:
-            placeDetails.openingHours != null ? DateTime.now() : null,
-      );
-
-      final added = await LocationAddService(ref).addSavedLocation(
-        context,
-        newLocation,
-        locationCountryCode: placeDetails.countryCode,
-      );
-      if (!mounted) return;
-      if (!added) return;
-
-      // Stay on the sheet so the user can paste another link / search
-      // for the next place without re-opening it.
-      AppToast.success(context, 'Added ${placeDetails.name} to trip');
-      _resetSearchForNextAdd();
-    } catch (e) {
-      if (mounted) {
-        AppToast.error(context, 'Failed to decode URL: $e');
-      }
-    } finally {
-      if (mounted) setState(() => _isPastingUrl = false);
-    }
-  }
-
-  Future<void> _addLocationToTrip(PlacePrediction prediction) async {
-    // Defensive — overlay should block a second tap, but guard the
-    // race during its mount frame.
-    if (_isAddingPlace || _isPastingUrl) return;
-
-    // Permission check at function level
-    final hasWriteAccess =
-        await ref.read(hasWriteAccessProvider(widget.tripId).future);
-    if (!mounted) return;
-    if (!hasWriteAccess) {
-      AppToast.warning(
-        context,
-        'You don\'t have permission to add locations to this trip.',
-      );
-      return;
-    }
-
-    // Cheap duplicate check using the prediction's place_id — saves the
-    // round-trip cost of Place Details when the pick is already in the
-    // trip. Notify the user, reset the search, and bail.
-    if (_isAlreadyOnTargetDay(placeId: prediction.placeId)) {
-      AppToast.warning(
-        context,
-        '"${prediction.mainText}" is already planned for this day',
-      );
-      _resetSearchForNextAdd();
-      return;
-    }
-
-    setState(() => _isAddingPlace = true);
-    try {
-      final placeDetails =
-          await PlacesService.getPlaceDetails(prediction.placeId);
-
-      if (placeDetails == null) {
-        if (mounted) {
-          AppToast.error(context, 'Failed to get location details');
-        }
-        return;
-      }
-      if (!mounted) return;
-
-      // Place Details may return a canonical place_id that differs from
-      // the autocomplete prediction's id (CID vs ChIJ, region variants).
-      // Re-check duplicates against the canonical id before committing.
-      final canonicalPlaceId = placeDetails.placeId ?? prediction.placeId;
-      if (_isAlreadyOnTargetDay(
-        placeId: canonicalPlaceId,
-        name: placeDetails.name,
-        lat: placeDetails.coordinates.latitude,
-        lng: placeDetails.coordinates.longitude,
-      )) {
-        AppToast.warning(
-          context,
-          '"${placeDetails.name}" is already planned for this day',
-        );
-        _resetSearchForNextAdd();
-        return;
-      }
-
-      final newLocation = SavedLocation(
-        id: const Uuid().v4(),
-        userId: '', // Will be set by repository
-        fingerprint: '',
-        name: placeDetails.name,
-        lat: placeDetails.coordinates.latitude,
-        lng: placeDetails.coordinates.longitude,
-        isSkipped: false,
-        stayDuration: 1800, // 30 minutes default
-        scheduledDate: _effectiveScheduledDate(),
-        createdAt: DateTime.now(),
-        tripId: widget.tripId, // Assign to this trip
-        photoReference: placeDetails.photoReference,
-        photoReferences: placeDetails.photoReferences.isEmpty
-            ? null
-            : placeDetails.photoReferences,
-        photoAttributions: placeDetails.photoAttributions,
-        placeId: canonicalPlaceId,
-        originalName: placeDetails.name,
-        placeTypes: placeDetails.types.isEmpty ? null : placeDetails.types,
-        floor: placeDetails.floor,
-        googleOpeningHours: placeDetails.openingHours,
-        hoursLastRefreshedAt:
-            placeDetails.openingHours != null ? DateTime.now() : null,
-      );
-
-      final added = await LocationAddService(ref).addSavedLocation(
-        context,
-        newLocation,
-        locationCountryCode: placeDetails.countryCode,
-      );
-      if (!mounted) return;
-      if (!added) return;
-
-      // Stay on the sheet so the user can immediately pick the next
-      // place — clears input, drops predictions, refocuses the field.
-      AppToast.success(context, 'Added ${placeDetails.name} to trip');
-      _resetSearchForNextAdd();
-    } catch (e) {
-      if (mounted) {
-        AppToast.error(context, 'Error: $e');
-      }
-    } finally {
-      if (mounted) setState(() => _isAddingPlace = false);
-    }
-  }
+  /// A day's "+" and the empty-day placeholder: the place lands on [day].
+  void _showAddLocationForDate(DateTime day) =>
+      showAddPlaceSheet(context, trip: _trip, day: day);
 }

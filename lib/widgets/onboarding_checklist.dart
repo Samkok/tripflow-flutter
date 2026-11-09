@@ -33,9 +33,9 @@ const _kStepMeta = {
     subtitle: 'Search anything — cafés, sights, hotels',
   ),
   ChecklistStep.activateTrip: (
-    icon: Icons.play_circle_outline,
-    title: 'Activate the trip',
-    subtitle: 'Puts it on your map, ready to go',
+    icon: Icons.map_outlined,
+    title: 'Open your trip on the map',
+    subtitle: 'Your places become pins, ready to route',
   ),
   ChecklistStep.optimizeRoute: (
     icon: Icons.route_outlined,
