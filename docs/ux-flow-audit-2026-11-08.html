@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VoyZa UX Flow Audit</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Source+Sans+3:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    /* Night-map palette: the app is a dark map with a cyan trip line. Paper for reading, cyan reserved for the proposal marks. */
+    --paper: #f6f4ee;
+    --ink: #17202b;
+    --ink-soft: #4b5563;
+    --rule: #d9d4c7;
+    --card: #ffffff;
+    --accent: #0e7c86;      /* the trip line, darkened for paper */
+    --flag: #c43d3d;        /* "not visited" red, the one semantic red */
+    --tint: #e6f3f4;
+    --font-display: "Fraunces", Georgia, serif;
+    --font-body: "Source Sans 3", "Helvetica Neue", Arial, sans-serif;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #0f1720; --ink: #e8ecf1; --ink-soft: #a7b0bc; --rule: #26313d;
+      --card: #16202b; --accent: #4fd1dc; --flag: #ff6b6b; --tint: #10272c; color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #0f1720; --ink: #e8ecf1; --ink-soft: #a7b0bc; --rule: #26313d;
+    --card: #16202b; --accent: #4fd1dc; --flag: #ff6b6b; --tint: #10272c; color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body { background: var(--paper); color: var(--ink); font-family: var(--font-body); font-size: 17px; line-height: 1.5; }
+  main { max-width: 880px; margin: 0 auto; padding: 40px 16px 72px; }
+  h1, h2, h3 { font-family: var(--font-display); text-wrap: balance; line-height: 1.15; margin: 0; }
+  h1 { font-size: 2.3rem; font-weight: 700; }
+  h2 { font-size: 1.5rem; font-weight: 600; margin-top: 56px; padding-top: 16px; border-top: 1px solid var(--rule); }
+  h3 { font-size: 1.12rem; font-weight: 600; margin-top: 28px; }
+  p { max-width: 65ch; margin: 12px 0; }
+  .lede { font-size: 1.15rem; color: var(--ink-soft); max-width: 60ch; }
+  .meta { color: var(--ink-soft); font-size: 0.95rem; margin-top: 8px; }
+  figure { margin: 24px 0; }
+  figure svg { max-width: 100%; height: auto; display: block; color: var(--ink); }
+  figcaption { font-size: 0.95rem; color: var(--ink-soft); margin-top: 8px; max-width: 70ch; }
+  .scroll { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.97rem; font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  th { font-weight: 700; color: var(--ink-soft); font-size: 0.85rem; letter-spacing: 0.02em; text-transform: uppercase; }
+  td.n { text-align: right; white-space: nowrap; }
+  .prop { background: var(--card); border: 1px solid var(--rule); border-radius: 10px; padding: 16px 18px; margin: 14px 0; display: grid; gap: 6px; }
+  .prop h3 { margin: 0; }
+  .prop .tags { display: flex; gap: 8px; flex-wrap: wrap; font-size: 0.8rem; font-weight: 700; letter-spacing: 0.02em; text-transform: uppercase; }
+  .pill { padding: 2px 8px; border-radius: 999px; border: 1px solid var(--rule); color: var(--ink-soft); }
+  .pill.high { border-color: var(--accent); color: var(--accent); background: var(--tint); }
+  .prop p { margin: 4px 0; }
+  ul { padding-left: 20px; } li { margin: 4px 0; }
+  .note { border-left: 3px solid var(--accent); padding: 8px 14px; background: var(--tint); border-radius: 0 8px 8px 0; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9em; }
+  @media (max-width: 480px) { h1 { font-size: 1.8rem; } body { font-size: 16px; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>VoyZa UX Flow Audit</h1>
+  <p class="lede">What the app asks a traveller to learn, drawn from the navigation code, and the eleven places where it asks for the same thing twice.</p>
+  <p class="meta">Read from the codebase on 8 November 2026 (<code>main</code> at <code>008976f</code> plus the ended-trip work). Nothing here was measured on a device; tap counts are the shortest path the code allows.</p>
+
+  <h2>1. The shape of the app</h2>
+  <p>Three tabs. The Trips tab lists trips and opens a trip's page. The Map tab shows one trip at a time, the "active" one, with the plan sheet docked underneath and most editing in sheets over the map. Settings holds account, subscription and preferences.</p>
+
+  <figure>
+    <svg viewBox="0 0 960 560" role="img" aria-label="Flow map of VoyZa: three tabs lead to the Trips list, the Map with its plan sheet and detail sheets, and Settings; the Trip page and the Map plan sheet both reach the same editing sheets.">
+      <defs>
+        <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+        </marker>
+      </defs>
+      <g font-family="Source Sans 3, Arial, sans-serif" font-size="12" fill="currentColor">
+        <!-- tab bar -->
+        <rect x="20" y="20" width="920" height="40" rx="8" fill="none" stroke="currentColor" stroke-opacity="0.35"/>
+        <text x="140" y="45" text-anchor="middle" font-weight="700">Trips tab</text>
+        <text x="480" y="45" text-anchor="middle" font-weight="700">Map tab (active trip)</text>
+        <text x="820" y="45" text-anchor="middle" font-weight="700">Settings tab</text>
+
+        <!-- Trips column -->
+        <rect x="40" y="100" width="200" height="54" rx="8" fill="none" stroke="currentColor"/>
+        <text x="140" y="122" text-anchor="middle" font-weight="600">Trip list</text>
+        <text x="140" y="140" text-anchor="middle" fill-opacity="0.7">cards · Activate / Go to map</text>
+        <rect x="40" y="200" width="200" height="54" rx="8" fill="none" stroke="currentColor"/>
+        <text x="140" y="222" text-anchor="middle" font-weight="600">Create trip wizard</text>
+        <text x="140" y="240" text-anchor="middle" fill-opacity="0.7">country → dates → name → buddies</text>
+        <rect x="40" y="300" width="200" height="70" rx="8" fill="none" stroke="currentColor" stroke-width="1.6"/>
+        <text x="140" y="322" text-anchor="middle" font-weight="600">Trip page</text>
+        <text x="140" y="340" text-anchor="middle" fill-opacity="0.7">days · Unscheduled · Not visited</text>
+        <text x="140" y="356" text-anchor="middle" fill-opacity="0.7">Add Location · Auto-plan · PDF · QR</text>
+        <line x1="140" y1="154" x2="140" y2="200" marker-end="url(#arr)"/>
+        <text x="148" y="182" fill-opacity="0.7">+ New</text>
+        <line x1="100" y1="154" x2="100" y2="300" marker-end="url(#arr)"/>
+        <text x="48" y="282" fill-opacity="0.7">tap card</text>
+
+        <!-- Map column -->
+        <rect x="330" y="100" width="300" height="70" rx="8" fill="none" stroke="currentColor"/>
+        <text x="480" y="122" text-anchor="middle" font-weight="600">Map</text>
+        <text x="480" y="140" text-anchor="middle" fill-opacity="0.7">banner · day chip · filter bar · search · tags</text>
+        <text x="480" y="156" text-anchor="middle" fill-opacity="0.7">5 FABs · legends · route lines</text>
+        <rect x="330" y="214" width="300" height="70" rx="8" fill="none" stroke="currentColor" stroke-width="1.6"/>
+        <text x="480" y="236" text-anchor="middle" font-weight="600">Trip plan sheet</text>
+        <text x="480" y="254" text-anchor="middle" fill-opacity="0.7">day ◀ ▶ · Selected / All tabs · selection menu</text>
+        <text x="480" y="270" text-anchor="middle" fill-opacity="0.7">Re-optimize · Unscheduled · Not visited</text>
+        <line x1="480" y1="170" x2="480" y2="214" marker-end="url(#arr)"/>
+        <text x="488" y="196" fill-opacity="0.7">docked</text>
+
+        <!-- sheets row -->
+        <rect x="300" y="340" width="110" height="46" rx="8" fill="none" stroke="currentColor"/>
+        <text x="355" y="359" text-anchor="middle" font-weight="600">Place sheet</text>
+        <text x="355" y="375" text-anchor="middle" fill-opacity="0.7">16 actions</text>
+        <rect x="425" y="340" width="110" height="46" rx="8" fill="none" stroke="currentColor"/>
+        <text x="480" y="359" text-anchor="middle" font-weight="600">Route sheet</text>
+        <text x="480" y="375" text-anchor="middle" fill-opacity="0.7">legs · options</text>
+        <rect x="550" y="340" width="110" height="46" rx="8" fill="none" stroke="currentColor"/>
+        <text x="605" y="359" text-anchor="middle" font-weight="600">Jump to a day</text>
+        <text x="605" y="375" text-anchor="middle" fill-opacity="0.7">days · Not visited</text>
+        <line x1="400" y1="284" x2="360" y2="340" marker-end="url(#arr)"/>
+        <text x="320" y="318" fill-opacity="0.7">tap pin / card</text>
+        <line x1="480" y1="284" x2="480" y2="340" marker-end="url(#arr)"/>
+        <text x="488" y="318" fill-opacity="0.7">tap leg</text>
+        <line x1="560" y1="284" x2="600" y2="340" marker-end="url(#arr)"/>
+        <text x="585" y="318" fill-opacity="0.7">day chip</text>
+
+        <!-- shared editing sheets -->
+        <rect x="300" y="440" width="360" height="64" rx="8" fill="none" stroke="var(--accent)" stroke-width="1.8"/>
+        <text x="480" y="462" text-anchor="middle" font-weight="600">Shared editing sheets</text>
+        <text x="480" y="480" text-anchor="middle" fill-opacity="0.75">Add place · Move / copy day · Move to trip · Not visited review</text>
+        <text x="480" y="496" text-anchor="middle" fill-opacity="0.75">Auto-plan · Stay duration · Tag · Collaborators · Paywall</text>
+        <line x1="355" y1="386" x2="380" y2="440" marker-end="url(#arr)"/>
+        <line x1="480" y1="284" x2="480" y2="340" stroke="none"/>
+        <path d="M240 350 C 270 350, 280 470, 300 472" fill="none" stroke="var(--accent)" stroke-width="1.6" marker-end="url(#arr)"/>
+        <text x="236" y="420" fill="var(--accent)" font-weight="600">same sheets,</text>
+        <text x="236" y="436" fill="var(--accent)" font-weight="600">second list</text>
+        <path d="M 630 250 C 700 250, 700 470, 660 472" fill="none" stroke="var(--accent)" stroke-width="1.6" marker-end="url(#arr)"/>
+
+        <!-- Settings column -->
+        <rect x="720" y="100" width="200" height="54" rx="8" fill="none" stroke="currentColor"/>
+        <text x="820" y="122" text-anchor="middle" font-weight="600">Settings</text>
+        <text x="820" y="140" text-anchor="middle" fill-opacity="0.7">7 sections</text>
+        <rect x="720" y="200" width="200" height="54" rx="8" fill="none" stroke="currentColor"/>
+        <text x="820" y="222" text-anchor="middle" font-weight="600">Subscription · Free trial</text>
+        <text x="820" y="240" text-anchor="middle" fill-opacity="0.7">manage screen · paywall</text>
+        <rect x="720" y="300" width="200" height="54" rx="8" fill="none" stroke="currentColor"/>
+        <text x="820" y="322" text-anchor="middle" font-weight="600">Invite · Referral</text>
+        <text x="820" y="340" text-anchor="middle" fill-opacity="0.7">screen + prompt + code field</text>
+        <line x1="820" y1="154" x2="820" y2="200" marker-end="url(#arr)"/>
+        <line x1="820" y1="254" x2="820" y2="300" marker-end="url(#arr)"/>
+
+        <!-- trips -> map -->
+        <path d="M240 127 C 290 127, 290 135, 330 135" fill="none" stroke="currentColor" marker-end="url(#arr)"/>
+        <text x="246" y="118" fill-opacity="0.7">Go to map</text>
+      </g>
+    </svg>
+    <figcaption>The map and the trip page are two full itineraries (the two heavier boxes). Both list every day, both carry an Unscheduled and a Not visited section, both open the same editing sheets, and each has its own card and its own menu. A traveller learns two ways to do one job.</figcaption>
+  </figure>
+
+  <h2>2. Where the same thing is asked for twice</h2>
+  <p>These are the duplications a reader of the code can prove, not a matter of taste. Each one is a place where a traveller can be told "do it here" in two or more spots that look different and behave slightly differently.</p>
+
+  <div class="scroll">
+  <table>
+    <thead><tr><th>Job</th><th class="n">Ways in</th><th>Where</th></tr></thead>
+    <tbody>
+      <tr><td>Add a place</td><td class="n">6</td><td>Map search field · full search screen · trip page "Add Location" · per-day "+" · paste a Google Maps link (two places) · long-press the map for nearby picks · "Add to trip" on a loose place</td></tr>
+      <tr><td>See the day's places</td><td class="n">4</td><td>Plan sheet, Selected tab · plan sheet, All tab · trip page days · Entire-trip map legend</td></tr>
+      <tr><td>Change the day</td><td class="n">4</td><td>◀ ▶ in the plan sheet · day chip → Jump sheet · trip page scroll · the All tab</td></tr>
+      <tr><td>Plan the route</td><td class="n">4 verbs</td><td>Re-optimize (one day) · Plan / Auto-plan (whole trip, two entry points) · "Put all on one day" · "Reschedule the plan too?" when dates change</td></tr>
+      <tr><td>Edit a place</td><td class="n">3 menus</td><td>Place sheet (16 actions) · card Options (8) · selection menu (6)</td></tr>
+      <tr><td>Reach the ended trip's leftovers</td><td class="n">4</td><td>Header pill · list section with switch · Jump sheet row · trip page panel</td></tr>
+      <tr><td>Pay or trial</td><td class="n">3 screens</td><td>Paywall · Subscription management · Settings "Free Trial" and "Subscription" sections</td></tr>
+      <tr><td>Decide which trip the map shows</td><td class="n">3 controls</td><td>Activate · Deactivate · Go to map</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <figure>
+    <svg viewBox="0 0 900 300" role="img" aria-label="Six entry points for adding a place all converge on one service, LocationAddService, which does the date confirmation, country guard and write.">
+      <defs>
+        <marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+        </marker>
+      </defs>
+      <g font-family="Source Sans 3, Arial, sans-serif" font-size="12" fill="currentColor">
+        <g>
+          <rect x="20" y="20" width="230" height="30" rx="6" fill="none" stroke="currentColor"/><text x="135" y="40" text-anchor="middle">Map search field</text>
+          <rect x="20" y="64" width="230" height="30" rx="6" fill="none" stroke="currentColor"/><text x="135" y="84" text-anchor="middle">Search screen (from accommodation prompt)</text>
+          <rect x="20" y="108" width="230" height="30" rx="6" fill="none" stroke="currentColor"/><text x="135" y="128" text-anchor="middle">Trip page "Add Location" / per-day +</text>
+          <rect x="20" y="152" width="230" height="30" rx="6" fill="none" stroke="currentColor"/><text x="135" y="172" text-anchor="middle">Paste Google Maps link (×2)</text>
+          <rect x="20" y="196" width="230" height="30" rx="6" fill="none" stroke="currentColor"/><text x="135" y="216" text-anchor="middle">Long-press map → nearby picker</text>
+          <rect x="20" y="240" width="230" height="30" rx="6" fill="none" stroke="currentColor"/><text x="135" y="260" text-anchor="middle">"Add to trip" on a loose place</text>
+        </g>
+        <g stroke="currentColor" fill="none" marker-end="url(#arr2)">
+          <path d="M250 35 C 380 35, 420 145, 540 145"/>
+          <path d="M250 79 C 380 79, 420 145, 540 145"/>
+          <path d="M250 123 C 380 123, 420 145, 540 145"/>
+          <path d="M250 167 C 380 167, 420 145, 540 145"/>
+          <path d="M250 211 C 380 211, 420 145, 540 145"/>
+          <path d="M250 255 C 380 255, 420 145, 540 145"/>
+        </g>
+        <rect x="540" y="110" width="200" height="70" rx="8" fill="var(--tint)" stroke="var(--accent)" stroke-width="1.8"/>
+        <text x="640" y="136" text-anchor="middle" font-weight="700">LocationAddService</text>
+        <text x="640" y="154" text-anchor="middle" fill-opacity="0.75">date check · country guard</text>
+        <text x="640" y="170" text-anchor="middle" fill-opacity="0.75">duplicate check · write</text>
+        <path d="M740 145 L 790 145" stroke="currentColor" fill="none" marker-end="url(#arr2)"/>
+        <text x="800" y="149" font-weight="600">the trip</text>
+        <text x="400" y="290" text-anchor="middle" fill-opacity="0.7">every door is a different widget with its own look, confirmations and dead ends</text>
+      </g>
+    </svg>
+    <figcaption>Adding a place already goes through one service with one set of rules. Only the doors differ. One search sheet with Nearby and Paste-a-link inside it, opened from both the map and the trip page with the day pre-filled, would keep the rules and lose five doors.</figcaption>
+  </figure>
+
+  <h2>3. Shortest paths today</h2>
+  <p>Counted from the code, keyboard typing excluded. These are the numbers to beat.</p>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>Task</th><th class="n">Taps</th><th>Path</th></tr></thead>
+    <tbody>
+      <tr><td>Create a trip (signed in)</td><td class="n">8</td><td>Trips → + → country → Next → dates → Next → name → Next → buddies → Create</td></tr>
+      <tr><td>Create a trip (guest)</td><td class="n">6</td><td>same, without the buddies step</td></tr>
+      <tr><td>Add a place to today</td><td class="n">3–4</td><td>Map → search → result → (date confirmation)</td></tr>
+      <tr><td>Plan today's route</td><td class="n">3</td><td>Map → Re-optimize → start point → go</td></tr>
+      <tr><td>Mark a place done</td><td class="n">3</td><td>pin → sheet → Done, or card → Options → Mark as Done</td></tr>
+      <tr><td>Move a place to another day</td><td class="n">3</td><td>card → Options → Move to another day → day</td></tr>
+      <tr><td>Open the map for a trip from the Trips tab</td><td class="n">2</td><td>card → Go to map (activates it)</td></tr>
+      <tr><td>Review an ended trip's leftovers</td><td class="n">2</td><td>Map → Not visited pill</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h2>4. What to simplify, in order</h2>
+  <p>Ranked by how much a traveller's week changes against how much code moves. The first three are structural; the rest are afternoons.</p>
+
+  <div class="prop">
+    <h3>1. One itinerary list, not two</h3>
+    <div class="tags"><span class="pill high">High impact</span><span class="pill">Large change</span></div>
+    <p>Keep the trip page as the place to <em>plan</em> (full-height list, bulk edits, dates, buddies, export) and make the map's plan sheet a thin companion: today's stops in route order, the Not visited and Unscheduled pills as links to the trip page, and nothing that edits structure. Share one card widget and one Options menu between them so an action always looks the same.</p>
+    <p>Removes: a second selection mode, a second Unscheduled section, a second Not visited section, the Selected/All tab bar, two sort toggles.</p>
+  </div>
+
+  <div class="prop">
+    <h3>2. Retire "Activate" as a concept</h3>
+    <div class="tags"><span class="pill high">High impact</span><span class="pill">Medium change</span></div>
+    <p>Opening a trip's map should make it the one on the map; nothing needs a Deactivate button. The Trips tab shows an "On the map" mark on that card. Internally the active-trip id stays; only the three controls go, and with them the write-access checks that key off a trip the user never consciously "activated".</p>
+  </div>
+
+  <div class="prop">
+    <h3>3. One way to add a place</h3>
+    <div class="tags"><span class="pill high">High impact</span><span class="pill">Medium change</span></div>
+    <p>A single search sheet, opened from the map's search field and the trip page's + alike, with three tabs inside: Search, Nearby (the long-press picker's content), Paste a link. The day is pre-filled from where it was opened, so the date confirmation disappears for the common case. The loose-place "Add to trip" stays, since it is a different starting point.</p>
+  </div>
+
+  <div class="prop">
+    <h3>4. One planning verb</h3>
+    <div class="tags"><span class="pill">Medium impact</span><span class="pill">Medium change</span></div>
+    <p>"Plan" with two scopes, this day or the whole trip. Re-optimize, Auto-plan, "Put all on one day" and the reschedule-on-date-change prompt become modes of it, in one sheet, with one progress indicator and one undo.</p>
+  </div>
+
+  <div class="prop">
+    <h3>5. A shorter first trip</h3>
+    <div class="tags"><span class="pill">Medium impact</span><span class="pill">Small change</span></div>
+    <p>Create a trip on one screen: name and country, dates optional with "No dates yet" as the default, buddies invited afterwards from the trip page. Eight taps become three, and a new user meets the undated-trip model (Day 1, Day 2…) without being asked about dates first.</p>
+  </div>
+
+  <div class="prop">
+    <h3>6. A place sheet with a top and a rest</h3>
+    <div class="tags"><span class="pill">Medium impact</span><span class="pill">Small change</span></div>
+    <p>Sixteen actions read as a settings page. Keep Done, Skip, Route and Schedule at the top; fold Tag, Accommodation, Stay duration and Floor into one "Details" row that expands; collapse Photos and Hours by default. The Options menu on the card then needs only the actions the sheet's top row lacks.</p>
+  </div>
+
+  <div class="prop">
+    <h3>7. One home for the ended trip's leftovers</h3>
+    <div class="tags"><span class="pill">Medium impact</span><span class="pill">Small change</span></div>
+    <p>They currently have four entrances (pill, list section with switch, Jump-sheet row, trip page panel). Keep the list section as the home and the Jump-sheet row as the map preview; drop the header pill, and make the trip page panel link to the same review sheet rather than repeat the cards.</p>
+  </div>
+
+  <div class="prop">
+    <h3>8. Three map buttons, not five</h3>
+    <div class="tags"><span class="pill">Low impact</span><span class="pill">Small change</span></div>
+    <p>My location, Fit, Share. "Toggle place names" and "Clear route" move into the map's settings (the tune icon already exists in the plan sheet header). The pulsing Share glow then has less to compete with.</p>
+  </div>
+
+  <div class="prop">
+    <h3>9. One subscription surface</h3>
+    <div class="tags"><span class="pill">Low impact</span><span class="pill">Small change</span></div>
+    <p>Settings shows "Free Trial" and "Subscription" as separate sections above a separate management screen and the paywall. One "VoyZa Pro" row that opens one screen, which states the trial, the plan and the next charge, and offers upgrade or manage.</p>
+  </div>
+
+  <div class="prop">
+    <h3>10. Count the first-session prompts</h3>
+    <div class="tags"><span class="pill">Unknown impact</span><span class="pill">Needs a device run</span></div>
+    <p>The code can show up to seven interruptions before a first place is saved: onboarding, analytics consent, ads measurement consent, the iOS tracking prompt, sign-up required, the referral prompt and the paywall. Which of them actually fire, and in what order, depends on flags I cannot read from code alone. This one wants a recording of a fresh install.</p>
+  </div>
+
+  <div class="prop">
+    <h3>11. Day navigation: pick two</h3>
+    <div class="tags"><span class="pill">Low impact</span><span class="pill">Small change</span></div>
+    <p>◀ ▶ for the next day and the Jump sheet for any day cover every case. The plan sheet's All tab and the Entire-trip legend answer the same "show me everything" question; keep Entire trip on the map and drop the All tab from the sheet once the trip page is the full list.</p>
+  </div>
+
+  <h2>5. How this was produced, and what it cannot see</h2>
+  <p>The flow map comes from the navigation calls in the code: every <code>push</code>, bottom sheet and dialog, which screen owns it, and which tap reaches it. The counts are of code paths, not of what any traveller did.</p>
+  <div class="note">
+    <p>Two things no reading of the code can tell: how the screens look at a glance (density, hierarchy, what the eye lands on) and how long each path feels. For the first, VoyZa's screens can be rendered to pictures from a throwaway widget test with the real fonts, which has worked for the Auto-plan sheet and single widgets; the map tiles themselves stay blank in that method. For the second, a recording of a real session on the phone is the only honest source.</p>
+  </div>
+  <p>Suggested next step: run the three structural changes past one real trip you have planned, and render the proposed single place sheet and single search sheet as pictures before building them.</p>
+</main>
+</body>
+</html>
