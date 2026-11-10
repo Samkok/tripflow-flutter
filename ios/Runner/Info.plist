@@ -40,6 +40,12 @@
 	<string>VoyZa only adds route share cards you choose to save. It never reads or browses your photos.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>VoyZa uses your location to display your current position on the map, provide accurate directions, and help you plan your trips.</string>
+	<!-- Apple requires this key whenever the binary references the
+	     "Always" location API, and the location plugin does (ITMS-90683 on
+	     build 1.11.53). VoyZa never asks for background location: it has no
+	     location background mode and only requests "While Using". -->
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>VoyZa uses your location only while the app is open, to show where you are on the map and route you to your next stop. It does not track you in the background.</string>
 	<!-- Firebase Analytics and Performance start OFF and with every Consent
 	     Mode signal denied. The consent services (MeasurementConsentService,
 	     AnalyticsConsentService) switch them on once the person's choice is
