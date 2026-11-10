@@ -169,8 +169,8 @@ class SavedLocation extends HiveObject {
   /// True when this place was HANDED OVER to the trip owner: a member who
   /// added it left the trip, was removed, or deleted their account (server
   /// column `handed_over_from`, set by the hand-over functions only). The
-  /// owner keeps the place, and it does not count against their free-place
-  /// allowance — they never added it. Read-only here: never sent back.
+  /// owner keeps the place, and it does not count as one of their own
+  /// places — they never added it. Read-only here: never sent back.
   @HiveField(27, defaultValue: false)
   final bool handedOver;
 

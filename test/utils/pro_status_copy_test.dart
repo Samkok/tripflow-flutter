@@ -9,7 +9,7 @@ void main() {
   group('describeProRow', () {
     test('free sells, pro states the renewal, lifetime says so', () {
       expect(describeProRow(ProStatus.free, now: now, formatDate: _d),
-          (title: 'VoyZa Pro', subtitle: 'Unlock unlimited places'));
+          (title: 'VoyZa Pro', subtitle: 'Add places and Auto-plan your days'));
       final ends = DateTime(2027, 3, 9);
       expect(
           describeProRow(
@@ -90,7 +90,7 @@ void main() {
         isNull);
   });
 
-  test('trialEndsSentence names the allowance either way', () {
+  test('trialEndsSentence says what the free plan keeps and what it lacks', () {
     final ends = DateTime(2026, 11, 12);
     final renewing = ProStatus(
         tier: ProTier.trial,
@@ -99,13 +99,12 @@ void main() {
         productId: 'yearly');
     final lapsing =
         ProStatus(tier: ProTier.trial, expiresAt: ends, willRenew: false);
-    final a =
-        trialEndsSentence(renewing, freePlaces: 10, now: now, formatDate: _d);
-    final b =
-        trialEndsSentence(lapsing, freePlaces: 10, now: now, formatDate: _d);
+    final a = trialEndsSentence(renewing, now: now, formatDate: _d);
+    final b = trialEndsSentence(lapsing, now: now, formatDate: _d);
     expect(a, contains('Yearly plan billing starts on 12/11/2026'));
-    expect(a, contains('10 saved places'));
+    expect(a, contains('adding places needs VoyZa Pro'));
     expect(b, contains('The trial ends on 12/11/2026'));
-    expect(b, contains('10 saved places'));
+    expect(b, contains('You keep every trip'));
+    expect(b, contains('adding places needs VoyZa Pro'));
   });
 }

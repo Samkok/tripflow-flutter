@@ -41,7 +41,10 @@ typedef FormatDate = String Function(DateTime date);
 }) {
   switch (status.tier) {
     case ProTier.free:
-      return (title: 'VoyZa Pro', subtitle: 'Unlock unlimited places');
+      return (
+        title: 'VoyZa Pro',
+        subtitle: 'Add places and Auto-plan your days'
+      );
     case ProTier.trial:
       final ends = status.expiresAt;
       if (ends == null) return (title: 'VoyZa Pro trial', subtitle: 'Active');
@@ -114,11 +117,11 @@ double? trialProgress(ProStatus status, {required DateTime now}) {
   return (now.difference(start).inSeconds / span).clamp(0.0, 1.0);
 }
 
-/// One sentence on what happens when the trial ends. [freePlaces] is the
-/// free plan's allowance, the number the Terms state in words.
+/// One sentence on what happens when the trial ends: either billing
+/// starts, or the person is back on the free plan, where trips stay but
+/// adding places needs Pro.
 String trialEndsSentence(
   ProStatus status, {
-  required int freePlaces,
   required DateTime now,
   required FormatDate formatDate,
 }) {
@@ -126,8 +129,8 @@ String trialEndsSentence(
   final when = ends == null ? 'when the trial ends' : 'on ${formatDate(ends)}';
   if (status.willRenew == true) {
     return '${planNameFor(status.productId)} billing starts $when. Cancel '
-        'before then to stay on the free plan with $freePlaces saved places.';
+        'before then and you keep every trip; adding places needs VoyZa Pro.';
   }
-  return 'The trial ends $when. You keep every trip, with $freePlaces saved '
-      'places on the free plan.';
+  return 'The trial ends $when. You keep every trip; adding places needs '
+      'VoyZa Pro.';
 }

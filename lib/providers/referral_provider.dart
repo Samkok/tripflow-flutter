@@ -1,4 +1,3 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/referral.dart';
@@ -48,22 +47,3 @@ final referralMonthsEarnedProvider = Provider<int>((ref) {
 /// True once the user has ever opened the invite share sheet (persisted).
 final referralHasSharedProvider =
     FutureProvider<bool>((ref) => ReferralService.instance.hasEverShared());
-
-/// Permanent bonus place slots earned from successful referrals (+2 per
-/// redemption, capped at +10 server-side). Granted by the redeem-referral
-/// edge function; this is a plain read of the profile row. Guests: 0.
-final referralBonusPlacesProvider = FutureProvider<int>((ref) async {
-  final userId = ref.watch(currentUserIdProvider);
-  if (userId == null) return 0;
-  try {
-    final row = await SupabaseService.instance.client
-        .from('user_profiles')
-        .select('referral_bonus_places')
-        .eq('user_id', userId)
-        .maybeSingle();
-    return (row?['referral_bonus_places'] as int?) ?? 0;
-  } catch (e) {
-    debugPrint('referralBonusPlacesProvider: $e');
-    return 0;
-  }
-});

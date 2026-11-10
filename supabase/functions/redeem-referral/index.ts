@@ -213,18 +213,8 @@ serve(async (req) => {
     // already_redeemed branch above; a concurrent double-grant loses this
     // guarded update and skips.
     if (completedRow) {
-      // Instant referrer reward: +2 free place slots, capped at +10 by the
-      // SQL function itself (LEAST), so no client math to trust.
-      const { error: bonusErr } = await supabase.rpc(
-        "increment_referral_bonus_places",
-        { target_user: referrerId },
-      );
-      if (bonusErr) {
-        console.error(
-          "redeem-referral: bonus slots failed (non-fatal):",
-          bonusErr,
-        );
-      }
+      // (The instant "+2 place slots" reward was retired on 2026-11-10,
+      // when adding places became part of VoyZa Pro.)
       // Tell the referrer the moment it happens. The month-at-conversion
       // wait starts NOW — silence here made the program feel dead.
       try {
@@ -233,9 +223,8 @@ serve(async (req) => {
           type: "referral_redeemed",
           title: "Your code was just used 🎉",
           body:
-            "A friend joined VoyZa with your code — you earned +2 free " +
-            "place slots right now. Your free month unlocks when they go " +
-            "Pro (usually within a month).",
+            "A friend joined VoyZa with your code. Your free month " +
+            "unlocks when they go Pro (usually within a month).",
           data: { screen: "referral" },
         });
       } catch (e) {

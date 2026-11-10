@@ -1,8 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:tutorial_coach_mark/tutorial_coach_mark.dart';
 
-import '../services/subscription_limit_service.dart';
-
 /// Builds the one-time, 3-step map spotlight tour:
 ///   1. search bar  → add your first place
 ///   2. map center  → press & hold to discover nearby places
@@ -20,7 +18,6 @@ TutorialCoachMark buildMapTutorial(
   BuildContext context, {
   required GlobalKey searchBarKey,
   required GlobalKey optimizeKey,
-  required bool isPro,
   required VoidCallback onFinish,
   required bool Function(int lastShownStep) onSkip,
 }) {
@@ -42,8 +39,7 @@ TutorialCoachMark buildMapTutorial(
           builder: (context, controller) => _StepCard(
             title: 'Add your first place',
             body: 'Search any spot — sights, food, hotels — and save it to '
-                'your day.'
-                '${isPro ? '' : '\nYou\'ve got ${SubscriptionLimitService.freePlaceAllowance} free places to start.'}',
+                'your day.',
             buttonLabel: 'Next',
             onPressed: controller.next,
           ),

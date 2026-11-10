@@ -25,6 +25,7 @@ import 'package:voyza/utils/date_picker_utils.dart';
 import 'package:voyza/utils/same_day_place_guard.dart';
 import 'package:voyza/utils/trip_date_validator.dart';
 import 'package:voyza/widgets/app_toast.dart';
+import '../services/subscription_limit_service.dart';
 import 'package:voyza/core/theme.dart';
 
 /// The place card — one widget for the map's plan sheet and the trip page.
@@ -935,6 +936,11 @@ class _OptimizedLocationCardState extends ConsumerState<OptimizedLocationCard> {
 
   void _showMoveCopyDialog(BuildContext context, WidgetRef ref,
       {required bool isCopy}) async {
+    // A copy creates a new place row: an add like any other, so it is Pro.
+    if (isCopy && !await SubscriptionLimitService(ref).canAddPlace(context)) {
+      return;
+    }
+    if (!context.mounted) return;
     final highlightedDates = ref.read(datesWithLocationsProvider);
     final earliestDate = highlightedDates.isNotEmpty
         ? highlightedDates.reduce((a, b) => a.isBefore(b) ? a : b)

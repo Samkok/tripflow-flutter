@@ -8,7 +8,6 @@ import '../../services/analytics_service.dart';
 import '../../services/anonymous_user_service.dart';
 import '../../services/onboarding_service.dart';
 import '../../services/review_prompt_service.dart';
-import '../../services/subscription_limit_service.dart';
 import '../../utils/countries.dart';
 import '../../widgets/country_picker_sheet.dart';
 import '../../widgets/rotating_globe_background.dart';
@@ -503,8 +502,8 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                 const SizedBox(width: 12),
                 Expanded(
                   child: Text(
-                    'You\'ve got ${SubscriptionLimitService.freePlaceAllowance} free places to start — '
-                    'enough to optimize your first day.',
+                    'Creating trips is free. Adding your own places is part '
+                    'of VoyZa Pro — the yearly plan starts with a free trial.',
                     style: theme.textTheme.bodyMedium
                         ?.copyWith(fontWeight: FontWeight.w600),
                   ),

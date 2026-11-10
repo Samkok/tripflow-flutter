@@ -2,22 +2,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'app_toast.dart';
 
-import '../services/subscription_limit_service.dart';
-import 'free_places_meter.dart';
-
 /// One-time activation celebrations. Gating (per-user "already celebrated"
 /// flags) lives with the callers via [OnboardingService]; these are pure UI.
 ///
-/// The first-trip modal is deliberately light (emoji + meter); the
-/// checklist's completion celebration is the big moment.
+/// The first-trip modal is deliberately light; the checklist's completion
+/// celebration is the big moment.
 
 /// Light congrats modal after the user's very first trip is created.
-/// Points them at the next step (adding places) and frames the free-place
-/// allowance as a goal meter. [placesUsed] is the user's live own-place
-/// count — usually 0, but a user who saved unassigned places before their
-/// first trip should see the truth.
-Future<void> showFirstTripCelebration(BuildContext context,
-    {int placesUsed = 0}) {
+/// Points them at the next step (adding places).
+Future<void> showFirstTripCelebration(BuildContext context) {
   return showDialog<void>(
     context: context,
     builder: (ctx) {
@@ -44,11 +37,6 @@ Future<void> showFirstTripCelebration(BuildContext context,
                 style: theme.textTheme.bodyMedium
                     ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
                 textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 18),
-              FreePlacesMeter(
-                used: placesUsed.clamp(
-                    0, SubscriptionLimitService.freePlaceAllowance),
               ),
               const SizedBox(height: 20),
               SizedBox(

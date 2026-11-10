@@ -33,7 +33,7 @@ void main() {
   testWidgets('free sells, with an Upgrade pill', (tester) async {
     await _pump(tester, ProStatus.free);
     expect(find.text('VoyZa Pro'), findsOneWidget);
-    expect(find.text('Unlock unlimited places'), findsOneWidget);
+    expect(find.text('Add places and Auto-plan your days'), findsOneWidget);
     expect(find.text('Upgrade'), findsOneWidget);
   });
 

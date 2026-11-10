@@ -54,11 +54,9 @@ import '../providers/arrival_radius_provider.dart';
 import '../providers/zoom_fit_settings_provider.dart';
 import '../utils/countries.dart';
 import '../widgets/app_toast.dart';
-import '../providers/subscription_provider.dart';
 import '../services/analytics_service.dart';
 import '../services/first_run_coordinator.dart';
 import '../widgets/celebration_dialogs.dart';
-import '../widgets/free_places_meter.dart';
 import '../widgets/map_tutorial.dart';
 import '../widgets/map_widget.dart';
 import '../widgets/trip_bottom_sheet.dart';
@@ -149,8 +147,8 @@ class _MapScreenState extends ConsumerState<MapScreen>
   // optimize button is passed down into TripBottomSheet.
   final _searchBarKey = GlobalKey();
   final _optimizeButtonKey = GlobalKey();
-  // The whole top overlay (trip banner + pin filter bar + search bar +
-  // allowance chip): measured, not guessed, when framing the map.
+  // The whole top overlay (trip banner + pin filter bar + search bar):
+  // measured, not guessed, when framing the map.
   final _topChromeKey = GlobalKey();
 
   // Checklist guide consumption. Watch-and-compare, NOT ref.listen: this
@@ -358,7 +356,6 @@ class _MapScreenState extends ConsumerState<MapScreen>
         context,
         searchBarKey: _searchBarKey,
         optimizeKey: _optimizeButtonKey,
-        isPro: ref.read(isProProvider),
         onFinish: () {
           unawaited(markDone());
           AnalyticsService.instance.mapTutorialCompleted();
@@ -1976,8 +1973,8 @@ class _MapScreenState extends ConsumerState<MapScreen>
                           ),
                         ],
                       ),
-                      // Under the search bar: the allowance chip (centred) and
-                      // the refresh icon (right) keep their column; the tag
+                      // Under the search bar: the refresh icon (right) keeps
+                      // its column; the tag
                       // legend overlays it on the left. A Stack so the legend
                       // starts right under the search bar without pushing the
                       // two down, and stays out of the measured chrome height
@@ -1988,23 +1985,6 @@ class _MapScreenState extends ConsumerState<MapScreen>
                           Column(
                             crossAxisAlignment: CrossAxisAlignment.center,
                             children: [
-                              // Goal-gradient progress: free users see how much of the
-                              // free-place allowance (10) is used, live. Hidden for Pro.
-                              // In Entire-trip mode it moves to the right, out from
-                              // under the day legend's rows ("Day 1: Oct 5: 3 places"
-                              // reaches well past the centre of a phone).
-                              Consumer(
-                                builder: (context, ref, child) => Align(
-                                  alignment: ref.watch(allDaysModeProvider)
-                                      ? Alignment.centerRight
-                                      : Alignment.center,
-                                  child: child,
-                                ),
-                                child: const Padding(
-                                  padding: EdgeInsets.only(top: 8),
-                                  child: FreePlacesProgressChip(),
-                                ),
-                              ),
                               // Manual refresh — realtime escape hatch. Right-aligned so
                               // it shares the vertical axis of the FAB column below.
                               Align(
@@ -2833,8 +2813,8 @@ class _MapScreenState extends ConsumerState<MapScreen>
   }
 
   /// The on-screen region fitted content should occupy while BROWSING:
-  /// below the top overlay (trip banner, pin filter bar, search bar and
-  /// allowance chip), above the collapsed trip sheet, clear of the FAB
+  /// below the top overlay (trip banner, pin filter bar and search bar),
+  /// above the collapsed trip sheet, clear of the FAB
   /// column — and inset for the pin BITMAP, not just the coordinate: the
   /// pin is anchored on its tip, so a point framed exactly on the window's
   /// top edge would still draw its head under the chrome, and one on the
@@ -2854,13 +2834,11 @@ class _MapScreenState extends ConsumerState<MapScreen>
     final bannerH = hasActiveTrip ? 72.0 + 12.0 : 44.0 + 12.0;
     const filterBarH = 46.0;
     const searchBarHeight = 60.0;
-    const allowanceChipH = 40.0;
     return MediaQuery.of(context).padding.top +
         topMargin +
         bannerH +
         filterBarH +
-        searchBarHeight +
-        allowanceChipH;
+        searchBarHeight;
   }
 
   Rect _browsingFitWindow() {

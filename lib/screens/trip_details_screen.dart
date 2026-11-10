@@ -18,7 +18,6 @@ import 'package:voyza/widgets/sign_up_required_sheet.dart';
 import 'package:voyza/providers/onboarding_checklist_provider.dart';
 import 'package:voyza/widgets/onboarding_checklist.dart';
 import 'package:voyza/services/onboarding_service.dart';
-import 'package:voyza/services/subscription_limit_service.dart';
 import 'package:voyza/models/location_model.dart';
 import 'package:voyza/widgets/celebration_dialogs.dart';
 import 'package:voyza/widgets/location_detail_sheet.dart';
@@ -411,10 +410,7 @@ class _TripDetailsScreenState extends ConsumerState<TripDetailsScreen> {
     }
     await service.markCelebrated(userId, OnboardingMilestone.firstTrip);
     if (mounted) {
-      await showFirstTripCelebration(
-        context,
-        placesUsed: SubscriptionLimitService.ownPlaceCount(ref),
-      );
+      await showFirstTripCelebration(context);
     }
   }
 

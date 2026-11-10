@@ -27,8 +27,8 @@ enum PaywallTrigger {
   trialExpired,
   upgradePrompt,
 
-  /// The free saved-place allowance is used up (see
-  /// [SubscriptionLimitService.freePlaceAllowance]).
+  /// Adding a place: a Pro feature (see [SubscriptionLimitService]). The
+  /// name is kept for analytics continuity.
   placeLimit,
 
   /// Applying an Auto-plan proposal (the preview is free; Apply is Pro).
@@ -329,6 +329,9 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
     // Null when no eligible FREE trial exists (none configured, already
     // used, or the intro offer is a paid one).
     final trialPhrase = _eligibleTrialPhrase();
+    // Which plan carries that trial ("Yearly"): the headline names it, so
+    // nobody picks another plan expecting free days.
+    final trialPlan = _eligibleTrialPlan();
     final hasUsedTrialBefore = _anyPackageHasIntroOfferButIneligible();
     final isTrialExpired = widget.trigger == PaywallTrigger.trialExpired;
     final isPlaceLimit = widget.trigger == PaywallTrigger.placeLimit;
@@ -343,26 +346,27 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
       // the one tap that makes it real.
       headline = 'Let VoyZa plan your days';
       subheadline = trialPhrase != null
-          ? 'Your plan is ready — apply it with Pro, free for $trialPhrase.'
+          ? 'Your plan is ready — apply it with Pro, free for $trialPhrase '
+              'on the $trialPlan plan.'
           : 'Your plan is ready — apply it and every day falls into place.';
       heroIcon = Icons.auto_awesome_rounded;
     } else if (isPlaceLimit) {
-      // The user hit the gate mid-flow with a trip in progress — frame the
-      // upgrade around continuing what they're building right now.
-      headline =
-          "You've used all ${SubscriptionLimitService.effectiveAllowanceOf(ref)} free places";
+      // They tapped Add: frame Pro around building the trip they came for.
+      headline = 'Add places with VoyZa Pro';
       subheadline = trialPhrase != null
-          ? 'Go unlimited with Pro — try it free for $trialPhrase.'
-          : 'Go unlimited with VoyZa Pro to keep building your trip.';
+          ? 'Save every stop and let VoyZa route your days — free for '
+              '$trialPhrase on the $trialPlan plan.'
+          : 'Save every stop and let VoyZa route your days.';
       heroIcon = Icons.add_location_alt_rounded;
     } else if (isTrialExpired || hasUsedTrialBefore) {
       headline = 'Your free trial has ended';
-      subheadline = 'Go Pro for unlimited places, Auto-plan and trip copies.';
+      subheadline =
+          'Go Pro to keep adding places, apply Auto-plan and copy shared trips.';
       heroIcon = Icons.lock_clock;
     } else if (trialPhrase != null) {
       headline = 'Try VoyZa Pro free for $trialPhrase';
       subheadline =
-          'Then continue with a subscription. Cancel anytime in your store account.';
+          'The free trial comes with the $trialPlan plan. Cancel anytime in your store account.';
       heroIcon = Icons.card_giftcard;
     } else {
       headline = 'Upgrade to VoyZa Pro';
@@ -465,8 +469,7 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
                       style: const TextStyle(fontWeight: FontWeight.bold),
                     ),
                     const TextSpan(
-                      text:
-                          '. Go Pro to keep adding places beyond the free allowance.',
+                      text: '. Go Pro to keep adding places.',
                     ),
                   ],
                 ),
@@ -545,6 +548,23 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
     return null;
   }
 
+  /// Display name of the plan that carries the eligible free trial (in the
+  /// same priority order as [_eligibleTrialPhrase]); 'Yearly' when unknown,
+  /// since that is where the stores put it.
+  String _eligibleTrialPlan() {
+    for (final p in _subscriptionPackages()) {
+      final label = _trialLabelFor(p);
+      if (label != null && label.endsWith(' free')) {
+        return switch (p.packageType) {
+          PackageType.monthly => 'Monthly',
+          PackageType.weekly => 'Trip Pass',
+          _ => 'Yearly',
+        };
+      }
+    }
+    return 'Yearly';
+  }
+
   /// True when the plans do carry a free trial but this person or device
   /// has already had it — every free plan decides "used" while at least
   /// one of them is settled, not merely pending. Swaps the hero to "trial
@@ -606,18 +626,27 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
   Widget _buildFeaturesList(BuildContext context) {
     final theme = Theme.of(context);
 
-    // Verified 2026-08-06: the ONLY paid gate in the app is the saved-place
-    // allowance (SubscriptionLimitService). Optimization, multi-day
-    // itineraries, collaboration, sync — and trip creation itself — are
-    // free for everyone, so listing them as Pro was misleading (and an App
-    // Store 2.3.1 risk). One honest differentiator, stated plainly.
+    // What Pro actually unlocks (2026-11-10): adding places, applying an
+    // Auto-plan proposal, and more than one copy of a shared trip.
+    // Optimization, multi-day itineraries, collaboration, sync and trip
+    // creation are free for everyone, so they are not listed here (listing
+    // them as Pro was misleading, and an App Store 2.3.1 risk).
     final features = [
       (
-        'Unlimited saved places',
-        Icons.all_inclusive,
-        'The free plan includes '
-            '${SubscriptionLimitService.freePlaceAllowance} — Pro removes '
-            'the cap entirely',
+        'Add places to your trips',
+        Icons.add_location_alt_rounded,
+        'Search, pick what is nearby or paste a Maps link — as many as '
+            'your trip needs',
+      ),
+      (
+        'Auto-plan your days',
+        Icons.auto_awesome_rounded,
+        'Apply a day-by-day plan across the whole trip in one tap',
+      ),
+      (
+        'Copy any shared trip',
+        Icons.copy_all_rounded,
+        'The free plan includes one copy — Pro removes the limit',
       ),
       (
         'Back an independent travel app',

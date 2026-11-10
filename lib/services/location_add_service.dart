@@ -11,7 +11,6 @@ import '../models/trip.dart';
 import '../providers/auth_provider.dart';
 import '../providers/local_active_trip_provider.dart';
 import '../providers/location_provider.dart';
-import '../providers/subscription_provider.dart';
 import '../providers/trip_collaborator_provider.dart';
 import '../providers/trip_provider.dart';
 import '../providers/user_trip_provider.dart';
@@ -38,11 +37,10 @@ import 'analytics_service.dart';
 /// guard, and **strict country guard**) live in one place and stay
 /// consistent.
 ///
-/// The free-place paywall gate applies only to the path that CREATES a new
-/// saved place ([addPlace]). The attach paths ([attachLocationsToTrip]) only
-/// re-tag rows that already exist and count against the allowance, so
-/// they are not gated — otherwise a free user at the limit couldn't
-/// organize their own places into trips.
+/// The Pro gate applies only to the path that CREATES a new saved place
+/// ([addPlace]). The attach paths ([attachLocationsToTrip]) only re-tag
+/// rows that already exist, so they are not gated — a free user can still
+/// organize the places they already have into trips.
 ///
 /// The country guard is hard-blocking: when the active trip has a tagged
 /// country and the candidate location's country is known to differ, the
@@ -54,14 +52,13 @@ class LocationAddService {
 
   LocationAddService(this._ref);
 
-  /// Goal-gradient feedback after a NEW place is persisted (create paths
-  /// only — attach paths don't consume the allowance). Free users get a
-  /// "N of 10 free places used" toast; the very first place ever gets a
-  /// warmer nudge toward the 3-place Optimize threshold instead.
+  /// Feedback after a NEW place is persisted (create paths only): the very
+  /// first place on the board gets a nudge toward the 3-place Optimize
+  /// threshold. (The "N of 10 free places used" meter toast went with the
+  /// free allowance on 2026-11-10.)
   ///
-  /// Applies to ANONYMOUS users too (one-time flags keyed to the persistent
-  /// device UUID) — they can add places and hit the same gate, so they get
-  /// the same goal-gradient feedback pushing them toward the optimize "aha."
+  /// Applies to ANONYMOUS users too (one-time flag keyed to the persistent
+  /// device UUID).
   ///
   /// [usedAfter] is captured by the caller BEFORE the repository write
   /// (+1), so it can't race the location stream.
@@ -71,26 +68,23 @@ class LocationAddService {
   /// and lands as the caller's toast wraps up. Best-effort: never throws.
   void _afterSuccessfulNewPlace(BuildContext context, int usedAfter) {
     try {
-      if (_ref.read(isProProvider)) return;
       final authUserId = _ref.read(currentUserIdProvider);
-      const total = SubscriptionLimitService.freePlaceAllowance;
-      final used = usedAfter > total ? total : usedAfter;
       unawaited(() async {
         final userId = authUserId ?? await AnonymousUserService.id;
         final service = OnboardingService.instance;
-        final isFirstEver = !await service.hasCelebrated(
-            userId, OnboardingMilestone.firstPlace);
-        if (isFirstEver) {
-          await service.markCelebrated(userId, OnboardingMilestone.firstPlace);
+        if (await service.hasCelebrated(
+            userId, OnboardingMilestone.firstPlace)) {
+          return;
         }
-        // The warm "unlock Optimize" nudge only fits when this is genuinely
-        // their first place on the board — a sample-trip user already has 5,
-        // so they get the meter copy like everyone else.
-        final message = (isFirstEver && used == 1)
-            ? 'First place saved! ✨ Add 2 more to unlock Optimize'
-            : 'Place saved — $used of $total free places used';
+        await service.markCelebrated(userId, OnboardingMilestone.firstPlace);
+        // Only when this is genuinely the first place on the board — a
+        // sample-trip user already has several.
+        if (usedAfter != 1) return;
         await Future.delayed(const Duration(milliseconds: 1900));
-        if (context.mounted) AppToast.info(context, message);
+        if (context.mounted) {
+          AppToast.info(
+              context, 'First place saved! ✨ Add 2 more to unlock Optimize');
+        }
       }());
     } catch (_) {
       // Feedback is cosmetic; never break the add flow over it.
@@ -451,8 +445,7 @@ class LocationAddService {
   ) async {
     if (picks.isEmpty) return false;
 
-    // No paywall gate: attaching re-tags existing places; it doesn't
-    // consume the free-place allowance.
+    // No paywall gate: attaching re-tags existing places; it creates none.
     final tripCode = targetTrip.countryCode;
     if (tripCode != null) {
       final codes = await Future.wait(picks.map(_resolveCountryCodeForSaved));

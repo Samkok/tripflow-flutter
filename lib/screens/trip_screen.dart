@@ -457,7 +457,7 @@ class _TripScreenState extends ConsumerState<TripScreen> {
         userId: userId,
         name: 'Lisbon — sample trip ✨',
         description: 'A demo trip so you can see route optimization in action. '
-            'Delete it anytime to free up your free places.',
+            'Delete it anytime.',
         countryCode: 'PT',
         startDate: day,
         endDate: day,
@@ -466,10 +466,9 @@ class _TripScreenState extends ConsumerState<TripScreen> {
       // Real Lisbon spots, intentionally out of geographic order so Optimize
       // visibly reorders them. (name, lat, lng)
       //
-      // Five stops — the sample writes straight to the repository (bypassing
-      // the LocationAddService gate), so it must stay within
-      // SubscriptionLimitService.freePlaceAllowance (10) or a brand-new free
-      // user would be over their allowance the moment they tap the demo.
+      // Five stops — the sample writes straight to the repository, past the
+      // Pro gate on adding places, on purpose: it is the free demonstration
+      // of Optimize.
       const places = <(String, double, double)>[
         ('Time Out Market', 38.7067, -9.1459),
         ('Belém Tower', 38.6916, -9.2160),
@@ -526,8 +525,8 @@ class _TripScreenState extends ConsumerState<TripScreen> {
       final anonId = await AnonymousUserService.id;
       final seededKey = 'sample_seeded_$anonId';
       // Idempotency: the sample CTA is reachable from BOTH onboarding and the
-      // Trips empty state. Re-seeding would double the sample's places and eat
-      // most of the free allowance, so seed at most once per device.
+      // Trips empty state. Re-seeding would double the sample's places, so
+      // seed at most once per device.
       if (prefs.getBool(seededKey) ?? false) {
         ref.read(mainTabRequestProvider.notifier).state = 1; // Map tab
         return;
@@ -537,10 +536,9 @@ class _TripScreenState extends ConsumerState<TripScreen> {
       final day = DateTime(now.year, now.month, now.day);
       final locationRepository = ref.read(locationRepositoryProvider);
 
-      // Same Lisbon spots as the authed sample, but 4 (not 5): these local rows
-      // count toward SubscriptionLimitService.freePlaceAllowance (10), so
-      // seeding 4 leaves plenty of free slots before the paywall. Still > the
-      // aha threshold, so Optimize visibly reorders them.
+      // Same Lisbon spots as the authed sample, but 4 (not 5). Still > the
+      // aha threshold, so Optimize visibly reorders them. Like the authed
+      // sample, these rows go past the Pro gate on purpose.
       const places = <(String, double, double)>[
         ('Time Out Market', 38.7067, -9.1459),
         ('Belém Tower', 38.6916, -9.2160),
@@ -2696,8 +2694,9 @@ class _TripScreenState extends ConsumerState<TripScreen> {
 
   /// "Duplicate": a new trip in the same country with the same places (its
   /// days keep the original's layout). The user picks whether the copy
-  /// starts on a date or stays undated for now. The copies count against
-  /// the free-place allowance like any other add.
+  /// starts on a date or stays undated for now. Copying the places is an
+  /// add like any other, so it needs VoyZa Pro; an empty trip duplicates
+  /// freely.
   Future<void> _duplicateTripFromCard(Trip trip) async {
     final all = ref.read(savedLocationsProvider).valueOrNull;
     if (all == null) {
@@ -2759,14 +2758,8 @@ class _TripScreenState extends ConsumerState<TripScreen> {
     final allowed = await SubscriptionLimitService(ref)
         .canAddPlaces(context, tripLocs.length);
     if (!mounted) return;
-    if (allowed < tripLocs.length) {
-      AppToast.info(
-          context,
-          'Duplicating needs ${tripLocs.length} free '
-          '${tripLocs.length == 1 ? 'place' : 'places'} — '
-          'you have $allowed left.');
-      return;
-    }
+    // Declined at the paywall: nothing is copied.
+    if (allowed < tripLocs.length) return;
     final names = ref.read(userTripsProvider).valueOrNull?.map((t) => t.name) ??
         const <String>[];
     final newName = TripDatesService.copyName(trip.name, names);

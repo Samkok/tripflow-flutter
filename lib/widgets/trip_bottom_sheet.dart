@@ -50,8 +50,7 @@ class TripBottomSheet extends ConsumerStatefulWidget {
   /// Single source of truth for the goal-gradient nudges below — the
   /// onboarding checklist's "add places" step mirrors this number by hand
   /// (onboarding_checklist_provider / onboarding_checklist), keep them in
-  /// step. Distinct from [SubscriptionLimitService.freePlaceAllowance] (the
-  /// paywall cap of 10) — 2 unlocks Optimize, 10 hits the wall.
+  /// step.
   /// Lowered from 3 → 2 (owner call, 2026-08-15): even a two-stop day has a
   /// real best order + travel times worth showing.
   static const int ahaThreshold = 2;

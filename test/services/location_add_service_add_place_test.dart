@@ -107,6 +107,11 @@ Future<_H> _pump(
   return (context: ctx, ref: r, repo: repo, trips: trips);
 }
 
+/// The first place on an empty board earns a delayed nudge toward Optimize;
+/// let it land before the test ends.
+Future<void> _letTheNudgeLand(WidgetTester tester) =>
+    tester.pump(const Duration(seconds: 2));
+
 void main() {
   testWidgets('writes the row to the trip and day and clears the map route',
       (tester) async {
@@ -130,6 +135,9 @@ void main() {
     expect(row.stayDuration, 1800);
     expect(row.name, 'Din Tai Fung');
     expect(h.trips.routeClears, 1, reason: 't1 is the trip on the map');
+    await _letTheNudgeLand(tester);
+    expect(find.textContaining('First place saved'), findsOneWidget,
+        reason: 'the first place points at Optimize, Pro or not');
   });
 
   testWidgets(
@@ -146,6 +154,7 @@ void main() {
     expect(ok, isTrue);
     expect(h.repo.added, hasLength(1));
     expect(h.trips.routeClears, 0);
+    await _letTheNudgeLand(tester);
   });
 
   testWidgets('the same place on the same day is refused', (tester) async {
@@ -175,6 +184,9 @@ void main() {
     );
     expect(ok, isTrue);
     expect(h.repo.added, hasLength(1));
+    await _letTheNudgeLand(tester);
+    expect(find.textContaining('First place saved'), findsNothing,
+        reason: 'the board already had a place');
   });
 
   testWidgets('no day means the Unscheduled bucket', (tester) async {
@@ -188,6 +200,7 @@ void main() {
     );
     expect(ok, isTrue);
     expect(h.repo.added.single.scheduledDate, isNull);
+    await _letTheNudgeLand(tester);
   });
 
   testWidgets('a read-only member cannot add', (tester) async {
@@ -218,6 +231,7 @@ void main() {
     expect(ok, isTrue);
     expect(h.repo.added.single.tripId, isNull);
     expect(h.trips.routeClears, 1, reason: 'the map shows the loose places');
+    await _letTheNudgeLand(tester);
   });
 
   test('savedLocationFromPlace copies what Google knows', () {

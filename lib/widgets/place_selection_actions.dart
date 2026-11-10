@@ -6,6 +6,7 @@ import '../providers/map_ui_state_provider.dart';
 import '../providers/trip_day_labeler_provider.dart';
 import '../providers/trip_listener_provider.dart';
 import '../providers/trip_provider.dart';
+import '../services/subscription_limit_service.dart';
 import '../utils/date_picker_utils.dart';
 import '../utils/same_day_place_guard.dart';
 import '../utils/trip_date_validator.dart';
@@ -150,6 +151,11 @@ Future<void> _moveOrCopySelectedToDay(
   required BuildContext promptContext,
   required bool followDay,
 }) async {
+  // A copy creates new place rows: an add like any other, so it is Pro.
+  if (copy && !await SubscriptionLimitService(ref).canAddPlace(context)) {
+    return;
+  }
+  if (!context.mounted) return;
   final highlightedDates = ref.read(datesWithLocationsProvider);
   final earliestDate = highlightedDates.isNotEmpty
       ? highlightedDates.reduce((a, b) => a.isBefore(b) ? a : b)

@@ -6,7 +6,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../providers/subscription_provider.dart';
-import '../services/subscription_limit_service.dart';
 import '../utils/pro_status_copy.dart';
 import '../widgets/app_toast.dart';
 import 'paywall_screen.dart';
@@ -179,7 +178,6 @@ class _SubscriptionManagementScreenState
             Text(
               trialEndsSentence(
                 status,
-                freePlaces: SubscriptionLimitService.freePlaceAllowance,
                 now: now,
                 formatDate: fmt,
               ),
@@ -395,6 +393,16 @@ class _SubscriptionManagementScreenState
                 '${Platform.isIOS ? 'App Store' : 'Play Store'} settings. '
                 'Your subscription will remain active until the end of the '
                 'billing period.',
+          ),
+          const Divider(height: 24),
+          _buildFaqItem(
+            context,
+            'Can I get a refund?',
+            'Refunds go through ${Platform.isIOS ? 'the App Store' : 'the Play Store'}\'s '
+                'refund request. If you live in the EEA or the UK you can '
+                'withdraw from a purchase within 14 days; the Terms '
+                '(Settings → Terms & Conditions) explain how, and you can '
+                'always email us.',
           ),
           const Divider(height: 24),
           _buildFaqItem(

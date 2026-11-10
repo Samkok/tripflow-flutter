@@ -113,8 +113,8 @@ class TripDatesService {
   /// on it and the trip is dated; without one the trip is planned "no dates
   /// yet" (numbered days) for the user to date later. Every stop starts
   /// active; tags, photos, hours, stay flags and durations carry over.
-  /// Returns the new trip; the caller has already cleared the free-place
-  /// allowance for [sourceLocations].
+  /// Returns the new trip; the caller has already passed the Pro gate for
+  /// [sourceLocations].
   static Future<Trip> duplicateTrip(
     WidgetRef ref,
     Trip source,

@@ -53,8 +53,7 @@ Future<void> showReferralAfterPurchase(
               const SizedBox(height: 8),
               Text(
                 'Know someone else planning a trip? Invite them — they get '
-                'a month of Pro today, and you get yours when they go Pro '
-                '(plus 2 bonus place slots the moment they join).',
+                'a month of Pro today, and you get yours when they go Pro.',
                 style: theme.textTheme.bodyMedium
                     ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
                 textAlign: TextAlign.center,

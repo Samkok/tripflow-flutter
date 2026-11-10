@@ -186,28 +186,16 @@ serve(async (req) => {
             referralDone = false;
           } else if (!insErr) {
             // Exactly-once side effects (this call created the referral):
-            // same instant rewards as redeem-referral — +2 place slots
-            // (LEAST-capped at 10 inside the SQL function) and a heads-up
-            // to the inviter. Both non-fatal.
-            const { error: bonusErr } = await supabase.rpc(
-              "increment_referral_bonus_places",
-              { target_user: referrerId },
-            );
-            if (bonusErr) {
-              console.error(
-                "claim-invites: bonus slots failed (non-fatal):",
-                bonusErr,
-              );
-            }
+            // a heads-up to the inviter, as in redeem-referral (the instant
+            // "+2 place slots" reward was retired on 2026-11-10). Non-fatal.
             try {
               await supabase.from("notifications").insert({
                 user_id: referrerId,
                 type: "referral_redeemed",
                 title: "Your invite worked 🎉",
                 body:
-                  "The friend you invited just joined VoyZa — you earned " +
-                  "+2 free place slots right now, and they're on your " +
-                  "trip. Your free month unlocks when they go Pro.",
+                  "The friend you invited just joined VoyZa and is on " +
+                  "your trip. Your free month unlocks when they go Pro.",
                 data: { screen: "referral" },
               });
             } catch (e) {

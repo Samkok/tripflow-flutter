@@ -41,7 +41,17 @@ Future<void> showAddPlaceSheet(
   AddPlaceSegment initial = AddPlaceSegment.search,
   LatLng? nearbyCenter,
   String? nearbyCenterLabel,
-}) {
+}) async {
+  // Adding places is VoyZa Pro: ask before the sheet opens, so nobody
+  // searches for a place they cannot save. A member who may only view the
+  // trip skips the question; the sheet itself tells them why they can't add.
+  final container = ProviderScope.containerOf(context, listen: false);
+  final viewOnly = trip != null &&
+      container.read(hasWriteAccessProvider(trip.id)).valueOrNull == false;
+  if (!viewOnly) {
+    final ok = await SubscriptionLimitService.ensureCanAdd(context);
+    if (!ok || !context.mounted) return;
+  }
   return showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
@@ -343,11 +353,12 @@ class _AddPlaceSheetState extends ConsumerState<AddPlaceSheet> {
 
   Future<void> _addNearby(List<NearbyPlace> pickedAll) async {
     if (_busy != null || pickedAll.isEmpty) return;
-    // ONE allowance decision — and at most one paywall — for the batch.
+    // ONE decision — and at most one paywall — for the batch (a backstop:
+    // the sheet's door already asked).
     final allowed = await SubscriptionLimitService(ref)
         .canAddPlaces(context, pickedAll.length);
     if (!mounted || allowed == 0) return;
-    final picked = pickedAll.take(allowed).toList();
+    final picked = pickedAll;
     setState(() => _busy = picked.length == 1
         ? 'Adding location…'
         : 'Adding ${picked.length} locations…');
@@ -364,13 +375,6 @@ class _AddPlaceSheetState extends ConsumerState<AddPlaceSheet> {
             tag: picked[i].tag, tagConfirmed: true, skipLimitCheck: true);
         if (!mounted) return;
         if (added) names.add(details.name);
-      }
-      if (allowed < pickedAll.length && names.isNotEmpty) {
-        AppToast.info(
-          context,
-          'Added $allowed of ${pickedAll.length} — your free allowance is '
-          '${SubscriptionLimitService.effectiveAllowanceOf(ref)} places.',
-        );
       }
       if (names.isEmpty) return;
       AppToast.success(

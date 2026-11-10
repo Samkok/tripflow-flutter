@@ -9,6 +9,7 @@ class TermsScreen extends StatelessWidget {
   const TermsScreen({super.key});
 
   static const _privacyPolicyUrl = 'https://voyza.xtremon.com/privacy';
+  static const _email = 'hengsamkok76@gmail.com';
 
   @override
   Widget build(BuildContext context) {
@@ -40,12 +41,22 @@ class TermsScreen extends StatelessWidget {
                 ),
                 _buildSection(
                   context,
-                  '2. Description of Service',
+                  '2. Who Offers VoyZa',
+                  // Trader identity (EEA/UK consumer law; Google Play and
+                  // Apple show the same details on the store listing). The
+                  // postal address and phone are pending Sam's decision:
+                  // swap "available on request" for them when set, here, in
+                  // the website Terms and in the privacy policy together.
+                  'VoyZa is offered by Kok Heng, an individual developer (sole trader) based in Phnom Penh, Cambodia, trading as VoyZa. "VoyZa" and "Xtremon" are trading names; there is no separate registered company, so Kok Heng is the person you contract with when you use the App or buy VoyZa Pro. You can reach us at $_email. Our postal address is available on request by email.',
+                ),
+                _buildSection(
+                  context,
+                  '3. Description of Service',
                   'VoyZa lets you search for places, save them to trips, build itineraries, and generate optimized multi-stop routes. Creating an account lets your trips sync across your devices through our cloud service and lets you collaborate on trips with people you invite. VoyZa also offers an optional paid subscription, VoyZa Pro.',
                 ),
                 _buildSection(
                   context,
-                  '3. Third-Party Services',
+                  '4. Third-Party Services',
                   // Store naming is platform-aware: Apple rejects iOS
                   // binaries that mention Google Play (Guideline 2.3.10).
                   // The canonical web terms still describe both stores.
@@ -53,27 +64,32 @@ class TermsScreen extends StatelessWidget {
                 ),
                 _buildSection(
                   context,
-                  '4. Location Data',
+                  '5. Location Data',
                   'VoyZa uses your device location to show where you are on the map, find nearby places, and optimize routes from your current position. Location and place coordinates are sent to Google Maps Platform to provide search, geocoding, and routing. You can control location access in your device settings; some features will not work without it. See our Privacy Policy for details on how location data is handled.',
                 ),
                 _buildSection(
                   context,
-                  '5. Your Content, Cloud Storage & Collaboration',
+                  '6. Your Content, Cloud Storage & Collaboration',
                   "Trips, places, routes, notes, and other content you create (\"Your Content\") are stored in your VoyZa account in our cloud database and synced to your devices — they are not kept only on your device. When you invite collaborators to a trip, they can view that trip's content and, if you grant edit access, change it; every member of a shared trip can also see the other members' email addresses. You are responsible for the content you add and for the people you choose to invite. You keep your rights in Your Content and grant us the limited rights needed to store, process, sync, and display it in order to operate the service. See our Privacy Policy for details.",
                 ),
                 _buildSection(
                   context,
-                  '6. Subscriptions (VoyZa Pro)',
-                  'VoyZa Pro is an optional paid upgrade sold through ${Platform.isIOS ? 'the App Store' : 'the Play Store'}. It is available as an auto-renewing subscription — weekly ("Trip Pass"), monthly, or yearly — or as a one-time Lifetime purchase. Pricing, billing period, and any free-trial terms are shown at the point of purchase and are billed by the store. Subscription plans renew automatically unless cancelled at least 24 hours before the end of the current period; you can manage or cancel them in your ${Platform.isIOS ? 'App Store' : 'Play Store'} account settings. A Lifetime purchase is one-time and does not renew, so there is nothing to cancel. Whether you qualify for a free trial is decided by the store; when a trial starts while you are signed in, we record a device identifier to detect repeated trials and referral abuse. The free plan includes a limited number of saved places (currently 10 per account, plus any bonus slots earned through the referral program) and one copy of a shared trip, and applying an Auto-plan proposal needs VoyZa Pro; Pro removes the place cap and the copy limit. We may adjust the free allowance from time to time.',
+                  '7. Subscriptions (VoyZa Pro)',
+                  'VoyZa Pro is an optional paid upgrade sold through ${Platform.isIOS ? 'the App Store' : 'the Play Store'}. It is available as an auto-renewing subscription — weekly ("Trip Pass"), monthly, or yearly — or as a one-time Lifetime purchase. Pricing, billing period, and any free-trial terms are shown at the point of purchase and are billed by the store. Subscription plans renew automatically unless cancelled at least 24 hours before the end of the current period; you can manage or cancel them in your ${Platform.isIOS ? 'App Store' : 'Play Store'} account settings. A Lifetime purchase is one-time and does not renew, so there is nothing to cancel. A free trial, where the store offers you one, is available on the yearly plan only (currently 7 days); the weekly, monthly and Lifetime options start with payment. Whether you qualify for the trial is decided by the store; when a trial starts while you are signed in, we record a device identifier to detect repeated trials and referral abuse. On the free plan you can create trips, explore the sample trip, view and edit trips you are invited to, optimize routes for the places already in a trip, share, and make one copy of a shared trip. Adding new places — to your own trip or to one shared with you — needs VoyZa Pro, as do copying a place to another day, duplicating a trip with its places, applying an Auto-plan proposal, and copying more than one shared trip. This follows the person who adds the place, not the owner of the trip. Places you have already saved stay in your trips. We may change what the free plan includes from time to time.',
                 ),
                 _buildSection(
                   context,
-                  '7. Referral & Invitation Program',
-                  'You can invite other people to VoyZa and to collaborate on your trips. When you invite someone who is not yet a VoyZa user by email, we store that email address to deliver the invitation and to connect you both if they join (see our Privacy Policy). Under our referral program (for example, "give a month, get a month"), when a person you refer signs up using your referral link or code, they may receive a promotional period of VoyZa Pro; you may receive a small instant benefit at their sign-up (currently 2 additional free place slots per referred sign-up, up to a maximum of 10), and when they go on to start a paid subscription (after any free trial), you may receive a promotional period as well (currently 30 days each; a one-time Lifetime purchase does not count). A code can be redeemed once per account, within 14 days of creating the account, and only with a verified email address. If you have an active paid subscription when a reward is earned, your promotional period may be applied when your current subscription period ends. Rewards are granted as promotional access, have no cash value, and are non-transferable. To keep the program fair, rewards are capped (currently 12 rewarded referrals per 12-month period), and referrals must be genuine invitations to real people you know. Self-referrals; creating fake, duplicate, or additional accounts; referring your own devices or accounts; and any automated, deceptive, or abusive activity are prohibited, and we use limited signals (including a device identifier) to detect them. Please invite only people who are happy to hear from you, and do not send spam. We may change, suspend, or end the referral program, and may withhold, revoke, or reverse rewards obtained through prohibited or fraudulent activity, at any time.',
+                  '8. Refunds and Your Right of Withdrawal',
+                  'VoyZa Pro is bought through ${Platform.isIOS ? 'the App Store' : 'the Play Store'}, which takes the payment and issues your receipt. If you live in the European Economic Area or the United Kingdom, you have a legal right to withdraw from a purchase within 14 days without giving a reason. A subscription starts as soon as you buy it, at your request, so if you withdraw within those 14 days you may be charged a proportionate amount for the days you had access. A Lifetime purchase is digital content delivered immediately: by buying it you ask for immediate delivery and acknowledge that the right of withdrawal ends once it is delivered. To withdraw or ask for a refund, use the store\'s refund request (the quickest route) or email us at $_email with your store receipt. Where the law gives you a right to a refund we honour it. Outside the EEA and the UK, refunds follow the store\'s refund policy and the law of your country.',
                 ),
                 _buildSection(
                   context,
-                  '8. Analytics & Advertising',
+                  '9. Referral & Invitation Program',
+                  'You can invite other people to VoyZa and to collaborate on your trips. When you invite someone who is not yet a VoyZa user by email, we store that email address to deliver the invitation and to connect you both if they join (see our Privacy Policy). Under our referral program (for example, "give a month, get a month"), when a person you refer signs up using your referral link or code, they may receive a promotional period of VoyZa Pro; when they go on to start a paid subscription (after any free trial), you may receive a promotional period as well (currently 30 days each; a one-time Lifetime purchase does not count). Bonus place slots granted under an earlier version of the program no longer have any effect, because adding places is now part of VoyZa Pro. A code can be redeemed once per account, within 14 days of creating the account, and only with a verified email address. If you have an active paid subscription when a reward is earned, your promotional period may be applied when your current subscription period ends. Rewards are granted as promotional access, have no cash value, and are non-transferable. To keep the program fair, rewards are capped (currently 12 rewarded referrals per 12-month period), and referrals must be genuine invitations to real people you know. Self-referrals; creating fake, duplicate, or additional accounts; referring your own devices or accounts; and any automated, deceptive, or abusive activity are prohibited, and we use limited signals (including a device identifier) to detect them. Please invite only people who are happy to hear from you, and do not send spam. We may change, suspend, or end the referral program, and may withhold, revoke, or reverse rewards obtained through prohibited or fraudulent activity, at any time.',
+                ),
+                _buildSection(
+                  context,
+                  '10. Analytics & Advertising',
                   // One text per build. Builds that measure advertising
                   // (MeasurementConfig.adsMeasurement, the default) carry
                   // Meta's SDK, two switches and Apple's tracking prompt;
@@ -88,34 +104,44 @@ class TermsScreen extends StatelessWidget {
                 ),
                 _buildSection(
                   context,
-                  '9. Acceptable Use & Termination',
+                  '11. Acceptable Use & Termination',
                   'You agree not to use the App for illegal purposes, to attempt to reverse engineer or exploit it, to interfere with its infrastructure or security, or to abuse the collaboration, sharing or referral features or other users. You may stop using the App at any time and delete your account from Settings. We may suspend or terminate access for violations of these Terms.',
                 ),
                 _buildPrivacySection(context),
                 _buildSection(
                   context,
-                  '11. Disclaimer of Warranties',
-                  'The App and its services are provided "as is" and "as available" without warranties of any kind. We do not warrant that the App will be error-free or uninterrupted. All travel information, including maps, routes, travel times, and distances, is provided by third-party services and may contain inaccuracies. Always exercise your own judgment, be aware of your surroundings, and verify information before relying on it for navigation or travel. We are not responsible for any damages or losses resulting from your reliance on this information.',
+                  '13. Your Statutory Rights',
+                  'If you use VoyZa as a consumer, nothing in these Terms limits or excludes any right you have under the mandatory consumer protection law of your country of residence that cannot be excluded by agreement. In particular, if you live in the EEA or the UK, the App and VoyZa Pro must conform to the contract (the legal guarantee of conformity for digital content and digital services), and you are entitled to the remedies that law provides, such as having a fault fixed, a price reduction or ending the contract. Sections 14 and 15 apply only to the extent permitted by that law.',
                 ),
                 _buildSection(
                   context,
-                  '12. Limitation of Liability',
-                  'To the fullest extent permitted by applicable law, in no event shall VoyZa or its creators be liable for any indirect, incidental, special, consequential, or punitive damages, or any loss of profits, revenues, data, use, goodwill, or other intangible losses, resulting from (a) your access to or use of, or inability to access or use, the App; (b) any conduct or content of any third party on the App; or (c) unauthorized access, use, or alteration of your transmissions or content.',
+                  '14. Disclaimer of Warranties',
+                  'Subject to section 13, the App and its services are provided "as is" and "as available" without warranties of any kind. We do not warrant that the App will be error-free or uninterrupted. All travel information, including maps, routes, travel times, and distances, is provided by third-party services and may contain inaccuracies. Always exercise your own judgment, be aware of your surroundings, and verify information before relying on it for navigation or travel. We are not responsible for any damages or losses resulting from your reliance on this information.',
                 ),
                 _buildSection(
                   context,
-                  '13. Intellectual Property',
+                  '15. Limitation of Liability',
+                  'To the fullest extent permitted by applicable law, in no event shall VoyZa or its creators be liable for any indirect, incidental, special, consequential, or punitive damages, or any loss of profits, revenues, data, use, goodwill, or other intangible losses, resulting from (a) your access to or use of, or inability to access or use, the App; (b) any conduct or content of any third party on the App; or (c) unauthorized access, use, or alteration of your transmissions or content. Nothing in these Terms excludes or limits our liability for death or personal injury caused by our negligence, for fraud or fraudulent misrepresentation, or for anything else that cannot be excluded or limited by law.',
+                ),
+                _buildSection(
+                  context,
+                  '16. Intellectual Property',
                   'All rights, title, and interest in and to the App (excluding content provided by third parties and Your Content) are and will remain the exclusive property of VoyZa and its creators. The App is protected by copyright and other laws. Nothing in these Terms gives you the right to use the VoyZa name or any VoyZa trademarks, logos, domain names, or other distinctive brand features.',
                 ),
                 _buildSection(
                   context,
-                  '14. Changes to Terms',
-                  'We may revise these Terms from time to time. We will notify you of material changes by posting the updated Terms on this page. Your continued use of the App after changes take effect means you accept the revised Terms. This does not apply to data processing that needs your consent: where our Privacy Policy says we will ask for it, we ask separately, and continued use of the App is never treated as that consent. Please review this page periodically.',
+                  '17. Changes to Terms',
+                  'We may revise these Terms from time to time. We will notify you of material changes by posting the updated Terms on this page. Your continued use of the App after changes take effect means you accept the revised Terms. If a change materially affects a paid VoyZa Pro plan, we will tell you at least 30 days before it takes effect, in the App or by email, and you may cancel your subscription before then; if you do, the change does not apply to the period you have already paid for. This does not apply to data processing that needs your consent: where our Privacy Policy says we will ask for it, we ask separately, and continued use of the App is never treated as that consent. Please review this page periodically.',
+                ),
+                _buildSection(
+                  context,
+                  '18. Governing Law and Complaints',
+                  'These Terms are governed by the laws of Cambodia, except that if you are a consumer you also benefit from the mandatory consumer protection law of the country where you live, and nothing here takes away your right to bring a claim in your local courts. If something goes wrong, email us first at $_email; we aim to reply within 14 days. If you live in the EEA or the UK and we cannot resolve a complaint, you may be able to refer it to an approved alternative dispute resolution body in your country.',
                 ),
                 _buildContactSection(context),
                 const SizedBox(height: 24),
                 const Text(
-                  'Last updated: October 6, 2026',
+                  'Last updated: November 10, 2026',
                   style: TextStyle(
                       fontStyle: FontStyle.italic, color: Colors.grey),
                 ),
@@ -136,7 +162,7 @@ class TermsScreen extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            '10. Privacy',
+            '12. Privacy',
             style: Theme.of(context).textTheme.titleLarge?.copyWith(
                   fontWeight: FontWeight.bold,
                 ),
@@ -179,7 +205,7 @@ class TermsScreen extends StatelessWidget {
   }
 
   Widget _buildContactSection(BuildContext context) {
-    const email = 'hengsamkok76@gmail.com';
+    const email = _email;
     final bodyStyle =
         Theme.of(context).textTheme.bodyMedium?.copyWith(height: 1.5);
     return Padding(
@@ -188,7 +214,7 @@ class TermsScreen extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            '15. Contact Us',
+            '19. Contact Us',
             style: Theme.of(context).textTheme.titleLarge?.copyWith(
                   fontWeight: FontWeight.bold,
                 ),
@@ -200,7 +226,7 @@ class TermsScreen extends StatelessWidget {
               children: [
                 const TextSpan(
                   text:
-                      'If you have any questions about these Terms and Conditions, you can contact us at ',
+                      'If you have any questions about these Terms and Conditions, you can contact Kok Heng (VoyZa) at ',
                 ),
                 WidgetSpan(
                   alignment: PlaceholderAlignment.baseline,

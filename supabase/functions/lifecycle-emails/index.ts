@@ -55,7 +55,8 @@ function render(stage: string): { subject: string; html: string } | null {
           "<p>Welcome to VoyZa! Here's the 3-step magic that saves you hours of backtracking:</p>"
             + "<p>📍 <b>Save 3+ places</b> you want to visit</p>"
             + "<p>✨ Tap <b>Optimize</b> — we order them into the smartest route</p>"
-            + "<p>🕒 <b>See more, backtrack less</b></p>",
+            + "<p>🕒 <b>See more, backtrack less</b></p>"
+            + "<p>Creating trips is free. Adding your own places is part of VoyZa Pro — the yearly plan starts with a free trial.</p>",
           "Open VoyZa",
         ),
       };
@@ -64,7 +65,8 @@ function render(stage: string): { subject: string; html: string } | null {
         subject: "You're a couple of places from a smarter route",
         html: layout(
           "You're moments from the magic ✨",
-          "<p>Your trip is started — nice work. Add a few more places (3+ unlocks it) and tap <b>Optimize</b> to watch VoyZa group nearby spots and cut the backtracking.</p>",
+          "<p>Your trip is started — nice work. Add a few more places (3+ unlocks it) and tap <b>Optimize</b> to watch VoyZa group nearby spots and cut the backtracking.</p>"
+            + "<p>Adding places is part of VoyZa Pro — the yearly plan starts with a free trial.</p>",
           "Add places & optimize",
         ),
       };
@@ -73,7 +75,7 @@ function render(stage: string): { subject: string; html: string } | null {
         subject: "Your next trip deserves a smarter route",
         html: layout(
           "Your next trip deserves a smarter route",
-          "<p>Planning somewhere new? Your saved trips and places are still here. Re-open VoyZa to optimize your next multi-stop day — and start a fresh free trial of Pro.</p>"
+          "<p>Planning somewhere new? Your saved trips and places are still here. Re-open VoyZa to optimize your next multi-stop day. Adding new places is part of VoyZa Pro; if you have not used your free trial yet, the yearly plan starts with one.</p>"
           + "<p>💡 <b>Bonus:</b> invite a friend who's planning a trip — you'll both get a free month of Pro. Find your invite code in Settings → Invite friends.</p>",
           "Start planning",
         ),
