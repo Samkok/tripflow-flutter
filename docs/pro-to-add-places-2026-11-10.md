@@ -1,6 +1,6 @@
 # Adding places is part of VoyZa Pro (2026-11-10)
 
-Decided by Sam on 2026-11-10. Not committed, not released.
+Decided by Sam on 2026-11-10. Committed on 2026-11-10 (a19d853), not released.
 
 ## The rule
 
@@ -42,7 +42,8 @@ allowance and needed no change.
 1. Deploy the edge functions `redeem-referral`, `claim-invites` and
    `lifecycle-emails` (needs Sam's go). Until then a referrer is still told
    they earned "+2 free place slots".
-2. Deploy the website (`voyza_landing`, manual).
+2. Push the website repo (`voyza_landing`). A push to `main` deploys it to
+   production, so the free-plan wording waits there as a local commit.
 3. Ship the build.
 4. Change the store listings the day the build is live. The exact lines are
    at the end of `marketing/app-store-listing.md`. The App Store description
