@@ -9,6 +9,12 @@ class SupabaseService {
   static final Completer<void> _initCompleter = Completer<void>();
   static bool _isInitialized = false;
 
+  /// Sent with every request from builds that ask for VoyZa Pro before a
+  /// place is added (2026-11-10 onwards). The optional server rule in
+  /// supabase/manual/locations_pro_gate_old_builds.sql skips any request
+  /// that carries it, so that rule can only ever touch older builds.
+  static const proGateHeader = 'x-voyza-pro-gate';
+
   static Future<void> initialize() async {
     if (_isInitialized) return;
 
@@ -16,6 +22,7 @@ class SupabaseService {
       await Supabase.initialize(
         url: dotenv.env['SUPABASE_URL'] ?? '',
         anonKey: dotenv.env['SUPABASE_ANON_KEY'] ?? '',
+        headers: const {proGateHeader: '1'},
       );
       _isInitialized = true;
       if (!_initCompleter.isCompleted) {

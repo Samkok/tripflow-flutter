@@ -37,22 +37,49 @@ Pro row, trial-ends sentence, referral screen, lifecycle emails, referral
 notifications, outreach pitches. The privacy policy does not state the
 allowance and needed no change.
 
-## Release day, in this order
+## Rolled out on 2026-11-10
 
-1. Deploy the edge functions `redeem-referral`, `claim-invites` and
-   `lifecycle-emails` (needs Sam's go). Until then a referrer is still told
-   they earned "+2 free place slots".
-2. Push the website repo (`voyza_landing`). A push to `main` deploys it to
-   production, so the free-plan wording waits there as a local commit.
-3. Ship the build.
-4. Change the store listings the day the build is live. The exact lines are
-   at the end of `marketing/app-store-listing.md`. The App Store description
-   can only change with a new version, so put the new text in that version.
-5. Edit the Product Hunt description (it says "10 free places").
+- Server functions `redeem-referral`, `claim-invites` and `lifecycle-emails`
+  are deployed. No one held bonus slots, so retiring them took nothing away.
+- The website is live with the new Terms and the free-plan wording. A push to
+  `main` of `voyza_landing` deploys it.
+- Product Hunt description edited.
+- Google Play: the new last line of the description is saved as a draft. It
+  goes live once the AI asset declaration on that page is answered, the
+  listing is saved and the change is sent for review.
+- App Store: nothing changed yet. The promotional text can change at any
+  time; the description only inside a new version. The pipeline submits a
+  tagged build for review straight away, with the previous description, so
+  the description has to be edited on the new version before it is reviewed.
+  The lines are at the end of `marketing/app-store-listing.md`.
+- The build itself: not tagged.
+
+## Old builds
+
+Builds up to 1.11.53 keep the 10 free places. This cannot be closed well
+from the server:
+
+- A guest's places never reach the server, so no server rule can see them.
+- An old build cannot say whether a row is a new place or a place saved
+  earlier that is only now syncing (a guest who signs up). Builds 1.9.0 to
+  1.11.53 delete a place from the device when the server refuses it, so every
+  wrong guess is a lost place.
+- The app stamps `created_at` in local time without an offset, so the server
+  cannot tell a fresh place from one a few hours old.
+- Very few signed-in users on old builds add places at all (checked against
+  the database on 2026-11-10), so there is little to close.
+
+A rule that does the safest possible version of this is written and tested
+(19 cases, in-process Postgres) but NOT applied:
+`supabase/manual/locations_pro_gate_old_builds.sql`. It is outside
+`supabase/migrations` on purpose. Builds from this change on send the header
+`x-voyza-pro-gate` and are never touched by it. Its remaining risk and the
+three statements that remove it are in the file's header. If it is ever
+applied, do it only once this build is live in both stores.
 
 ## Known gaps
 
-- The limit was only ever enforced in the app. Older builds keep the 10 free
-  places until the user updates; nothing forces an update.
+- Older builds keep the 10 free places until the user updates; nothing
+  forces an update (see "Old builds").
 - The database column `referral_bonus_places` and the function
   `increment_referral_bonus_places` stay, unused. No migration is needed.
