@@ -13,7 +13,18 @@
 //  • Injection: recipient comes from the DB row (not the request), all
 //    user-controlled text is HTML-escaped, and header fields are stripped
 //    of control characters.
+//  • Unsubscribe: an address on public.email_suppressions is never emailed
+//    (the app then falls back to the share sheet, so the inviter can still
+//    send it themselves). Every email carries an unsubscribe link and the
+//    one-click List-Unsubscribe headers.
 import { createClient } from "jsr:@supabase/supabase-js@2";
+import {
+  commercialFooterHtml,
+  isSuppressed,
+  newUnsubscribeToken,
+  postalAddress,
+  unsubscribeHeaders,
+} from "../_shared/email_unsubscribe.ts";
 
 const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
 const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -109,6 +120,28 @@ Deno.serve(async (req) => {
       return reply(200, { ok: false, reason: "email_disabled" });
     }
 
+    // Commercial email must name a postal address (CAN-SPAM). Without the
+    // EMAIL_POSTAL_ADDRESS secret, no email: the app falls back to the
+    // share sheet so the inviter can still send the invite themselves.
+    if (!postalAddress()) {
+      console.error("send-invite-email: EMAIL_POSTAL_ADDRESS not set");
+      return reply(200, { ok: false, reason: "email_disabled" });
+    }
+
+    // ── Unsubscribed? Never email them again ─────────────────────────
+    // isSuppressed throws when the list can't be read: no send then.
+    if (await isSuppressed(supabase, invite.email as string)) {
+      return reply(200, { ok: false, reason: "recipient_unsubscribed" });
+    }
+    const unsubToken = await newUnsubscribeToken(
+      supabase,
+      invite.email as string,
+      "invite",
+    );
+    if (!unsubToken) {
+      return reply(200, { ok: false, reason: "send_failed" });
+    }
+
     // ── Compose ───────────────────────────────────────────────────────
     const { data: trip } = await supabase
       .from("trips").select("name").eq("id", tripId).maybeSingle();
@@ -151,7 +184,10 @@ Deno.serve(async (req) => {
       `</div>` +
       `<p style="margin:16px 0 0;color:#9aa4ad;font-size:12px">Didn't expect this? You can ignore this email — nothing happens without you signing up.</p>` +
       `</div>` +
-      `<div style="padding:16px 24px;color:#9aa4ad;font-size:12px;border-top:1px solid #eef1f4">VoyZa · voyza.xtremon.com</div>` +
+      commercialFooterHtml(
+        unsubToken,
+        `${eName} entered this address to invite you to a trip`,
+      ) +
       `</div></div>`;
 
     const from = Deno.env.get("LIFECYCLE_FROM") ??
@@ -167,6 +203,7 @@ Deno.serve(async (req) => {
         to: invite.email, // DB row, not request input
         subject: `${inviterName} invited you to plan "${tripName}" on VoyZa`,
         html,
+        headers: unsubscribeHeaders(unsubToken),
       }),
     });
     if (!res.ok) {

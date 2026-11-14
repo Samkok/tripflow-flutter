@@ -63,6 +63,12 @@ verify_jwt = false
 [functions.public-trip]
 verify_jwt = false
 
+# The unsubscribe endpoint is called by mail apps' one-click button and by a
+# signed-out browser; the random per-email token is the credential and it
+# can only unsubscribe. Must stay off or every unsubscribe fails.
+[functions.email-unsubscribe]
+verify_jwt = false
+
 # Pushes are triggered by a Database Webhook that sends the service-role key;
 # the function also checks that claim itself. Live setting is true.
 [functions.send-push-notification]

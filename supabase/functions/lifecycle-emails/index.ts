@@ -6,6 +6,12 @@
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
+import {
+  commercialFooterHtml,
+  newUnsubscribeToken,
+  postalAddress,
+  unsubscribeHeaders,
+} from "../_shared/email_unsubscribe.ts";
 
 const supabase = createClient(
   Deno.env.get("SUPABASE_URL")!,
@@ -30,7 +36,12 @@ function jwtRole(authHeader: string): string | null {
 const APP_URL = "https://apps.apple.com/us/app/voyza/id6758559163";
 
 // Shared branded email layout (gradient header, body, CTA button, footer).
-function layout(heading: string, bodyHtml: string, ctaText: string): string {
+function layout(
+  heading: string,
+  bodyHtml: string,
+  ctaText: string,
+  footerHtml: string,
+): string {
   const p = "margin:0 0 12px;color:#46535f;font-size:15px;line-height:1.5";
   return `<div style="background:#f4f6f8;padding:24px;font-family:-apple-system,'Segoe UI',Roboto,sans-serif">`
     + `<div style="max-width:520px;margin:0 auto;background:#fff;border-radius:16px;overflow:hidden;border:1px solid #e6e9ee">`
@@ -40,12 +51,16 @@ function layout(heading: string, bodyHtml: string, ctaText: string): string {
     + bodyHtml.replaceAll("<p>", `<p style="${p}">`)
     + `<a href="${APP_URL}" style="display:inline-block;margin-top:6px;background:#2E5BD0;color:#fff;text-decoration:none;font-weight:700;padding:12px 22px;border-radius:10px">${ctaText}</a>`
     + `</div>`
-    + `<div style="padding:16px 24px;color:#9aa4ad;font-size:12px;border-top:1px solid #eef1f4">VoyZa · voyza.xtremon.com</div>`
+    + footerHtml
     + `</div></div>`;
 }
 
 // Per-stage copy. Plain, benefit-led, mobile-first. Keep it honest.
-function render(stage: string): { subject: string; html: string } | null {
+// [footerHtml] carries the unsubscribe link and the sender's postal address.
+function render(
+  stage: string,
+  footerHtml: string,
+): { subject: string; html: string } | null {
   switch (stage) {
     case "welcome":
       return {
@@ -58,6 +73,7 @@ function render(stage: string): { subject: string; html: string } | null {
             + "<p>🕒 <b>See more, backtrack less</b></p>"
             + "<p>Creating trips is free. Adding your own places is part of VoyZa Pro — the yearly plan starts with a free trial.</p>",
           "Open VoyZa",
+          footerHtml,
         ),
       };
     case "activate":
@@ -68,6 +84,7 @@ function render(stage: string): { subject: string; html: string } | null {
           "<p>Your trip is started — nice work. Add a few more places (3+ unlocks it) and tap <b>Optimize</b> to watch VoyZa group nearby spots and cut the backtracking.</p>"
             + "<p>Adding places is part of VoyZa Pro — the yearly plan starts with a free trial.</p>",
           "Add places & optimize",
+          footerHtml,
         ),
       };
     case "winback":
@@ -78,6 +95,7 @@ function render(stage: string): { subject: string; html: string } | null {
           "<p>Planning somewhere new? Your saved trips and places are still here. Re-open VoyZa to optimize your next multi-stop day. Adding new places is part of VoyZa Pro; if you have not used your free trial yet, the yearly plan starts with one.</p>"
           + "<p>💡 <b>Bonus:</b> invite a friend who's planning a trip — you'll both get a free month of Pro. Find your invite code in Settings → Invite friends.</p>",
           "Start planning",
+          footerHtml,
         ),
       };
     default:
@@ -85,7 +103,14 @@ function render(stage: string): { subject: string; html: string } | null {
   }
 }
 
-async function sendEmail(to: string, subject: string, html: string): Promise<boolean> {
+const WHY = "you have a VoyZa account";
+
+async function sendEmail(
+  to: string,
+  subject: string,
+  html: string,
+  headers: Record<string, string>,
+): Promise<boolean> {
   if (!RESEND_API_KEY) {
     console.warn("RESEND_API_KEY not set — cannot send");
     return false;
@@ -97,7 +122,7 @@ async function sendEmail(to: string, subject: string, html: string): Promise<boo
         Authorization: `Bearer ${RESEND_API_KEY}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ from: FROM, to, subject, html }),
+      body: JSON.stringify({ from: FROM, to, subject, html, headers }),
     });
     if (!res.ok) console.warn(`Resend ${res.status}: ${await res.text()}`);
     return res.ok;
@@ -133,6 +158,7 @@ serve(async (req) => {
           LIFECYCLE_FROM_from_env: Deno.env.get("LIFECYCLE_FROM") != null,
           SUPABASE_URL: !!Deno.env.get("SUPABASE_URL"),
           SUPABASE_SERVICE_ROLE_KEY: !!Deno.env.get("SUPABASE_SERVICE_ROLE_KEY"),
+          EMAIL_POSTAL_ADDRESS: postalAddress() != null, // boolean only
         },
       }),
       { status: 200, headers: { "Content-Type": "application/json" } },
@@ -149,12 +175,26 @@ serve(async (req) => {
       : ["welcome", "activate", "winback"];
     const results: Record<string, string> = {};
     for (const stage of stages) {
-      const tpl = render(stage);
+      if (!postalAddress()) {
+        results[stage] = "no_postal_address";
+        continue;
+      }
+      const token = await newUnsubscribeToken(supabase, testEmail, "lifecycle");
+      if (!token) {
+        results[stage] = "no_unsubscribe_token";
+        continue;
+      }
+      const tpl = render(stage, commercialFooterHtml(token, WHY));
       if (!tpl) {
         results[stage] = "no_template";
         continue;
       }
-      const ok = await sendEmail(testEmail, `[Test] ${tpl.subject}`, tpl.html);
+      const ok = await sendEmail(
+        testEmail,
+        `[Test] ${tpl.subject}`,
+        tpl.html,
+        unsubscribeHeaders(token),
+      );
       results[stage] = ok ? "sent" : "failed";
     }
     return new Response(
@@ -166,6 +206,8 @@ serve(async (req) => {
   const summary: Record<string, number> = {
     sent: 0,
     skipped_no_template: 0,
+    skipped_no_unsubscribe_token: 0,
+    skipped_no_postal_address: 0,
     send_failed: 0,
     errors: 0,
   };
@@ -182,13 +224,27 @@ serve(async (req) => {
       });
     }
 
+    // Unsubscribed addresses are already left out by the SQL function.
     for (const row of (targets ?? []) as Array<{ user_id: string; email: string; stage: string }>) {
-      const tpl = render(row.stage);
+      // Commercial email must name a postal address (CAN-SPAM). Without the
+      // EMAIL_POSTAL_ADDRESS secret nothing is sent; the user stays due and
+      // is picked up by the next run once the address is set.
+      if (!postalAddress()) {
+        summary.skipped_no_postal_address++;
+        continue;
+      }
+      // No stored token, no send: the email would carry a dead link.
+      const token = await newUnsubscribeToken(supabase, row.email, "lifecycle");
+      if (!token) {
+        summary.skipped_no_unsubscribe_token++;
+        continue;
+      }
+      const tpl = render(row.stage, commercialFooterHtml(token, WHY));
       if (!tpl) {
         summary.skipped_no_template++;
         continue;
       }
-      const ok = await sendEmail(row.email, tpl.subject, tpl.html);
+      const ok = await sendEmail(row.email, tpl.subject, tpl.html, unsubscribeHeaders(token));
       if (!ok) {
         summary.send_failed++;
         continue;

@@ -1,3 +1,7 @@
+-- SUPERSEDED for lifecycle_email_targets(): the live definition, which also
+-- skips unsubscribed addresses, is in
+-- supabase/migrations/20261114090000_email_unsubscribe.sql.
+--
 -- Lifecycle emails — supporting schema for the lifecycle-emails edge function.
 -- Apply manually (Supabase SQL editor or apply_migration) BEFORE deploying +
 -- scheduling the function. Safe/additive. Assumes public.locations has a
