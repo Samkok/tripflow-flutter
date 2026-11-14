@@ -44,10 +44,11 @@ class TermsScreen extends StatelessWidget {
                   '2. Who Offers VoyZa',
                   // Trader identity (EEA/UK consumer law; Google Play and
                   // Apple show the same details on the store listing). The
-                  // postal address and phone are pending Sam's decision:
-                  // swap "available on request" for them when set, here, in
-                  // the website Terms and in the privacy policy together.
-                  'VoyZa is offered by Kok Heng, an individual developer (sole trader) based in Phnom Penh, Cambodia, trading as VoyZa. "VoyZa" and "Xtremon" are trading names; there is no separate registered company, so Kok Heng is the person you contract with when you use the App or buy VoyZa Pro. You can reach us at $_email. Our postal address is available on request by email.',
+                  // postal address (set 2026-11-14, as on the Play account)
+                  // must match the website Terms, the privacy policy and the
+                  // EMAIL_POSTAL_ADDRESS secret used in email footers. The
+                  // public phone number is still undecided.
+                  'VoyZa is offered by Kok Heng, an individual developer (sole trader) based in Phnom Penh, Cambodia, trading as VoyZa. "VoyZa" and "Xtremon" are trading names; there is no separate registered company, so Kok Heng is the person you contract with when you use the App or buy VoyZa Pro. You can reach us at $_email. Our postal address is Home 6, Street P33, Chip Mong 598, Phnom Kha Pir, Chrang Chamreh Ti Pir, Phnom Penh 12000, Cambodia.',
                 ),
                 _buildSection(
                   context,
@@ -141,7 +142,7 @@ class TermsScreen extends StatelessWidget {
                 _buildContactSection(context),
                 const SizedBox(height: 24),
                 const Text(
-                  'Last updated: November 10, 2026',
+                  'Last updated: November 14, 2026',
                   style: TextStyle(
                       fontStyle: FontStyle.italic, color: Colors.grey),
                 ),
